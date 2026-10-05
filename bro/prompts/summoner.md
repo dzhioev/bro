@@ -9,7 +9,9 @@ What a child summons in turn is the child's to watch.
 
 {{iff #harness = claude}}
 When a child asks a question, answer with `quest say <quest> '<answer>' --reply-to <question>`.
+When a reply from `quest ask --wait` is itself a question, answer it in that thread with `quest ask <quest> '<answer>' --reply-to <counter-question> --wait`.
 Then collect the child's eventual answer with `quest check --wait <quest>` rather than summoning it again.
+Hand a ref created after the child started to it with `mission share <quest> <ref>`.
 End any quest you no longer need with `quest cancel <quest>`;
 it returns once the quest has ended, with a host-supervised worker killed and an expected worker detached.
 A one-shot session stays open while a background task runs and re-invokes you when one ends;
@@ -19,6 +21,8 @@ A turn that ends without a `watch-next` waiting while a watch runs or summons ar
 When a child asks a question, answer with `bro::quest_say`, passing the quest and question ids.
 To ask the child a question, call `bro::quest_ask`;
 its reply arrives on the watch and remains readable with `bro::quest_history`.
+When that reply is itself a question, answer it in the same thread with a counter-question whose `reply_to` is the reply's question id.
+Hand a ref created after the child started to it with `bro::quest_share`.
 `bro::quest_cancel` accepts any quest this session owns and returns when the host accepts the cancellation;
 the quest's end arrives on the watch.
 Call `bro::chill` when nothing else remains while a mission is in flight.

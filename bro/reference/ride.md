@@ -1009,7 +1009,8 @@ underneath it are two client surfaces over the same request, each split into the
   it exits 4 when a question awaits the caller, and `--wait` returns on the next message or the end.
   `quest say <id> '<text>' [--reply-to <question>]` sends a message that expects no reply, or a reply;
   `quest ask <id> '<text>' [--reply-to <question>] [--wait [<seconds>]]` asks a question and prints its id, a counter-question with `--reply-to`;
-  `--wait` blocks for the reply and prints it, exiting 4 with the id when its optional bound passes first, the reply still recoverable from the journal.
+  `--wait` prints a plain reply and exits 0, or prints a reply that is itself a question and exits 4, with stderr naming its `counter_question_id` and the ready counter-question command.
+  When the optional wait bound passes first, it prints the original question id and exits 3, the reply still recoverable from the journal.
   Concurrent waiters and later reads see the same state.
   `quest list` walks the caller-scoped paginated `query {}` listing and prints retained bro summons live-first, including their talk and pending questions.
   `quest watch` first takes the current `events {}` head, then replays retained own-quest messages and open questions whose journal sequence is no newer than that head, marked `before the watch`.
@@ -1021,21 +1022,24 @@ underneath it are two client surfaces over the same request, each split into the
   it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
   `mission check|history|say|ask|share|list|watch|cancel` is the corresponding universal surface for every worker type:
   Chat payloads are JSON objects, and `history --seq N` recovers one full retained entry.
+  A blocking `mission ask` has the same exits and reply handling as `quest ask`, printing a JSON payload and putting `<json>` in the ready counter-question command.
   `share <id> <ref> [--timeout <seconds>]` hands an owner-reachable artifact to a live worker.
   List and watch accept `--type`, and watch cuts chat lines over 1 KiB with a history pointer.
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
-- the bro service tools (`bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_list` / `quest_cancel` on the `quest_id` it returns), for bro LLM processes, and mounted beside the CLIs in a claude session.
+- Bro LLM processes use the service tools `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns.
+  The same tools are mounted beside the CLIs in a claude session.
   The summon tool's `passes` list is the CLI's repeatable `--pass` field.
   On the bro harness, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
   answers, questions, replies, refusals, and terminal states arrive through `quest watch`.
-  `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch;
+  `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch, and `quest_share` hands an owner-reachable ref to a live child;
   `quest_check` and `quest_history` are one non-blocking journal read each;
   and `quest_cancel` returns once the host accepts the cancellation, with the terminal following on the watch.
   `quest_list` is the same paginated journal listing on both harnesses.
   On the claude harness, the blocking service tools retain their polling controls:
   `summon` blocks unless `detach: true`, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the terminal.
+  A waiting `quest_ask` returns `state: answered` for a plain reply, `state: question` with `answer` and `counter_question_id` for a reply that asks back, and `state: asked` with the original `question_id` at its bound.
   Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the outcome and chat.
   In an interactive Claude session, a call still running after 120 s moves into a background task whose result arrives as a notification;
   the tool cautions recover an interrupted task by id instead of sending twice.

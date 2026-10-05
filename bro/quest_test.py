@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from bro import quest, summon
+from bro.artifact import SHARE
 from bro.broker import brotocol
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
@@ -22,6 +23,8 @@ from bro.quest_test_helper import (
   running_live_broker,
   running_server,
 )
+
+REF = f'sha256:{"a" * 64}'
 
 
 async def _reply_empty_watch_replay(server) -> None:
@@ -162,6 +165,58 @@ async def test_ask_wait_prints_the_reply(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
+async def test_ask_wait_reports_a_counter_question_and_its_id(monkeypatch, capsys, caplog):
+  caplog.set_level('INFO')
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(quest.main, ['quest', 'ask', 'REQ-1', 'ready?', '--wait', '5'])
+    )
+    channel, query = await next_message(server)
+    live = quest_record('REQ-1', 'started', talk=['owner.question', 'worker.question'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
+    _, question = await next_message(server)
+    assert question.id is not None
+    asked = entry(1, 'owner', 'ready?', id=question.id, pending=True)
+    channel, query = await next_message(server)
+    await reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'mission': {**live, 'messages': [asked], 'chat_seq': 1}},
+    )
+    channel, waiting = await next_message(server)
+    counter_question = entry(
+      2,
+      'worker',
+      'Which environment?',
+      id='COUNTER-1',
+      reply_to=question.id,
+      pending=True,
+    )
+    await reply(
+      server,
+      channel,
+      waiting,
+      outcome='ok',
+      value={'mission': {**live, 'messages': [asked, counter_question], 'chat_seq': 2}},
+    )
+
+    assert await task == quest.QUESTION_EXIT_CODE
+    assert capsys.readouterr().out == 'Which environment?\n'
+    assert 'counter_question_id COUNTER-1' in caplog.text
+    assert "quest ask REQ-1 '<answer>' --reply-to COUNTER-1 --wait" in caplog.text
+
+  assert quest.asked_view(quest.Asked('REQ-1', question.id, 'Which environment?', 'COUNTER-1')) == {
+    'state': 'question',
+    'quest_id': 'REQ-1',
+    'question_id': question.id,
+    'answer': 'Which environment?',
+    'counter_question_id': 'COUNTER-1',
+  }
+
+
+@pytest.mark.asyncio
 async def test_ask_wait_timeout_returns_its_recoverable_id(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
@@ -184,8 +239,28 @@ async def test_ask_wait_timeout_returns_its_recoverable_id(monkeypatch, capsys):
     _, waiting = await next_message(server)
     assert waiting.args['since'] == 1
 
-    assert await task == quest.QUESTION_EXIT_CODE
+    assert await task == quest.RUNNING_EXIT_CODE
     assert capsys.readouterr().out == f'{question.id}\n'
+
+
+@pytest.mark.asyncio
+async def test_share_hands_a_ref_to_a_live_bro_quest(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(asyncio.to_thread(quest.share, 'REQ-1', REF))
+    channel, query = await next_message(server)
+    await reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'mission': quest_record('REQ-1', 'started')},
+    )
+    channel, request = await next_message(server)
+    assert request.kind == SHARE
+    assert request.args == {'id': 'REQ-1', 'ref': REF}
+    await reply(server, channel, request, outcome='ok', value={})
+
+    assert await task == 'REQ-1'
 
 
 @pytest.mark.asyncio

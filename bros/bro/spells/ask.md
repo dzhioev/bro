@@ -12,7 +12,7 @@ A summon succeeds only when the target is in the summoner's `launch.bro.bros` se
 — the session reads those members from the banner's `may_summon` row, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.22.0
+version: 1.23.0
 ---
 
 # Ask
@@ -174,7 +174,10 @@ When a blocking summon granted `worker.question` exits 4, stdout is the child's 
 Answer it with `quest say <quest-id> '<answer>' --reply-to <question-id>`, then resume the same quest with `quest check --wait <quest-id>`.
 That check may itself exit 4 with the open questions the child is stalled on;
 repeat the answer/check loop until it exits 0 with the child's final answer or 1 with a failure.
+When a reply to `quest ask --wait` is itself a question, it exits 4 with that question on stdout and its `counter_question_id` on stderr;
+answer in the same thread with `quest ask <quest-id> '<answer>' --reply-to <counter-question-id> --wait`.
 Never restart the summon to answer it.
+Hand a ref created after launch to the live child with `mission share <quest-id> <ref>`.
 `quest history <quest-id>` shows the conversation so far, open questions marked `pending`.
 `quest watch` arms at the current journal head and prints ordered transitions after it
 — your summons', messages and denials included;
@@ -187,6 +190,8 @@ read the retained answer with `bro::quest_check` once the watch reports the term
 If a child asks a question, answer it with `bro::quest_say(reply_to=…)`, then return to `bro::chill` rather than polling or restarting the summon.
 To ask the child, call `bro::quest_ask`;
 its reply arrives on the watch and remains readable with `bro::quest_history`.
+When that reply is itself a question, answer it in the same thread with another `bro::quest_ask`, setting `reply_to` to its `counter_question_id`.
+Hand a ref created after launch to the live child with `bro::quest_share`.
 `quest watch` arms at the current journal head and prints ordered transitions after it
 — your summons', messages and denials included;
 if retained events have a gap, it reports the loss and re-arms from the current head.

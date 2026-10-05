@@ -495,10 +495,19 @@ class Asked:
   mission_id: str
   question_id: str
   answer: Optional[dict[str, Any]] = None
+  counter_question_id: Optional[str] = None
 
   @property
   def state(self) -> str:
-    return 'asked' if self.answer is None else 'answered'
+    if self.answer is None:
+      return 'asked'
+    return 'question' if self.counter_question_id is not None else 'answered'
+
+
+@dataclass(frozen=True)
+class _Reply:
+  answer: dict[str, Any]
+  counter_question_id: Optional[str]
 
 
 def _entry_payload(entry: dict[str, Any]) -> dict[str, Any]:
@@ -508,7 +517,7 @@ def _entry_payload(entry: dict[str, Any]) -> dict[str, Any]:
   return payload
 
 
-def _reply_from_tail(mission: dict[str, Any], question_id: str) -> Optional[dict[str, Any]]:
+def _reply_from_tail(mission: dict[str, Any], question_id: str) -> Optional[_Reply]:
   for entry in reversed(_entries(mission)):
     transition = entry.get('transition')
     if transition not in ('message', 'refused'):
@@ -519,7 +528,10 @@ def _reply_from_tail(mission: dict[str, Any], question_id: str) -> Optional[dict
         raise MissionError('a refused mission chat entry carried no reason')
       raise MissionError(reason)
     if transition == 'message' and entry.get('reply_to') == question_id:
-      return _entry_payload(entry)
+      counter_question_id = entry.get('id')
+      if counter_question_id is not None and not isinstance(counter_question_id, str):
+        raise MissionError('a mission counter-question carried a malformed id')
+      return _Reply(_entry_payload(entry), counter_question_id)
   return None
 
 
@@ -561,7 +573,10 @@ def ask(
     current = _poll_mission(
       connected, resolved, current, deadline=deadline, done=replied, on_chat=True
     )
-  return Asked(resolved, question_id, _reply_from_tail(current, question_id))
+  reply = _reply_from_tail(current, question_id)
+  if reply is None:
+    return Asked(resolved, question_id)
+  return Asked(resolved, question_id, reply.answer, reply.counter_question_id)
 
 
 def asked_view(asked: Asked) -> dict[str, Any]:
@@ -572,6 +587,8 @@ def asked_view(asked: Asked) -> dict[str, Any]:
   }
   if asked.answer is not None:
     view['answer'] = asked.answer
+  if asked.counter_question_id is not None:
+    view['counter_question_id'] = asked.counter_question_id
   return view
 
 
@@ -584,6 +601,7 @@ def share(
   *,
   timeout: Optional[float] = None,
   client: Optional['Client'] = None,
+  validate: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> None:
   """Share one reachable artifact ref with a live mission this session owns."""
   from bro.artifact import DEFAULT_TIMEOUT, SHARE, is_ref
@@ -595,6 +613,11 @@ def share(
   if not math.isfinite(wait_seconds) or wait_seconds <= 0:
     raise ValueError('timeout must be a finite positive number')
   with connection(client) as connected:
+    if validate is not None:
+      mission = query_mission(connected, resolved)
+      caller_end(mission, resolved)
+      validate(mission)
+      _require_live(mission)
     call_ok(connected, SHARE, {'id': resolved, 'ref': ref}, timeout=wait_seconds)
 
 
@@ -994,8 +1017,18 @@ def _ask(
   if asked.state == 'answered':
     _print_json(asked.answer)
     return 0
+  if asked.state == 'question':
+    _print_json(asked.answer)
+    assert asked.counter_question_id is not None
+    log.info(
+      "counter_question_id %s; reply with `mission ask %s '<json>' --reply-to %s --wait`",
+      asked.counter_question_id,
+      asked.mission_id,
+      asked.counter_question_id,
+    )
+    return QUESTION_EXIT_CODE
   print(asked.question_id)
-  return 0 if wait is None else QUESTION_EXIT_CODE
+  return 0 if wait is None else RUNNING_EXIT_CODE
 
 
 def _share(mission_id: str, ref: str, timeout: Optional[float]) -> int:
@@ -1072,7 +1105,13 @@ def main(argv: list[str]) -> Optional[int]:
   say_parser.add_argument('--reply-to', metavar='<question-id>', help='question this answers')
   say_parser.set_handler(_say)
 
-  ask_parser = verbs.add_parser('ask', help='send a typed question; --wait blocks for its reply')
+  ask_parser = verbs.add_parser(
+    'ask',
+    help='send a typed question; --wait blocks for its reply',
+    description='ask a typed question and print its id; --wait prints a plain reply and exits 0, '
+    f'a counter-question and its id on stderr and exits {QUESTION_EXIT_CODE}, or the original '
+    f'question id and exits {RUNNING_EXIT_CODE} when its bound passes',
+  )
   ask_parser.add_argument('mission_id', metavar='<mission-id>', help=MISSION_ID_HELP)
   ask_parser.add_argument('payload', type=payload_argument, help='JSON object to send')
   ask_parser.add_argument(
