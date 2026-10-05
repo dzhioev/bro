@@ -99,7 +99,12 @@ The browser's context then grows by about the answer per step, whatever the page
   An unboxed session runs the host's own `claude` today, whatever its version, since the runner spawns a bare `claude` and the runtime bundle carries none;
   only its configuration is isolated.
   The runner runs the pinned version (`ride/ride/setup/container/claude-code-version`) by absolute path in every session:
-  the image's install when boxed, and when unboxed the release binary `ride/ride/claude/claude_release.py` downloads, verifies against the release manifest's checksum, and caches on the host.
+  the image's install when boxed, and when unboxed the release binary `ride/ride/claude/claude_release.py` downloads and verifies against the release manifest's checksum.
+  The binary is cached under the runtime root by version and platform, with that checksum recorded beside it, so a later start checks the copy against the record and reuses it offline;
+  `claude_release.cached_binary` reads the manifest only when no verified copy is cached.
+  The cache keeps the image tags' lock discipline (`ride/ride/workspace/image_locks.py`):
+  a session holds a shared lock on its version from before the ensure until it exits, a missing version's download serializes on a separate lock and stages into a file of its own,
+  and `ride clean` removes a version no session holds, under a non-blocking exclusive lock across the removal.
 - **Claude's MCP limits.**
   `ride/ride/claude/runner.py` sets `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` and `MCP_TOOL_TIMEOUT` both to 24 hours, a backstop no framework bound reaches, the latter up from 10 minutes:
   each tool's own bound decides, and a runaway call is left to the supervising layer, the summon's timeout or a human.
@@ -351,8 +356,8 @@ In order:
 
 Every session started from the new installation runs the pinned Claude Code, so the runner's variables meet the one version they were checked against, 2.1.280;
 a pin bump re-checks them as it re-checks the rest of Claude's surface.
-An unboxed session's first start per pinned version downloads its release binary, about 230 MB, so it needs the network once;
-a download that fails or mismatches its checksum fails the launch.
+An unboxed session's first start per pinned version downloads its release binary, about 230 MB, so it needs the network once, and later starts reuse the cached copy offline;
+a download that fails or mismatches its checksum fails the launch, and so does a cached copy that no longer matches its recorded checksum.
 Roots started earlier keep their bundle and so the host's `claude` for unboxed sessions, as before.
 Rollback is installing the previous revision:
 no store, journal, or configuration format changes, roots started after it refuse `browser` again, and their unboxed sessions run the host's `claude` again.
@@ -365,6 +370,7 @@ no store, journal, or configuration format changes, roots started after it refus
   a counter-question reply reporting its id on `quest ask` and `mission ask` and in both views (`state: question`, `question_id` kept, `counter_question_id` added), and the wait's bound exiting 3;
   `quest_share` handing a ref to a live child quest;
   the runner's Claude binary per isolation and its MCP environment;
+  the release cache (an offline start reusing a verified copy with no manifest read, concurrent first starts downloading once, a tampered copy refused, `ride clean` keeping a held version);
   both toolsets over a fake mission (command rendering, the inline cut and its mint, a spill read for its head, an error, an ended webview, `open`'s cancel, `reopen` repeating the options, the shares, and the last URL, `share`'s path);
   the `artifact` toolset (windows, grep, a directory path, an unreachable ref refused);
   `look` with a fake reader (the capture command, a text capture decoded and minted, a `ref` read, an empty capture refused, the question in the prompt, a fabricated ref dropped, the answer cut, and no key failing with the fallbacks named);
