@@ -3,7 +3,12 @@ import pytest
 import bro.harness.claude as claude
 from bro.mcp import ToolLayer, select
 
-_GROUPS = {'FILES': claude.FILES, 'SHELL': claude.SHELL, 'DELEGATION': claude.DELEGATION}
+_GROUPS = {
+  'FILES': claude.FILES,
+  'SHELL': claude.SHELL,
+  'DELEGATION': claude.DELEGATION,
+  'WEB': claude.WEB,
+}
 
 
 class TestGroups:

@@ -1019,6 +1019,63 @@ class TestMaySummon:
 
     assert Derived()._may_summon == ('one', 'two')
 
+
+class TestMayLaunch:
+  def test_defaults_to_empty(self):
+    class Plain(BaseBro):
+      name = 'plain'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert Plain()._may_launch == ()
+
+  def test_mro_unioned(self):
+    class Base(BaseBro):
+      name = 'base'
+      description = 'd'
+      may_launch = ('webview',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class Derived(Base):
+      name = 'derived'
+      may_launch = ('benchmark',)
+
+    assert Derived()._may_launch == ('webview', 'benchmark')
+
+  @pytest.mark.parametrize(
+    'worker_type',
+    ['bro.party.unboxed', 'bro.bros.bro-dev', 'webview.vnc'],
+  )
+  def test_payload_shaped_worker_type_is_refused(self, worker_type):
+    class Invalid(BaseBro):
+      name = 'invalid'
+      description = 'd'
+      may_launch = (worker_type,)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match=r'Invalid\.may_launch.*invalid worker type'):
+      Invalid()
+
+  def test_bro_is_refused_because_the_framework_seeds_it(self):
+    class Invalid(BaseBro):
+      name = 'invalid'
+      description = 'd'
+      may_launch = ('bro',)
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(ValueError, match=r'Invalid\.may_launch.*framework seeds'):
+      Invalid()
+
+
+class TestEmptyManifest:
   def test_empty_when_no_components_and_keyless_llm(self):
 
     class Bare(BaseBro):
@@ -1053,6 +1110,20 @@ class _OptionalSource(SearchableDataSource):
 
 
 class TestOptionalSecrets:
+  def test_toolset_optional_secret_reaches_the_bro_manifest(self):
+    class OptionalToolset(mcp.Toolset[None]):
+      optional_secrets = ('gamma',)
+
+    class OptionalBro(BaseBro):
+      name = 'optional-toolset'
+      description = 'd'
+      tools: ClassVar = [mcp.mount(OptionalToolset('optional-tools'))]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    assert OptionalBro().optional_secrets() == ('gamma',)
+
   def test_unions_mcp_and_datasource_optional(self):
     class OptBro(BaseBro):
       name = 'opt'

@@ -42,6 +42,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `watches.py`, `watch_run.py` (`watch-run`), and `watch_next.py` (`watch-next`) — a session's watches:
   a command run once for the run with its lines kept under the session state dir, and the wait that returns the lines a reader has not seen
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
+  `artifact_mcp.py` is the registered `artifact` toolset, reading and grepping reachable text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
   a supervisor remains the live process-group leader until every command descendant exits;
@@ -69,7 +70,7 @@ A subpackage with a map of its own is pointed at, not described here.
   see `datasources/AGENTS.md`
 - `extra/github/` — the GitHub API client (`api.py`), the GitHub App authentication source (`app.py`), and pull-request reads (`pulls.py`)
 - `harness/` — what a consuming harness brings of its own, named where a persona can declare against it.
-  `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`) plus `claude.block(*names)`, conditioned on the Claude harness.
+  `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
   `quest watch` needs no declaring:

@@ -424,7 +424,7 @@ The shipped schemas are:
 A webview launch request may carry `vnc_port` only with `vnc`;
 it asks the worker container to publish the noVNC view on that host port instead of an available one.
 
-Every bro launch starts with the framework seed `:launch.bro` and `:launch.bro.party.boxed`, plus one `@<bro>` for every target its persona's `may_summon` declares.
+Every bro launch starts with the framework seed `:launch.bro` and `:launch.bro.party.boxed`, one `@<bro>` for every target its persona's `may_summon` declares, and one whole `:launch.<type>` key for every worker type its `may_launch` declares.
 The repository's `[tool.bro]` layer follows, then the host config's `defaults`, matching project URL, matching project path, URL-bro, and path-bro layers, then launch flags.
 Each layer folds name by name:
 the last word wins, repeated grants and revokes are harmless, revoking an absent name is harmless, and one layer naming the same value in both lists fails.

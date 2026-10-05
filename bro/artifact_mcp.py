@@ -1,0 +1,262 @@
+import codecs
+import re
+from collections import deque
+from collections.abc import Iterator
+from dataclasses import dataclass
+from io import DEFAULT_BUFFER_SIZE
+from pathlib import Path, PurePosixPath
+from typing import Annotated, Optional
+
+from pydantic import Field
+
+from bro.artifact import get_artifact
+from bro.base.text_window import (
+  BYTE_LIMIT,
+  DEFAULT_LIMIT,
+  MAX_LIMIT,
+  apply_limit,
+)
+from bro.mcp import Toolset
+
+toolset = Toolset[None]('artifact')
+
+_REF_FIELD = Field(description='artifact ref (sha256:<64 hex digits>)')
+_PATH_FIELD = Field(
+  description='file path inside a directory artifact; omit when the ref is a file artifact'
+)
+_LINE_BREAK = re.compile(r'\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]')
+_LINE_END = re.compile(r'(?:\r\n|[\n\r\v\f\x1c-\x1e\x85\u2028\u2029])\Z')
+
+
+@dataclass(frozen=True)
+class _Line:
+  length: int
+  prefix: str
+
+
+class _HeadWindow:
+  def __init__(self, limit: int):
+    self.limit = limit
+    self.effective_limit = min(max(limit, 1), MAX_LIMIT)
+    self.parts: list[str] = []
+    self.kept_lines = 0
+    self.kept_bytes = 0
+    self.total_lines = 0
+    self.total_bytes = 0
+    self.stopped = False
+
+  def add_line(self, prefix: str, length: int) -> None:
+    self.total_lines += 1
+    self.total_bytes += length
+    if self.stopped:
+      return
+    if self.kept_lines >= self.effective_limit or self.kept_bytes + length > BYTE_LIMIT:
+      if self.kept_lines == 0:
+        kept = prefix[:BYTE_LIMIT]
+        self.parts.append(kept)
+        self.kept_lines = 1
+        self.kept_bytes = len(kept)
+      self.stopped = True
+      return
+    if len(prefix) != length:
+      raise RuntimeError('a retained artifact line is missing content')
+    self.parts.append(prefix)
+    self.kept_lines += 1
+    self.kept_bytes += length
+
+  def render(self, *, before_lines: int = 0, before_bytes: int = 0) -> str:
+    return apply_limit(
+      ''.join(self.parts),
+      self.limit,
+      skipped_before_lines=before_lines,
+      skipped_before_bytes=before_bytes,
+      skipped_after_lines=self.total_lines - self.kept_lines,
+      skipped_after_bytes=self.total_bytes - self.kept_bytes,
+    )
+
+
+def _resolve_file(ref: str, path: Optional[str]) -> Path:
+  artifact_path = Path(get_artifact(ref))
+  if artifact_path.is_file():
+    if path is not None:
+      raise ValueError(f'artifact {ref} is a file; path must be omitted')
+    return artifact_path
+  if not artifact_path.is_dir():
+    raise ValueError(f'artifact {ref} resolved to neither a file nor a directory')
+  if path is None:
+    raise ValueError(f'artifact {ref} is a directory; path is required')
+
+  relative_path = PurePosixPath(path)
+  if relative_path.is_absolute() or '..' in relative_path.parts:
+    raise ValueError(f'artifact path must stay inside {ref}: {path!r}')
+  root = artifact_path.resolve()
+  candidate = (root / Path(*relative_path.parts)).resolve()
+  if not candidate.is_relative_to(root):
+    raise ValueError(f'artifact path must stay inside {ref}: {path!r}')
+  if not candidate.is_file():
+    raise ValueError(f'artifact {ref} has no file at {path!r}')
+  return candidate
+
+
+def _location(ref: str, path: Optional[str]) -> str:
+  return ref if path is None else f'{ref}/{path}'
+
+
+def _decoded_lines(
+  artifact_path: Path,
+  location: str,
+  *,
+  maximum_line_length: Optional[int] = None,
+) -> Iterator[_Line]:
+  decoder = codecs.getincrementaldecoder('utf-8')()
+  line_length = 0
+  line_prefix = ''
+  pending_carriage_return = ''
+
+  def add(segment: str) -> None:
+    nonlocal line_length, line_prefix
+    line_length += len(segment)
+    if maximum_line_length is not None and line_length > maximum_line_length:
+      raise ValueError(
+        f'artifact {location} has a line longer than {maximum_line_length:,} characters; '
+        'grep cannot search it with bounded memory'
+      )
+    remaining = BYTE_LIMIT - len(line_prefix)
+    if remaining > 0:
+      line_prefix += segment[:remaining]
+
+  def consume(text: str) -> Iterator[_Line]:
+    nonlocal line_length, line_prefix
+    start = 0
+    for match in _LINE_BREAK.finditer(text):
+      add(text[start : match.end()])
+      yield _Line(line_length, line_prefix)
+      line_length = 0
+      line_prefix = ''
+      start = match.end()
+    add(text[start:])
+
+  try:
+    with artifact_path.open('rb') as content:
+      while chunk := content.read(DEFAULT_BUFFER_SIZE):
+        text = pending_carriage_return + decoder.decode(chunk)
+        pending_carriage_return = ''
+        if text.endswith('\r'):
+          pending_carriage_return = '\r'
+          text = text[:-1]
+        yield from consume(text)
+      yield from consume(pending_carriage_return + decoder.decode(b'', final=True))
+  except UnicodeDecodeError as error:
+    raise ValueError(f'artifact {location} is not UTF-8 text') from error
+  if line_length > 0:
+    yield _Line(line_length, line_prefix)
+
+
+def _artifact_lines(
+  ref: str,
+  path: Optional[str],
+  *,
+  maximum_line_length: Optional[int] = None,
+) -> Iterator[_Line]:
+  return _decoded_lines(
+    _resolve_file(ref, path),
+    _location(ref, path),
+    maximum_line_length=maximum_line_length,
+  )
+
+
+@toolset.tool(
+  'read a text artifact as a numbered line window. For a directory artifact, path '
+  f'names the file to read. Content is capped at {MAX_LIMIT:,} lines and the shared byte '
+  'limit, with skipped-content markers.'
+)
+def read(
+  ref: Annotated[str, _REF_FIELD],
+  path: Annotated[Optional[str], _PATH_FIELD] = None,
+  offset: Annotated[int, Field(description='0-based line index to start reading from', ge=0)] = 0,
+  limit: Annotated[
+    int,
+    Field(
+      description=(
+        f'max lines to return; values above {MAX_LIMIT:,} are clamped, with the clamp '
+        'announced inline'
+      )
+    ),
+  ] = DEFAULT_LIMIT,
+) -> str:
+  window = _HeadWindow(limit)
+  before_lines = 0
+  before_bytes = 0
+  effective_offset = max(offset, 0)
+  for line_number, line in enumerate(_artifact_lines(ref, path), start=1):
+    if line_number <= effective_offset:
+      before_lines += 1
+      before_bytes += line.length
+      continue
+    number = f'{line_number:>5}\t'
+    window.add_line(number + line.prefix, len(number) + line.length)
+  return window.render(before_lines=before_lines, before_bytes=before_bytes)
+
+
+def _body(line: _Line) -> str:
+  ending = _LINE_END.search(line.prefix)
+  return line.prefix if ending is None else line.prefix[: ending.start()]
+
+
+@toolset.tool(
+  'search a text artifact with a regular expression and return matching lines with their '
+  '1-based numbers and optional surrounding context. For a directory artifact, path names '
+  'the file to search. Output follows the shared line and byte caps; a line longer than the '
+  'byte cap is refused rather than materialized.'
+)
+def grep(
+  ref: Annotated[str, _REF_FIELD],
+  pattern: Annotated[str, Field(description='regular expression to search for')],
+  path: Annotated[Optional[str], _PATH_FIELD] = None,
+  context: Annotated[
+    int,
+    Field(
+      description='lines of context to include before and after each match',
+      ge=0,
+      le=DEFAULT_LIMIT,
+    ),
+  ] = 0,
+) -> str:
+  if context < 0 or context > DEFAULT_LIMIT:
+    raise ValueError(f'context must be between 0 and {DEFAULT_LIMIT:,}')
+  try:
+    expression = re.compile(pattern)
+  except re.error as error:
+    raise ValueError(f'invalid regular expression: {error}') from error
+
+  window = _HeadWindow(DEFAULT_LIMIT)
+  history: deque[tuple[int, str]] = deque(maxlen=context)
+  last_selected: Optional[int] = None
+  after_context_until = 0
+
+  def select(line_number: int, body: str, *, matched: bool) -> None:
+    nonlocal last_selected
+    if last_selected is not None and line_number <= last_selected:
+      return
+    if last_selected is not None and line_number != last_selected + 1:
+      window.add_line('--\n', 3)
+    separator = ':' if matched else '-'
+    rendered = f'{line_number}{separator}{body}\n'
+    window.add_line(rendered, len(rendered))
+    last_selected = line_number
+
+  for line_number, line in enumerate(
+    _artifact_lines(ref, path, maximum_line_length=BYTE_LIMIT), start=1
+  ):
+    body = _body(line)
+    matched = expression.search(body) is not None
+    if matched:
+      for prior_number, prior_body in history:
+        select(prior_number, prior_body, matched=False)
+      select(line_number, body, matched=True)
+      after_context_until = line_number + context
+    elif line_number <= after_context_until:
+      select(line_number, body, matched=False)
+    history.append((line_number, body))
+
+  return window.render()
