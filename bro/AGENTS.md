@@ -151,17 +151,18 @@ Every assembly (`assemble(harness, …)`) appends the `bro` service server;
 - the job tools of a declared `shell` roster, on the bro harness alone
   — `job`, `poll`, `kill`, `jobs`, and `chill`, over the run's registry and inbox;
   with no `shell` declared, automatic `quest watch` admission mounts the same tools narrowed to that command.
-- `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
+- `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 
 The harnesses differ in waiting.
 The bro-harness shapes return at once
-— `summon` on host acceptance with no `detach`, `quest_ask` with a minted question id, `quest_check` and `quest_history` after one journal read, `quest_cancel` when the host accepts
+— `summon` on host acceptance with no `detach`, `quest_ask` with a minted question id, `quest_check` and `quest_history` after one journal read, `quest_share` when the host accepts the ref, `quest_cancel` when the host accepts
 — and later transitions arrive through `quest watch`.
 The claude-harness shapes keep the blocking controls
-— `summon` waits for an answer or question, `quest_ask` for the reply, `quest_check(wait=true)` to the end or a child question, `quest_history(wait=true)` to the next message, `quest_cancel` to the end
-— each owning a per-call channel client closed on cancellation;
-their descriptions carry the `{{when #harness = claude}}` transport caution that steers a long run to detach plus polling.
+— `summon` waits for an answer or question, `quest_ask` for the reply, `quest_check(wait=true)` to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` to the end.
+`quest_share` returns when the host accepts the ref on both harnesses.
+Each blocking call owns a per-call channel client closed on cancellation;
+its description carries the `{{when #harness = claude}}` transport caution that steers a long run to detach plus polling.
 
 ### Credential manifest
 
