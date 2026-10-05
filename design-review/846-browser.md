@@ -95,9 +95,15 @@ The browser's context then grows by about the answer per step, whatever the page
   it hands a ref the session can reach to a live child quest, as `mission share` does from a shell, so an owner without one can pass a file made after the summon.
 - **`claude.WEB`.**
   `bro/harness/claude.py` gains `WEB = ('WebFetch', 'WebSearch')`, Claude Code's own fetchers, so a persona can withhold them.
+- **One pinned Claude Code.**
+  An unboxed session runs the host's own `claude` today, whatever its version, since the runner spawns a bare `claude` and the runtime bundle carries none;
+  only its configuration is isolated.
+  The runner runs the pinned version (`ride/ride/setup/container/claude-code-version`) by absolute path in every session:
+  the image's install when boxed, and when unboxed the release binary `ride/ride/claude/claude_release.py` downloads, verifies against the release manifest's checksum, and caches on the host.
 - **Claude's MCP limits.**
-  `ride/ride/claude/runner.py` sets `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT=0` and raises `MCP_TOOL_TIMEOUT` from 10 minutes to 24 hours, a backstop no framework bound reaches:
+  `ride/ride/claude/runner.py` sets `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` and `MCP_TOOL_TIMEOUT` both to 24 hours, a backstop no framework bound reaches, the latter up from 10 minutes:
   each tool's own bound decides, and a runaway call is left to the supervising layer, the summon's timeout or a human.
+  A positive idle bound rather than `0` leans on no special value.
   The Claude-harness cautions on the blocking service tools in `bro/bro.py` and the transport sentence in `bro/reference/ride.md` are reworded around what remains, an interactive session moving a long call into the background;
   recovery by id stays.
   This resolves #431.
@@ -260,7 +266,7 @@ without it, an unattended browser stops and raises, naming the decision.
 | open | 1200 s | `OPEN_TIMEOUT`; the launch is cancelled at it |
 | inline reply | 4 KB | this design; a `command` reply or `look` answer past it is cut with a marker |
 | reader input | none | the reader model's context limit fails loudly |
-| one MCP call on the Claude harness | its tool's own bound | the idle cut is off, and `MCP_TOOL_TIMEOUT` is a 24-hour backstop |
+| one MCP call on the Claude harness | its tool's own bound | the idle cut and `MCP_TOOL_TIMEOUT` are both a 24-hour backstop |
 | a `[[browse]]` session | the summon's timeout | set by the owner, in hours |
 
 ### Risks
@@ -303,6 +309,8 @@ without it, an unattended browser stops and raises, naming the decision.
   the repository grant reaches every bro, the host config needs an entry per project, and a summoner's grant needs the summoner to hold the key itself, so it could browse directly.
 - **Progress notifications keeping long Claude calls alive:**
   the session MCP server answers in JSON mode, with no stream to carry them.
+- **`open` returning a starting webview to wait on in slices under an idle cut:**
+  with one pinned Claude everywhere and the cut lifted, `open` blocks through `OPEN_TIMEOUT` as the CLI does.
 - **The browser asking the owner `"…; what next?"`:**
   the owner is the one making requests, so each instruction is the owner's question with its outcome in the reply.
 - **`[[browse <url>]]`:**
@@ -317,9 +325,9 @@ without it, an unattended browser stops and raises, naming the decision.
   `bros.browser` joins `[tool.uv.build-backend] module-name`.
 - Core: `may_launch` in `bro/bro.py`, `Toolset.optional_secrets` in `bro/mcp.py`, `WEB` in `bro/harness/claude.py`, and the `artifact` toolset registered under `bro.toolsets`;
   the counter-question ids and the bound's exit code in `bro/quest.py` and `bro/mission.py`, and `quest_share` among the service tools in `bro/bro.py`;
-  ride: the seed in `ride/ride/scope.py` and the MCP limits in `ride/ride/claude/runner.py`.
+  ride: the seed in `ride/ride/scope.py`, and the pinned binary and the MCP limits in `ride/ride/claude/runner.py`.
 - Docs: root `AGENTS.md` (the webview row), `webview/AGENTS.md` (the toolset, the persona, the spell), and `bro/AGENTS.md` (the artifact toolset, the `WEB` group, `quest_share`);
-  `bro/reference/extending.md` (`may_launch`, a toolset's optional secrets) and `bro/reference/ride.md` (the seed, the transport sentence, `ask`'s exit codes and view, `quest_share`);
+  `bro/reference/extending.md` (`may_launch`, a toolset's optional secrets) and `bro/reference/ride.md` (the seed, the pinned Claude in unboxed sessions, the transport sentence, `ask`'s exit codes and view, `quest_share`);
   the summoner fragment and the `ask` spell (answering a counter-question, sharing with a live child), and `README.md` (`browser` among the shipped personas).
 
 ### Rollout
@@ -341,12 +349,13 @@ In order:
    an older installation reading the same `~/.bro.json` leaves a `browser` entry inert, since no launch of its own resolves it.
 4. Verification runs from a root started after the install, granted `@browser`, such as a fresh coordinator session that picks the work up from this page.
 
-Boxed sessions run the image's pinned Claude Code, 2.1.280, which reads `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`, `0` turning the cut off as its own abort message documents.
-Unboxed sessions run the host's own `claude`, whatever its version:
-one that does not read the variable keeps its own idle cut, aborting a long call as today with the quest still recoverable by id,
-and a pin moving to such a version would do the same to boxed sessions.
+Every session started from the new installation runs the pinned Claude Code, so the runner's variables meet the one version they were checked against, 2.1.280;
+a pin bump re-checks them as it re-checks the rest of Claude's surface.
+An unboxed session's first start per pinned version downloads its release binary, about 230 MB, so it needs the network once;
+a download that fails or mismatches its checksum fails the launch.
+Roots started earlier keep their bundle and so the host's `claude` for unboxed sessions, as before.
 Rollback is installing the previous revision:
-no store, journal, or configuration format changes, and roots started after it refuse `browser` again.
+no store, journal, or configuration format changes, roots started after it refuse `browser` again, and their unboxed sessions run the host's `claude` again.
 
 ### Verification the stages owe
 
@@ -355,7 +364,7 @@ no store, journal, or configuration format changes, and roots started after it r
   a toolset's optional secrets reaching the bro's optional tier;
   a counter-question reply reporting its id on `quest ask` and `mission ask` and in both views (`state: question`, `question_id` kept, `counter_question_id` added), and the wait's bound exiting 3;
   `quest_share` handing a ref to a live child quest;
-  the runner's MCP environment;
+  the runner's Claude binary per isolation and its MCP environment;
   both toolsets over a fake mission (command rendering, the inline cut and its mint, a spill read for its head, an error, an ended webview, `open`'s cancel, `reopen` repeating the options, the shares, and the last URL, `share`'s path);
   the `artifact` toolset (windows, grep, a directory path, an unreachable ref refused);
   `look` with a fake reader (the capture command, a text capture decoded and minted, a `ref` read, an empty capture refused, the question in the prompt, a fabricated ref dropped, the answer cut, and no key failing with the fallbacks named);
@@ -372,7 +381,7 @@ no store, journal, or configuration format changes, and roots started after it r
   then "done", ending with the session log.
 - The opt-in `llm` stage (real tokens):
   `look`'s reader over a checked-in real snapshot, every element it returns present there with its role and name;
-  and a Claude-harness session whose MCP tool stays silent past 300 s receiving its result.
+  and an unboxed Claude-harness session, on the pinned binary the runner fetched, whose MCP tool stays silent past 300 s receiving its result.
   The routes' Claude-harness side is the roster unit test and this probe.
 - The verification phase, live:
   the three one-shot examples of `## Goal` or stand-ins, and a `[[browse]]` thread with a clarification, on both harnesses.
