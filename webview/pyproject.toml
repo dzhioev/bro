@@ -11,6 +11,7 @@ dependencies = [
   "bro",
   "bro-ride",
   "mcp==1.28.1",
+  "pydantic",
 ]
 
 [project.scripts]
@@ -20,6 +21,9 @@ dependencies = [
 
 [project.entry-points."bro.worker_types"]
 webview = "bro.webview.worker:WebviewType"
+
+[project.entry-points."bro.toolsets"]
+webview = "bro.webview.mcp:toolset"
 
 [project.entry-points."bro.credentials"]
 cookies = "bro.webview.credentials:COOKIES"

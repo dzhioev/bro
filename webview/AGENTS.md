@@ -22,6 +22,13 @@ Run `sync-scripts --project webview` after adding or removing a CLI, and build t
 - `bro/webview/capture.py` — the container-side capture exchange and fixed storage-state call
 - `bro/webview/setup.py` — the host-side profile lock, seed and capture workflow, guarded store write, and summary
 - `bro/webview/cli.py` (`webview`) — the owner-side `open`, `close`, and `setup` verbs and the container-side `serve` and `capture` verbs
+- `bro/webview/mcp.py` — the registered `webview` toolset for typed owner-side open, command, live-roster, sharing, reopen, and close operations
+
+## Owner toolset
+
+The `webview` toolset is the typed owner surface over the mission wire.
+`open` retains the launch options and initial shares, `command` bounds reply text while preserving the whole text by artifact ref, and `tools` condenses the live Playwright roster.
+`share` returns the worker-side upload path, `reopen` repeats every retained option and share before restoring the last reported page URL, and `close` returns the terminal outcome.
 
 ## Owner command
 
