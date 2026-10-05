@@ -322,6 +322,7 @@ PYTEST_FILES = [
   'webview/bro/webview/capture_test.py',
   'webview/bro/webview/setup_test.py',
   'webview/bro/webview/cli_test.py',
+  'webview/bro/webview/mcp_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/green_trees_test.py',
   'local/bro/local/gate_display_test.py',
