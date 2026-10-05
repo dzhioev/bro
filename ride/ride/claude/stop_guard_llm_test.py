@@ -38,8 +38,8 @@ pytestmark = REQUIRES_CLAUDE_CREDENTIAL
 
 
 @pytest.fixture(scope='module')
-def claude(pytestconfig: pytest.Config) -> Path:
-  return pinned_claude(pytestconfig)
+def claude() -> Path:
+  return pinned_claude()
 
 
 def _stops(

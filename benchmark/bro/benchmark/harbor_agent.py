@@ -264,9 +264,8 @@ def run_command(
   the recorded detail have the framework's own error text. The ride runs under
   `setsid` and publishes its process group, which is what `kill_command` reaps:
   a TERM to the group reaches the launcher, which ends the ride through its own
-  teardown, joined members in their own sessions included. The session's PATH
-  leads with the bundle's `claude`, the one program the runtime spawns by name
-  rather than through its own scripts.
+  teardown, joined members in their own sessions included.
+  The runtime selects the checksum-recorded Claude binary carried beside its own installation.
   """
   launch = ride_command(
     bro=bro, instruction=instruction, harness=harness, llm=None if llm is None else f':{llm}'
@@ -276,7 +275,6 @@ def run_command(
   session = '; '.join(
     [
       f'echo $$ > {PGID_FILE}',
-      f'export PATH={BUNDLE.claude_dir}:"$PATH"',
       f'exec {launch} 2> {ACTIVITY_LOG}',
     ]
   )

@@ -3,6 +3,7 @@ from typing import Optional
 
 from bro.base import log
 from bro.workspace.paths import workspace_dir
+from ride.claude.claude_release import clean_cached_releases
 from ride.repository import clean_managed_mirrors
 from ride.runtime_bundle import clean_runtime_bundles
 from ride.workspace.docker import running_mounts
@@ -118,8 +119,12 @@ def clean_workspaces(
   }
   mirror_removed, mirror_skipped = clean_managed_mirrors(referenced, dry_run=dry_run)
   runtime_removed, runtime_skipped = clean_runtime_bundles(dry_run=dry_run)
+  release_removed, release_skipped = clean_cached_releases(dry_run=dry_run)
   action = 'would clean' if dry_run else 'cleaned'
   log.info('%s %d managed mirror(s), skipped %d referenced', action, mirror_removed, mirror_skipped)
   log.info('%s %d runtime bundle(s), skipped %d active', action, runtime_removed, runtime_skipped)
+  log.info(
+    '%s %d Claude Code release(s), skipped %d active', action, release_removed, release_skipped
+  )
   log.info('cleaned %d workspace(s), skipped %d, failed %d', removed, skipped, failed)
   return 1 if failed > 0 else 0

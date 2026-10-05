@@ -16,7 +16,9 @@ from typing import TYPE_CHECKING
 from bro.base import log
 from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
-from bro.summon import SUMMONER_ENV, summoned
+from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
+from bro.workspace.paths import ISOLATION_ENV
+from ride.claude import claude_release
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
@@ -25,14 +27,44 @@ from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
+from ride.workspace.build_context import claude_code_version
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
-def _run_claude(argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
-  return run_interactive(['claude', *argv], env, transcripts)
+_CONTAINER_CLAUDE = Path('/opt/claude-code/claude')
+_MCP_BACKSTOP_MILLISECONDS = 24 * 60 * 60 * 1000
+
+
+def _claude_binary() -> Path:
+  isolation = os.environ.get(ISOLATION_ENV)
+  if isolation == 'boxed':
+    return _CONTAINER_CLAUDE
+  if isolation != 'unboxed':
+    raise RuntimeError(f'{ISOLATION_ENV} must be set to boxed or unboxed')
+
+  runtime_value = os.environ.get(RUNTIME_ENV)
+  if runtime_value is None:
+    raise RuntimeError(f'{RUNTIME_ENV} is unset')
+  runtime = Path(runtime_value)
+  if not runtime.is_absolute():
+    raise RuntimeError(f'{RUNTIME_ENV} must be an absolute path, not {runtime_value!r}')
+  carried_directory = runtime / 'claude'
+  if carried_directory.exists():
+    return claude_release.verified_binary(carried_directory / 'claude')
+  return claude_release.cached_binary(claude_code_version(), claude_release.host_platform())
+
+
+def _apply_mcp_backstops(environment: dict[str, str]) -> None:
+  value = str(_MCP_BACKSTOP_MILLISECONDS)
+  environment['CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT'] = value
+  environment['MCP_TOOL_TIMEOUT'] = value
+
+
+def _run_claude(binary: Path, argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
+  return run_interactive([str(binary), *argv], env, transcripts)
 
 
 def _claude_state_dir() -> Path:
@@ -101,19 +133,19 @@ def _complete_run(emitted: threading.Event, result: str | None) -> None:
     channel.close()
 
 
-def _run_claude_root_solo(argv: list[str], env: dict[str, str], prompt: str) -> int:
+def _run_claude_root_solo(binary: Path, argv: list[str], env: dict[str, str], prompt: str) -> int:
   """run a root's print-mode Claude with each turn's reply on the session's
   stdout, and close its host-anchored quest on success."""
   with _trail_watch() as emitted:
     run = run_streaming(
-      ['claude', *argv], env, prompt, on_result=lambda reply: print(reply, flush=True)
+      [str(binary), *argv], env, prompt, on_result=lambda reply: print(reply, flush=True)
     )
   if run.code == 0 and not run.stopped:
     _complete_run(emitted, None)
   return run.code
 
 
-def _run_claude_summoned(argv: list[str], env: dict[str, str], prompt: str) -> int:
+def _run_claude_summoned(binary: Path, argv: list[str], env: dict[str, str], prompt: str) -> int:
   """run a summoned print-mode Claude and emit its broker lifecycle.
 
   A clean exit answers with the last turn's reply. A non-zero exit or a stopped
@@ -121,7 +153,7 @@ def _run_claude_summoned(argv: list[str], env: dict[str, str], prompt: str) -> i
   former, and a `raise`- or `answer`-ended session already sent its own. The
   reply is echoed to stdout either way, so the output tail still carries it."""
   with _trail_watch() as emitted:
-    run = run_streaming(['claude', *argv], env, prompt)
+    run = run_streaming([str(binary), *argv], env, prompt)
   reply = run.results[-1] if len(run.results) > 0 else ''
   print(reply, flush=True)
   if run.code != 0 or run.stopped:
@@ -131,7 +163,7 @@ def _run_claude_summoned(argv: list[str], env: dict[str, str], prompt: str) -> i
 
 
 def _run_claude_summoned_interactive(
-  argv: list[str], env: dict[str, str], transcripts: Path
+  binary: Path, argv: list[str], env: dict[str, str], transcripts: Path
 ) -> int:
   """the `_run_claude` of a manual summon child: claude runs interactively as
   usual, and the runner only emits the trail mark. The result is the
@@ -139,11 +171,16 @@ def _run_claude_summoned_interactive(
   answer, which the broker turns into the summoner's synthesized failure when
   the channel goes."""
   with _trail_watch():
-    return _run_claude(argv, env, transcripts).code
+    return _run_claude(binary, argv, env, transcripts).code
 
 
 def run_session(spec: 'SessionSpec | SessionRun') -> int:
   tree = Path.cwd()
+  try:
+    binary = _claude_binary()
+  except (OSError, RuntimeError, ValueError) as error:
+    log.error('cannot prepare pinned Claude Code: %s', error)
+    return 1
 
   transcripts = claude_projects_dir(tree)
   claude_args = list(spec.arguments)
@@ -197,9 +234,7 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
 
     env = {**os.environ}
     env['CLAUDE_CODE_TMPDIR'] = str(_claude_temp_dir())
-    # claude's MCP tool-call timeout (ms): the ~1-minute default kills
-    # legitimately slow tools (vision audits, renders)
-    env['MCP_TOOL_TIMEOUT'] = str(10 * 60 * 1000)
+    _apply_mcp_backstops(env)
     # claude resolves fast-mode availability from a stored OAuth credentials
     # file, and left to guess without one reports it disabled by an organization
     env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1'
@@ -210,13 +245,13 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
       if launch.prompt is None:
         raise RuntimeError('a solo session launches with a prompt')
       if summoned():
-        code = _run_claude_summoned(launch.argv, env, launch.prompt)
+        code = _run_claude_summoned(binary, launch.argv, env, launch.prompt)
       else:
-        code = _run_claude_root_solo(launch.argv, env, launch.prompt)
+        code = _run_claude_root_solo(binary, launch.argv, env, launch.prompt)
     elif summoned():
-      code = _run_claude_summoned_interactive(launch.argv, env, transcripts)
+      code = _run_claude_summoned_interactive(binary, launch.argv, env, transcripts)
     else:
-      code = _run_claude(launch.argv, env, transcripts).code
+      code = _run_claude(binary, launch.argv, env, transcripts).code
     if code != 0:
       log.error('claude exited with status %d', code)
 

@@ -12,13 +12,14 @@ Claude Code's own harness themed with the session's bro.
   a session selects the Claude harness, mounting the bro's additions to Claude Code's native tools.
   It contributes the `persona:` resolver through `bro.mcp.targets`.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
-  resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, and Claude process lifetime.
+  pinned absolute binary selection per isolation, resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
 - `interrupt.py` — how a Claude process is ended so its in-flight turn reaches the transcript:
   SIGINT for print mode, and for a TUI the interrupt keypress on a runner-owned pty that proxies the session's terminal.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config, the append prompt, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
 - `claude_auth.py` — the setup-token environment.
-- `claude_release.py` — a Claude Code version's standalone release binary for one platform, checksum-verified against its release manifest and cached.
+- `claude_release.py` — the host-wide standalone-release cache:
+  a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, and cleanup.
 - `shell_prefix.py` — the shell claude's Bash commands run in, pinned, and the prefix script through which each of them gets the session's PATH.
 - `claude_config.py` — the `claude/` state dir under a workspace:
   settings, transcript paths, subject reads, provisioning, and the container mount and env that carry it in.
@@ -55,3 +56,8 @@ Claude Code's own harness themed with the session's bro.
   — the session MCP server, recorder daemon, and statusLine projector
   — is named by its path in the runtime the runner runs from (`bro.base.spawn.console_script`), never by bare name:
   the session PATH carries the pinned session commands, and machinery is not among them.
+- The runner starts Claude by absolute path:
+  `/opt/claude-code/claude` from the pinned runtime image when boxed;
+  a checksum-recorded `claude/claude` carried by a materialized runtime when present;
+  otherwise `claude_release.cached_binary` at the same pin when unboxed.
+  A bare `claude` from the session PATH is never the harness executable.

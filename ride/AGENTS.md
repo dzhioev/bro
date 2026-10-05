@@ -69,7 +69,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   see `ride/workspace/AGENTS.md`.
 - `ride/setup/` — packaged runtime/project image and managed-session entrypoint assets;
   see `ride/setup/AGENTS.md`.
-- `ride/claude/` — the Claude Code harness implementation;
+- `ride/claude/` — the Claude Code harness implementation, including the host's verified pinned-release cache;
   see `ride/claude/AGENTS.md`.
 
 ## Invariants
@@ -93,7 +93,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   No pointer is published when trail recording is disabled.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
-  managed URL mirrors under `runtime_base()/repos/`.
+  managed URL mirrors under `runtime_base()/repos/`;
+  and checksum-recorded Claude Code releases under `runtime_base()/claude-code/`, by pinned version and platform.
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails use a dedicated fixed absolute mount.
 - Every attached workspace tree is an independent clone on its recorded branch.
@@ -108,6 +109,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   A process holds a shared tag lock from before ensure until exit, missing-tag builds serialize on a separate lock, and pruning keeps a non-blocking exclusive tag lock across removal.
   A foreground worker run resolves and holds the invoking installation's runtime and worker images through those locks but prunes none;
   it mounts only the runtime volume, publishes declared ports on loopback, pipes stdin and stdout, and removes its container on exit.
+- An unboxed Claude session holds its pinned release version's shared lock from before cache verification until the process exits.
+  A missing version downloads under a separate lock into unique staging, and `ride clean` keeps an exclusive version lock across removing an unused release.
 - A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
   — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
   — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.

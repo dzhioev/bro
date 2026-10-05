@@ -403,17 +403,13 @@ sys.exit(5)
 """
 
 # scenarios F/G: a wrapper the entrypoint execs in place of the session command.
-# it drops a fake `claude` onto PATH — the session runner resolves it instead of
-# the image's real one — then execs the runner itself ("$@", the same
-# `do-ride solo|along …` invocation the started-party launcher sends). the fake records
-# its argv/env to the report file, proving the argv was built in-container by the
-# frozen runtime; under RIDE_E2E_LINGER it waits for the print-mode interrupt,
-# SIGINT (exit 7), so the harness can assert `docker stop` reaches claude through
-# tini → runner.
-_DO_RIDE_WRAPPER = """
-mkdir -p /tmp/e2e-bin
-cat > /tmp/e2e-bin/claude <<'FAKE'
-#!/usr/bin/env python3
+# the driver mounts `_FAKE_CLAUDE` over the image's absolute Claude directory,
+# then this execs the runner itself ("$@", the same `do-ride solo|along …`
+# invocation the started-party launcher sends). the fake records its argv/env to
+# the report file, proving the argv was built in-container by the frozen runtime;
+# under RIDE_E2E_LINGER it waits for the print-mode interrupt, SIGINT (exit 7),
+# so the harness can assert `docker stop` reaches claude through tini → runner.
+_FAKE_CLAUDE = """#!/usr/bin/env python3
 import json, os, signal, sys
 from pathlib import Path
 
@@ -428,11 +424,9 @@ if os.environ.get('RIDE_E2E_LINGER') == '1':
   signal.pause()
   sys.exit(8)
 sys.exit(12)
-FAKE
-chmod +x /tmp/e2e-bin/claude
-export PATH="/tmp/e2e-bin:$PATH"
-exec "$@"
 """
+
+_DO_RIDE_WRAPPER = 'exec "$@"\n'
 
 _TRAIL_HEADER_WRAPPER = """
 set +e
@@ -465,7 +459,14 @@ claude_dir = workspace.path / 'claude'
 session_dir = workspace.path / 'session'
 claude_dir.mkdir()
 session_dir.mkdir()
-extra_mounts = [f'{claude_dir}:/home/ride/.claude', f'{session_dir}:/var/ride/session']
+claude_install = workspace.path / 'e2e-claude-install'
+claude_install.mkdir()
+claude_binary = claude_install / 'claude'
+claude_binary.write_text(os.environ['RIDE_E2E_CLAUDE'])
+claude_binary.chmod(0o755)
+extra_mounts = [f'{claude_dir}:/home/ride/.claude',
+                f'{session_dir}:/var/ride/session',
+                f'{claude_install}:/opt/claude-code:ro']
 if os.environ.get('RIDE_E2E_LOCAL_TRAILS') == '1':
   trails_dir = workspace.path / 'trails'
   trails_dir.mkdir()
@@ -645,6 +646,7 @@ class _Driver:
     driver_env['RIDE_E2E_IMAGE'] = env.image
     driver_env['RIDE_E2E_RUNTIME_IMAGE'] = env.runtime_image
     driver_env['RIDE_E2E_RUNTIME_HASH'] = env.runtime_bundle_hash
+    driver_env['RIDE_E2E_CLAUDE'] = _FAKE_CLAUDE
     driver_env['XDG_DATA_HOME'] = str(env.data_home)
     driver_env.update(extra_env)
     master, slave = pty.openpty()

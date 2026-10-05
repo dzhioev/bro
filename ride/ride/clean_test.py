@@ -27,8 +27,10 @@ def test_clean_collects_all_global_stores_after_removing_workspaces(monkeypatch)
   monkeypatch.setattr(clean, 'hold_workspace_removal', lambda *_args: contextlib.nullcontext())
   mirrors = MagicMock(return_value=(1, 1))
   bundles = MagicMock(return_value=(2, 0))
+  releases = MagicMock(return_value=(3, 1))
   monkeypatch.setattr(clean, 'clean_managed_mirrors', mirrors)
   monkeypatch.setattr(clean, 'clean_runtime_bundles', bundles)
+  monkeypatch.setattr(clean, 'clean_cached_releases', releases)
 
   assert clean.clean_workspaces() == 0
 
@@ -36,6 +38,7 @@ def test_clean_collects_all_global_stores_after_removing_workspaces(monkeypatch)
   retained.remove.assert_not_called()
   mirrors.assert_called_once_with({'https://example.test/retained.git'}, dry_run=False)
   bundles.assert_called_once_with(dry_run=False)
+  releases.assert_called_once_with(dry_run=False)
 
 
 def test_clean_aborts_before_removing_anything_when_docker_is_unreachable(monkeypatch):
@@ -56,6 +59,7 @@ def test_dry_run_does_not_create_a_workspace_lock(monkeypatch):
   workspace = clean.Workspace.create('dry', None, clean.Isolation.UNBOXED)
   monkeypatch.setattr(clean, 'clean_managed_mirrors', MagicMock(return_value=(0, 0)))
   monkeypatch.setattr(clean, 'clean_runtime_bundles', MagicMock(return_value=(0, 0)))
+  monkeypatch.setattr(clean, 'clean_cached_releases', MagicMock(return_value=(0, 0)))
 
   assert clean.clean_workspaces(dry_run=True, names=['dry']) == 0
   assert not workspace.lockfile.exists()
@@ -78,6 +82,7 @@ def test_force_removes_an_explicit_unrecognized_workspace_without_reading_it(mon
   monkeypatch.setattr(clean.Workspace, 'all', MagicMock(return_value=[]))
   monkeypatch.setattr(clean, 'clean_managed_mirrors', MagicMock(return_value=(0, 0)))
   monkeypatch.setattr(clean, 'clean_runtime_bundles', MagicMock(return_value=(0, 0)))
+  monkeypatch.setattr(clean, 'clean_cached_releases', MagicMock(return_value=(0, 0)))
 
   assert clean.clean_workspaces(force=True, names=['old']) == 0
   removed.assert_called_once_with(path)
