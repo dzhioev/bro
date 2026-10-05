@@ -53,7 +53,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   a pinned standalone CPython with the dependencies `WHEEL_PACKAGES` resolves to against the workspace lock and those distributions themselves as built wheels installed into its own site-packages,
   every console script relocated to find the interpreter beside itself,
   ride's shim farm over the session commands,
-  and the Claude Code binary at ride's pinned version under `claude/`, checksum-verified from the release manifest and cached between builds.
+  and the Claude Code binary at ride's pinned version under `claude/`, copied from ride's locked host release cache with its checksum record beside it.
   Its manifest records those inputs and gives the bundle a content-derived identity.
   `Bundle` is the layout a consumer addresses — interpreter, scripts, shim farm, `claude`, manifest, and identity;
   `built(root)` reports an absent, incomplete, or malformed bundle rather than building one behind the caller's back
