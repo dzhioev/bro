@@ -373,8 +373,9 @@ _QUEST_SAY_DESCRIPTION = (
 _QUEST_ASK_DESCRIPTION = (
   'ask a question on a quest by `quest_id` — a child quest, or `self` to your own summoner — '
   'and return its id; `reply_to` makes it a counter-question to the question named. `wait` '
-  'blocks for the reply in seconds and returns the answered state; expiry returns the asked '
-  'state with the id, while the host keeps the question live. text over the message bound is '
+  'blocks for the reply in seconds and returns the answered state for a plain reply, or the '
+  'question state with its `counter_question_id` when the reply asks back; expiry returns the '
+  'asked state with the original id, while the host keeps the question live. text over the message bound is '
   'refused with its size; mint an artifact and send the ref instead.'
   + _claude_blocking_caution(
     'if the background task is interrupted, recover the eventual reply with `quest_history` '
@@ -388,6 +389,12 @@ _QUEST_ASK_NATIVE_DESCRIPTION = (
   'and return its id; `reply_to` makes it a counter-question to the question named. the reply '
   'arrives through `quest watch` and remains readable with `quest_history`. text over the '
   'message bound is refused with its size; mint an artifact and send the ref instead.'
+)
+
+
+_QUEST_SHARE_DESCRIPTION = (
+  'hand an artifact ref this session can reach to a live child quest by `quest_id`. the host '
+  'refuses an unknown, ended, non-bro, or unowned quest and a ref outside this session’s view.'
 )
 
 
@@ -764,6 +771,18 @@ def _quest_ask_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
   )
 
 
+def _quest_share_tool(variables: Variables) -> llm_mcp.Tool:
+  from bro import quest as quest_client
+
+  async def _quest_share(quest_id: str, ref: str) -> dict[str, Any]:
+    shared_with = await off_loop(quest_client.share, quest_id, ref)
+    return {'state': 'shared', 'quest_id': shared_with, 'ref': ref}
+
+  return llm_mcp.FunctionTool(
+    _quest_share, name='quest_share', description=_QUEST_SHARE_DESCRIPTION, variables=variables
+  )
+
+
 def _quest_list_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
@@ -972,6 +991,7 @@ _SERVICE_TOOL_NAMES = (
   'quest_history',
   'quest_say',
   'quest_ask',
+  'quest_share',
   'quest_list',
   'quest_cancel',
   'job',
@@ -1033,6 +1053,7 @@ def _build_service_server(
         'quest_history',
         'quest_say',
         'quest_ask',
+        'quest_share',
         'quest_list',
         'quest_cancel',
       ]
@@ -1059,6 +1080,7 @@ def _build_service_server(
     tools.append(_quest_history_tool(variables, harness))
     tools.append(_quest_say_tool(variables))
     tools.append(_quest_ask_tool(variables, harness))
+    tools.append(_quest_share_tool(variables))
     tools.append(_quest_list_tool(variables))
     tools.append(_quest_cancel_tool(variables, harness))
   if has_jobs:

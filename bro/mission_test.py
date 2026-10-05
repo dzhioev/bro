@@ -141,6 +141,76 @@ async def test_ask_wait_prints_a_typed_reply(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
+async def test_ask_wait_reports_a_typed_counter_question_and_its_id(monkeypatch, capsys, caplog):
+  caplog.set_level('INFO')
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(
+        mission.main,
+        ['mission', 'ask', 'WEB-1', '{"tool":"snapshot"}', '--wait', '5'],
+      )
+    )
+    channel, query = await next_message(server)
+    live = quest_record(
+      'WEB-1', 'started', type='webview', talk=['owner.question', 'worker.question']
+    )
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
+    _, question = await next_message(server)
+    assert question.id is not None
+    asked = _typed_entry(1, 'owner', {'tool': 'snapshot'}, question_id=question.id, pending=True)
+    channel, query = await next_message(server)
+    await reply(
+      server,
+      channel,
+      query,
+      outcome='ok',
+      value={'mission': {**live, 'messages': [asked], 'chat_seq': 1}},
+    )
+    channel, waiting = await next_message(server)
+    counter_question = _typed_entry(
+      2,
+      'worker',
+      {'question': 'Which frame?'},
+      question_id='COUNTER-1',
+      reply_to=question.id,
+      pending=True,
+    )
+    await reply(
+      server,
+      channel,
+      waiting,
+      outcome='ok',
+      value={'mission': {**live, 'messages': [asked, counter_question], 'chat_seq': 2}},
+    )
+
+    assert await task == mission.QUESTION_EXIT_CODE
+    assert json.loads(capsys.readouterr().out) == {'question': 'Which frame?'}
+    assert 'counter_question_id COUNTER-1' in caplog.text
+    assert "mission ask WEB-1 '<json>' --reply-to COUNTER-1 --wait" in caplog.text
+
+  assert mission.asked_view(
+    mission.Asked('WEB-1', question.id, {'question': 'Which frame?'}, 'COUNTER-1')
+  ) == {
+    'state': 'question',
+    'mission_id': 'WEB-1',
+    'question_id': question.id,
+    'answer': {'question': 'Which frame?'},
+    'counter_question_id': 'COUNTER-1',
+  }
+
+
+def test_ask_wait_bound_exits_running_and_keeps_the_question_id(monkeypatch, capsys):
+  monkeypatch.setattr(
+    mission,
+    'ask',
+    lambda mission_id, payload, *, reply_to, wait: mission.Asked(mission_id, 'QUESTION-1'),
+  )
+
+  assert mission._ask('WEB-1', {'tool': 'snapshot'}, None, 0.1) == mission.RUNNING_EXIT_CODE
+  assert capsys.readouterr().out == 'QUESTION-1\n'
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
   ('worker_type', 'result'),
   [

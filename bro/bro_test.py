@@ -1513,6 +1513,7 @@ _QUEST_TOOLS = {
   'quest_history',
   'quest_say',
   'quest_ask',
+  'quest_share',
   'quest_list',
   'quest_cancel',
 }
@@ -1569,6 +1570,7 @@ class TestSummonTool:
     assert properties(native['quest_history']) == {'quest_id'}
     assert properties(native['quest_say']) == {'quest_id', 'text', 'reply_to'}
     assert properties(native['quest_ask']) == {'quest_id', 'text', 'reply_to'}
+    assert properties(native['quest_share']) == {'quest_id', 'ref'}
     assert properties(native['quest_cancel']) == {'quest_id'}
     assert 'detach' in properties(served['summon'])
     assert {'wait', 'timeout'} <= properties(served['quest_check'])
@@ -1642,6 +1644,28 @@ class TestSummonTool:
     assert calls == [('self', 'yes', 'Q1')] * 2
 
   @pytest.mark.asyncio
+  async def test_quest_share_hands_a_ref_to_a_live_child(self, monkeypatch):
+    from bro import quest as quest_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    calls = []
+
+    def share(quest_id, ref):
+      calls.append((quest_id, ref))
+      return quest_id
+
+    monkeypatch.setattr(quest_module, 'share', share)
+    tool = await _find_tool(EchoBro(), 'quest_share')
+    ref = f'sha256:{"a" * 64}'
+
+    assert await tool.call({'quest_id': 'REQ-1', 'ref': ref}) == {
+      'state': 'shared',
+      'quest_id': 'REQ-1',
+      'ref': ref,
+    }
+    assert calls == [('REQ-1', ref)]
+
+  @pytest.mark.asyncio
   async def test_native_quest_cancel_returns_after_acceptance(self, monkeypatch):
     from bro import quest as quest_module
 
@@ -1659,7 +1683,7 @@ class TestSummonTool:
     }
 
   @pytest.mark.asyncio
-  async def test_mcp_quest_ask_returns_the_asked_state_and_closes_its_client(self, monkeypatch):
+  async def test_mcp_quest_ask_returns_a_counter_question_and_closes_its_client(self, monkeypatch):
     from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
@@ -1668,14 +1692,18 @@ class TestSummonTool:
     monkeypatch.setattr(
       quest_module,
       'ask',
-      lambda quest_id, text, *, reply_to, wait, client: quest_module.Asked(quest_id, 'QUESTION-1'),
+      lambda quest_id, text, *, reply_to, wait, client: quest_module.Asked(
+        quest_id, 'QUESTION-1', 'Which environment?', 'COUNTER-1'
+      ),
     )
     tool = await _find_tool(EchoBro(), 'quest_ask', harness='claude')
 
     assert await tool.call({'quest_id': 'REQ-1', 'text': 'approve?', 'wait': 60}) == {
-      'state': 'asked',
+      'state': 'question',
       'quest_id': 'REQ-1',
       'question_id': 'QUESTION-1',
+      'answer': 'Which environment?',
+      'counter_question_id': 'COUNTER-1',
     }
     assert client.closed
 
