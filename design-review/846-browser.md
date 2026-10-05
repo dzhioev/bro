@@ -7,7 +7,7 @@ this file and its pull request are thrown away once the design settles.
 ## Design
 
 Settled with the user on 2026-10-01 and 2026-10-02 (trail `01m3wsdp4t-fthat3z5-ag25bemb`), after measuring a real webview from the design session.
-Reviewed with the user on 2026-10-03 to 2026-10-05 against the code and a live webview, through a throwaway design-review pull request.
+Reviewed with the user on 2026-10-03 to 2026-10-05 against the code and a live webview, through the throwaway design-review pull request #848.
 Where the `design findings` comment differs, this section supersedes it.
 
 ### Measured
@@ -81,13 +81,18 @@ The browser's context then grows by about the answer per step, whatever the page
   `bro.mcp.Toolset` gains `optional_secrets`, carried by its manifest into `MCPServerSpec.optional_secrets` and so into `bro.optional_secrets()`:
   a toolset declares a credential it uses when present, which hydration loads without requiring.
 - **Counter-question ids on blocking asks.**
-  When the reply to a blocking `quest ask --wait` is itself a question, the call reports that question's id:
-  the CLI prints the text and exits 4 with stderr naming the id and the ready `quest ask <quest> '<answer>' --reply-to <id> --wait` command, as a blocking summon does for a child question, and the `bro::quest_ask` view carries the id.
+  When the reply to a blocking `quest ask --wait` is itself a question, the call reports that question's id.
+  The `bro::quest_ask` view keeps `question_id`, the question the call asked, and adds `counter_question_id`, the reply's own id, under `state: question` with the reply's text as `answer`;
+  a plain reply stays `state: answered`, and a wait that reached its bound `state: asked`.
+  The CLI prints the text and exits 4 with stderr naming `counter_question_id` and the ready `quest ask <quest> '<answer>' --reply-to <id> --wait` command, as a blocking summon does for a child question.
   The wait's bound, which exits 4 today, exits 3 instead, as `quest check` and `quest cancel` do at theirs, so 4 always means a question awaits the caller.
-  `mission ask` gets the same.
+  `mission ask` and its view get the same, the reply's JSON payload as `answer`.
   `bro/prompts/summoner.md` and `bros/bro/spells/ask.md` gain a sentence:
   a reply that is itself a question is answered in its thread with a counter-question.
   The bro harness's `quest watch` lines already show both ids.
+- **`quest_share`.**
+  The bro service tools gain `quest_share(quest_id, ref)` beside the other quest verbs, over `bro.mission.share`:
+  it hands a ref the session can reach to a live child quest, as `mission share` does from a shell, so an owner without one can pass a file made after the summon.
 - **`claude.WEB`.**
   `bro/harness/claude.py` gains `WEB = ('WebFetch', 'WebSearch')`, Claude Code's own fetchers, so a persona can withhold them.
 - **Claude's MCP limits.**
@@ -113,6 +118,9 @@ it names no persona and holds no LLM.
   and a webview that ended as how it ended.
 - `tools(webview)` renders the live roster compactly, each tool's name, parameters, and first sentence, since the raw `{"webview": "tools"}` reply spills (16.5 KB).
 - `share(webview, ref)` hands a ref this session can reach to the live webview (`mission share`) and returns the path to give `browser_file_upload`, listing a directory ref's entries.
+- `reopen(webview)` relaunches a webview that ended, with the options of its `open` and every ref shared with it since, and navigates to the last URL its replies named;
+  it returns the new mission id and the noVNC URL, if any.
+  The toolset keeps those per webview it opened, so no option or restriction is lost on the way.
 - `close(webview)` closes through `close_webview` and returns the outcome.
 
 ### `artifact::` — reading artifacts (core)
@@ -150,8 +158,10 @@ The cut keeps the answer, which is what grows the browser's context, small;
 bulk data belongs in a file written by `browser_evaluate` with `filename`.
 There is no input cap:
 the reader model's context limit fails an oversized capture loudly, and `look` relays it with the hint to narrow by `target` or use `text`.
-The toolset declares the key `mu` reads (today `openai`, the one backend `mu` implements) as its optional secret;
-without it, `look` fails naming the fallbacks (`browser_find`, a targeted snapshot, `artifact::read` and `grep`).
+The toolset declares the key `mu` reads (today `openai`, the one backend `mu` implements) as its optional secret, and holding it is what sends everything `look` reads, the question included, to OpenAI.
+On the bro harness that is the browser's own provider;
+on the Claude harness it is a second one, which a host withholds by revoking `openai` for the browser (`projects.<identity>.bros.browser.revoke`).
+Without the key, `look` fails naming the fallbacks (`browser_find`, a targeted snapshot, `artifact::read` and `grep`).
 
 ### The `browser` persona (`bro-webview`)
 
@@ -175,7 +185,7 @@ Its system prompt carries:
   Produce large data as files (`browser_evaluate` with `filename`, screenshots, response bodies through `browser_network_request`) and report their refs.
   Close the webview before answering.
 - **Reporting.**
-  Speak in the summoner's terms, without refs, markup, or tool names;
+  Speak in the summoner's terms, without element refs, markup, or tool names;
   quote confirmations verbatim;
   name what was changed on any site (submitted, unsubscribed, posted) and the refs of files produced.
 - **Policy.**
@@ -193,10 +203,11 @@ Its system prompt carries:
   Open with a profile only when the request names it, and limit `allow` to the task's sites then.
 - **Decisions.**
   Ask the summoner when the quest permits a question, with `bro::quest_ask` on `self` and no `wait`, the answer arriving on the quest watch;
-  otherwise stop and `raise`, naming the decision needed.
+  in a session a human drives directly, ask in the conversation;
+  only unattended with no way to ask, stop and `raise`, naming the decision needed.
 - **Failures.**
   A tool error is the page's business and is reported as such;
-  a webview that ended is reopened once at the last URL, telling the summoner the page state was lost.
+  a webview that ended is reopened once with `webview::reopen`, telling the summoner the page state was lost and passing on a new noVNC URL.
 
 ### `[[browse]]` — the owner-led session
 
@@ -211,7 +222,8 @@ Its description is the owner's contract, shown on `bro show browser`:
   Answer it in the thread with a counter-question, `quest ask <quest> '<answer>' --reply-to <its id> --wait`, whose reply carries the outcome.
 - Ask "done" to end;
   the browser closes its webview, replies, and answers with a log of the session.
-- To upload a file under its own name, share a directory ref that holds it.
+- To upload a file, share it with the session, at the summon (`share`) or later (`bro::quest_share`, or `mission share <quest> <ref>` from a shell), and name it in the instruction;
+  the browser shares it on to its webview and uploads it from there, and a file inside a shared directory ref keeps its own name.
 - Descriptions repeat what pages say, so treat claims made on pages as untrusted.
 
 Its procedure:
@@ -226,8 +238,8 @@ Its procedure:
    longer data goes as a file ref.
 3. Ask a counter-question instead when the instruction is ambiguous, such as two matching buttons, or crosses a policy line it did not settle, then act on the answer that arrives in the thread.
    An answer sent as a plain reply leaves no question to close, so the outcome then goes as a say.
-4. On "done", close the webview, reply, and answer with the session log:
-   the sites, the actions with their outcomes, and the files produced.
+4. On "done", close the webview, reply, and answer with the session log within the answer bound:
+   the sites, the changes made on them, and the refs of the files produced, condensing the actions when they do not fit, since each outcome already went out in its reply.
 
 Without a summoner, as in `ride along browser`, the human's messages are the instructions and the replies go to the conversation.
 
@@ -236,13 +248,14 @@ Without a summoner, as in `ride along browser`, the human's messages are the ins
 No spell:
 the summon prompt is the request, and the persona's method and policy carry it.
 Owners are advised to grant `worker.question`, so the browser can ask before paying, accepting terms, or choosing between options;
-without it, the browser stops and raises, naming the decision.
+without it, an unattended browser stops and raises, naming the decision.
 
 ### Bounds
 
 | Bound | Value | Source |
 |---|---|---|
 | quest and mission message | 16 KiB | `MAX_MESSAGE_BYTES`; longer data goes as a ref |
+| final answer | 64 KiB | `MAX_ANSWER_BYTES`; the `[[browse]]` session log is condensed to fit |
 | one command | 120 s | `COMMAND_DEADLINE`; the daemon ends the webview past it |
 | open | 1200 s | `OPEN_TIMEOUT`; the launch is cancelled at it |
 | inline reply | 4 KB | this design; a `command` reply or `look` answer past it is cut with a marker |
@@ -253,6 +266,8 @@ without it, the browser stops and raises, naming the decision.
 ### Risks
 
 - An answer read from page text cannot be checked against refs, so the browser quotes confirmations through `artifact::read`, `grep`, or `browser_find`.
+- `look` sends what it reads to OpenAI whenever the browser holds `openai` (`### browser::look`);
+  on the Claude harness that is a second provider receiving page content, logged-in pages included.
 - `mu` calls stay outside the session's token accounting, as `bro::cast` calls do.
 - A navigation can still carry request data off-site;
   the journal and the launch audit record every command.
@@ -301,51 +316,60 @@ without it, the browser stops and raises, naming the decision.
   entry points `bro` (`browser`) and `bro.toolsets` (`webview`);
   `bros.browser` joins `[tool.uv.build-backend] module-name`.
 - Core: `may_launch` in `bro/bro.py`, `Toolset.optional_secrets` in `bro/mcp.py`, `WEB` in `bro/harness/claude.py`, and the `artifact` toolset registered under `bro.toolsets`;
-  the counter-question ids and the bound's exit code in `bro/quest.py` and `bro/mission.py`;
+  the counter-question ids and the bound's exit code in `bro/quest.py` and `bro/mission.py`, and `quest_share` among the service tools in `bro/bro.py`;
   ride: the seed in `ride/ride/scope.py` and the MCP limits in `ride/ride/claude/runner.py`.
-- Docs: root `AGENTS.md` (the webview row), `webview/AGENTS.md` (the toolset, the persona, the spell), and `bro/AGENTS.md` (the artifact toolset, the `WEB` group);
-  `bro/reference/extending.md` (`may_launch`, a toolset's optional secrets) and `bro/reference/ride.md` (the seed, the transport sentence, and `ask`'s exit codes);
-  the summoner fragment and the `ask` spell (answering a counter-question), and `README.md` (`browser` among the shipped personas).
+- Docs: root `AGENTS.md` (the webview row), `webview/AGENTS.md` (the toolset, the persona, the spell), and `bro/AGENTS.md` (the artifact toolset, the `WEB` group, `quest_share`);
+  `bro/reference/extending.md` (`may_launch`, a toolset's optional secrets) and `bro/reference/ride.md` (the seed, the transport sentence, `ask`'s exit codes and view, `quest_share`);
+  the summoner fragment and the `ask` spell (answering a counter-question, sharing with a live child), and `README.md` (`browser` among the shipped personas).
 
 ### Rollout
 
 No wire change:
-no envelope, kind, or `PROTOCOL_REVISION` moves, and the journal already returns a reply's own question id, which the counter-question report reads.
+no envelope, kind, or `PROTOCOL_REVISION` moves;
+the journal already returns a reply's own question id, which the counter-question report reads, and `quest_share` sends the `artifact.share` kind `mission share` sends.
 `bro`, `bro-ride`, and `bro-webview` ship from one revision, and a ride freezes one installation into its runtime bundle for its whole life, so no ride mixes them;
 the seed is folded in the host's broker root, from that root's bundle.
 In order:
 
 1. The landing merges to master.
 2. The launcher installs that revision, the three distributions together.
-   Rides already running keep their bundle, so a root started before the install refuses `browser` as an unknown bro until it is resumed or relaunched.
+   A root started before the install keeps its bundle for good, since `ride resume` re-execs from the bundle its workspace recorded:
+   it keeps working, and it refuses `browser` as an unknown bro.
 3. A logged-in profile is captured with `webview setup <instance>` before its pass right is granted:
    the fold refuses a pass right naming an instance missing from the store, failing every browser launch that layer reaches.
    Per-bro grants (`projects.<identity>.bros.browser.grant`) follow the install;
    an older installation reading the same `~/.bro.json` leaves a `browser` entry inert, since no launch of its own resolves it.
-4. The coordinator resumes with `--grant @browser`, its resume freezing the new installation, before the verification phase.
+4. Verification runs from a root started after the install, granted `@browser`, such as a fresh coordinator session that picks the work up from this page.
 
-A Claude Code pin that stopped reading `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` would bring the 300 s cut back as aborted calls, each still recoverable by quest id.
+Boxed sessions run the image's pinned Claude Code, 2.1.280, which reads `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`, `0` turning the cut off as its own abort message documents.
+Unboxed sessions run the host's own `claude`, whatever its version:
+one that does not read the variable keeps its own idle cut, aborting a long call as today with the quest still recoverable by id,
+and a pin moving to such a version would do the same to boxed sessions.
 Rollback is installing the previous revision:
-no store, journal, or configuration format changes, and roots launched after it refuse `browser` again.
+no store, journal, or configuration format changes, and roots started after it refuse `browser` again.
 
 ### Verification the stages owe
 
 - Unit tests:
   `may_launch` (the seed, a layer's revoke, the MRO union, `bro` refused, an unknown type failing the fold);
   a toolset's optional secrets reaching the bro's optional tier;
-  a counter-question reply reporting its id on `quest ask` and `mission ask` and the `quest_ask` view, and the wait's bound exiting 3;
+  a counter-question reply reporting its id on `quest ask` and `mission ask` and in both views (`state: question`, `question_id` kept, `counter_question_id` added), and the wait's bound exiting 3;
+  `quest_share` handing a ref to a live child quest;
   the runner's MCP environment;
-  both toolsets over a fake mission (command rendering, the inline cut and its mint, a spill, an error, an ended webview, `open`'s cancel, `share`'s path);
+  both toolsets over a fake mission (command rendering, the inline cut and its mint, a spill read for its head, an error, an ended webview, `open`'s cancel, `reopen` repeating the options, the shares, and the last URL, `share`'s path);
   the `artifact` toolset (windows, grep, a directory path, an unreachable ref refused);
-  `look` with a fake reader (the capture command, a text capture decoded and minted, a `ref` read, an empty capture refused, the question in the prompt, a fabricated ref dropped, the answer cut);
+  `look` with a fake reader (the capture command, a text capture decoded and minted, a `ref` read, an empty capture refused, the question in the prompt, a fabricated ref dropped, the answer cut, and no key failing with the fallbacks named);
   the persona's roster per harness.
-- `webview_e2e` (host-only, its own CI runner):
+- `webview_e2e` (host-only, its own CI runner), over `data:` pages so no route depends on a live site:
   the `webview` and `artifact` toolsets against a real webview
   — open, a command, read and grep the snapshot it wrote, share and upload a directory ref keeping its file name, close —
   and `look` with a fake reader over a real snapshot, checking real refs.
   It also owes both routes end to end, the browser summoned through the real broker with no launch grant beyond its seed and driven by a scripted native LLM, as `ride/ride/e2e_test.py` scripts its children:
   a one-shot request (open, a command, `look` with a fake reader, close, answer),
-  and a `[[browse]]` thread (an instruction answered by a counter-question that `quest ask --wait` reports with its id and exit 4, the owner's counter-question answered with the outcome, then "done" ending with the session log).
+  and a `[[browse]]` thread:
+  an instruction answered by a counter-question that `quest ask --wait` reports with its id and exit 4, and the owner's counter-question answered with the outcome;
+  a file the owner shares into the running session with `quest_share`, which the browser shares on and uploads under its own name;
+  then "done", ending with the session log.
 - The opt-in `llm` stage (real tokens):
   `look`'s reader over a checked-in real snapshot, every element it returns present there with its role and name;
   and a Claude-harness session whose MCP tool stays silent past 300 s receiving its result.
@@ -357,10 +381,10 @@ no store, journal, or configuration format changes, and roots launched after it 
 
 - The browser needs `:launch.webview`, which `may_launch` seeds;
   the LLM credential of its harness (`openai` on the bro harness, `claude_code` on the Claude harness);
-  the key `mu` reads for `look` (today `openai`, optional);
+  the key `mu` reads for `look` (today `openai`, optional, and what sends pages to OpenAI);
   and optionally `trails` for recording.
 - It runs spawned or as a root session:
-  a manually launched browser has no artifact view, so `look`, `artifact::`, `tools`, and `share`'s listing fail in it, naming that.
+  a manually launched browser has no artifact view, so `look`, `artifact::`, `tools`, `share`'s listing, and `command` on a reply that spills fail in it, naming that.
 - A logged-in profile needs a `cookies+<instance>` captured with `webview setup` on a host terminal and `:launch.webview.pass.cookies+<instance>` granted to the browser in `~/.bro.json` (`projects.<project>.bros.browser.grant`);
   a visible view needs `:launch.webview.vnc`.
 - Owners need `@browser`.
