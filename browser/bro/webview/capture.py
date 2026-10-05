@@ -162,7 +162,7 @@ async def capture(stdin: BinaryIO, stdout: BinaryIO) -> None:
   options = decode_options(raw_options)
   seed = _read_seed(stdin)
 
-  with tempfile.TemporaryDirectory(prefix='bro-webview-capture-') as directory:
+  with tempfile.TemporaryDirectory(prefix='bro-browser-capture-') as directory:
     root = Path(directory)
     with contextlib.ExitStack() as process_stack:
       xvfb, display = process_stack.enter_context(serve._xvfb())

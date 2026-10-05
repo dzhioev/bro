@@ -64,7 +64,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["bench", "dev", "local", "native", "oops", "ride", "webview"]
+members = ["bench", "dev", "local", "native", "oops", "ride", "browser"]
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
@@ -171,17 +171,17 @@ wheel-exclude = [
 consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "bench", "dev", "local", "native", "oops", "ride", "webview"]
+pythonpath = [".", "bench", "dev", "local", "native", "oops", "ride", "browser"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "bench", "dev", "local", "native", "oops", "ride", "webview", "conftest.py"]
+include = ["bro", "bros", "bench", "dev", "local", "native", "oops", "ride", "browser", "conftest.py"]
 # `oops/cdk` type-checks in its own environment, the only one holding the CDK
 exclude = ["bro/setup/", ".venv/", "*.egg-info/", "oops/cdk/"]
-extraPaths = [".", "bench", "dev", "local", "native", "oops", "ride", "webview"]
+extraPaths = [".", "bench", "dev", "local", "native", "oops", "ride", "browser"]
 venvPath = "."
 venv = ".venv"
 
@@ -189,7 +189,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "bench", "dev", "local", "native", "oops", "oops/cdk", "ride", "webview", "benchmark"]
+src = [".", "bench", "dev", "local", "native", "oops", "oops/cdk", "ride", "browser", "benchmark"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]
