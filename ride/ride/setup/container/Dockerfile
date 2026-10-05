@@ -28,7 +28,9 @@ RUN bash -e /tmp/bro-shell/install_awscli.sh \
  && rm -rf /tmp/bro-shell
 
 ARG CLAUDE_CODE_VERSION
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && mkdir -p /opt/claude-code \
+ && ln -s "$(command -v claude)" /opt/claude-code/claude
 
 RUN useradd -m -u 1000 -s /bin/bash ride \
  && mkdir -p /home/ride/.claude \

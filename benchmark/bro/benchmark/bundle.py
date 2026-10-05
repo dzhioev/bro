@@ -150,6 +150,10 @@ class Bundle:
     return self.claude_dir / 'claude'
 
   @property
+  def claude_checksum(self) -> Path:
+    return self.claude.with_suffix('.sha256')
+
+  @property
   def manifest(self) -> Path:
     return self.root / 'bundle.json'
 
@@ -163,7 +167,14 @@ class Bundle:
     return str(_load_manifest(self.manifest)['source_commit'])
 
   def missing(self) -> tuple[Path, ...]:
-    parts = (self.interpreter, self.script('ride'), self.shims, self.claude, self.manifest)
+    parts = (
+      self.interpreter,
+      self.script('ride'),
+      self.shims,
+      self.claude,
+      self.claude_checksum,
+      self.manifest,
+    )
     return tuple(part for part in parts if not part.exists())
 
 
@@ -217,11 +228,6 @@ def workspace_root() -> Path:
 
 def default_root(workspace: Path) -> Path:
   return workspace / 'var' / 'benchmark' / 'bundle'
-
-
-def claude_code_cache(workspace: Path) -> Path:
-  """where downloaded Claude Code binaries are kept between builds."""
-  return workspace / 'var' / 'benchmark' / 'claude-code'
 
 
 def host_mismatch() -> Optional[str]:
@@ -361,13 +367,15 @@ def _relocate_scripts(bundle: Bundle) -> None:
   log.verbose('relocated %d console scripts', len(relocated))
 
 
-def _install_claude_code(bundle: Bundle, cache: Path) -> dict[str, str]:
+def _install_claude_code(bundle: Bundle) -> dict[str, str]:
   version = claude_code_version()
-  binary = claude_release.cached_binary(version, CLAUDE_CODE_PLATFORM, cache)
+  binary = claude_release.cached_binary(version, CLAUDE_CODE_PLATFORM)
   bundle.claude_dir.mkdir()
   shutil.copyfile(binary, bundle.claude)
   bundle.claude.chmod(0o755)
-  return {'version': version, 'sha256': _file_digest(bundle.claude)}
+  digest = _file_digest(bundle.claude)
+  bundle.claude_checksum.write_text(f'{digest}\n')
+  return {'version': version, 'sha256': digest}
 
 
 @contextlib.contextmanager
@@ -397,7 +405,7 @@ def _wheels(directory: Path) -> list[Path]:
   return wheels
 
 
-def build(workspace: Path, root: Path, cache: Path) -> Bundle:
+def build(workspace: Path, root: Path) -> Bundle:
   mismatch = host_mismatch()
   if mismatch is not None:
     raise RuntimeError(mismatch)
@@ -420,7 +428,7 @@ def build(workspace: Path, root: Path, cache: Path) -> Bundle:
     _run(install_command(bundle, requirements, wheels))
     _relocate_scripts(bundle)
     link_session_commands(bundle.root)
-    claude_code = _install_claude_code(bundle, cache)
+    claude_code = _install_claude_code(bundle)
     validate_materialized_runtime(bundle.root)
     manifest = _bundle_manifest(requirements_text, wheels, source_commit, claude_code)
     bundle.manifest.write_bytes(_manifest_bytes(manifest) + b'\n')
@@ -431,7 +439,7 @@ def command(output: Optional[str]) -> Optional[int]:
   workspace = workspace_root()
   root = default_root(workspace) if output is None else Path(output).resolve()
   try:
-    bundle = build(workspace, root, claude_code_cache(workspace))
+    bundle = build(workspace, root)
   except subprocess.CalledProcessError as error:
     log.error('%s failed: %s', error.cmd[0], error.stderr or error)
     return 1

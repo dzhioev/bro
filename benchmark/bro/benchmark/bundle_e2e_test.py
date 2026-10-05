@@ -19,7 +19,7 @@ from collections.abc import Generator
 
 import pytest
 
-from bro.benchmark.bundle import build, claude_code_cache, host_mismatch, workspace_root
+from bro.benchmark.bundle import build, host_mismatch, workspace_root
 from bro.benchmark.harbor_agent import ride_command
 
 IMAGE = 'ubuntu:24.04'
@@ -63,7 +63,7 @@ def _in(container: str, *command: str) -> str:
 
 def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
   workspace = workspace_root()
-  bundle = build(workspace, tmp_path / 'bundle', claude_code_cache(workspace))
+  bundle = build(workspace, tmp_path / 'bundle')
   claude_code = json.loads(bundle.manifest.read_text())['claude_code']
 
   with _container() as container:

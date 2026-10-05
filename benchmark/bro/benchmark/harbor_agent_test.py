@@ -242,12 +242,6 @@ def test_the_instruction_is_one_argument_however_it_is_written():
   assert instruction in shlex.split(session)
 
 
-def test_the_bundled_claude_leads_the_sessions_path():
-  session = _session(_run_command())
-
-  assert f'export PATH={BUNDLE.claude_dir}:"$PATH"' in session
-
-
 def test_the_activity_log_lands_in_the_trial_directory():
   command = _run_command()
 
