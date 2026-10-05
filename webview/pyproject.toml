@@ -19,6 +19,9 @@ dependencies = [
 "bro.webview.cli" = "bro.webview._entrypoints:bro_webview_cli"
 "webview" = "bro.webview._entrypoints:bro_webview_cli"
 
+[project.entry-points."bro"]
+browser = "bros.browser:Browser"
+
 [project.entry-points."bro.worker_types"]
 webview = "bro.webview.worker:WebviewType"
 
@@ -36,12 +39,12 @@ bro = { workspace = true }
 bro-ride = { workspace = true }
 
 [tool.deptry.package_module_name_map]
-bro = ["bro"]
+bro = ["bro", "bros"]
 bro-ride = ["ride"]
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = ["bro.webview"]
+module-name = ["bro.webview", "bros.browser"]
 namespace = true
 wheel-exclude = [
   "**/*_test.py",

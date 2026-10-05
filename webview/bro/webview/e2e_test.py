@@ -174,6 +174,379 @@ except Exception:
 """
 
 
+_BROWSER_ONE_SHOT_ROOT = r"""
+from pathlib import Path
+from bro.summon import summon_and_wait
+
+try:
+  answer = summon_and_wait(
+    'browser',
+    'Open the request page and report how to complete it.',
+    llm='echo',
+    harness='bro',
+    timeout=600,
+  )
+  Path('/workspace/.browser-one-shot-report').write_text(answer)
+except Exception:
+  import traceback
+  Path('/workspace/.browser-one-shot-error').write_text(traceback.format_exc())
+  raise
+"""
+
+
+_BROWSER_ONE_SHOT_CHILD = r"""
+import asyncio
+import re
+import urllib.parse
+
+from bro.llm.llms.echo import LLMSpec as EchoSpec
+from bro.llm.tracker import NullTracker
+from bro.native.llm import LLM
+from bro.native.runner import Runner
+from bros.browser import Browser
+from bros.browser import mcp as browser_mcp
+
+browser_mcp.credentials.available = lambda name: name == 'openai'
+
+
+def fake_reader(prompt, content):
+  assert 'complete the request' in prompt.lower(), prompt
+  match = re.search(r'- button "Complete request" \[ref=([^\]]+)\]', content)
+  assert match is not None, content
+  return {
+    'answer': 'Use the Complete request button.',
+    'elements': [
+      {'ref': match.group(1), 'role': 'button', 'name': 'Complete request'},
+    ],
+  }
+
+
+browser_mcp._read_page = fake_reader
+
+
+def text_result(value):
+  if isinstance(value, dict):
+    assert set(value) == {'result'}, value
+    value = value['result']
+  assert isinstance(value, str), value
+  return value
+
+
+class ScriptedLLM(LLM):
+  async def send(self, messages, *, request_timeout=None):
+    opened = await self.tools.call('webview__open', {})
+    webview = opened['webview']
+    html = (
+      '<!doctype html><html><head><title>Request page</title></head>'
+      '<body><h1>Request ready</h1><button>Complete request</button></body></html>'
+    )
+    url = 'data:text/html,' + urllib.parse.quote(html)
+    navigated = text_result(
+      await self.tools.call(
+        'webview__command',
+        {'webview': webview, 'tool': 'browser_navigate', 'arguments': {'url': url}},
+      )
+    )
+    assert 'Request page' in navigated, navigated
+    looked = await self.tools.call(
+      'browser__look',
+      {
+        'question': 'Given the request goal, which control will complete the request?',
+        'webview': webview,
+      },
+    )
+    assert looked['answer'] == 'Use the Complete request button.', looked
+    assert looked['elements'][0]['name'] == 'Complete request', looked
+    assert looked['ref'].startswith('sha256:'), looked
+    closed = await self.tools.call('webview__close', {'webview': webview})
+    assert closed['outcome'] == 'ok', closed
+    await self.tools.call(
+      'bro__answer',
+      {'answer': 'The request page is ready; use its Complete request button.'},
+    )
+    raise AssertionError('answer did not end the run')
+
+
+class ScriptedRunner(Runner):
+  def _create_llm(self, *, hold):
+    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    return ScriptedLLM(self.inbox, servers)
+
+
+asyncio.run(
+  ScriptedRunner(Browser.create(EchoSpec())).run(
+    'Open the request page and report how to complete it.',
+    surface='webview-e2e',
+    tracker=NullTracker(),
+  )
+)
+"""
+
+
+_BROWSER_THREAD_ROOT = r"""
+import json
+import re
+import subprocess
+from pathlib import Path
+
+from bro import quest
+from bro.artifact import mint_artifact
+from bro.summon import summon_detached
+
+
+def run(*arguments, expected=0):
+  completed = subprocess.run(arguments, capture_output=True, text=True)
+  if completed.returncode != expected:
+    raise RuntimeError(
+      f'{arguments!r} returned {completed.returncode}, expected {expected}'
+      f'\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}'
+    )
+  return completed
+
+
+try:
+  quest_id = summon_detached(
+    'browser',
+    '[[browse]]',
+    llm='echo',
+    harness='bro',
+    timeout=600,
+    talk=['owner.question', 'worker.question'],
+  )
+  clarification = run(
+    'quest', 'ask', quest_id, 'Click Done', '--wait', '180', expected=4
+  )
+  assert 'two Done buttons' in clarification.stdout, clarification.stdout
+  match = re.search(r'counter_question_id ([^;\s]+)', clarification.stderr)
+  assert match is not None, clarification.stderr
+  counter_question_id = match.group(1)
+
+  clicked = run(
+    'quest',
+    'ask',
+    quest_id,
+    'Use the one in the order edit section',
+    '--reply-to',
+    counter_question_id,
+    '--wait',
+    '180',
+  )
+  assert 'order edit section' in clicked.stdout, clicked.stdout
+
+  upload_directory = Path('/workspace/browser-thread-upload')
+  upload_directory.mkdir()
+  (upload_directory / 'resume.txt').write_text('browser thread upload')
+  upload_ref = mint_artifact('browser-thread-upload', timeout=30).ref
+  quest.share(quest_id, upload_ref)
+  uploaded = run(
+    'quest',
+    'ask',
+    quest_id,
+    f'Upload resume.txt from {upload_ref}',
+    '--wait',
+    '180',
+  )
+  assert 'resume.txt' in uploaded.stdout, uploaded.stdout
+
+  finished = run('quest', 'ask', quest_id, 'done', '--wait', '180')
+  assert 'closed' in finished.stdout.lower(), finished.stdout
+  outcome = quest.check(quest_id, wait=True, timeout=180)
+  assert outcome.answer is not None
+  report = {
+    'quest': quest_id,
+    'counter_question': clarification.stdout.strip(),
+    'clicked': clicked.stdout.strip(),
+    'uploaded': uploaded.stdout.strip(),
+    'answer': outcome.answer,
+    'upload_ref': upload_ref,
+  }
+  Path('/workspace/.browser-thread-report.json').write_text(json.dumps(report))
+except Exception:
+  import traceback
+  Path('/workspace/.browser-thread-error').write_text(traceback.format_exc())
+  raise
+"""
+
+
+_BROWSER_THREAD_CHILD = r"""
+import asyncio
+import re
+import urllib.parse
+
+from bro import quest
+from bro.llm.llms.echo import LLMSpec as EchoSpec
+from bro.llm.tracker import NullTracker
+from bro.native.llm import LLM
+from bro.native.runner import Runner
+from bros.browser import Browser
+from bros.browser import mcp as browser_mcp
+
+browser_mcp.credentials.available = lambda name: name == 'openai'
+
+
+def fake_reader(prompt, content):
+  elements = []
+  for name in ('Done order edit', 'Done address'):
+    match = re.search(rf'- button "{name}" \[ref=([^\]]+)\]', content)
+    assert match is not None, content
+    elements.append({'ref': match.group(1), 'role': 'button', 'name': name})
+  return {'answer': 'There are two Done buttons.', 'elements': elements}
+
+
+browser_mcp._read_page = fake_reader
+
+
+def text_result(value):
+  if isinstance(value, dict):
+    assert set(value) == {'result'}, value
+    value = value['result']
+  assert isinstance(value, str), value
+  return value
+
+
+class ScriptedLLM(LLM):
+  async def send(self, messages, *, request_timeout=None):
+    spell = await self.tools.call('spell__browse', {})
+    assert 'Run an owner-led webview' in spell, spell
+    opened = await self.tools.call('webview__open', {})
+    self.webview = opened['webview']
+    html = (
+      '<!doctype html><html><head><title>Order editor</title></head><body>'
+      '<section><h2>Order edit</h2><button id="order-done">Done order edit</button></section>'
+      '<section><h2>Address</h2><button id="address-done">Done address</button></section>'
+      '<input id="upload" type="file"></body></html>'
+    )
+    url = 'data:text/html,' + urllib.parse.quote(html)
+    await self.tools.call(
+      'webview__command',
+      {'webview': self.webview, 'tool': 'browser_navigate', 'arguments': {'url': url}},
+    )
+    looked = await self.tools.call(
+      'browser__look',
+      {'question': 'Which Done controls are available?', 'webview': self.webview},
+    )
+    assert len(looked['elements']) == 2, looked
+    started = await self.tools.call(
+      'bro__job', {'command': 'quest watch', 'mode': 'watch'}
+    )
+    assert 'started' in started, started
+    self.watch_job = started.split()[1]
+    return 'waiting for the owner'
+
+  async def next_question(self):
+    while True:
+      history = quest.history('self')
+      if history.awaiting:
+        return history.awaiting[0]
+      await self.tools.call('bro__chill', {'seconds': 180})
+      self.inbox.drain()
+
+  async def wake(self, *, request_timeout=None):
+    instruction = await self.next_question()
+    assert instruction.text == 'Click Done', instruction
+    await self.tools.call(
+      'bro__quest_ask',
+      {
+        'quest_id': 'self',
+        'text': 'There are two Done buttons: one in the order edit section and one in the address section. Which one?',
+        'reply_to': instruction.id,
+      },
+    )
+
+    clarification = await self.next_question()
+    assert clarification.text == 'Use the one in the order edit section', clarification
+    await self.tools.call(
+      'webview__command',
+      {
+        'webview': self.webview,
+        'tool': 'browser_click',
+        'arguments': {'element': 'order edit Done button', 'target': '#order-done'},
+      },
+    )
+    await self.tools.call(
+      'bro__quest_say',
+      {
+        'quest_id': 'self',
+        'text': 'Clicked Done in the order edit section; the order editor remains open.',
+        'reply_to': clarification.id,
+      },
+    )
+
+    upload = await self.next_question()
+    match = re.search(r'sha256:[0-9a-f]{64}', upload.text)
+    assert match is not None, upload
+    shared = await self.tools.call(
+      'webview__share', {'webview': self.webview, 'ref': match.group(0)}
+    )
+    assert 'resume.txt' in shared['entries'], shared
+    await self.tools.call(
+      'webview__command',
+      {
+        'webview': self.webview,
+        'tool': 'browser_click',
+        'arguments': {'element': 'file input', 'target': '#upload'},
+      },
+    )
+    await self.tools.call(
+      'webview__command',
+      {
+        'webview': self.webview,
+        'tool': 'browser_file_upload',
+        'arguments': {'paths': [shared['path'] + '/resume.txt']},
+      },
+    )
+    filename = text_result(
+      await self.tools.call(
+        'webview__command',
+        {
+          'webview': self.webview,
+          'tool': 'browser_evaluate',
+          'arguments': {'function': "() => document.querySelector('#upload').files[0].name"},
+        },
+      )
+    )
+    assert 'resume.txt' in filename, filename
+    await self.tools.call(
+      'bro__quest_say',
+      {
+        'quest_id': 'self',
+        'text': 'Uploaded resume.txt; the order editor remains open.',
+        'reply_to': upload.id,
+      },
+    )
+
+    done = await self.next_question()
+    assert done.text == 'done', done
+    closed = await self.tools.call('webview__close', {'webview': self.webview})
+    assert closed['outcome'] == 'ok', closed
+    await self.tools.call(
+      'bro__quest_say',
+      {'quest_id': 'self', 'text': 'The webview is closed.', 'reply_to': done.id},
+    )
+    await self.tools.call('bro__kill', {'id': self.watch_job})
+    await self.tools.call(
+      'bro__answer',
+      {
+        'answer': 'Session log: used the order editor; clicked its Done control and uploaded resume.txt.'
+      },
+    )
+    raise AssertionError('answer did not end the run')
+
+
+class ScriptedRunner(Runner):
+  def _create_llm(self, *, hold):
+    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    return ScriptedLLM(self.inbox, servers)
+
+
+asyncio.run(
+  ScriptedRunner(Browser.create(EchoSpec())).run(
+    '[[browse]]', surface='webview-e2e', tracker=NullTracker()
+  )
+)
+"""
+
+
 _NESTED_WEBVIEW_ROUTE = r"""
 import json
 import subprocess
@@ -952,6 +1325,72 @@ def test_spawned_child_opens_a_granted_webview(
   )
   assert code == 0, _diagnostic(workspace, '.webview-summon-error')
   assert (workspace.tree / '.webview-summon-report').read_text() == 'opened'
+  assert _live_containers(workspace) == []
+
+
+def test_browser_one_shot_uses_its_seeded_webview_and_checked_snapshot_refs(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  import ride.bro_worker as ride_spawn
+
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    assert arguments[0].bro == 'browser'
+    return replace(launch, command=_session_broxy_probe(_BROWSER_ONE_SHOT_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='browser-one-shot',
+    source=_BROWSER_ONE_SHOT_ROOT,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+    launch_scope={
+      'bro': {'bros': frozenset({'browser'}), 'party': frozenset({'boxed'})},
+    },
+  )
+
+  assert code == 0, _diagnostic(workspace, '.browser-one-shot-error')
+  answer = (workspace.tree / '.browser-one-shot-report').read_text()
+  assert answer == 'The request page is ready; use its Complete request button.'
+  assert _live_containers(workspace) == []
+
+
+def test_browser_browse_thread_routes_clarification_live_share_upload_and_log(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  import ride.bro_worker as ride_spawn
+
+  original_started_party_launch = ride_spawn.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    assert arguments[0].bro == 'browser'
+    return replace(launch, command=_session_broxy_probe(_BROWSER_THREAD_CHILD))
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='browser-thread',
+    source=_BROWSER_THREAD_ROOT,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+    launch_scope={
+      'bro': {'bros': frozenset({'browser'}), 'party': frozenset({'boxed'})},
+    },
+  )
+
+  assert code == 0, _diagnostic(workspace, '.browser-thread-error')
+  report = json.loads((workspace.tree / '.browser-thread-report.json').read_text())
+  assert 'two Done buttons' in report['counter_question']
+  assert 'order edit section' in report['clicked']
+  assert 'resume.txt' in report['uploaded']
+  assert 'Session log:' in report['answer']
+  assert report['upload_ref'].startswith('sha256:')
   assert _live_containers(workspace) == []
 
 
