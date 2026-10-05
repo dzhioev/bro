@@ -2,6 +2,7 @@
 
 import contextlib
 import errno
+import http.server
 import json
 import os
 import pty
@@ -22,6 +23,7 @@ import ride.clean as ride_clean
 import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
 from bro.base import credentials
+from bro.broker.transports.tcp import LOCAL_HOST
 from bro.webview.profile import PROFILE_VERSION
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.artifacts import view_mount
@@ -277,26 +279,27 @@ try:
       raise TimeoutError('host did not inspect the refused download')
     time.sleep(0.2)
 
+  page_url = __PAGE_URL__
   remote = ask(
     mission,
-    {'tool': 'browser_navigate', 'arguments': {'url': 'https://example.com/'}},
+    {'tool': 'browser_navigate', 'arguments': {'url': page_url}},
   )
   assert 'error' not in remote, remote
   requests = ask(
     mission,
     {
       'tool': 'browser_network_requests',
-      'arguments': {'static': True, 'filter': 'example\\.com'},
+      'arguments': {'static': True, 'filter': re.escape(page_url)},
     },
   )
   indexes = [int(value) for value in re.findall(r'(?m)^(\d+)\.', requests.get('text', ''))]
-  assert indexes, requests
+  assert len(indexes) == 1, requests
   response_body = ask(
     mission,
     {
       'tool': 'browser_network_request',
       'arguments': {
-        'index': indexes[-1],
+        'index': indexes[0],
         'part': 'response-body',
         'filename': 'network-body.html',
       },
@@ -304,7 +307,7 @@ try:
   )
   body_file, body = one_file(response_body)
   assert body_file['name'] == 'network-body.html', body_file
-  assert b'Example Domain' in body, body[:200]
+  assert body == __NETWORK_PAGE__, body[:200]
 
   closed = json.loads(run('webview', 'close', mission).stdout)
   assert closed['outcome'] == 'ok', closed
@@ -582,6 +585,33 @@ def _available_port() -> int:
   with socket.socket() as listener:
     listener.bind(('127.0.0.1', 0))
     return listener.getsockname()[1]
+
+
+# no subresources, and a data: icon so the browser requests no favicon either
+_NETWORK_PAGE = b'<!doctype html><link rel=icon href=data:,><title>webview network body</title>'
+
+
+@contextlib.contextmanager
+def _served_page(page: bytes) -> Iterator[str]:
+  """serve `page` on the one address a container reaches the host at, yielding the
+  URL a container fetches it at."""
+  import ride.broker_root as broker_root
+
+  class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+      self.send_response(200)
+      self.send_header('Content-Type', 'text/html')
+      self.send_header('Content-Length', str(len(page)))
+      self.end_headers()
+      self.wfile.write(page)
+
+  gateways = [host for host in broker_root.broker_bind_hosts() if host != LOCAL_HOST]
+  host = gateways[0] if len(gateways) > 0 else LOCAL_HOST
+  with contextlib.ExitStack() as stack:
+    server = stack.enter_context(http.server.ThreadingHTTPServer((host, 0), Handler))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    stack.callback(server.shutdown)
+    yield f'http://{workspace_docker.CONTAINER_BROKER_HOST}:{server.server_address[1]}/'
 
 
 @contextlib.contextmanager
@@ -914,14 +944,17 @@ def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(
     assert files() == baseline
     (workspace.tree / '.webview-download-continue').touch()
 
-  code, workspace = _run_route(
-    env,
-    monkeypatch,
-    suffix='full',
-    source=_FULL_ROUTE,
-    vnc=False,
-    observer=inspect_files,
-  )
+  with _served_page(_NETWORK_PAGE) as page_url:
+    code, workspace = _run_route(
+      env,
+      monkeypatch,
+      suffix='full',
+      source=_FULL_ROUTE.replace('__PAGE_URL__', repr(page_url)).replace(
+        '__NETWORK_PAGE__', repr(_NETWORK_PAGE)
+      ),
+      vnc=False,
+      observer=inspect_files,
+    )
 
   diagnostic = _diagnostic(workspace, '.webview-e2e-error')
   assert code == 0, diagnostic
