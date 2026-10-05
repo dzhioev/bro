@@ -651,6 +651,31 @@ class TestPreflightScopedLaunch:
 
 
 class TestLaunchLayers:
+  def test_declared_worker_type_is_seeded(self):
+    declared = type('DeclaredBro', (), {'_may_summon': (), '_may_launch': ('webview',)})()
+    with patch('bro.registry.create_bro', return_value=declared):
+      launch = ride.scope.effective_launch(
+        'declared', (), grant=[], revoke=[], credential_store=None
+      )
+
+    assert launch['webview'] == {}
+
+  def test_layer_can_revoke_a_declared_worker_type(self):
+    declared = type('DeclaredBro', (), {'_may_summon': (), '_may_launch': ('webview',)})()
+    layers = (ride.scope.ScopeLayer(revoke=(':launch.webview',)),)
+    with patch('bro.registry.create_bro', return_value=declared):
+      launch = ride.scope.effective_launch(
+        'declared', layers, grant=[], revoke=[], credential_store=None
+      )
+
+    assert 'webview' not in launch
+
+  def test_unknown_declared_worker_type_fails_the_launch_fold(self):
+    declared = type('DeclaredBro', (), {'_may_summon': (), '_may_launch': ('missing',)})()
+    with patch('bro.registry.create_bro', return_value=declared):
+      with pytest.raises(ValueError, match="unknown worker type 'missing'.*installed types"):
+        ride.scope.effective_launch('declared', (), grant=[], revoke=[], credential_store=None)
+
   def test_project_host_and_launch_layers_apply_name_by_name(self, tmp_path, monkeypatch):
     (tmp_path / 'pyproject.toml').write_text(
       '[tool.bro]\n'

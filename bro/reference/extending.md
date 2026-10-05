@@ -85,6 +85,10 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   The declaration is MRO-walked and unioned like `extra_secrets`;
   each seed expands transitive launch authority and should be added deliberately.
   The complete permission-document fold is `bro/reference/ride.md`, "Session permissions and credentials".
+- `may_launch = ('webview',)` seeds one whole `:launch.<type>` key per worker type before the launch's configuration layers fold.
+  Fields, flags, and pass rights remain host- or launch-configured, and any layer may revoke the seeded key.
+  The declaration is MRO-walked and unioned like `may_summon`;
+  `bro` is refused because the framework already seeds it, and an uninstalled type fails when the host computes a launch for the persona.
 - `provisioning = (provision_hooks,)` declares session-start steps for the session's workspace
   — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`do-ride` for a managed one, on either harness).
   MRO-walked and concatenated like `extra_secrets`.
@@ -162,6 +166,8 @@ def lookup(product_id: str, context: Context[Catalog]) -> str:
   Neither the namespace nor a tool name may contain `__`, the wire separator between them.
 - `secrets` is the credential set the tools read through the store, and becomes the mounted server's `needed_secrets`;
   override `get_secrets(tool_names)` when the set depends on the selected subset.
+- `optional_secrets` is the credential set the tools use when present but can run without;
+  it becomes the mounted server's `optional_secrets` and enters the bro's best-effort credential tier.
 - `state` builds the per-server object, once per built server in the serving process and never on a metadata surface, and every tool declaring a `Context`-annotated parameter receives it as `context.state`;
   `close` releases it when the run's lifetime ends (`BaseBro.close()`).
   A toolset without state leaves both out and declares `Toolset[None]`.

@@ -36,6 +36,7 @@ from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import RunLifecycle, validate_answer
+from bro.worker_types import type_name as worker_type_name
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
 
@@ -1364,6 +1365,10 @@ class BaseBro(ABC):
   # under the host's depth cap (see ride/ride/bro_worker.py). MRO-walked and
   # unioned like `extra_secrets`.
   may_summon: tuple[str, ...] = ()
+  # worker types this bro may launch, seeded as whole `:launch.<type>` keys before
+  # the launch's configured layers fold. `bro` is always seeded by the framework.
+  # MRO-walked and unioned like `may_summon`.
+  may_launch: tuple[str, ...] = ()
   # session-start steps for the session's workspace, applied to its root at
   # session start. every start of a session runs them, resumes included, so a
   # step is idempotent and leaves state the workspace already carries alone.
@@ -1408,6 +1413,7 @@ class BaseBro(ABC):
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
+    may_launch_types: list[str] = []
     provision_steps: list[ProvisionStep] = []
     spell_paths: dict[str, Path] = {}
     feature_gates: dict[str, Condition | bool] = {}
@@ -1432,6 +1438,18 @@ class BaseBro(ABC):
       raw_summon = cls.__dict__.get('may_summon')
       if raw_summon is not None:
         may_summon_names.extend(raw_summon)
+      raw_launch = cls.__dict__.get('may_launch')
+      if raw_launch is not None:
+        if not isinstance(raw_launch, tuple):
+          raise TypeError(f'{cls.__name__}.may_launch must be a tuple of worker type names')
+        for worker_type in raw_launch:
+          try:
+            worker_type_name(worker_type)
+          except ValueError as error:
+            raise ValueError(f'{cls.__name__}.may_launch: {error}') from error
+          if worker_type == 'bro':
+            raise ValueError(f'{cls.__name__}.may_launch must not name bro; the framework seeds it')
+          may_launch_types.append(worker_type)
       raw_provisioning = cls.__dict__.get('provisioning')
       if raw_provisioning is not None:
         provision_steps.extend(raw_provisioning)
@@ -1453,6 +1471,7 @@ class BaseBro(ABC):
             feature_credentials[feature_name] = kind
     self._extra_secrets: tuple[str, ...] = tuple(extra_secret_names)
     self._may_summon: tuple[str, ...] = tuple(may_summon_names)
+    self._may_launch: tuple[str, ...] = tuple(may_launch_types)
     self._provisioning: tuple[ProvisionStep, ...] = tuple(provision_steps)
     self._spells: dict[str, Path] = spell_paths
     self._features: dict[str, Condition | bool] = feature_gates

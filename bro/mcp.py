@@ -386,11 +386,14 @@ class Toolset[T]:
 
   secrets: the base `get_secrets` returns the static `secrets` class var;
   subclass and override it when the credential set depends on the selected tools.
+  optional_secrets declares credentials the tools use when present but do not require.
   """
 
   # credentials the toolset's tools read through the store when the set is
   # independent of the tool subset; the `get_secrets` default returns it.
   secrets: ClassVar[tuple[str, ...]] = ()
+  # credentials used when present but not required for the toolset to run.
+  optional_secrets: ClassVar[tuple[str, ...]] = ()
 
   def __init__(
     self,
@@ -474,6 +477,7 @@ class Toolset[T]:
     # server stays self-describing — its scoped credential needs and the
     # definition roster it was built from.
     server.needed_secrets = self.get_secrets(names)
+    server.optional_secrets = self.optional_secrets
     server.tool_universe = tuple(self._by_name)
     return server
 
@@ -482,4 +486,5 @@ class Toolset[T]:
     return MCPServerSpec(
       build=lambda: self.build(*names),
       needed_secrets=self.get_secrets(names),
+      optional_secrets=self.optional_secrets,
     )

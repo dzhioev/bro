@@ -126,6 +126,7 @@ bro = "bros.bro:Bro"
 github_app = "bro.extra.github.app:Source"
 
 [project.entry-points."bro.toolsets"]
+artifact = "bro.artifact_mcp:toolset"
 brog = "bro.brog.mcp:toolset"
 
 [tool.bro]

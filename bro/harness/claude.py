@@ -6,8 +6,8 @@ follow that drift instead of one per persona, and `block` gates the whole set
 behind the harness that has them.
 
 The groups are cut by what a session can *do* with them, since that is what a
-persona forgoes: `FILES` reaches the workspace, `SHELL` runs commands in it, and
-`DELEGATION` starts work in another agent.
+persona forgoes: `FILES` reaches the workspace, `SHELL` runs commands in it,
+`DELEGATION` starts work in another agent, and `WEB` fetches and searches web content.
 """
 
 from bro.base.condition import When, when
@@ -27,6 +27,8 @@ SHELL = ('Bash', 'BashOutput', 'KillShell', 'Monitor', 'TaskOutput', 'TaskStop')
 # spawner has shipped under both `Task` and `Agent`; naming both costs nothing
 # and a denylist that misses the live name grants the capability back
 DELEGATION = ('Task', 'Agent', 'Workflow')
+# fetching and searching web content
+WEB = ('WebFetch', 'WebSearch')
 
 
 def block(*tool_names: str) -> When[ToolLayer]:

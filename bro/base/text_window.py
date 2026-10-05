@@ -75,11 +75,13 @@ def apply_limit(
   keep: Literal['head', 'tail'] = 'head',
   skipped_before_lines: int = 0,
   skipped_before_bytes: int = 0,
+  skipped_after_lines: int = 0,
+  skipped_after_bytes: int = 0,
 ) -> str:
   """cap content to `limit` lines and `BYTE_LIMIT` bytes, keeping the head or
   tail. Wraps the kept slice with `[...skipped before/after...]` markers
-  reporting what was dropped at each end (including any prior offset surfaced
-  via skipped_before_*)."""
+  reporting what was dropped at each end, including content a streaming caller
+  counted without retaining and supplies through the skipped arguments."""
   effective, clamp_note = _clamp(limit)
   lines = content.splitlines(keepends=True)
   total_lines = len(lines)
@@ -98,12 +100,13 @@ def apply_limit(
 
   if keep == 'head':
     before_lines, before_bytes = skipped_before_lines, skipped_before_bytes
-    after_lines, after_bytes = dropped_lines, dropped_bytes
+    after_lines = dropped_lines + skipped_after_lines
+    after_bytes = dropped_bytes + skipped_after_bytes
     before_note, after_note = '', clamp_note
   else:
     before_lines = skipped_before_lines + dropped_lines
     before_bytes = skipped_before_bytes + dropped_bytes
-    after_lines = after_bytes = 0
+    after_lines, after_bytes = skipped_after_lines, skipped_after_bytes
     before_note, after_note = clamp_note, ''
 
   pieces: list[str] = []
