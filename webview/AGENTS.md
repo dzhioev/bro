@@ -1,9 +1,9 @@
 # Webview worker
 
-The `bro-webview` member publishes the registered `webview` worker type, its owner and setup commands, and its container-side daemon and capture process in the `bro.webview` namespace.
+The `bro-webview` member publishes the `browser` persona and its page reader, the registered `webview` worker type, its owner and setup commands, and its container-side daemon and capture process.
 It depends on core for broker and artifact contracts, on `bro-ride` for setup's foreground worker run, and on the MCP SDK for the Playwright stdio client.
 Only `bro.webview.setup` imports `ride`;
-the registered type and container-side modules stay dependency-light because every launch-scope fold and broker root loads them.
+the persona declaration, registered type, and mounted toolsets stay dependency-light because every launch-scope fold and broker root loads them.
 
 ## Development
 
@@ -23,6 +23,22 @@ Run `sync-scripts --project webview` after adding or removing a CLI, and build t
 - `bro/webview/setup.py` — the host-side profile lock, seed and capture workflow, guarded store write, and summary
 - `bro/webview/cli.py` (`webview`) — the owner-side `open`, `close`, and `setup` verbs and the container-side `serve` and `capture` verbs
 - `bro/webview/mcp.py` — the registered `webview` toolset for typed owner-side open, command, live-roster, sharing, reopen, and close operations
+- `bros/browser/__init__.py` — the registered browser persona, its webview launch seed, bounded tool roster, policy, and reporting contract
+- `bros/browser/mcp.py` — `browser::look`, the focused snapshot, text, and artifact reader with checked element refs
+- `bros/browser/spells/browse.md` — the owner-led instruction loop, clarification threads, uploads, and session log
+
+## Browser persona
+
+`browser` is the plain-text interface to webview missions.
+Its own seed grants the whole webview worker type, while profile passes and a visible view remain host or launch decisions.
+It mounts `webview::`, `browser::`, and `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
+The `[[browse]]` spell keeps one webview open while the owner sends each instruction as a quest question;
+a clarification is a counter-question in that thread, and "done" closes the webview and returns the session log.
+
+`browser::look` captures a snapshot or the page's decoded `innerText`, or reads an existing artifact ref, and sends that representation plus one focused question to a disposable reader.
+It returns a bounded answer and only element refs whose role and accessible name match the snapshot it read.
+The optional `openai` credential enables the reader and is the boundary across which page content travels;
+without it the browser uses `browser_find`, targeted snapshots, and `artifact::read` or `artifact::grep`.
 
 ## Owner toolset
 

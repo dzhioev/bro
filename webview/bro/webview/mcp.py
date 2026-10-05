@@ -135,6 +135,16 @@ def _mission_answer(webview: str, payload: dict[str, Any]) -> dict[str, Any]:
   return asked.answer
 
 
+def command_reply(
+  webview: str, tool: str, arguments: Optional[dict[str, Any]] = None
+) -> dict[str, Any]:
+  """Call one Playwright tool and return its unspilled worker reply."""
+  payload: dict[str, Any] = {'tool': tool}
+  if arguments is not None:
+    payload['arguments'] = arguments
+  return _spilled_reply(_mission_answer(webview, payload))
+
+
 def _artifact_path(ref: str) -> Path:
   return Path(get_artifact(ref))
 
@@ -273,10 +283,7 @@ def command(
   ] = None,
 ) -> str:
   record = context.state.get(webview)
-  payload: dict[str, Any] = {'tool': tool}
-  if arguments is not None:
-    payload['arguments'] = arguments
-  rendered, text = _render_reply(_mission_answer(webview, payload))
+  rendered, text = _render_reply(command_reply(webview, tool, arguments))
   urls = _PAGE_URL.findall(text)
   if urls:
     record.last_url = urls[-1]

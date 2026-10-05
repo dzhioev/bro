@@ -323,6 +323,8 @@ PYTEST_FILES = [
   'webview/bro/webview/setup_test.py',
   'webview/bro/webview/cli_test.py',
   'webview/bro/webview/mcp_test.py',
+  'webview/bros/browser/browser_test.py',
+  'webview/bros/browser/mcp_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/green_trees_test.py',
   'local/bro/local/gate_display_test.py',
@@ -388,6 +390,7 @@ BENCHMARK_E2E_PYTEST_FILES = [
 # and spends real tokens, so the stage naming them runs only when asked for
 LLM_PYTEST_FILES = [
   'bro/spells_llm_test.py',
+  'webview/bros/browser/reader_llm_test.py',
   'dev/bros/dev/commit_llm_test.py',
   'native/bro/native/llms/openai_llm_test.py',
   'ride/ride/claude/input_channels_llm_test.py',
