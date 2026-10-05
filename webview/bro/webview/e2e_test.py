@@ -87,6 +87,93 @@ channel.close()
 """
 
 
+_TOOLSET_ROUTE = r"""
+import json
+import re
+import traceback
+import urllib.parse
+from pathlib import Path
+
+from bro import artifact_mcp
+from bro.artifact import mint_artifact
+from bro.llm.mcp import Context
+from bro.webview import mcp
+
+workspace = Path('/workspace')
+report_path = workspace / '.webview-toolset-report.json'
+error_path = workspace / '.webview-toolset-error'
+
+try:
+  upload_directory = workspace / 'upload-directory'
+  upload_directory.mkdir()
+  (upload_directory / 'resume.txt').write_text('directory upload payload')
+  upload_ref = mint_artifact('upload-directory', timeout=30).ref
+
+  context = Context(mcp.Webviews())
+  opened = mcp.open(context)
+  html = '''<!doctype html><html><body>
+  <h1>typed webview route</h1>
+  <input id="upload" type="file">
+  </body></html>'''
+  data_url = 'data:text/html,' + urllib.parse.quote(html)
+  navigated = mcp.command(
+    context, opened.webview, 'browser_navigate', {'url': data_url}
+  )
+  assert 'Page URL' in navigated, navigated
+  snapshot = mcp.command(
+    context,
+    opened.webview,
+    'browser_snapshot',
+    {'filename': 'typed-snapshot.yml'},
+  )
+  snapshot_match = re.search(r'typed-snapshot\.yml: (sha256:[0-9a-f]{64})', snapshot)
+  assert snapshot_match is not None, snapshot
+  snapshot_ref = snapshot_match.group(1)
+  read = artifact_mcp.read(snapshot_ref)
+  found = artifact_mcp.grep(snapshot_ref, 'typed webview route')
+  assert 'typed webview route' in read, read
+  assert 'typed webview route' in found, found
+
+  shared = mcp.share(context, opened.webview, upload_ref)
+  assert shared['entries'] == ['resume.txt'], shared
+  mcp.command(
+    context,
+    opened.webview,
+    'browser_click',
+    {'element': 'file input', 'target': '#upload'},
+  )
+  uploaded = mcp.command(
+    context,
+    opened.webview,
+    'browser_file_upload',
+    {'paths': [shared['path'] + '/resume.txt']},
+  )
+  assert 'error' not in uploaded.lower(), uploaded
+  filename = mcp.command(
+    context,
+    opened.webview,
+    'browser_evaluate',
+    {'function': "() => document.querySelector('#upload').files[0].name"},
+  )
+  assert 'resume.txt' in filename, filename
+  closed = mcp.close(context, opened.webview)
+  assert closed['outcome'] == 'ok', closed
+  report_path.write_text(
+    json.dumps(
+      {
+        'webview': opened.webview,
+        'snapshot_ref': snapshot_ref,
+        'upload_ref': upload_ref,
+        'closed': closed,
+      }
+    )
+  )
+except Exception:
+  error_path.write_text(traceback.format_exc())
+  raise
+"""
+
+
 _NESTED_WEBVIEW_ROUTE = r"""
 import json
 import subprocess
@@ -964,6 +1051,26 @@ def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(
   assert not any(
     directory.name.startswith('webview-') for directory in workspace.path.parent.iterdir()
   )
+  assert _live_containers(workspace) == []
+
+
+def test_webview_toolset_routes_artifact_read_share_upload_and_close(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  code, workspace = _run_route(
+    isolated_env,
+    monkeypatch,
+    suffix='toolset',
+    source=_TOOLSET_ROUTE,
+    vnc=False,
+    observer=lambda _workspace, _route_ended: None,
+  )
+
+  assert code == 0, _diagnostic(workspace, '.webview-toolset-error')
+  report = json.loads((workspace.tree / '.webview-toolset-report.json').read_text())
+  assert report['closed']['outcome'] == 'ok'
+  assert report['snapshot_ref'].startswith('sha256:')
+  assert report['upload_ref'].startswith('sha256:')
   assert _live_containers(workspace) == []
 
 

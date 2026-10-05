@@ -427,6 +427,7 @@ dependencies = [
     { name = "bro" },
     { name = "bro-ride" },
     { name = "mcp" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
@@ -434,6 +435,7 @@ requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-ride", editable = "ride" },
     { name = "mcp", specifier = "==1.28.1" },
+    { name = "pydantic" },
 ]
 
 [[package]]
