@@ -12,12 +12,12 @@ resolution-markers = [
 members = [
     "bro",
     "bro-bench",
+    "bro-browser",
     "bro-dev",
     "bro-local",
     "bro-native",
     "bro-oops",
     "bro-ride",
-    "bro-webview",
 ]
 
 [[package]]
@@ -321,6 +321,25 @@ dependencies = [
 requires-dist = [{ name = "bro", editable = "." }]
 
 [[package]]
+name = "bro-browser"
+version = "0.1.0"
+source = { editable = "browser" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-ride" },
+    { name = "mcp" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-ride", editable = "ride" },
+    { name = "mcp", specifier = "==1.28.1" },
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "bro-dev"
 version = "0.1.0"
 source = { editable = "dev" }
@@ -417,25 +436,6 @@ requires-dist = [
     { name = "mcp", specifier = "==1.28.1" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "textual", specifier = "==8.2.8" },
-]
-
-[[package]]
-name = "bro-webview"
-version = "0.1.0"
-source = { editable = "webview" }
-dependencies = [
-    { name = "bro" },
-    { name = "bro-ride" },
-    { name = "mcp" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "bro", editable = "." },
-    { name = "bro-ride", editable = "ride" },
-    { name = "mcp", specifier = "==1.28.1" },
-    { name = "pydantic" },
 ]
 
 [[package]]

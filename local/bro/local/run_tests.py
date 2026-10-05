@@ -70,7 +70,7 @@ DISTRIBUTIONS = [
       '^native/',
       '^oops/',
       '^ride/',
-      '^webview/',
+      '^browser/',
       f'^{BENCHMARK}/',
       '.venv/',
       '.claude/',
@@ -115,7 +115,7 @@ DISTRIBUTIONS = [
     deptry_known_first_party=('bro',),
   ),
   Distribution(
-    directory='webview',
+    directory='browser',
     deptry_exclude=(TEST_MODULE_PATTERN,),
     deptry_known_first_party=('bro',),
   ),
@@ -317,12 +317,14 @@ PYTEST_FILES = [
   'bench/bro/bench/job_test.py',
   'bench/bro/bench/presets_test.py',
   'bench/bro/bench/run_test.py',
-  'webview/bro/webview/worker_test.py',
-  'webview/bro/webview/serve_test.py',
-  'webview/bro/webview/capture_test.py',
-  'webview/bro/webview/setup_test.py',
-  'webview/bro/webview/cli_test.py',
-  'webview/bro/webview/mcp_test.py',
+  'browser/bro/webview/worker_test.py',
+  'browser/bro/webview/serve_test.py',
+  'browser/bro/webview/capture_test.py',
+  'browser/bro/webview/setup_test.py',
+  'browser/bro/webview/cli_test.py',
+  'browser/bro/webview/mcp_test.py',
+  'browser/bros/browser/browser_test.py',
+  'browser/bros/browser/mcp_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/green_trees_test.py',
   'local/bro/local/gate_display_test.py',
@@ -355,7 +357,7 @@ DOCKER_PYTEST_FILES = [
   'ride/ride/runtime_bundle_smoke_test.py',
 ]
 BROKER_E2E_PYTEST_FILE = 'ride/ride/e2e_test.py'
-WEBVIEW_E2E_PYTEST_FILES = ['webview/bro/webview/e2e_test.py']
+WEBVIEW_E2E_PYTEST_FILES = ['browser/bro/webview/e2e_test.py']
 # each run from its project's own environment, the only one that can import it
 PROJECTS = [
   Project(
@@ -388,6 +390,7 @@ BENCHMARK_E2E_PYTEST_FILES = [
 # and spends real tokens, so the stage naming them runs only when asked for
 LLM_PYTEST_FILES = [
   'bro/spells_llm_test.py',
+  'browser/bros/browser/reader_llm_test.py',
   'dev/bros/dev/commit_llm_test.py',
   'native/bro/native/llms/openai_llm_test.py',
   'ride/ride/claude/input_channels_llm_test.py',

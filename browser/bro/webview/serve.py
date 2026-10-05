@@ -225,7 +225,7 @@ def _vnc(display: str) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
 
 @contextlib.contextmanager
 def _browser_config(storage_state: dict[str, Any] | None) -> Iterator[tuple[Path, Path | None]]:
-  with tempfile.TemporaryDirectory(prefix='bro-webview-') as directory:
+  with tempfile.TemporaryDirectory(prefix='bro-browser-') as directory:
     root = Path(directory)
     config = root / 'playwright.json'
     config.write_text(json.dumps({'browser': {'contextOptions': {'acceptDownloads': False}}}))

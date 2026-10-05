@@ -1,0 +1,6 @@
+- main [ref=e2]:
+  - heading "Release dashboard" [level=1] [ref=e3]
+  - paragraph [ref=e4]: Version 5.6 ships on October 8.
+  - button "Open release notes" [ref=e5]
+  - link "Download report" [ref=e6] [cursor=pointer]:
+    - /url: https://example.test/download

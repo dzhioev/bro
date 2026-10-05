@@ -31,7 +31,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   the opt-in `llm` (the live-LLM behavior probes, run only when `--only` names the stage, since they spend real tokens),
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag),
   `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
-  and `webview_e2e` (the real browser worker route, `webview/bro/webview/e2e_test.py`),
+  and `webview_e2e` (the real browser worker route, `browser/bro/webview/e2e_test.py`),
   all skipped when the gate itself runs inside a container.
   `--only` and `--skip` name stages, are repeatable, and are mutually exclusive.
   `--shard K/N` runs the K-th of N shards of the `broker_e2e` stage (`bro.dev.sharding` deals them), for a runner per shard.
