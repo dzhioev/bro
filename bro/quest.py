@@ -379,13 +379,22 @@ class Asked:
   quest_id: str
   question_id: str
   answer: Optional[str] = None
+  counter_question_id: Optional[str] = None
 
   @property
   def state(self) -> str:
-    return 'asked' if self.answer is None else 'answered'
+    if self.answer is None:
+      return 'asked'
+    return 'question' if self.counter_question_id is not None else 'answered'
 
 
-def _reply_from_tail(quest: dict[str, Any], question_id: str) -> Optional[str]:
+@dataclass(frozen=True)
+class _Reply:
+  answer: str
+  counter_question_id: Optional[str]
+
+
+def _reply_from_tail(quest: dict[str, Any], question_id: str) -> Optional[_Reply]:
   for entry in reversed(_entries(quest)):
     transition = entry.get('transition')
     if transition not in ('message', 'refused'):
@@ -396,7 +405,10 @@ def _reply_from_tail(quest: dict[str, Any], question_id: str) -> Optional[str]:
         raise QuestError('a refused quest chat entry carried no reason')
       raise QuestError(reason)
     if transition == 'message' and entry.get('reply_to') == question_id:
-      return _text_from_entry(entry)
+      counter_question_id = entry.get('id')
+      if counter_question_id is not None and not isinstance(counter_question_id, str):
+        raise QuestError('a quest counter-question carried a malformed id')
+      return _Reply(_text_from_entry(entry), counter_question_id)
   return None
 
 
@@ -440,7 +452,10 @@ def ask(
     current = _poll_quest(
       connected, resolved, current, deadline=deadline, done=replied, on_chat=True
     )
-  return Asked(resolved, question_id, _reply_from_tail(current, question_id))
+  reply = _reply_from_tail(current, question_id)
+  if reply is None:
+    return Asked(resolved, question_id)
+  return Asked(resolved, question_id, reply.answer, reply.counter_question_id)
 
 
 def asked_view(asked: Asked) -> dict[str, Any]:
@@ -451,7 +466,31 @@ def asked_view(asked: Asked) -> dict[str, Any]:
   }
   if asked.answer is not None:
     view['answer'] = asked.answer
+  if asked.counter_question_id is not None:
+    view['counter_question_id'] = asked.counter_question_id
   return view
+
+
+# --- artifact sharing -----------------------------------------------------------
+
+
+def share(
+  quest_id: str,
+  ref: str,
+  *,
+  timeout: Optional[float] = None,
+  client: Optional['Client'] = None,
+) -> str:
+  """Share one reachable artifact ref with a live bro quest this session owns."""
+  resolved = resolve(quest_id)
+  mission_client.share(
+    resolved,
+    ref,
+    timeout=timeout,
+    client=client,
+    validate=_require_bro,
+  )
+  return resolved
 
 
 # --- cancel ---------------------------------------------------------------------
@@ -765,8 +804,18 @@ def _ask(quest_id: str, text: str, reply_to: Optional[str], wait: Optional[float
   if asked.state == 'answered':
     print(asked.answer)
     return 0
+  if asked.state == 'question':
+    print(asked.answer)
+    assert asked.counter_question_id is not None
+    log.info(
+      "counter_question_id %s; reply with `quest ask %s '<answer>' --reply-to %s --wait`",
+      asked.counter_question_id,
+      asked.quest_id,
+      asked.counter_question_id,
+    )
+    return QUESTION_EXIT_CODE
   print(asked.question_id)
-  return 0 if wait is None else QUESTION_EXIT_CODE
+  return 0 if wait is None else RUNNING_EXIT_CODE
 
 
 def _cancel(quest_id: str, timeout: Optional[float]) -> int:
@@ -872,8 +921,9 @@ def main(argv: list[str]) -> Optional[int]:
     'ask',
     help='ask a question; --wait blocks for its reply',
     description='ask a question on a quest and print its id — with --reply-to a counter-question '
-    'to the question named; --wait blocks for the reply and prints it, and at its bound '
-    f'prints the question id and exits {QUESTION_EXIT_CODE}, the question still live',
+    'to the question named; --wait prints a plain reply and exits 0, or a counter-question and '
+    f'exits {QUESTION_EXIT_CODE} with its id on stderr; at its bound it prints the original '
+    f'question id and exits {RUNNING_EXIT_CODE}, the question still live',
   )
   ask_parser.add_argument('quest_id', metavar='<quest-id>', help=QUEST_ID_HELP)
   ask_parser.add_argument(
