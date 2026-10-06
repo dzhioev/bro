@@ -285,8 +285,7 @@ a branch that is final before review cannot account for the work that follows it
 The flow's one mandatory local pass
 — on the folded, rebased tree, which is the tree that ships.
 Run the repo's gate over what the change reaches:
-a selection scoped to the diff against `<base>` where offered, otherwise affected tests (the repo's command and environment flags).{{when #harness = bro}} Run long commands through `bro::job` in `fg` mode with an explicit `timeout_seconds` (600 fits)
-— the default foreground wait is shorter.{{end}}
+a selection scoped to the diff against `<base>` where offered, otherwise affected tests (the repo's command and environment flags).
 
 What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
 The whole gate is the pull request's:
@@ -463,7 +462,7 @@ Don't wait for a review to arrive — hand it over:
 
 1. Summon the eyebro with the watcher already running
    — the watcher baselines existing events as seen at start, so a review posted before it starts would never fire.
-   `bro::summon` targeting the eyebro your banner's `may_summon` names, {{when #harness = claude}}with `detach: true`, {{end}}a four-hour timeout (`14400`) and a self-contained prompt naming the PR
+   `bro::summon` targeting the eyebro your banner's `may_summon` names, with a four-hour timeout (`14400`) and a self-contained prompt naming the PR
    — the child shares no context with this session:
    `[[review pr <pr-url>]]`.
 2. The conversation runs through the PR:
@@ -476,14 +475,13 @@ Don't wait for a review to arrive — hand it over:
    step 15's APPROVED handler is where you collect it.
    It is not the only place, because the child can finish without posting anything new:
    one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
-   {{iff #harness = claude}}The quest watch's `summon ended` line is what carries that end
-   — `bro::quest_check` on the quest id then, and a completed answer is the verdict whether or not a PR event carried it.{{else}}A PR that stays quiet past reason is therefore a reason to check the quest rather than to keep waiting
-   — `bro::quest_check` on the quest id, and a completed answer is the verdict whether or not an event carried it.{{end}}
+   The session watch's `summon ended` line carries that end
+   — `bro::quest_check` on the quest id then, and a completed answer is the verdict whether or not a PR event carried it.
 3. A summon denied at launch, or a child that raises before it reviews anything
    — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
-   — means no reviewer ran:
-   {{when #harness = claude}}the second arrives as `summon ended failed:raised` on the quest watch, its reason on `bro::quest_check`;
-   {{end}}report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
+   — means no reviewer ran.
+   A raise arrives as `summon ended failed:raised` on the session watch, with its reason on `bro::quest_check`;
+   report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
    A child that ran and ended without approving is the opposite case and blocks the merge;
    step 15 handles it.
 
@@ -576,7 +574,7 @@ Watcher silence is not evidence that checks finished.
 If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
 
 With all three gates clear, chain into the merge, and batch it
-— {{iff #harness = bro}}stop the watcher with `bro::kill(id=job_id)`{{eliff #harness = claude}}stop it with `TaskStop`{{end}}, then [[land]] **in the same response** and follow it through the merge.
+— stop the watcher with `bro::unwatch('poll-pr <owner>/<repo> <pr_number>')`, then [[land]] **in the same response** and follow it through the merge.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
 informational;
