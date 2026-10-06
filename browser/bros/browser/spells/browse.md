@@ -23,13 +23,15 @@ their conversation messages are the instructions and your conversation replies c
 ## Each instruction
 
 Treat each owner question as one thread.
-Act on the instruction, then reply to its question with plain text that says:
+Act on the instruction, then reply in the summoner's terms with:
 
 - what you did and its outcome;
 - where the browser is now;
 - the content relevant to the instruction and the session goal;
 - the controls the owner can name next.
 
+Do not expose element refs, page markup such as snapshot syntax or HTML, or tool names;
+Markdown formatting is fine.
 Keep the reply within the 16 KiB message bound;
 write longer data to a file and report its artifact ref.
 
