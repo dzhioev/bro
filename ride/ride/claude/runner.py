@@ -9,10 +9,11 @@ The outer `ride solo|along` validates policy once, so this runner repeats no pol
 import contextlib
 import os
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from bro import watches
 from bro.base import log
 from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
@@ -22,11 +23,12 @@ from ride.claude import claude_release
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
-from ride.claude.interrupt import Run, run_interactive, run_streaming
+from ride.claude.interrupt import Run, StreamedRun, run_interactive, run_streaming
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
+from ride.claude.waiter_state import WaiterState
 from ride.workspace.build_context import claude_code_version
 
 if TYPE_CHECKING:
@@ -64,7 +66,24 @@ def _apply_mcp_backstops(environment: dict[str, str]) -> None:
 
 
 def _run_claude(binary: Path, argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
-  return run_interactive([str(binary), *argv], env, transcripts)
+  return run_interactive([str(binary), *argv], env, transcripts, waiters=WaiterState.for_session())
+
+
+def _stream_claude(
+  binary: Path,
+  argv: list[str],
+  env: dict[str, str],
+  prompt: str,
+  on_result: Callable[[str], None] | None = None,
+) -> StreamedRun:
+  return run_streaming(
+    [str(binary), *argv],
+    env,
+    prompt,
+    store=watches.session_store(),
+    waiters=WaiterState.for_session(),
+    on_result=on_result,
+  )
 
 
 def _claude_state_dir() -> Path:
@@ -137,9 +156,7 @@ def _run_claude_root_solo(binary: Path, argv: list[str], env: dict[str, str], pr
   """run a root's print-mode Claude with each turn's reply on the session's
   stdout, and close its host-anchored quest on success."""
   with _trail_watch() as emitted:
-    run = run_streaming(
-      [str(binary), *argv], env, prompt, on_result=lambda reply: print(reply, flush=True)
-    )
+    run = _stream_claude(binary, argv, env, prompt, lambda reply: print(reply, flush=True))
   if run.code == 0 and not run.stopped:
     _complete_run(emitted, None)
   return run.code
@@ -153,7 +170,7 @@ def _run_claude_summoned(binary: Path, argv: list[str], env: dict[str, str], pro
   former, and a `raise`- or `answer`-ended session already sent its own. The
   reply is echoed to stdout either way, so the output tail still carries it."""
   with _trail_watch() as emitted:
-    run = run_streaming([str(binary), *argv], env, prompt)
+    run = _stream_claude(binary, argv, env, prompt)
   reply = run.results[-1] if len(run.results) > 0 else ''
   print(reply, flush=True)
   if run.code != 0 or run.stopped:
@@ -193,6 +210,9 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     claude_args = ['--resume', latest.stem, *claude_args]
 
   with contextlib.ExitStack() as teardown:
+    waiters = WaiterState.for_session()
+    waiters.reset()
+    teardown.callback(waiters.stand_down)
     # session-local MCP serving: OS-assigned port published via a port file,
     # per-session bearer token. the server imports from the session runtime
     # selected by PATH — the snapshot on host, the runtime volume in a container.

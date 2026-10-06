@@ -31,9 +31,12 @@ import tty
 from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
+from bro import turn_end, watches
 from bro.base import log
 from ride.claude.claude_config import latest_jsonl
+from ride.claude.waiter_state import REWAKE_STATUS, WAITER_EVENTS, WAITER_MARK, WaiterState
 from ride.do_ride import stopped_on_sigterm
 
 # the bytes a terminal delivers for Ctrl-C and Ctrl-D
@@ -80,15 +83,17 @@ def run_streaming(
   env: Mapping[str, str],
   prompt: str,
   *,
+  store: watches.Store,
+  waiters: WaiterState,
   on_result: Callable[[str], None] | None = None,
 ) -> StreamedRun:
   """run print-mode claude over stream-json with its stdin held open.
 
   `prompt` goes in as the first user message. Claude then keeps the session
-  alive as long as stdin is open, and a finished background task wakes it for
-  a turn of its own; the run closes stdin at the first turn end with no
-  background task running, which ends the session. `on_result` sees each
-  turn's reply as it lands.
+  alive as long as stdin is open, and a finished background task or a watch
+  waiter's rewake wakes it for a turn of its own. Each turn end is settled
+  through `bro.turn_end` over `store`, and an end closes stdin, which ends the
+  session. `on_result` sees each turn's reply as it lands.
   """
   process = subprocess.Popen(
     argv,
@@ -100,30 +105,85 @@ def run_streaming(
   )
   assert process.stdin is not None and process.stdout is not None
   results: list[str] = []
-  with stopped_on_sigterm(lambda: _interrupt_printing(process)) as stopped, _ended(process):
+  with (
+    stopped_on_sigterm(lambda: _interrupt_printing(process, waiters)) as stopped,
+    _ended(process),
+  ):
     with contextlib.closing(process.stdin) as stdin:
-      # a claude gone before its first message reports through its exit code
-      with contextlib.suppress(BrokenPipeError):
-        stdin.write(json.dumps(_user_message(prompt)) + '\n')
-        stdin.flush()
-      tasks_running = False
-      pending_input = True
+      session = _StreamSession(stdin, store, waiters)
+      session.send(prompt)
       for line in process.stdout:
         event = _stream_event(line)
         if event is None:
           continue
-        if event.get('type') == 'system' and event.get('subtype') == 'background_tasks_changed':
-          tasks_running = len(_task_list(event)) > 0
-        elif event.get('type') == 'result':
+        session.observe(event)
+        if event.get('type') == 'result':
           text = event.get('result')
           reply = text if isinstance(text, str) else ''
           results.append(reply)
           if on_result is not None:
             on_result(reply)
-          if pending_input and not tasks_running:
-            stdin.close()
-            pending_input = False
+          session.settle()
   return StreamedRun(process.returncode, stopped.is_set(), tuple(results))
+
+
+class _StreamSession:
+  """the `bro.turn_end.TurnEnd` port of a stream-json claude: its live
+  background tasks and its waiters' rewakes, read off the event stream, and
+  its stdin, which carries a notice and whose close is the end."""
+
+  def __init__(self, stdin: IO[str], store: watches.Store, waiters: WaiterState) -> None:
+    self._stdin = stdin
+    self._store = store
+    self._waiters = waiters
+    self._tasks: tuple[dict, ...] = ()
+    self._rewakes_seen = 0
+
+  @property
+  def watch_store(self) -> watches.Store:
+    return self._store
+
+  def send(self, text: str) -> None:
+    # a claude gone already reports through its exit code
+    with contextlib.suppress(BrokenPipeError):
+      self._stdin.write(json.dumps(_user_message(text)) + '\n')
+      self._stdin.flush()
+
+  def observe(self, event: dict) -> None:
+    if event.get('type') != 'system':
+      return
+    if event.get('subtype') == 'background_tasks_changed':
+      self._tasks = _task_list(event)
+    elif event.get('subtype') == 'hook_response' and _from_waiter(event):
+      status = event.get('exit_code')
+      if status == REWAKE_STATUS:
+        self._rewakes_seen += 1
+      elif status != 0 and not self._waiters.stood_down():
+        raise RuntimeError(f'the watch waiter failed with {status}: {event.get("stderr")}')
+
+  def settle(self) -> None:
+    """settle a turn end, unless the session already ended or a waiter's
+    rewake, begun but not yet in claude's queue, will start another turn."""
+    if self._stdin.closed:
+      return
+    with self._waiters.locked():
+      if self._waiters.rewakes() > self._rewakes_seen:
+        return
+      turn_end.settle(self)
+
+  def background_work(self) -> tuple[str, ...]:
+    return tuple(
+      f'{task["task_id"]} {task["task_type"]} `{task["description"].replace("`", "\\`")}`'
+      for task in self._tasks
+      if task.get('ambient') is not True
+    )
+
+  def notify(self, text: str) -> None:
+    self.send(text)
+
+  def end(self) -> None:
+    self._waiters.stand_down()
+    self._stdin.close()
 
 
 @contextlib.contextmanager
@@ -155,29 +215,52 @@ def _stream_event(line: str) -> dict | None:
   return event
 
 
-def _task_list(event: dict) -> list:
+def _task_list(event: dict) -> tuple[dict, ...]:
   tasks = event.get('tasks')
-  if not isinstance(tasks, list):
-    raise RuntimeError('a background_tasks_changed event carries no tasks list')
-  return tasks
+  if not isinstance(tasks, list) or not all(_is_task(task) for task in tasks):
+    raise RuntimeError(f'a background_tasks_changed event carries a malformed task list: {tasks!r}')
+  return tuple(tasks)
 
 
-def run_interactive(argv: list[str], env: Mapping[str, str], transcripts: Path) -> Run:
+def _from_waiter(response: dict) -> bool:
+  stdout = response.get('stdout')
+  return (
+    response.get('hook_event') in WAITER_EVENTS
+    and isinstance(stdout, str)
+    and stdout.splitlines()[:1] == [WAITER_MARK]
+  )
+
+
+def _is_task(task: object) -> bool:
+  return (
+    isinstance(task, dict)
+    and all(isinstance(task.get(field), str) for field in ('task_id', 'task_type', 'description'))
+    and isinstance(task.get('ambient', False), bool)
+  )
+
+
+def run_interactive(
+  argv: list[str], env: Mapping[str, str], transcripts: Path, *, waiters: WaiterState
+) -> Run:
   """run claude's TUI on a pty proxying the session's terminal.
 
   `transcripts` is the projects dir the interrupted turn lands in."""
   with _terminal_run(argv, env) as run:
-    with stopped_on_sigterm(lambda: _interrupt_interactive(run, transcripts)) as stopped:
+    with stopped_on_sigterm(lambda: _interrupt_interactive(run, transcripts, waiters)) as stopped:
       code = run.process.wait()
   return Run(code, stopped.is_set())
 
 
-def _interrupt_printing(process: subprocess.Popen) -> None:
+def _interrupt_printing(process: subprocess.Popen, waiters: WaiterState) -> None:
+  # claude kills a pending waiter on the interrupt, which reads as the waiter
+  # failing unless it was stood down first
+  waiters.stand_down()
   process.send_signal(signal.SIGINT)
   _await_exit(process)
 
 
-def _interrupt_interactive(run: '_TerminalRun', transcripts: Path) -> None:
+def _interrupt_interactive(run: '_TerminalRun', transcripts: Path, waiters: WaiterState) -> None:
+  waiters.stand_down()
   run.type(_INTERRUPT_KEY)
   try:
     _await_flush(transcripts)

@@ -247,9 +247,8 @@ PYTEST_FILES = [
   'ride/ride/artifacts_test.py',
   'ride/ride/pending_launch_test.py',
   'ride/ride/claude/claude_argv_test.py',
-  'ride/ride/claude/stop_guard_test.py',
-  'ride/ride/claude/watch_delivery_test.py',
   'ride/ride/claude/watch_guard_test.py',
+  'ride/ride/claude/watch_waiter_test.py',
   'ride/ride/claude/interrupt_test.py',
   'ride/ride/claude/claude_config_test.py',
   'ride/ride/alias_test.py',
@@ -402,7 +401,7 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/interrupt_llm_test.py',
   'ride/ride/claude/mcp_timeout_llm_test.py',
   'ride/ride/claude/shell_prefix_llm_test.py',
-  'ride/ride/claude/stop_guard_llm_test.py',
+  'ride/ride/claude/watch_waiter_llm_test.py',
 ]
 
 
