@@ -140,10 +140,11 @@ def _capture(
     capture_ref = _mint_text(captured)
   else:
     urls = _PAGE_URL.findall(reply_text)
+    if not urls:
+      raise ValueError(f'webview capture omitted the page URL: {reply_text}')
+    # Playwright MCP leaves out the title line when the page title is empty.
     titles = _PAGE_TITLE.findall(reply_text)
-    if not urls or not titles:
-      raise ValueError(f'webview capture omitted the page title or URL: {reply_text}')
-    title = titles[-1]
+    title = titles[-1] if titles else ''
     url = urls[-1]
   if len(captured.strip()) == 0:
     raise ValueError(

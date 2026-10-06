@@ -197,6 +197,26 @@ def test_empty_capture_names_the_page_modal_state(monkeypatch, tmp_path) -> None
     mcp.look('What is visible?', webview='webview-1')
 
 
+def test_untitled_page_snapshot_reads_with_an_empty_title(monkeypatch, tmp_path) -> None:
+  snapshot = tmp_path / 'snapshot.yml'
+  snapshot.write_text('- heading "You are unsubscribed" [level=1] [ref=e1]\n')
+  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(snapshot))
+  monkeypatch.setattr(
+    'bro.webview.mcp.command_reply',
+    lambda webview, tool, arguments: {
+      'text': '- Page URL: https://example.test/unsubscribe\n- Console: 0 errors, 0 warnings',
+      'files': [{'name': 'browser-look-snapshot.yml', 'ref': CAPTURE_REF}],
+    },
+  )
+  monkeypatch.setattr(
+    mcp, '_read_page', lambda prompt, content: {'answer': 'Done.', 'elements': []}
+  )
+
+  result = mcp.look('Is the address unsubscribed?', webview='webview-1')
+
+  assert (result['title'], result['url']) == ('', 'https://example.test/unsubscribe')
+
+
 def test_snapshot_element_ref_must_match_one_exact_ref_token(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- link "Download report" [ref=e6] [cursor=pointer]\n')
