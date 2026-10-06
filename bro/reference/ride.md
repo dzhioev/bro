@@ -144,7 +144,7 @@ The command must match the persona's shell roster exactly, as `bro::job` require
 `do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
 Each joined party member has its own session directory and therefore its own store.
 
-Claude's compatibility delivery uses `watch-next` as its blocking reader, so its quest-watch commands remain admitted alongside the runtime-owned producer.
+Claude's tool fold admits `watch-run quest watch` and `watch-next` through `Bash` for the same sessions, beside the runtime-owned producer.
 
 ## Claude harness
 
@@ -163,20 +163,26 @@ The outer runs the separate `do-ride solo|along` session executable.
 Unboxed isolation takes it from the frozen host snapshot;
 boxed isolation takes it from the same bundle materialized at `/var/ride/runtime`.
 
-A solo session runs Claude in print mode over stream-json, its prompt delivered as the first user message and its stdin held open:
-Claude then stays alive as long as stdin is open and starts a turn of its own when a background task finishes,
-and the runner closes stdin at the first turn end with no background task running, which ends the session.
-A solo session's settings therefore wire `ride.claude.stop_guard` as its `Stop` hook:
-reading the running tasks off the hook input and every mission the run owns off the host journal, it blocks a turn end once per turn (Claude's `stop_hook_active` marks the second stop)
-when missions are in flight with no background task running, where the exiting process would orphan them,
-or when a background task is running with nothing in flight, where it would hold the session until killed;
-any running task over missions in flight is the wait it should be and passes.
-The stop guard reads `background_tasks`, which Claude Code sends undocumented;
-`ride/ride/claude/stop_guard_llm_test.py` probes it live against the Claude Code release every managed session runs.
+Every session's settings wire `ride.claude.watch_waiter` as its `Stop` and `StopFailure` hook, with `asyncRewake`:
+each turn end, one that ends in an API error included, starts a waiter in the background, which registers as the session's current one and polls the watch store.
+On a batch it exits 2 with the lines on stderr,
+which Claude hands the model under the hook's `rewakeSummary` and `rewakeMessage`, after the next tool result of a running turn or as a turn of its own.
+A waiter exits 0 once a later waiter supersedes it, the runner stands it down, or `do-ride` is gone;
+shortly before its hook timeout it wakes the session with a line saying no watch line arrived and that ending the turn keeps waiting.
 
-Claude Code notifies a finished background command with the path of its output file, never the output.
-Every session's settings therefore wire `ride.claude.watch_delivery` as its `UserPromptSubmit` hook, which Claude Code also runs on a task notification:
-for a notified `watch-next` it returns the output as additional context, so the woken model has the watch's lines without reading the file.
+A solo session runs Claude in print mode over stream-json, its prompt delivered as the first user message and its stdin held open:
+Claude then stays alive as long as stdin is open, and a finished background task or a waiter's rewake starts a turn of its own.
+At each turn's `result` event the runner applies the shared end-of-turn rule (`bro.turn_end`),
+with Claude's background work read off the stream's last `background_tasks_changed` event, less the entries flagged `ambient`, which Claude marks as housekeeping rather than activity.
+A notice goes in as a user message on stdin;
+an end stands the waiter down and closes stdin, which ends the session without the up to 30 seconds Claude holds a closing print session for a pending async hook.
+A stop stands the waiter down before it interrupts Claude, which kills a pending waiter, so that kill never reads as the waiter failing.
+Claude drops a rewake that arrives after stdin closes, so the runner reads each waiter's exit off the stream's hook events
+and leaves a turn end unsettled while a batch a waiter took has not yet reached Claude's queue.
+The waiter's hook command prints a mark before the interpreter starts,
+which tells the waiter's hook events, a failed start's among them, from those of the hooks Claude merges in from the session's other settings;
+a waiter that fails fails the solo run.
+`ride/ride/claude/watch_waiter_llm_test.py` probes the hooks, the events, and the exit live against the Claude Code release every managed session runs.
 
 Claude Code runs a Bash command in a login shell whenever its startup shell snapshot is missing, and a login profile that resets PATH there, Debian's `/etc/profile` or the user's own, drops the session commands.
 The runner therefore pins the shell through `CLAUDE_CODE_SHELL` and routes every command through a `CLAUDE_CODE_SHELL_PREFIX` script (`ride.claude.shell_prefix`) that restores the session's PATH first;

@@ -9,10 +9,9 @@ import contextlib
 import json
 import os
 import shlex
-import signal
 import subprocess
 import sys
-from collections.abc import Generator, Iterable
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -20,13 +19,16 @@ import pytest
 
 from bro.trails.local import LocalStore
 from bro.trails.record.session import ManagedSession
-from ride.claude.claude_argv import STREAM_JSON_ARGS
+from ride.claude.claude_argv import STREAM_JSON_ARGS, watch_waiter_hooks
 from ride.claude.claude_config import _SESSION_SETTINGS_JSON
 from ride.claude.interrupt import run_streaming
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
+  Feed,
+  bounded,
   claude_token,
   pinned_claude,
+  watched_session,
 )
 from ride.claude.system_prompt import session_append_prompt
 from ride.claude.trail_recorder import Recorder
@@ -41,8 +43,11 @@ _CLAUDE_INSTRUCTIONS = 'model-input-claude-instructions'
 _AGENTS_INSTRUCTIONS = 'model-input-agents-instructions'
 _USER_INPUT = (
   'Call mcp__fixture__echo with value model-input-tool-result, then reply exactly MODEL-INPUT-DONE.'
+  ' When a later message shows watch lines, reply with the line that contains'
+  ' model-input-watch-line, verbatim.'
 )
 _ASSISTANT_REPLY = 'MODEL-INPUT-DONE'
+_WATCH_LINE = 'model-input-watch-line'
 
 _MCP_SERVER = f"""\
 from mcp.server.fastmcp import FastMCP
@@ -74,23 +79,6 @@ print(json.dumps(output))
 @pytest.fixture(scope='module')
 def claude() -> Path:
   return pinned_claude()
-
-
-@contextlib.contextmanager
-def _bounded(seconds: float) -> Generator[None]:
-  """Fail a live session instead of leaving the opt-in stage hung."""
-
-  def _expire(signum, frame):
-    del signum, frame
-    raise TimeoutError(f'the session did not end within {seconds:.0f}s')
-
-  previous = signal.signal(signal.SIGALRM, _expire)
-  signal.alarm(int(seconds))
-  try:
-    yield
-  finally:
-    signal.alarm(0)
-    signal.signal(signal.SIGALRM, previous)
 
 
 def _environment(config: Path) -> dict[str, str]:
@@ -134,7 +122,10 @@ def _recorded_messages(
   instruction_text: str,
   prompt: str,
   agents_flag: bool,
+  watch_line: str | None = None,
 ) -> list[dict]:
+  """record a print session, handing it `watch_line` through a watch at its
+  first turn end when one is given, and return the trail's messages."""
   repository = root / 'repository'
   repository.mkdir()
   subprocess.run(['git', 'init', '-q'], cwd=repository, check=True)
@@ -146,7 +137,8 @@ def _recorded_messages(
     'hooks': {
       'UserPromptSubmit': [
         {'hooks': [{'type': 'command', 'command': shlex.join([sys.executable, str(hook)])}]}
-      ]
+      ],
+      **(watch_waiter_hooks() if watch_line is not None else {}),
     }
   }
   mcp_config = {
@@ -175,8 +167,29 @@ def _recorded_messages(
     session_append_prompt('unattended', 'bro'),
     *STREAM_JSON_ARGS,
   ]
-  with contextlib.chdir(repository), _bounded(_SESSION_TIMEOUT_SECONDS):
-    run = run_streaming(argv, _environment(config), prompt)
+  with watched_session(root / 'session') as (watch_store, waiters):
+    feed = Feed(watch_store, root / 'lines') if watch_line is not None else None
+    handed_over = False
+
+    def _hand_over(reply: str) -> None:
+      nonlocal handed_over
+      if feed is None or watch_line is None:
+        return
+      if watch_line in reply:
+        feed.stop()
+      elif not handed_over:
+        handed_over = True
+        feed.say(watch_line)
+
+    with contextlib.chdir(repository), bounded(_SESSION_TIMEOUT_SECONDS):
+      run = run_streaming(
+        argv,
+        _environment(config),
+        prompt,
+        store=watch_store,
+        waiters=waiters,
+        on_result=_hand_over,
+      )
   assert run.code == 0 and not run.stopped, run
 
   transcripts = list((config / 'projects').rglob('*.jsonl'))
@@ -247,6 +260,7 @@ def test_claude_trail_records_every_model_input_channel(tmp_path: Path, claude: 
     instruction_text=_CLAUDE_INSTRUCTIONS,
     prompt=_USER_INPUT,
     agents_flag=False,
+    watch_line=_WATCH_LINE,
   )
 
   snapshots = [
@@ -287,6 +301,10 @@ def test_claude_trail_records_every_model_input_channel(tmp_path: Path, claude: 
   assert _contains(_notice(messages, 'hook_additional_context'), _HOOK_CONTEXT)
   assert any(
     message.get('type') == 'user_input' and _contains(message, _USER_INPUT) for message in messages
+  )
+  assert any(
+    message.get('event') == 'task-notification' and _contains(message, _WATCH_LINE)
+    for message in messages
   )
   assert any(
     message.get('type') == 'assistant' and _contains(message, _ASSISTANT_REPLY)
