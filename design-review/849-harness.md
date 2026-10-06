@@ -1,6 +1,7 @@
 ## Design
 
 Settled with the user on 2026-10-05 (trail `01m45h783d-2jkg13yd-07dpdhqf`).
+Reviewed against the code at `f7f1ba8b`, once #846 had landed, with the user on 2026-10-06 (trail `01m47h1ktn-8w232c6j-6ygzcm8d`).
 
 ### Probe: `asyncRewake` on the pinned Claude Code (2.1.280)
 
@@ -17,8 +18,8 @@ Run live from the design session in throwaway stream-json and TUI sessions, each
   `rewakeSummary` and `rewakeMessage`, marked internal in the settings schema, replace them from `--settings`.
   `UserPromptSubmit` fires for the notification, with its text as the prompt.
 - **The bound.**
-  An async hook's default timeout is 10 minutes;
-  expiry SIGTERMs the hook and wakes nothing, leaving the session with no waiter.
+  An async hook's default timeout is 10 minutes, and `timeout` takes seconds with no maximum;
+  an `asyncRewake` hook keeps its timer armed, and expiry SIGTERMs it (exit 143) and wakes nothing, leaving the session with no waiter.
 - **Several waiters.**
   A wake from elsewhere (a user message, a task notification, a blocking `Stop` hook) leaves the earlier waiter running, and every turn end starts another;
   the waiters pile up and race for the same input.
@@ -31,6 +32,10 @@ Run live from the design session in throwaway stream-json and TUI sessions, each
   Claude spawns hooks in their own process group.
   At the end of a print session it waits up to 30 s for a pending async hook, then SIGTERMs it;
   a TUI `/exit` SIGTERMs it at once.
+- **Errored turns**, read off the binary in the review rather than probed:
+  a turn that ends in an API error, a prompt-too-long, or a malformed tool call that failed again on retry fires `StopFailure` and returns before any `Stop` hook runs.
+  `asyncRewake` is a field of every command hook's settings;
+  that it backgrounds on `StopFailure` too is for the `llm` stage to confirm.
 
 ### The harness interface
 
@@ -40,7 +45,9 @@ General code reaches a harness through that object, passed in by the engine that
 - **Core.**
   `bro/harness/__init__.py` holds `Harness`, the base class of the framework half, and the registry:
   the installed names, read from entry-point metadata without importing anything, and the harness a name loads.
-  As with `bro.worker_types`, loading refuses an object that is not a `Harness` or whose `name` differs from its entry.
+  The package already holds `claude.py`, the Claude tool names personas import until the persona slice moves them, so `__init__.py` stays cheap to import.
+  Loading refuses an object that is not a `Harness` instance or whose `name` differs from its entry, as `bro.worker_types` refuses a class that is not a `WorkerType` or names another type;
+  an uninstalled name raises `ValueError` listing the installed ones.
 - **Ride.**
   `ride.harness.SessionHarness` is today's `Harness` protocol under a new name:
   scope recipe, auth preflight, LLM resolution, the session reads and run, and the boxed and unboxed extras.
@@ -49,16 +56,22 @@ General code reaches a harness through that object, passed in by the engine that
 - **Claude.**
   `ride/ride/claude/harness.py:CLAUDE`, registered as `claude` by `bro-ride`.
 - **Bro.**
-  `native/bro/native/harness.py:BRO`, registered as `bro` by `bro-native`, which takes over `ride/ride/bro.py` and gains a dependency on `bro-ride`, as `bro-webview` has.
+  `native/bro/native/harness.py:BRO`, registered as `bro` by `bro-native`, which takes over `ride/ride/bro.py` and gains a dependency on `bro-ride`, as `bro-browser` has.
   Ride loads `bro-native` only through the group, never by import.
 - **Names.**
   Every list of harness names reads the registry:
-  `bro.mcp.Harness`, `ride.harness.HARNESS_NAMES` and `get_harness`'s if-chain, ride's `--harness` choices, `bro_worker`'s summon check, and `bro.summon`'s help;
-  so do the `[tool.bro] harness` and `summon-harness` validation in `bro/workspace/project.py` and the Terminal-Bench adapter in `benchmark/`.
-  The `#harness` fact's domain is the installed names.
+  `bro.mcp.Harness`, `ride.harness.HARNESS_NAMES` and `get_harness`'s if-chain, ride's `--harness` choices, `bro_worker`'s summon check, and `bro.summon`'s help.
+  An installation may carry one harness without the other
+  — `bro-ride` without `bro-native` is a Claude-only runtime (`native/README.md`), and the benchmark launcher's interpreter cannot hold `bro-native`'s openai major —
+  so a name is checked against the installed ones where it is used, not where it is configured.
+  `[tool.bro] harness` and `summon-harness` (`bro/workspace/project.py`) and the defaults are read as well-formed names, and a launch or summon that selects an uninstalled harness fails naming the distribution to install.
   The defaults, `claude` for a launch and `bro` for a summon, are configuration values kept together in `bro.base.configs`.
+  The Terminal-Bench adapter in `benchmark/` checks a trial's harness against the bundle it builds, which carries `bro-native`, not against its own interpreter.
+- **The `#harness` fact** compares against any well-formed harness name rather than a closed domain, since a text may name a harness the installation does not carry;
+  an `iff` chain still raises when no branch matches the running harness.
 - **No guessing.**
-  A workspace with no resume spec records no harness, so `ride list` shows no subject for it rather than reading it as a Claude workspace.
+  A workspace with no resume spec records no harness, so `ride list` shows no subject for it rather than reading it as a Claude workspace;
+  neither does it for a workspace whose recorded harness this installation does not carry.
 - **Injection.**
   The engine passes its harness object wherever code passes `harness='bro'` or `harness='claude'` today:
   `BaseBro.assemble`, the composed prompt and its session fragments, spell bodies, and the cast tool.
@@ -89,7 +102,9 @@ it is two protocols the harness's session runtime implements, below.
   `watch-run` runs its command under `bro.job_supervisor`, the process-group leader behind `bro::job`, detached from whatever process started the watch.
   Stopping a watch ends its whole process group, as `bro::kill` ends a job's.
   The supervisor itself exits once its owner is gone:
-  for a watch the session that declared it, for a job the process that started it.
+  for a watch the session that declared it
+  — `do-ride` (`RIDE_RUNNER_PID`) in a managed session, the runner in an in-process `bro run|chat` —
+  and for a job the process that started it.
 - **The session watch.**
   `do-ride` arms `watch-run quest watch` before the harness session starts and stops it after, wherever today's admission rule admits it:
   a session that may summon, or a summoned one whose talk carries `owner.say`, `owner.question`, or `worker.question`.
@@ -97,21 +112,30 @@ it is two protocols the harness's session runtime implements, below.
   When the session ends, `do-ride` stops every producer still live in its store.
 - **Watches the model starts.**
   `bro::watch(command)` keeps an admitted command running for the rest of the session through the store, and `bro::unwatch(command)` stops it.
-  Both mount wherever the persona declares shell reach, on every harness, and admit commands as `job` does;
+  Both mount wherever the persona declares shell reach, on every harness, and admit commands against the persona's shell roster, as `job` does;
   on the bro harness they replace `job`'s `watch` mode.
+  `bro::unwatch` refuses the session watch, which the runtime owns.
+  A persona that declares no shell has no watches on either harness, although Claude still serves it an undeclared `Bash` until the persona slice.
 - **One stream.**
   `bro.mission` owns the stream behind both `quest watch` and `mission watch`:
   arming at the journal head, replaying retained chat, re-arming across a gap, and following the ordered events.
   `quest watch` is its view of the session's own quest and the bro missions the session owns.
 - **One end-of-turn rule.**
   `bro/turn_end.py` settles a one-shot turn end from the live work:
-  the missions the session owns, which of them the live session watch covers, the model's live watches, the harness's own background work, and whether a summoner may still speak or a question of the session's own awaits its reply.
-  - **End** when nothing is live and no summoner may speak.
-  - **Wait** silently on covered missions, live watches, or a question awaiting its reply.
-  - **Notice, then wait** when the only live things are background work or a summoner who may speak:
-    the notice names the work, says that ending the turn again keeps waiting, and, in a summoned session, that a finished result goes through `bro::answer`.
-  - **Notice, then end** when the only live things are missions no watch covers:
-    nothing would wake the session for them, so the notice names them and the routes (`bro::watch('mission watch')`, or cancelling them), and ending the turn again ends the run and orphans them.
+  the missions the session owns and which of them the live session watch covers;
+  the model's live watches and the lines in the store not yet delivered;
+  the harness's own background work;
+  and whether a summoner may still speak or a question of the session's own awaits its reply.
+  The first verdict whose condition holds applies:
+
+  1. **Wait** silently while a covered mission, a live watch of the model's, an undelivered line, or a question awaiting its reply exists:
+     each of those wakes the session when it moves, and an end never strands lines a watch printed before it exited.
+  2. **Notice, then wait** while harness background work runs or a summoner may speak:
+     the notice names that work and any mission no watch covers, says that ending the turn again keeps waiting, and, in a summoned session, that a finished result goes through `bro::answer`.
+     The browser in an owner-led `[[browse]]` thread waits here, its webview mission live with no watch on it.
+  3. **Notice, then end** while only missions no watch covers remain:
+     nothing would wake the session for them, so the notice names them and the routes the session has (`bro::watch('mission watch')` where it is mounted, or cancelling them), and ending the turn again ends the run and orphans them.
+  4. **End** otherwise.
 
   A notice comes once per distinct live set, from one text template both harnesses share.
   An interactive session has no rule:
@@ -122,21 +146,24 @@ it is two protocols the harness's session runtime implements, below.
 Each harness implements four operations for its sessions, behind two protocols in core:
 
 - `LineSink.deliver(batch)` puts lines into the model's context and wakes the session if it idles;
-  the general pump hands it each batch `take()` returns.
+  the general pump hands it each batch `take()` returns, and takes the next only once the model has the last, so a burst reaches the model one bounded batch at a time.
 - `TurnEnd.background_work()` reports the harness's own live background work, and `TurnEnd.notify(text)` and `TurnEnd.end()` carry out a notice and an end;
   the harness calls `turn_end.settle(port)` at each one-shot turn end.
 
 #### Claude (`ride/ride/claude/`)
 
 - **The waiter.**
-  `watch_waiter.py` is every session's `Stop` hook, with `asyncRewake`, `rewakeSummary: "watch lines"`, `rewakeMessage: "New lines from this session's watches:"`, and a `timeout` of 24 hours.
+  `watch_waiter.py` is every session's `Stop` hook and its `StopFailure` hook, with `asyncRewake`, `rewakeSummary: "watch lines"`, `rewakeMessage: "New lines from this session's watches:"`, and a `timeout` of 24 hours;
+  `StopFailure` keeps a turn that ends in an API error, which runs no `Stop` hook, from leaving the session without a waiter.
   It registers as the session's current waiter, and a waiter it supersedes exits 0 at its next poll.
   It also exits 0 once the session ends, on the runner's stand-down mark or when `RIDE_RUNNER_PID` is gone.
-  It polls the store every 0.5 s, and on a batch writes it to stderr and exits 2.
+  It polls the store every 0.5 s, and on a batch writes it to stderr and exits 2;
+  the next waiter starts at the turn end that batch leads to, which is how a burst arrives one batch at a time.
   A minute before its bound it exits 2 with a line saying no watch line arrived for 24 hours and that ending the turn keeps waiting, so the bound shows rather than leaving the session without a waiter.
 - **The one-shot runner.**
   `interrupt.run_streaming` settles each turn end at its `result` event.
-  Background work is the task list of the last `background_tasks_changed` event, which the SDK's wire schema types.
+  Background work is the task list of the last `background_tasks_changed` event, which Claude Code's stream-json schema declares, minus the entries flagged `ambient`:
+  Claude's own housekeeping (`skip_transcript` tasks and ambient websocket monitors), which it tells hosts not to count as activity, and which today's runner counts.
   A notice goes in as a user message on stdin;
   an end stands the waiter down, then closes stdin.
   The runner also stands the waiter down before interrupting Claude, so a pending waiter adds no 30-second exit delay.
@@ -145,7 +172,8 @@ Each harness implements four operations for its sessions, behind two protocols i
 
 #### Bro (`native/`)
 
-- A pump thread delivers each batch into the run's inbox, which already reaches the model after tool results and wakes an idle `bro chat`.
+- A pump thread delivers each batch into the run's inbox, which already reaches the model after tool results and wakes an idle `bro chat`;
+  it takes the next batch only once the inbox has drained the last.
 - `Runner` settles each one-shot turn end:
   background work is the running jobs, a notice goes through the inbox, an end returns the reply, and a wait idles on the inbox and wakes on its news, as `bro chat` does.
 - `bro::chill` goes, and with it the turn it held, which is what kept a human from typing in `bro chat`.
@@ -156,13 +184,15 @@ Each harness implements four operations for its sessions, behind two protocols i
   `summon` on acceptance, `quest_ask` with the question id, `quest_check` and `quest_history` after one read, and `quest_cancel` once the host accepts.
   The Claude variants and their transport cautions go.
   With `quest_ask`'s `wait` goes the `counter_question_id` view #846 adds to it;
-  the watch line already names both ids.
+  the quest watch line already names both ids (`summon asks … (…, question <id>, to <id>)`).
+  `quest_share`, which #846 also adds, already returns at once and stays as it is.
   The `summon` and `quest` CLIs keep their blocking forms for shells and humans.
 - The fold stops admitting quest-watch commands, so a persona that declares no shell has none on either harness.
 - `watch-next` goes;
   `watch-run` stays, as the producer.
 - `summoner.md`, `summoned.md`, `ask.md`, the `watch` spell, `orchestrate.md`, `run-pr.md`, and #846's `browse.md` owner contract state one model with no `#harness` fork:
   the session watch is kept for the model, lines arrive as notifications, waiting is ending the turn, and quest moves go through the `bro::` tools.
+  `run-pr.md` thereby also loses the branches that keep the `summon ended` route from the bro harness, where it is just as true.
   `fragments/watch.md` folds into the `watch` spell.
 - `bro/reference/ride.md`, `bro/AGENTS.md`, `bro/prompts/AGENTS.md`, `ride/ride/claude/AGENTS.md`, `native/AGENTS.md`, and the root map follow.
 
@@ -171,6 +201,10 @@ Each harness implements four operations for its sessions, behind two protocols i
 - A burst larger than one batch ends with the pending marker, and the waiter started at the next turn end delivers the rest at once.
 - A line that arrives during a turn is delivered within it by the waiter still waiting from the previous turn end;
   one that arrives after that waiter has exited is picked up at once by the next.
+- Lines that arrive before a session's first turn end wait for it:
+  a one-shot session starts with a turn, and an interactive one without a prompt has a human about to type.
+- Whether `Stop` fires on a turn the human interrupts in the TUI is unprobed;
+  if it does not, a waiter still waiting from an earlier turn end delivers, and otherwise lines wait for the next turn end, with the human present.
 - A session watch whose producer died, because the broker refused it for instance, covers nothing:
   its exit line is delivered, and the rule counts its missions as uncovered.
 - A resume re-arms the session watch, whose replay re-delivers retained pending chat marked `before the watch:`.
@@ -193,19 +227,34 @@ Each harness implements four operations for its sessions, behind two protocols i
    #754's shell syntax and its matcher are general code that both the Claude gate and the bro job tool call, and Claude's `Bash` stays blocked unless a `shell(...)` declaration hands it back.
    #754's pattern syntax and enforcement mechanism are settled in #754's own design, resumed before this slice starts.
 3. **Trails.**
-   Trail formats register in a `bro.trails.formats` group, one module each, apart from the harness registry:
+   Trail formats register through an entry-point group of their own, one module each, apart from the harness registry:
    a trail outlives the installation that recorded it, and the trails server loads no harness.
-   The name comparisons become adapter members:
-   whether a trail must name its bro, the list owner, the header fields the display shows, text bodies for rows spilled before `body_encoding`, and whether the format folds lineage.
+   Both of today's formats stay in core, since the trails server's image installs only the core `bro` wheel;
+   a harness distribution that ships a new format needs that image to install it.
+   The group needs a name other than `bro.trails.formats`, which `bro/trails/formats.py` (the schema versions) already holds as a module path.
+   The name comparisons become format members:
+   whether a trail must name its bro, enforced on import as well as at blaze, where today only blaze checks it;
+   the list owner;
+   and the header fields the display shows.
+   Lineage folding already keys off the format, through the adapter's `resolve_lineage`.
+   The `body_encoding` fallback (`parse_json=harness != 'claude'` in `bro/trails/server/dynamo.py`) serves rows spilled before that field existed, which may all be gone:
+   the stage counts rows with `body_s3` and no `body_encoding` in the live table, through a session with AWS access, and when there are none deletes the branch, so such a row fails loudly, or else makes it a format member.
    `native/bro/fork.py` refusing another harness's trail is the bro harness checking its own records, and stays.
 4. **Persona declarations, with #857.**
    A persona declares its reach in neutral groups, opt-in on every harness:
    files (read-only or read-write), shell (per #754), web, and delegation.
+   Groups are inherited like `tools`, so the base `bro` persona declares none
+   — a group on `Bro` would reach `browser` and `lead` —
+   and the bare `bro` persona keeps only the loop tools on Claude.
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
-   Claude passes exactly the natives the groups map to through `--tools`, an allowlist, plus the loop tools the slice lists, such as `ToolSearch`, which deferred MCP tools need.
+   Claude passes exactly the natives the groups map to through `--tools`, an allowlist, plus the loop tools the slice lists:
+   among them `Skill`, since sessions rely on Claude's own skill loader, and the `LSP` tool the pyright plugin every session enables needs.
+   `ToolSearch` is not what keeps ride's MCP tools reachable, since they load eagerly (`alwaysLoad`);
+   leaving it out only stops Claude deferring its own tools.
    Everything else is off, including the natives #857 lists, and natives a Claude Code bump adds stay off until mapped.
    The bro harness serves files with the `dev` toolset, which moves into `bro-native`, and leaves web and delegation unserved, delegation until #863.
-   `dev`, `eyebro`, `analyst`, `terminal`, `devoops`, and the local bros declare what they use today, delegation included.
+   Every registered persona declares the groups it reaches today, settled by the slice's inventory of the natives each one uses:
+   `terminal` without delegation, which it blocks, and `browser` with none of the four.
    `bro/harness/claude.py`'s tool names move into `ride/ride/claude/`.
    With no component conditioned on the harness, a bro has one selection, and the `bro`-harness special case in `_components_for` and `assemble` goes.
    #857 closes with this slice.
@@ -216,15 +265,41 @@ Each harness implements four operations for its sessions, behind two protocols i
    `#harness` stays a fact for a case no fact covers, unused in the repository;
    `bro/prompts/AGENTS.md` and the template and conditions references state the rule.
 
+### Rollout and mixed versions
+
+No landing changes a wire, store, or record format that two separately deployed processes share:
+
+- One installation runs one revision:
+  its distributions ship from one commit (`BOOTSTRAP.md`), and `ride` freezes the whole installation into a runtime bundle.
+- Every party tree runs its root's bundle, spawned and manual children included, and a resume runs the bundle its workspace recorded, so old and new code never meet in one session tree;
+  roots started before an install keep their bundle.
+- The watch store, the waiter's registration, and the stand-down mark live in one session's state dir and are read only by that session's own processes.
+  Hooks travel in each launch's `--settings`, never in the workspace's Claude state, so a resumed workspace gets the hooks of the bundle it runs.
+- The trails server is the one separately deployed reader:
+  an ECS service whose image installs only the core `bro` wheel, deployed through the `trails-server` target in `oops/deploy_targets.py`.
+  No landing changes what a trail records or what the server serves, so either side may run the older revision;
+  the rewake reaches a Claude transcript as records the projection already handles, an unknown attachment as a notification and a user record as input, which the `llm` stage's input-channel probe holds.
+  The trails landing changes the server's own code, so the server redeploys after it merges.
+- The benchmark launcher reads harness names off the bundle it builds rather than its own interpreter, so it keeps working whichever revision that bundle carries.
+- A repository that pins the framework adopts each landing through its own bump, which adapts its persona declarations and prompts, and runs the revision it pins until then.
+
+Each landing goes live by installing the launcher from master and starting a fresh root;
+the trails landing deploys the trails server between the two.
+
 ### Risks
 
 - `rewakeMessage` and `rewakeSummary` are marked internal.
   A pin bump re-probes them with the rest of the waiter's behavior;
   without them the model reads watch lines under a failing-hook label.
-- Claude's turn-end handling moves from the `Stop` input's undocumented `background_tasks` to the `background_tasks_changed` stream event, which the SDK's wire schema types.
+- The waiter on `StopFailure` is read off the binary, not probed:
+  should `asyncRewake` not background there, a one-shot session whose turn errors is left without a waiter until its timeout, and the `llm` stage records the fallback it takes in the Design changelog.
+- Claude's turn-end handling moves from the `Stop` input's `background_tasks` to the `background_tasks_changed` stream event;
+  both are declared in Claude Code's schemas, and the `llm` stage holds the event against the pin.
 - Each session has one reader:
   a reader run beside the waiter or the inbox would take lines from it, and with `watch-next` gone none ships.
 - `bro-native` depends on `bro-ride`, which adds certifi to a bare `bro run` install, and the root map's layering line changes to ride loading `bro-native` through the group.
+- A misspelled single-branch `{{when #harness = …}}` renders as false instead of raising;
+  the prompts slice leaves the repository no such condition.
 - A one-shot session that keeps a background task alive after its notice now waits for it on both harnesses, where a `bro run` used to end;
   a summoned session stays bounded by its timeout.
 - Opt-in natives can withhold a tool a persona relied on without naming it, such as LSP or plan mode;
@@ -246,26 +321,30 @@ Each harness implements four operations for its sessions, behind two protocols i
   the model keeps paying turns and shell admissions for plumbing (#793, #677).
 - **Two entry-point groups, one per half, or ride's session types moved into core:**
   settled with the user for one group and one object per harness.
-- **Trail formats on the harness object:**
-  a trail outlives the installation that recorded it.
+- **Trail formats on the harness object, or in the harness distributions:**
+  a trail outlives the installation that recorded it, and the trails server installs only core.
+- **The installed names as the `#harness` domain:**
+  a text naming a harness the installation does not carry would raise, breaking a Claude-only install;
+  settled with the user for checking names where they are used.
 - **Removing `#harness`:**
   a consumer may still need a fork no fact covers, and the rule is to avoid one, not to forbid it.
 
 ### Landings
 
-1. **#850, on the interface**, through one integration branch cut once #846 has landed, in stages:
+1. **#850, on the interface**, through one integration branch cut from master now that #846 has landed, in stages, each leaving the branch's gate green:
    1. the registry and the interface skeleton, with the bro harness moving into `bro-native` and no behavior change;
-   2. the general watching code:
-      the store's reader, producers under the job supervisor, the session watch in `do-ride`, the rule, one stream, and `bro::watch` and `bro::unwatch`;
-   3. the bro harness's port;
-   4. the Claude harness's port;
-   5. the quest tools, the fold, `watch-next`, the prompts, and the docs.
+   2. the store and its producers:
+      `take()`, `watch-run` under the job supervisor, the session watch armed and stopped by `do-ride`, and `bro::watch` and `bro::unwatch`;
+   3. the end-of-turn rule with its notice template, and one stream behind `quest watch` and `mission watch`;
+   4. the bro harness's port;
+   5. the Claude harness's port;
+   6. the quest tools, the fold, `watch-next`, the prompts, and the docs.
 
-   Stages 3 to 5 change what the model is told and how it waits, so the branch reaches master once.
+   Stages 4 to 6 change what the model is told and how it waits, so the branch reaches master once.
 2. Service tools.
 3. Tool fold, after #754's design.
 4. Trails.
-5. Persona declarations, with #857.
+5. Persona declarations, with #857, after the tool fold.
 6. Prompts.
 
 #863 (delegation through summons) follows #850 on its own.
@@ -275,13 +354,22 @@ Each harness implements four operations for its sessions, behind two protocols i
 - **Unit tests:**
   `take()` (the bounds, the pending marker, the offsets, two readers under the lock);
   the waiter's supersession and stand-down;
-  each verdict of the rule, with its once-per-set memory;
+  each verdict of the rule and their order over mixed live sets, the owner-led browser's wait among them, with the once-per-set memory;
   arming per admission rule, and the session's producers stopped at its end;
   a stopped watch's whole process group gone, and the supervisor exiting once its owner is gone;
-  `bro::watch` admission;
-  the native one-shot idle and wake;
-  the Claude runner's verdicts over the fake claude.
+  `bro::watch` admission, and `bro::unwatch` refusing the session watch;
+  the native pump's one batch in flight, and the native one-shot idle and wake;
+  the Claude runner's verdicts over the fake claude, `ambient` tasks excluded.
 - **`llm` stage, against the pinned Claude Code**, replacing `stop_guard_llm_test.py`:
-  an idle wake in stream-json and in the TUI, a mid-turn delivery, `rewakeMessage` and `rewakeSummary` honored, `background_tasks_changed` reporting a background task, and an end with a waiter pending exiting without the 30-second delay.
+  an idle wake in stream-json and in the TUI;
+  a mid-turn delivery;
+  `rewakeMessage` and `rewakeSummary` honored;
+  `background_tasks_changed` reporting a background task;
+  an end with a waiter pending exiting without the 30-second delay;
+  a waiter started by `StopFailure` after a turn that ends in an API error;
+  and the rewake's lines recorded in the trail, in `input_channels_llm_test.py`, which holds one representative of every model-input channel.
+  It needs a `claude_code` credential.
 - **e2e (`ride/ride/e2e_test.py`):**
   a summoned child's question and end reach a Claude summoner and a bro summoner through the session watch, with no watch command in either transcript.
+  The Claude summoner is the e2e's fake `claude`, which runs the `Stop` hook command from its `--settings` at each turn end and records what the hook delivers, so the waiter's take and exit run in CI's Docker stages;
+  Claude's own rewake is the `llm` stage's.
