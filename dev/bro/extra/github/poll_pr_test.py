@@ -25,7 +25,13 @@ def _user(login: str) -> dict[str, Any]:
 
 
 def _open_pr(login: str = 'alice', sha: str = 'deadbeef', **extra: Any) -> dict[str, Any]:
-  return {'state': 'open', 'head': {'sha': sha}, **_user(login), **extra}
+  return {
+    'state': 'open',
+    'head': {'sha': sha},
+    'mergeable_state': 'blocked',
+    **_user(login),
+    **extra,
+  }
 
 
 def _issue_comment(id: int, login: str, body: str) -> dict[str, Any]:
@@ -499,6 +505,10 @@ def _check_run(name: str, status: str, conclusion: Optional[str] = None) -> dict
   }
 
 
+def _edge(transition: Optional[poll_pr.CheckTransition]) -> Optional[str]:
+  return None if transition is None else transition.state
+
+
 class TestCheckTracker:
   def test_fires_once_per_red_episode_and_rearms(self):
     tracker = poll_pr.CheckTracker()
@@ -506,55 +516,69 @@ class TestCheckTracker:
     failed = [_check_run('tests', 'completed', 'failure')]
     passed = [_check_run('tests', 'completed', 'success')]
 
-    assert tracker.update('head', running) is None
-    fired = tracker.update('head', failed)
+    assert tracker.update('head', running, 'unstable') is None
+    fired = tracker.update('head', failed, 'unstable')
     assert fired is not None
+    assert fired.state == 'red'
     assert [run['name'] for run in fired.failed_runs] == ['tests']
-    assert tracker.update('head', failed) is None
-    green = tracker.update('head', passed)
-    assert green is not None
-    assert green.failed_runs == []
-    fired_again = tracker.update('head', failed)
-    assert fired_again is not None
-    assert len(fired_again.failed_runs) == 1
-    green_again = tracker.update('head', passed)
-    assert green_again is not None
-    assert green_again.failed_runs == []
+    assert tracker.update('head', failed, 'unstable') is None
+    assert _edge(tracker.update('head', passed, 'clean')) == 'green'
+    assert _edge(tracker.update('head', failed, 'unstable')) == 'red'
+    assert _edge(tracker.update('head', passed, 'clean')) == 'green'
 
-  def test_fires_green_once_and_rearms_on_a_pending_run(self):
+  def test_a_run_starting_on_a_green_head_takes_the_green_back(self):
+    tracker = poll_pr.CheckTracker()
+    passed = [_check_run('tests', 'completed', 'success')]
+    rerun = [_check_run('tests', 'queued')]
+
+    assert _edge(tracker.update('head', passed, 'clean')) == 'green'
+    assert tracker.update('head', passed, 'clean') is None
+    assert _edge(tracker.update('head', rerun, 'unstable')) == 'pending'
+    assert tracker.update('head', rerun, 'unstable') is None
+    assert _edge(tracker.update('head', passed, 'clean')) == 'green'
+
+  def test_a_new_head_rearms_green(self):
     tracker = poll_pr.CheckTracker()
     passed = [_check_run('tests', 'completed', 'success')]
 
-    first_green = tracker.update('head', passed)
-    assert first_green is not None
-    assert first_green.failed_runs == []
-    assert tracker.update('head', passed) is None
-    assert tracker.update('head', [_check_run('tests', 'queued')]) is None
-    second_green = tracker.update('head', passed)
-    assert second_green is not None
-    assert second_green.failed_runs == []
-
-  def test_a_new_head_rearms_green_without_a_pending_observation(self):
-    tracker = poll_pr.CheckTracker()
-    passed = [_check_run('tests', 'completed', 'success')]
-
-    first_green = tracker.update('first', passed)
-    assert first_green is not None
-    assert first_green.failed_runs == []
-    assert tracker.update('first', passed) is None
-    second_green = tracker.update('second', passed)
-    assert second_green is not None
-    assert second_green.failed_runs == []
+    assert _edge(tracker.update('first', passed, 'clean')) == 'green'
+    assert tracker.update('first', passed, 'clean') is None
+    assert _edge(tracker.update('second', passed, 'clean')) == 'green'
 
   def test_neutral_and_skipped_are_green(self):
     tracker = poll_pr.CheckTracker()
     runs = [_check_run('a', 'completed', 'neutral'), _check_run('b', 'completed', 'skipped')]
-    transition = tracker.update('head', runs)
-    assert transition is not None
-    assert transition.failed_runs == []
+    assert _edge(tracker.update('head', runs, 'clean')) == 'green'
 
-  def test_no_checks_is_not_green(self):
-    assert poll_pr.CheckTracker().update('head', []) is None
+  def test_no_runs_on_a_merge_held_for_a_check_is_not_green(self):
+    assert poll_pr.CheckTracker().update('head', [], 'blocked') is None
+
+  def test_no_runs_on_a_merge_held_for_none_fires_green_once(self):
+    tracker = poll_pr.CheckTracker()
+
+    assert _edge(tracker.update('head', [], 'clean')) == 'green'
+    assert tracker.update('head', [], 'clean') is None
+
+  def test_a_run_registering_after_the_empty_green_takes_it_back(self):
+    tracker = poll_pr.CheckTracker()
+
+    assert _edge(tracker.update('head', [], 'clean')) == 'green'
+    assert _edge(tracker.update('head', [_check_run('tests', 'queued')], 'unstable')) == 'pending'
+    passed = [_check_run('tests', 'completed', 'success')]
+    assert _edge(tracker.update('head', passed, 'clean')) == 'green'
+
+  def test_a_merge_no_longer_held_for_none_takes_the_empty_green_back(self):
+    tracker = poll_pr.CheckTracker()
+
+    assert _edge(tracker.update('head', [], 'clean')) == 'green'
+    assert _edge(tracker.update('head', [], 'unstable')) == 'pending'
+
+  def test_an_uncomputed_merge_state_moves_no_edge(self):
+    tracker = poll_pr.CheckTracker()
+
+    assert tracker.update('head', [], 'unknown') is None
+    assert _edge(tracker.update('head', [], 'clean')) == 'green'
+    assert tracker.update('head', [], 'unknown') is None
 
 
 class TestCheckEvents:
@@ -585,6 +609,7 @@ class TestCheckEvents:
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     checks = [e for e in events if e['event'] == 'checks']
     assert len(checks) == 1
+    assert checks[0]['state'] == 'red'
     assert checks[0]['failing'] == [
       {'name': 'tests', 'conclusion': 'failure', 'url': 'https://github.com/x/y/runs/tests'}
     ]
@@ -607,7 +632,34 @@ class TestCheckEvents:
 
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     checks = [event for event in events if event['event'] == 'checks']
-    assert checks == [{'event': 'checks', 'pr': 1, 'head': 'deadbeef', 'failing': []}]
+    assert checks == [
+      {'event': 'checks', 'pr': 1, 'head': 'deadbeef', 'state': 'green', 'failing': []}
+    ]
+
+  def test_a_head_no_run_reports_on_turns_green_once_its_merge_is_held_for_none(
+    self, monkeypatch, capsys
+  ):
+    self._baseline(monkeypatch)
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'pull_request',
+      _Stepper(
+        [
+          _open_pr(),
+          _open_pr(mergeable_state='unknown'),
+          _open_pr(mergeable_state='clean'),
+          {'merged': True},
+        ]
+      ),
+    )
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
+    assert _poll() == 0
+
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    checks = [event for event in events if event['event'] == 'checks']
+    assert checks == [
+      {'event': 'checks', 'pr': 1, 'head': 'deadbeef', 'state': 'green', 'failing': []}
+    ]
 
   def test_a_pr_without_a_head_sha_skips_the_check_fetch(self, monkeypatch):
     self._baseline(monkeypatch)
@@ -810,7 +862,7 @@ class TestPushedEvents:
     self._baseline(monkeypatch)
     events = self._green_after_a_move_to(monkeypatch, capsys, local_tip=lambda sha: sha == 'bbb')
     assert events == [
-      {'event': 'checks', 'pr': 1, 'head': 'bbb', 'failing': []},
+      {'event': 'checks', 'pr': 1, 'head': 'bbb', 'state': 'green', 'failing': []},
       {'event': 'merged', 'pr': 1},
     ]
 
@@ -819,7 +871,7 @@ class TestPushedEvents:
     events = self._green_after_a_move_to(monkeypatch, capsys, local_tip=lambda sha: sha == 'aaa')
     assert events == [
       {'event': 'pushed', 'pr': 1, 'head': 'bbb'},
-      {'event': 'checks', 'pr': 1, 'head': 'bbb', 'failing': []},
+      {'event': 'checks', 'pr': 1, 'head': 'bbb', 'state': 'green', 'failing': []},
       {'event': 'merged', 'pr': 1},
     ]
 

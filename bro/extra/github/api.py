@@ -22,6 +22,8 @@ _REQUEST_TIMEOUT_SECONDS = 30.0
 _BASE_BACKOFF = 1.0  # seconds; doubled per attempt
 _MAX_BACKOFF = 30.0  # ceiling for both exponential backoff and server-hinted waits
 _PASSING_CONCLUSIONS = frozenset({'success', 'neutral', 'skipped'})
+# merge states of a head whose commit status passes with nothing required left to report
+_NOTHING_EXPECTED_MERGE_STATES = frozenset({'clean', 'has_hooks'})
 _GRAPHQL_URL = 'https://api.github.com/graphql'
 _NEXT_PAGE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
@@ -37,6 +39,15 @@ def check_state(status: Optional[str], conclusion: Optional[str]) -> str:
   if (status or '').lower() != 'completed':
     return 'pending'
   return 'passed' if (conclusion or '').lower() in _PASSING_CONCLUSIONS else 'failed'
+
+
+def expects_no_check(merge_state: str) -> bool:
+  """whether GitHub's merge state of a head holds its merge for no check.
+
+  Case-insensitive like `check_state`: REST's `mergeable_state` spells it
+  `clean`, GraphQL's `mergeStateStatus` `CLEAN`.
+  """
+  return merge_state.lower() in _NOTHING_EXPECTED_MERGE_STATES
 
 
 def is_transient(error: urllib.error.URLError) -> bool:

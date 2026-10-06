@@ -226,6 +226,16 @@ class TestCheckState:
     assert api.check_state(None, None) == 'pending'
 
 
+class TestExpectsNoCheck:
+  def test_reads_both_api_spellings(self):
+    assert api.expects_no_check('clean')
+    assert api.expects_no_check('HAS_HOOKS')
+
+  def test_a_held_or_uncomputed_merge_expects_a_check(self):
+    for merge_state in ('blocked', 'UNSTABLE', 'unknown', 'BEHIND'):
+      assert not api.expects_no_check(merge_state), merge_state
+
+
 class TestGetAll:
   def test_follows_the_next_link_and_concatenates(self, monkeypatch):
     pages = [
