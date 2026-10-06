@@ -40,13 +40,12 @@ A subpackage with a map of its own is pointed at, not described here.
 - `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and ordered journal stream for every worker mission.
   The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
 - `quest.py` (`quest`) — the bro-only view over the mission surface and its shared stream, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
-- `watches.py`, `watch_run.py` (`watch-run`), and `watch_next.py` (`watch-next`) — one session-local watch store and its producers.
+- `watches.py` and `watch_run.py` (`watch-run`) — one session-local watch store and its producer.
   `take()` commits fair, bounded batches under one exclusive lock;
   each line names its command, and a cut batch carries a pending marker.
   The store also reports whether complete lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed.
   `watch-run` executes each shell command under `job_supervisor`, detached from its starter but held by an owner-liveness handle.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
-  `watch-next` is a blocking CLI reader of the same store.
 - `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered lines, harness background work, and live session traffic.
   Settlement blocks on the store's journal signal until the session watch has emitted through the snapshot it reads.
   A distinct live set receives at most one shared notice;
@@ -85,10 +84,8 @@ A subpackage with a map of its own is pointed at, not described here.
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
-  The compatibility delivery path for `quest watch` needs no declaring:
-  for a run that may summon, or a summoned run whose talk lets its summoner say or question or lets the run itself ask,
-  the fold admits `watch-run quest watch` and `watch-next` through `Bash` over any block or narrowing of that tool, with the job controls that stop the watch.
-  The same rule in `watches.py` decides whether `do-ride` arms the runtime-owned session watch.
+  The fold admits only what the persona declares.
+  `watches.py` separately decides whether `do-ride` arms the runtime-owned session watch, which reaches the model through the harness's delivery port rather than a tool it can call.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `launch/` + `native/bro/launch/` — core owns cross-harness launch primitives;
   `bro-native` owns the in-process `run` / `chat` launchers, chat UIs, and fork-resume flow.
@@ -120,7 +117,7 @@ A subpackage with a map of its own is pointed at, not described here.
   protocol and enforcement live in `bro/summon.py`, `bro/mission.py`, `bro/quest.py`, `ride/ride/launch_control.py`, and `ride/ride/bro_worker.py`, not in the spell
   — `spell::reflect` — the improving half of the loop over what a bro runs under:
   it reads recorded runs against the definition that drove them (the prompt texts, the bro's declaration, the launch scope) and writes its next version, each edit fixed in place or filed as a task
-  — and `spell::watch` — keeping a command's lines in view for the rest of a run, its per-harness mechanics spliced from the same prompts fragment the session texts splice for the quest watch.
+  — and `spell::watch` — keeping an admitted command's lines in view through `bro::watch`, ending turns while idle, and stopping it through `bro::unwatch`.
   Development personas ship from `bro-dev`;
   `dev/AGENTS.md` maps them.
   Consumer personas register through the `bro` entry-point group and live in their contributing packages.
@@ -166,20 +163,13 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
 - `watch` and `unwatch` with a declared `shell` roster on every harness, admitted against the same whole-command roster as a job;
   they start and stop the store's detached producer, while `unwatch` refuses the runtime-owned session watch.
 - the job tools of a declared `shell` roster, on the bro harness alone
-  — `job`, `poll`, `kill`, and `jobs`, over the run's registry and inbox;
-  with no `shell` declared, automatic `quest watch` admission mounts only the compatibility job tools narrowed to that command.
+  — `job`, `poll`, `kill`, and `jobs`, over the run's registry and inbox.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 
-The harnesses differ in waiting.
-The bro-harness shapes return at once
-— `summon` on host acceptance with no `detach`, `quest_ask` with a minted question id, `quest_check` and `quest_history` after one journal read, `quest_share` when the host accepts the ref, `quest_cancel` when the host accepts
-— and later transitions arrive through `quest watch`.
-The claude-harness shapes keep the blocking controls
-— `summon` waits for an answer or question, `quest_ask` for the reply, `quest_check(wait=true)` to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` to the end.
-`quest_share` returns when the host accepts the ref on both harnesses.
-Each blocking call owns a per-call channel client closed on cancellation;
-its description carries the `{{when #harness = claude}}` transport caution that steers a long run to detach plus polling.
+The quest tools have one shape on every harness and return at once:
+`summon` on host acceptance, `quest_ask` with a minted question id, `quest_check` and `quest_history` after one journal read, `quest_share` when the host accepts the ref, and `quest_cancel` when the host accepts.
+Later transitions arrive through the runtime-owned session watch.
 
 ### Credential manifest
 

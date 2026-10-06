@@ -143,8 +143,7 @@ The command must match the persona's shell roster exactly, as `bro::job` require
 `unwatch` refuses the runtime-owned session watch.
 `do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
 Each joined party member has its own session directory and therefore its own store.
-
-Claude's tool fold admits `watch-run quest watch` and `watch-next` through `Bash` for the same sessions, beside the runtime-owned producer.
+The session watch reaches the model through the selected harness's delivery port without adding commands to the persona's tool reach.
 
 ## Claude harness
 
@@ -1017,7 +1016,7 @@ The quest carries a fixed **talk** over four rights:
 A reply is authorized by the other end's question right.
 A summon defaults to `worker.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
 the host fixes and enforces the set when the quest opens, while both peer surfaces refuse a forbidden move before sending.
-The answer comes back synchronously, while permitted messages can travel for the quest's whole life.
+The answer is retained in the quest journal, while permitted messages can travel for the quest's whole life.
 A quest also ends before its answer when its summoner is gone or says so:
 a summoned session's exit, or a manual session's disconnect, ends every quest it opened as `failed:orphaned` and ends their workers down the tree, killing a spawned child and detaching a manual one,
 and the `cancel` kind ends any live mission its owner names as `failed:cancelled` the same way.
@@ -1068,21 +1067,17 @@ underneath it are two client surfaces over the same request, each split into the
   In a claude session, long summons run via the harness's background Bash;
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
-- Bro LLM processes use the service tools `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns.
-  The same tools are mounted beside the CLIs in a claude session.
+- Every harness mounts the same service tools:
+  `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns.
+  They are mounted beside the blocking CLIs in a Claude session.
   The summon tool's `passes` list is the CLI's repeatable `--pass` field.
-  On the bro harness, `summon` returns the accepted state after host acceptance and has no `detach` parameter;
-  answers, questions, replies, refusals, and terminal states arrive through `quest watch`.
-  `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch, and `quest_share` hands an owner-reachable ref to a live child;
+  `summon` returns the accepted state after host acceptance;
+  answers, questions, replies, refusals, and terminal states arrive through the session watch.
+  `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch, and `quest_share` hands an owner-reachable ref to a live child.
   `quest_check` and `quest_history` are one non-blocking journal read each;
-  and `quest_cancel` returns once the host accepts the cancellation, with the terminal following on the watch.
-  `quest_list` is the same paginated journal listing on both harnesses.
-  On the claude harness, the blocking service tools retain their polling controls:
-  `summon` blocks unless `detach: true`, `quest_ask` may wait for the reply, `quest_check(wait=true)` long-polls to the end or a child question, `quest_history(wait=true)` to the next message, and `quest_cancel` may wait for the terminal.
-  A waiting `quest_ask` returns `state: answered` for a plain reply, `state: question` with `answer` and `counter_question_id` for a reply that asks back, and `state: asked` with the original `question_id` at its bound.
-  Each MCP blocking call owns its channel client so cancellation aborts the current short wait, while the host journal retains the outcome and chat.
-  In an interactive Claude session, a call still running after 120 s moves into a background task whose result arrives as a notification;
-  the tool cautions recover an interrupted task by id instead of sending twice.
+  `quest_cancel` returns once the host accepts the cancellation, with the terminal following on the watch;
+  and `quest_list` is the paginated journal listing.
+  The service tools carry no waiting or detach controls.
 
 A claude-harness child is scoped through the claude recipe
 — `claude_code` required, no LLM key

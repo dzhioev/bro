@@ -31,14 +31,13 @@ def test_browser_declares_its_worker_seed_reader_and_spell() -> None:
   assert browser.get_spell_body('browse', harness='bro').startswith('# browse\n')
 
 
-def test_browse_spell_uses_the_cross_harness_watch_and_branches_final_delivery() -> None:
+def test_browse_spell_uses_session_watch_notifications_and_branches_final_delivery() -> None:
   browser = Browser()
 
   for harness in ('bro', 'claude'):
     body = browser.get_spell_body('browse', harness=harness)
-    assert '[[watch quest watch]]' in body
-    assert 'bro::job' not in body
-    assert 'bro::chill' not in body
+    assert 'session watch delivers owner questions as notifications' in body
+    assert '[[watch quest watch]]' not in body
     assert 'call `bro::answer`' in body
     assert 'do not call `bro::answer`' in body
 

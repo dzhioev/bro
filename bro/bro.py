@@ -257,19 +257,9 @@ def _answer_tool(harness: mcp.HarnessLike, variables: Variables) -> llm_mcp.Tool
   )
 
 
-def _claude_blocking_caution(recovery: str) -> str:
-  return (
-    '{{when #harness = claude}} CAUTION: an interactive session moves a blocking call still '
-    'running after 120 s into a background task, whose result arrives as a notification. '
-    f'{recovery}{{{{end}}}}'
-  )
-
-
 _SUMMON_DESCRIPTION = (
   'summon another bro: it runs your prompt in a new party or joins your party, as a quest '
-  'whose id every `quest_*` tool takes. '
-  '{{iff #harness = bro}}this call returns after host acceptance.{{else}}this call blocks — '
-  'typically for minutes — until its answer or a question comes back.{{end}} pass `target` '
+  'whose id every `quest_*` tool takes. this call returns after host acceptance. pass `target` '
   '(a bro name; it must be in your `launch.bro.bros` set, and '
   'a target outside it — or a summon nested past the depth cap — fails immediately '
   'with the reason) and `prompt` (the full request, self-contained — the target '
@@ -299,73 +289,32 @@ _SUMMON_DESCRIPTION = (
   'owner.question, worker.say, or worker.question. the optional `party` (`start` or '
   '`join`) and `isolation` (`boxed` or `unboxed`) fields place the child; an unmarked request '
   'starts boxed when permitted, otherwise unboxed. a join shares your tree and refuses '
-  '`isolation`, `into`, and `manual`. {{iff #harness = bro}}acceptance returns the quest id; '
-  'answers, questions, replies, refusals, and terminal states arrive through `quest watch`, '
-  'and `quest_check` reads the retained outcome.{{else}}this call returns an accepted, '
-  'question, or completed state with the quest id; a question state carries its id and text. '
-  'answer it with `quest_say`, then collect the eventual answer from the same quest with '
-  '`quest_check` rather than summoning again. fails with the reason when the run raises, '
-  'errors out, or dies. `detach: true` waits for host acceptance, then returns the accepted '
-  'state with its quest id; a denial or launch failure before acceptance fails this call. poll '
-  'that id with repeatable `quest_check` reads.{{end}} '
-  '`manual: true` registers a manual summon instead of spawning: acceptance returns '
-  'a token and `ride` command to relay to the user, who launches the child session; '
-  'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
-  'launch owns them, and requires boxed or unboxed in its `launch.bro.party` set.'
-  + _claude_blocking_caution(
-    'blocking summons sent together still run one after another, so prefer `detach: true` for '
-    'long work and for summons meant to run side by side, and do NOT re-summon if the '
-    'background task is interrupted{{iff #tools contains quest_list}}: recover the quest id '
-    'with quest_list and read its retained outcome with quest_check{{else}}; if you lost the '
-    'id, surface the interruption instead of retrying{{end}}.'
-  )
+  '`isolation`, `into`, and `manual`. acceptance returns the quest id; answers, questions, '
+  'replies, refusals, and terminal states arrive through the session watch, and `quest_check` '
+  'reads the retained outcome. `manual: true` registers a manual summon instead of spawning: '
+  'acceptance returns a token and `ride` command to relay to the user, who launches the child '
+  'session; manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the '
+  'user’s launch owns them, and refuses `share` because no child workspace exists yet. it '
+  'requires boxed or unboxed in its `launch.bro.party` set.'
 )
 
 
 _QUEST_CHECK_DESCRIPTION = (
-  'read the outcome of a child quest by `quest_id` through the host journal: a running '
-  'state with its trail id, a question state with the open questions the child is stalled on '
-  '(they wait on your reply, sent with `quest_say`), or the completed state with the answer. '
-  'reads are non-destructive and repeatable from any process, including after another waiter '
-  'saw the result. `wait: true` long-polls until the quest ends or such a question opens, '
-  'bounded by optional `timeout` seconds, and at the bound it reports running. unknown ids, '
-  'evicted results, and failed or denied quests raise with their reason; `self` is refused, '
-  'since the outcome of your own quest is yours to give.'
-  + _claude_blocking_caution(
-    'if the background task is interrupted, repeat the journal read with the same quest id.'
-  )
-)
-
-
-_QUEST_CHECK_NATIVE_DESCRIPTION = (
   'read the outcome of a child quest by `quest_id` through the host journal, without '
   'blocking: a running state with its trail id, a question state with the open questions the '
   'child is stalled on (they wait on your reply, sent with `quest_say`), or the completed '
-  'state with the answer. the end arrives through `quest watch`. unknown ids, evicted results, '
-  'and failed or denied quests raise with their reason; `self` is refused, since the outcome '
-  'of your own quest is yours to give.'
+  'state with the answer. the end arrives through the session watch. unknown ids, evicted '
+  'results, and failed or denied quests raise with their reason; `self` is refused, since the '
+  'outcome of your own quest is yours to give.'
 )
 
 
 _QUEST_HISTORY_DESCRIPTION = (
   "read a quest's conversation by `quest_id` — `self` for your own — through the host "
-  'journal: its talk rights and the retained message tail, oldest first, with every open '
-  'question marked `pending: true` in place, and `truncated: true` when older entries were '
-  'dropped. answer each marked question from the other end with `quest_say` and its id as '
-  '`reply_to`. `wait: true` long-polls until the next message or the end, bounded by optional '
-  '`timeout` seconds, and returns at once while a question awaits you.'
-  + _claude_blocking_caution(
-    'if the background task is interrupted, repeat the journal read with the same quest id.'
-  )
-)
-
-
-_QUEST_HISTORY_NATIVE_DESCRIPTION = (
-  "read a quest's conversation by `quest_id` — `self` for your own — through the host "
   'journal, without blocking: its talk rights and the retained message tail, oldest first, '
   'with every open question marked `pending: true` in place, and `truncated: true` when older '
   'entries were dropped. answer each marked question from the other end with `quest_say` and '
-  'its id as `reply_to`; new messages arrive through `quest watch`.'
+  'its id as `reply_to`; new messages arrive through the session watch.'
 )
 
 
@@ -379,22 +328,8 @@ _QUEST_SAY_DESCRIPTION = (
 
 _QUEST_ASK_DESCRIPTION = (
   'ask a question on a quest by `quest_id` — a child quest, or `self` to your own summoner — '
-  'and return its id; `reply_to` makes it a counter-question to the question named. `wait` '
-  'blocks for the reply in seconds and returns the answered state for a plain reply, or the '
-  'question state with its `counter_question_id` when the reply asks back; expiry returns the '
-  'asked state with the original id, while the host keeps the question live. text over the message bound is '
-  'refused with its size; mint an artifact and send the ref instead.'
-  + _claude_blocking_caution(
-    'if the background task is interrupted, recover the eventual reply with `quest_history` '
-    'on the same quest; do not ask again.'
-  )
-)
-
-
-_QUEST_ASK_NATIVE_DESCRIPTION = (
-  'ask a question on a quest by `quest_id` — a child quest, or `self` to your own summoner — '
   'and return its id; `reply_to` makes it a counter-question to the question named. the reply '
-  'arrives through `quest watch` and remains readable with `quest_history`. text over the '
+  'arrives through the session watch and remains readable with `quest_history`. text over the '
   'message bound is refused with its size; mint an artifact and send the ref instead.'
 )
 
@@ -406,22 +341,9 @@ _QUEST_SHARE_DESCRIPTION = (
 
 
 _QUEST_CANCEL_DESCRIPTION = (
-  'end a bro quest this session owns by `quest_id`: it ends failed:cancelled, and whatever '
-  'its worker launched in turn ends failed:orphaned. a host-supervised worker is killed; an '
-  'expected worker is detached. waits for the quest to end and returns an ended state with '
-  'its outcome, or a pending state when the optional `timeout` seconds pass first; the end '
-  'still arrives through `quest watch`. fails with the reason for a quest this session does '
-  'not own or that has already ended.'
-  + _claude_blocking_caution(
-    'if the background task is interrupted, recover the end with `quest_check` on the same id.'
-  )
-)
-
-
-_QUEST_CANCEL_NATIVE_DESCRIPTION = (
   'ask the host to cancel a bro quest this session owns by `quest_id` and return when the '
   'request is accepted. the worker ends asynchronously, and whatever it launched in turn '
-  'ends failed:orphaned with it; its end arrives through `quest watch`.'
+  'ends failed:orphaned with it; its end arrives through the session watch.'
 )
 
 
@@ -431,6 +353,7 @@ _QUEST_LIST_DESCRIPTION = (
   'timestamps, trail, and terminal outcome. use an id to recover an interrupted wait '
   'with `quest_check`.'
 )
+
 
 _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `isolation` "
@@ -476,9 +399,8 @@ async def _run_summon_request(
   isolation: Optional[Literal['boxed', 'unboxed']],
   talk: Optional[list[str]],
   manual: bool,
-  detached: bool,
 ) -> dict[str, Any]:
-  from bro import quest as quest_client, summon as summon_client
+  from bro import summon as summon_client
 
   source = None if live_run is None else live_run.current_tool_step_id
   step_id = source['step_id'] if source is not None else None
@@ -516,116 +438,29 @@ async def _run_summon_request(
       'quest_id': token,
       'command': summon_client.manual_launch_command(token, target),
     }
-  if detached:
-    quest_id = await off_loop(
-      summon_client.summon_detached,
-      target,
-      prompt,
-      timeout=timeout,
-      into=into,
-      hold=hold,
-      grant=grant,
-      revoke=revoke,
-      passes=passes,
-      share=share,
-      llm=llm,
-      harness=harness,
-      party=party,
-      isolation=isolation,
-      talk=talk,
-      step_id=step_id,
-      index=index,
-    )
-    return {'state': 'accepted', 'quest_id': quest_id}
-
-  sent: list[str] = []
-  with quest_client.open_client() as client:
-    outcome = await off_loop(
-      summon_client.summon_and_wait,
-      target,
-      prompt,
-      timeout=timeout,
-      into=into,
-      hold=hold,
-      grant=grant,
-      revoke=revoke,
-      passes=passes,
-      share=share,
-      llm=llm,
-      harness=harness,
-      party=party,
-      isolation=isolation,
-      talk=talk,
-      step_id=step_id,
-      index=index,
-      on_sent=sent.append,
-      client=client,
-      silence_timeout=quest_client.READ_WAIT_SECONDS,
-    )
-  [quest_id] = sent
-  if isinstance(outcome, quest_client.Question):
-    return {
-      'state': 'question',
-      'quest_id': quest_id,
-      'question': {'id': outcome.id, 'text': outcome.text},
-    }
-  return {'state': 'completed', 'quest_id': quest_id, 'answer': outcome}
-
-
-def _claude_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
-  # A fresh channel client per blocking call is closed on cancellation, unblocking
-  # its short broker wait; the retained journal result remains readable later.
-  # the run's tool position names the summon call's projected source, so the
-  # child's `summoned_by` can carry the precise fork position.
-  async def _summon(
-    target: str,
-    prompt: str,
-    timeout: Optional[float] = None,
-    into: Optional[str] = None,
-    detach: bool = False,
-    hold: Optional[str] = None,
-    grant: Optional[list[str]] = None,
-    revoke: Optional[list[str]] = None,
-    passes: Optional[list[str]] = None,
-    share: Optional[list[str]] = None,
-    llm: Optional[str] = None,
-    harness: Optional[str] = None,
-    party: Optional[Literal['start', 'join']] = None,
-    isolation: Optional[Literal['boxed', 'unboxed']] = None,
-    talk: Optional[list[str]] = None,
-    manual: bool = False,
-  ) -> dict[str, Any]:
-    return await _run_summon_request(
-      live_run,
-      target,
-      prompt,
-      timeout=timeout,
-      into=into,
-      hold=hold,
-      grant=grant,
-      revoke=revoke,
-      passes=passes,
-      share=share,
-      llm=llm,
-      harness=harness,
-      party=party,
-      isolation=isolation,
-      talk=talk,
-      manual=manual,
-      detached=detach,
-    )
-
-  return llm_mcp.FunctionTool(
-    _summon, name='summon', description=_SUMMON_DESCRIPTION, variables=variables
+  quest_id = await off_loop(
+    summon_client.summon_detached,
+    target,
+    prompt,
+    timeout=timeout,
+    into=into,
+    hold=hold,
+    grant=grant,
+    revoke=revoke,
+    passes=passes,
+    share=share,
+    llm=llm,
+    harness=harness,
+    party=party,
+    isolation=isolation,
+    talk=talk,
+    step_id=step_id,
+    index=index,
   )
+  return {'state': 'accepted', 'quest_id': quest_id}
 
 
-def _summon_tool(
-  variables: Variables, live_run: Optional[LiveRun], harness: mcp.HarnessLike
-) -> llm_mcp.Tool:
-  if name_of(harness) == 'claude':
-    return _claude_summon_tool(variables, live_run)
-
+def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
   async def _summon(
     target: str,
     prompt: str,
@@ -660,7 +495,6 @@ def _summon_tool(
       isolation=isolation,
       talk=talk,
       manual=manual,
-      detached=True,
     )
 
   return llm_mcp.FunctionTool(
@@ -668,60 +502,19 @@ def _summon_tool(
   )
 
 
-def _quest_check_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
+def _quest_check_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import quest as quest_client
-
-  if name_of(harness) == 'claude':
-
-    async def _claude_quest_check(
-      quest_id: str, wait: bool = False, timeout: Optional[float] = None
-    ) -> dict[str, Any]:
-      quest_client.wait_deadline(wait, timeout)
-      with quest_client.open_client() as client:
-        outcome = await off_loop(
-          quest_client.check, quest_id, wait=wait, timeout=timeout, client=client
-        )
-      return quest_client.outcome_view(outcome)
-
-    return llm_mcp.FunctionTool(
-      _claude_quest_check,
-      name='quest_check',
-      description=_QUEST_CHECK_DESCRIPTION,
-      variables=variables,
-    )
 
   async def _quest_check(quest_id: str) -> dict[str, Any]:
     return quest_client.outcome_view(await off_loop(quest_client.check, quest_id))
 
   return llm_mcp.FunctionTool(
-    _quest_check,
-    name='quest_check',
-    description=_QUEST_CHECK_NATIVE_DESCRIPTION,
-    variables=variables,
+    _quest_check, name='quest_check', description=_QUEST_CHECK_DESCRIPTION, variables=variables
   )
 
 
-def _quest_history_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
+def _quest_history_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import quest as quest_client
-
-  if name_of(harness) == 'claude':
-
-    async def _claude_quest_history(
-      quest_id: str, wait: bool = False, timeout: Optional[float] = None
-    ) -> dict[str, Any]:
-      quest_client.wait_deadline(wait, timeout)
-      with quest_client.open_client() as client:
-        conversation = await off_loop(
-          quest_client.history, quest_id, wait=wait, timeout=timeout, client=client
-        )
-      return quest_client.history_view(conversation)
-
-    return llm_mcp.FunctionTool(
-      _claude_quest_history,
-      name='quest_history',
-      description=_QUEST_HISTORY_DESCRIPTION,
-      variables=variables,
-    )
 
   async def _quest_history(quest_id: str) -> dict[str, Any]:
     return quest_client.history_view(await off_loop(quest_client.history, quest_id))
@@ -729,7 +522,7 @@ def _quest_history_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_m
   return llm_mcp.FunctionTool(
     _quest_history,
     name='quest_history',
-    description=_QUEST_HISTORY_NATIVE_DESCRIPTION,
+    description=_QUEST_HISTORY_DESCRIPTION,
     variables=variables,
   )
 
@@ -746,35 +539,19 @@ def _quest_say_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_ask_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
+def _quest_ask_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import quest as quest_client
-
-  if name_of(harness) == 'claude':
-
-    async def _claude_quest_ask(
-      quest_id: str,
-      text: str,
-      reply_to: Optional[str] = None,
-      wait: Optional[float] = None,
-    ) -> dict[str, Any]:
-      # refused before the client this tool owns opens, so an over-bound text attaches nothing
-      quest_client.chat_payload(text)
-      with quest_client.open_client() as client:
-        asked = await off_loop(
-          quest_client.ask, quest_id, text, reply_to=reply_to, wait=wait, client=client
-        )
-      return quest_client.asked_view(asked)
-
-    return llm_mcp.FunctionTool(
-      _claude_quest_ask, name='quest_ask', description=_QUEST_ASK_DESCRIPTION, variables=variables
-    )
 
   async def _quest_ask(quest_id: str, text: str, reply_to: Optional[str] = None) -> dict[str, Any]:
     asked = await off_loop(quest_client.ask, quest_id, text, reply_to=reply_to)
-    return quest_client.asked_view(asked)
+    return {
+      'state': 'asked',
+      'quest_id': asked.quest_id,
+      'question_id': asked.question_id,
+    }
 
   return llm_mcp.FunctionTool(
-    _quest_ask, name='quest_ask', description=_QUEST_ASK_NATIVE_DESCRIPTION, variables=variables
+    _quest_ask, name='quest_ask', description=_QUEST_ASK_DESCRIPTION, variables=variables
   )
 
 
@@ -801,35 +578,15 @@ def _quest_list_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_cancel_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
+def _quest_cancel_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import quest as quest_client
-
-  if name_of(harness) == 'claude':
-
-    async def _claude_quest_cancel(
-      quest_id: str, timeout: Optional[float] = None
-    ) -> dict[str, Any]:
-      quest_client.wait_deadline(True, timeout)
-      with quest_client.open_client() as client:
-        status = await off_loop(quest_client.cancel, quest_id, timeout=timeout, client=client)
-      return quest_client.cancel_view(status)
-
-    return llm_mcp.FunctionTool(
-      _claude_quest_cancel,
-      name='quest_cancel',
-      description=_QUEST_CANCEL_DESCRIPTION,
-      variables=variables,
-    )
 
   async def _quest_cancel(quest_id: str) -> dict[str, Any]:
     status = await off_loop(quest_client.request_cancel, quest_id)
     return quest_client.cancel_view(status)
 
   return llm_mcp.FunctionTool(
-    _quest_cancel,
-    name='quest_cancel',
-    description=_QUEST_CANCEL_NATIVE_DESCRIPTION,
-    variables=variables,
+    _quest_cancel, name='quest_cancel', description=_QUEST_CANCEL_DESCRIPTION, variables=variables
   )
 
 
@@ -1097,14 +854,14 @@ def _build_service_server(
   if has_answer:
     tools.append(_answer_tool(harness, variables))
   if has_broker:
-    tools.append(_summon_tool(variables, live_run, harness))
-    tools.append(_quest_check_tool(variables, harness))
-    tools.append(_quest_history_tool(variables, harness))
+    tools.append(_summon_tool(variables, live_run))
+    tools.append(_quest_check_tool(variables))
+    tools.append(_quest_history_tool(variables))
     tools.append(_quest_say_tool(variables))
-    tools.append(_quest_ask_tool(variables, harness))
+    tools.append(_quest_ask_tool(variables))
     tools.append(_quest_share_tool(variables))
     tools.append(_quest_list_tool(variables))
-    tools.append(_quest_cancel_tool(variables, harness))
+    tools.append(_quest_cancel_tool(variables))
   if has_watches:
     tools.extend(
       _watch_tools(
@@ -1161,12 +918,6 @@ def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> se
   return set(component.optional_secrets)
 
 
-QUEST_WATCH_COMMAND = watches.SESSION_WATCH_COMMAND
-QUEST_WATCH_SHELL_COMMANDS = (
-  f'watch-run {QUEST_WATCH_COMMAND}',
-  'watch-next',
-  f'watch-next {QUEST_WATCH_COMMAND}',
-)
 _CLAUDE_COMMAND_TOOLS = ('Bash', 'Monitor')
 _CLAUDE_COMMAND_CONTROL = ('BashOutput', 'KillShell', 'TaskOutput', 'TaskStop')
 
@@ -1187,10 +938,6 @@ class _ToolSelection:
 def _fold_tool_layers(
   layers: list[mcp.ToolLayer],
   harness: mcp.HarnessLike,
-  *,
-  may_summon: tuple[str, ...],
-  summoned: bool,
-  talk: Optional[tuple[str, ...]],
 ) -> _ToolSelection:
   server_specs: list[mcp.MCPServerSpec] = []
   blocked_names: list[str] = []
@@ -1241,21 +988,6 @@ def _fold_tool_layers(
         'nothing where the bro does not withhold it'
       )
     del blocked[name]
-
-  if watches.session_watch_admitted(may_summon=may_summon, summoned=summoned, talk=talk):
-    if name_of(harness) == 'bro':
-      if not shell_unrestricted and QUEST_WATCH_COMMAND not in shell_commands:
-        shell_commands.append(QUEST_WATCH_COMMAND)
-    else:
-      if 'Bash' in blocked:
-        del blocked['Bash']
-        narrowed['Bash'] = []
-      if 'Bash' in narrowed:
-        for command in QUEST_WATCH_SHELL_COMMANDS:
-          if command not in narrowed['Bash']:
-            narrowed['Bash'].append(command)
-        for name in _CLAUDE_COMMAND_CONTROL:
-          blocked.pop(name, None)
 
   return _ToolSelection(
     server_specs=server_specs,
@@ -1639,13 +1371,7 @@ class BaseBro(ABC):
       creds=credentials.known_names(),
       extra=self._feature_vocabulary,
     )
-    return _fold_tool_layers(
-      selected,
-      harness,
-      may_summon=summon.effective_may_summon(),
-      summoned=summon.summoned(),
-      talk=summon.talk(),
-    )
+    return _fold_tool_layers(selected, harness)
 
   def blocked_tool_names(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
     """harness-native tool names blocked by this bro's selected layers."""
