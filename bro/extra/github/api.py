@@ -10,7 +10,7 @@ from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
 
-from bro.base import log
+from bro.base.retry import RetryPolicy, retry
 
 # transient HTTP statuses worth retrying: server errors, rate limiting, and
 # 401/403 — GitHub returns these for token-propagation and secondary-rate-limit
@@ -51,7 +51,7 @@ def is_transient(error: urllib.error.URLError) -> bool:
   return True
 
 
-def _retry_delay(error: urllib.error.URLError, attempt: int) -> float:
+def _retry_delay(error: Exception, attempt: int) -> float:
   """seconds to wait before the next attempt (0-indexed), honoring server hints.
 
   prefers the server's own `Retry-After` (secondary rate limits) or
@@ -88,6 +88,15 @@ def _parse_retry_after(value: str) -> Optional[float]:
     return None
 
 
+def _retryable(error: Exception) -> bool:
+  if isinstance(error, urllib.error.URLError):
+    return is_transient(error)
+  return isinstance(error, (http.client.HTTPException, OSError))
+
+
+_RETRY_POLICY = RetryPolicy(retryable=_retryable, delay=_retry_delay, attempts=_MAX_ATTEMPTS)
+
+
 def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> Any:
   return _request_with_headers(method, url, token, body)[0]
 
@@ -111,28 +120,14 @@ def _request_with_headers(
     data = json.dumps(body).encode()
     headers['Content-Type'] = 'application/json'
   prepared = urllib.request.Request(url, data=data, headers=headers, method=method)
-  for attempt in range(_MAX_ATTEMPTS):
-    try:
-      with urllib.request.urlopen(prepared, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
-        payload = response.read()
-        headers = response.headers
-      return (json.loads(payload) if len(payload) > 0 else None, headers)
-    except (http.client.HTTPException, OSError) as error:
-      if isinstance(error, urllib.error.URLError):
-        if not is_transient(error):
-          raise
-        delay = _retry_delay(error, attempt)
-        reason = f'HTTP {error.code}' if isinstance(error, urllib.error.HTTPError) else error.reason
-      else:
-        delay = min(_MAX_BACKOFF, _BASE_BACKOFF * (2**attempt))
-        reason = f'{type(error).__name__}: {error}'
-      if attempt == _MAX_ATTEMPTS - 1:
-        raise
-      log.warning(
-        f'{reason} from {url}; retrying in {delay:.1f}s (attempt {attempt + 1}/{_MAX_ATTEMPTS})'
-      )
-      time.sleep(delay)
-  raise AssertionError('unreachable: final attempt returns or raises')
+
+  def send() -> tuple[Any, Message]:
+    with urllib.request.urlopen(prepared, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+      payload = response.read()
+      response_headers = response.headers
+    return (json.loads(payload) if len(payload) > 0 else None, response_headers)
+
+  return retry(send, _RETRY_POLICY, label=url)
 
 
 def get(url: str, token: str) -> Any:

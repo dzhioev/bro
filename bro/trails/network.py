@@ -4,11 +4,11 @@ import http.client
 import json
 import ssl
 import threading
-import time
 import urllib.request
 from typing import Any, Optional
 from urllib.parse import urlencode, urlparse
 
+from bro.base.retry import RetryPolicy, retry
 from bro.trails import formats
 from bro.trails.model import (
   LOOPBACK_HOSTS,
@@ -48,6 +48,10 @@ class HTTPStatusError(Exception):
 
 def is_retryable_status(status: int) -> bool:
   return status >= 500 or status == 429
+
+
+def _transient(error: Exception) -> bool:
+  return isinstance(error, (TransientUnavailable, OSError, http.client.HTTPException))
 
 
 def _append_conflict_extents(raw: bytes) -> Optional[tuple[int, int]]:
@@ -351,29 +355,26 @@ class NetworkStore(TrailsStore):
     *,
     retry_delays: tuple[float, ...] = _DEFAULT_RETRY_DELAYS_SECONDS,
   ) -> dict:
-    last_exception: Optional[Exception] = None
-    for delay in (0.0,) + retry_delays:
-      if delay > 0:
-        time.sleep(delay)
-      connection = self._take_connection()
-      try:
-        result = _exchange(connection, method, path, headers, body)
-      except TransientUnavailable as exception:
-        last_exception = exception
-        connection.close()
-      except (OSError, http.client.HTTPException) as exception:
-        last_exception = exception
-        connection.close()
-      except BaseException:
-        connection.close()
-        raise
-      else:
-        self._return_connection(connection)
-        return result
-    assert last_exception is not None
-    if isinstance(last_exception, TransientUnavailable):
-      raise last_exception
-    raise TransientUnavailable(str(last_exception)) from last_exception
+    policy = RetryPolicy(
+      retryable=_transient,
+      delay=lambda error, attempt: retry_delays[attempt],
+      attempts=len(retry_delays) + 1,
+    )
+    try:
+      return retry(lambda: self._exchange_once(method, path, headers, body), policy)
+    except (OSError, http.client.HTTPException) as exception:
+      raise TransientUnavailable(str(exception)) from exception
+
+  def _exchange_once(self, method: str, path: str, headers: dict, body: Optional[bytes]) -> dict:
+    """one request on a pooled connection, which is closed rather than reused after any failure."""
+    connection = self._take_connection()
+    try:
+      result = _exchange(connection, method, path, headers, body)
+    except BaseException:
+      connection.close()
+      raise
+    self._return_connection(connection)
+    return result
 
   def _take_connection(self) -> http.client.HTTPConnection:
     with self._lock:
