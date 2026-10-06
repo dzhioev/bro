@@ -2,7 +2,7 @@
 name: browse
 description:
 
-  Run an owner-led browser session: summon it detached with `owner.question,worker.question` talk and an hours-sized timeout;
+  Run an owner-led browser session: summon it with `owner.question,worker.question` talk and an hours-sized timeout;
   send each instruction as a question and read the outcome in its reply;
   answer a clarification in its thread with a counter-question;
   share upload artifacts with the running quest and name them in the instruction;
@@ -16,9 +16,9 @@ Run an owner-led webview until the owner asks "done".
 ## Start
 
 Open one webview, using a profile or visible view only when the summon prompt names it.
-If this is a summoned session, run [[watch quest watch]], keep that procedure active, and send nothing until the first owner question arrives.
-If a human is driving this session directly, do not start a quest watch;
-their conversation messages are the instructions and your conversation replies carry the outcomes.
+If this is a summoned session, its session watch delivers owner questions as notifications;
+send nothing until the first one arrives.
+If a human is driving this session directly, their conversation messages are the instructions and your conversation replies carry the outcomes.
 
 ## Each instruction
 
@@ -44,11 +44,12 @@ For an upload, use only a ref the owner shared with this quest for that purpose.
 Pass it to `webview::share`, upload the returned path, and name the file in the outcome.
 A file inside a shared directory keeps its own name.
 
-When summoned, follow the active watch procedure to wait for the next quest-watch line rather than ending a turn with the watch and webview still live.
+When summoned, end the turn whenever waiting is all that remains;
+the session watch wakes the run on the next owner message.
 
 ## Finish
 
 On "done", close the webview and reply to that question.
-If this is a summoned session, end the active watch through its procedure, then call `bro::answer` with a session log naming the sites, changes made on them, and refs of files produced.
+If this is a summoned session, call `bro::answer` with a session log naming the sites, changes made on them, and refs of files produced.
 If a human is driving this session directly, return that session log in the conversation and do not call `bro::answer`.
 Condense actions when the log would exceed the answer bound because each instruction already received its outcome.

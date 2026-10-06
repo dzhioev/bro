@@ -48,8 +48,7 @@ class _PolledStore(watches.Store):
     super().__init__(directory, directory / 'owner')
     self.polled = threading.Event()
 
-  def take(self, command: str | None = None) -> None:
-    del command
+  def take(self) -> None:
     self.polled.set()
 
 
@@ -61,8 +60,7 @@ class _BlockingStore(watches.Store):
     self.taking = threading.Event()
     self.release = threading.Event()
 
-  def take(self, command: str | None = None) -> str:
-    del command
+  def take(self) -> str:
     self.taking.set()
     assert self.release.wait(10), 'the test never released the batch'
     return '[held] line'

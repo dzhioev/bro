@@ -456,19 +456,6 @@ def ask(
   return Asked(resolved, question_id, reply.answer, reply.counter_question_id)
 
 
-def asked_view(asked: Asked) -> dict[str, Any]:
-  view: dict[str, Any] = {
-    'state': asked.state,
-    'quest_id': asked.quest_id,
-    'question_id': asked.question_id,
-  }
-  if asked.answer is not None:
-    view['answer'] = asked.answer
-  if asked.counter_question_id is not None:
-    view['counter_question_id'] = asked.counter_question_id
-  return view
-
-
 # --- artifact sharing -----------------------------------------------------------
 
 

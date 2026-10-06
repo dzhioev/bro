@@ -95,50 +95,25 @@ class TestSessionFragment:
     assert fragment.startswith('# Party member')
     assert 'shares the summoner’s working tree' in fragment
 
-  def test_a_summoning_run_keeps_the_summon_watch_armed_on_the_claude_harness(self, monkeypatch):
+  @pytest.mark.parametrize('harness', ['bro', 'claude'])
+  def test_a_summoning_run_uses_the_runtime_owned_watch(self, monkeypatch, harness):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    fragment = session_fragment('attended', harness='claude')
+    fragment = session_fragment('attended', harness=harness)
     assert fragment.startswith('# Summoning session')
+    assert 'session keeps a quest watch' in fragment
+    assert 'end the turn' in fragment
+    assert 'watch-next' not in fragment
+    assert 'bro::chill' not in fragment
     assert '{{' not in fragment
-    assert fragment.endswith(hold_fragment('attended', harness='claude'))
+    assert fragment.endswith(hold_fragment('attended', harness=harness))
 
-  def test_a_summoning_native_run_starts_a_watch_job_and_chills(self, monkeypatch):
-    monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    fragment = session_fragment('attended', harness='bro')
-    assert "`bro::job('<command>', mode='watch')`" in fragment
-    assert '`bro::chill`' in fragment
-
-  @pytest.mark.parametrize(
-    ('harness', 'marker'),
-    (
-      ('claude', 'stop the watch and end the turn'),
-      ('bro', 'ends when a turn ends with nothing running and nothing in flight'),
-    ),
-  )
-  def test_a_summoning_run_is_told_how_its_one_shot_ends_per_surface(
-    self, monkeypatch, harness, marker
-  ):
-    monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    fragment = session_fragment('unattended', harness=harness)
-    assert marker in fragment
-    assert 'watches included' not in fragment
-
-  @pytest.mark.parametrize(
-    ('harness', 'marker'),
-    (
-      ('claude', 'so end it through `bro::answer`'),
-      ('bro', 'ends when a turn ends with nothing running and nothing in flight'),
-    ),
-  )
-  def test_a_summoned_run_is_told_how_its_one_shot_ends_per_surface(
-    self, monkeypatch, harness, marker
-  ):
+  @pytest.mark.parametrize('harness', ['bro', 'claude'])
+  def test_a_summoned_run_has_one_turn_end_contract(self, monkeypatch, harness):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment('unattended', harness=harness, talk=('worker.say',))
-    assert marker in fragment
+    assert fragment.count('# One-shot turn end') == 1
+    assert 'watch-next' not in fragment
 
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
@@ -146,6 +121,7 @@ class TestSessionFragment:
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     fragment = session_fragment('attended', harness='claude', talk=('worker.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
+    assert fragment.count('# One-shot turn end') == 1
 
   def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
@@ -160,33 +136,24 @@ class TestSessionFragment:
     fragment = session_fragment('guided', harness='claude', talk=('worker.say',))
     assert fragment.endswith(hold_fragment('guided', harness='claude'))
 
-  @pytest.mark.parametrize(
-    ('harness', 'marker'),
-    (
-      ('claude', '`watch-run <command>`'),
-      ('bro', "`bro::job('<command>', mode='watch')`"),
-    ),
-  )
-  def test_a_speaking_summoner_reaches_the_child_by_surface(self, monkeypatch, harness, marker):
+  @pytest.mark.parametrize('harness', ['bro', 'claude'])
+  def test_a_speaking_summoner_reaches_the_child_through_the_session_watch(
+    self, monkeypatch, harness
+  ):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment('attended', harness=harness, talk=('owner.say', 'worker.say'))
-    assert marker in fragment
+    assert 'session keeps a quest watch' in fragment
+    assert 'arrive as notifications' in fragment
 
-  def test_a_questioning_native_child_asks_without_blocking(self, monkeypatch):
-    monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('unattended', harness='bro', talk=('worker.say', 'worker.question'))
-    assert 'call `bro::quest_ask` on `self`' in fragment
-    assert 'reply arrives on the quest watch' in fragment
-    assert 'bounded `wait`' not in fragment
-
-  def test_a_questioning_claude_child_arms_the_watch_for_the_reply(self, monkeypatch):
+  @pytest.mark.parametrize('harness', ['bro', 'claude'])
+  def test_a_questioning_child_asks_once_and_waits_on_the_session_watch(self, monkeypatch, harness):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness='claude', talk=('worker.say', 'worker.question')
+      'unattended', harness=harness, talk=('worker.say', 'worker.question')
     )
-    assert "`quest ask self '<question>' --wait`" in fragment
-    assert 'Keep the quest watch for that reply' in fragment
-    assert '`watch-run <command>`' in fragment
+    assert 'call `bro::quest_ask` on `self`' in fragment
+    assert 'reply arrives through the session watch' in fragment
+    assert 'wait`' not in fragment
 
   def test_a_silent_child_is_told_to_raise_instead_of_asking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')

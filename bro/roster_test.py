@@ -132,12 +132,18 @@ async def test_composed_prompts_leak_no_directives(name):
 
 
 class TestSummonRecovery:
-  def test_channel_mounts_query_backed_list_and_renders_recovery(self, monkeypatch):
+  def test_channel_mounts_query_backed_list_with_one_tool_shape(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', '/tmp/test-broker.sock')
     bro = create_bro('bro')
-    server = next(server for server in _servers(bro, harness='claude') if server.namespace == 'bro')
-    by_name = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
+    tools = {}
+    for harness in ('bro', 'claude'):
+      server = next(
+        server for server in _servers(bro, harness=harness) if server.namespace == 'bro'
+      )
+      tools[harness] = {tool.name: tool for tool in __import__('asyncio').run(server.list_tools())}
 
-    assert {'summon', 'quest_check', 'quest_history', 'quest_list'} <= set(by_name)
-    assert 'recover the quest id with quest_list' in by_name['summon'].description
-    assert 'last_seen' not in by_name['quest_check'].description
+    assert {'summon', 'quest_check', 'quest_history', 'quest_list'} <= set(tools['claude'])
+    for name in ('summon', 'quest_check', 'quest_history'):
+      assert tools['bro'][name].parameters == tools['claude'][name].parameters
+      assert tools['bro'][name].description == tools['claude'][name].description
+    assert 'last_seen' not in tools['claude']['quest_check'].description

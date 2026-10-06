@@ -50,8 +50,8 @@ class TestSessionAppendPrompt:
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'owner.say,worker.say')
     out = ride_system_prompt.session_append_prompt('unattended', 'bro')
-    assert '`watch-run <command>`' in out
-    assert 'so messages from the summoner reach you' in out
+    assert 'session keeps a quest watch' in out
+    assert 'messages from the summoner arrive as notifications' in out
 
 
 class TestSurfaceRendering:

@@ -207,14 +207,6 @@ async def test_ask_wait_reports_a_counter_question_and_its_id(monkeypatch, capsy
     assert 'counter_question_id COUNTER-1' in caplog.text
     assert "quest ask REQ-1 '<answer>' --reply-to COUNTER-1 --wait" in caplog.text
 
-  assert quest.asked_view(quest.Asked('REQ-1', question.id, 'Which environment?', 'COUNTER-1')) == {
-    'state': 'question',
-    'quest_id': 'REQ-1',
-    'question_id': question.id,
-    'answer': 'Which environment?',
-    'counter_question_id': 'COUNTER-1',
-  }
-
 
 @pytest.mark.asyncio
 async def test_ask_wait_timeout_returns_its_recoverable_id(monkeypatch, capsys):
