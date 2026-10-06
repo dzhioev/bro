@@ -1,20 +1,19 @@
 """the bro-native engine: runs a bro declaration as an in-process LLM loop."""
 
 import os
+import threading
 import traceback
-from collections.abc import Callable
-from contextlib import AbstractContextManager, ExitStack, nullcontext
-from dataclasses import dataclass
+from collections.abc import Callable, Generator
+from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from types import TracebackType
 from typing import Any, Optional, Self
 
-from bro import watches
+from bro import turn_end, watches
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
-from bro.broker.environment import BROKER_CHANNEL
 from bro.inbox import Inbox
-from bro.jobs import JobStatus, Registry
+from bro.jobs import Registry
 from bro.llm.observer import (
   InterimAssistantTextEvent,
   NullObserver,
@@ -25,7 +24,6 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
-from bro.mission import LiveMission, live_mission_line, live_missions
 from bro.monitor import session_dir, trail_pointer
 from bro.native import providers as native_providers
 from bro.native.harness import BRO
@@ -35,60 +33,7 @@ from bro.summon import summoned, summoned_by_from_env
 from bro.trails.record.bro import Recorder
 
 _TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
-
-_LIVE_WORK_HEADER = (
-  '[notification: the turn ended with work still running, so this run has not ended]'
-)
-_LIVE_WORK_RULE = (
-  'A one-shot run ends only when a turn ends with nothing running and nothing in flight. '
-  'To wait on running jobs, call `bro::chill`; otherwise `bro::kill` each job and end the turn. '
-  'This notice comes once: a turn that ends with the same work live and nothing else reported '
-  'ends the run, which kills its jobs and host-supervised workers and detaches expected workers.'
-)
-
-
-def _mission_work_rule(missions: tuple[LiveMission, ...]) -> str:
-  routes = []
-  if any(mission.type == 'bro' for mission in missions):
-    routes.append(
-      "arm `bro::job('quest watch', mode='watch')` and use `bro::quest_cancel` for quests"
-    )
-  if any(mission.type != 'bro' for mission in missions):
-    routes.append('arm `mission watch` and use `mission cancel` for other missions')
-  guidance = '; '.join(routes)
-  return (
-    'A one-shot run ends only when a turn ends with nothing running and nothing in flight. '
-    f'To wait on this work, {guidance}, then call `bro::chill`; otherwise end or cancel it. '
-    'This notice comes once: a turn that ends with the same work live and nothing else reported '
-    'ends the run, which kills its jobs and host-supervised workers and detaches expected workers.'
-  )
-
-
-@dataclass(frozen=True)
-class LiveWork:
-  """What a one-shot run still has running at a turn end."""
-
-  jobs: tuple[JobStatus, ...]
-  missions: tuple[LiveMission, ...]
-
-  def keys(self) -> frozenset[str]:
-    return frozenset(
-      [*(job.id for job in self.jobs), *(mission.mission_id for mission in self.missions)]
-    )
-
-  def is_empty(self) -> bool:
-    return len(self.jobs) == 0 and len(self.missions) == 0
-
-
-def live_work_notice(work: LiveWork) -> str:
-  lines = [_LIVE_WORK_HEADER]
-  for job in work.jobs:
-    command = job.command.replace('`', '\\`')
-    lines.append(f'{job.id} {job.mode} `{command}`')
-  for mission in work.missions:
-    lines.append(live_mission_line(mission))
-  lines.append(_mission_work_rule(work.missions) if work.missions else _LIVE_WORK_RULE)
-  return '\n'.join(lines)
+_WATCH_POLL_SECONDS = 0.1
 
 
 def _observer_scope(observer: Observer) -> AbstractContextManager[Observer]:
@@ -142,6 +87,12 @@ class Runner:
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
     self._watch_owner: Optional[watches.Owner] = None
+    self._lifetime_resources: Optional[ExitStack] = None
+    self._watch_pump_cancelled = threading.Event()
+    self._watch_delivery_lock = threading.Lock()
+    self._watch_delivery_pending = False
+    self._watch_pump_error: Optional[BaseException] = None
+    self._turn_ended = False
     self._llm: Optional[LLM] = None
     # a bro renders only through an observer its caller passes: an embedding
     # application must not get terminal output, or a display session, it never
@@ -169,6 +120,66 @@ class Runner:
     if self._watch_owner is not None:
       return self._watch_owner.store
     return watches.session_store()
+
+  @contextmanager
+  def _watch_pump(self) -> Generator[None, None, None]:
+    self._watch_pump_cancelled.clear()
+    self._watch_pump_error = None
+    thread = threading.Thread(target=self._pump_watch_lines, daemon=True)
+    thread.start()
+    try:
+      yield
+    finally:
+      self._watch_pump_cancelled.set()
+      self.inbox.notify()
+      thread.join()
+
+  def _pump_watch_lines(self) -> None:
+    try:
+      while not self._watch_pump_cancelled.is_set():
+        with self._watch_delivery_lock:
+          batch = self.watch_store.take()
+          self._watch_delivery_pending = batch is not None
+        if batch is not None:
+          self.deliver(batch)
+        else:
+          self._watch_pump_cancelled.wait(_WATCH_POLL_SECONDS)
+    except BaseException as error:
+      self._watch_pump_error = error
+      self.inbox.post('[notification: native watch delivery failed]')
+
+  def deliver(self, batch: str) -> None:
+    delivery_id = self.inbox.post(batch)
+    with self._watch_delivery_lock:
+      self._watch_delivery_pending = False
+    self.inbox.wait_until_drained(delivery_id, self._watch_pump_cancelled)
+
+  def background_work(self) -> tuple[str, ...]:
+    result = []
+    for job in (item.status() for item in self.registry.values()):
+      if job.state == 'running':
+        command = job.command.replace('`', '\\`')
+        result.append(f'{job.id} {job.mode} `{command}`')
+    return tuple(result)
+
+  def notify(self, text: str) -> None:
+    self.inbox.post(text)
+
+  def end(self) -> None:
+    self._turn_ended = True
+
+  def _raise_watch_pump_error(self) -> None:
+    if self._watch_pump_error is not None:
+      raise RuntimeError('native watch delivery failed') from self._watch_pump_error
+
+  def _settle_turn_end(self) -> bool:
+    with self._watch_delivery_lock:
+      self._raise_watch_pump_error()
+      self._turn_ended = False
+      if self._watch_delivery_pending or self.inbox.has_news():
+        return False
+      turn_end.settle(self)
+      return self._turn_ended
 
   def _start_refusal(self) -> Optional[str]:
     # the run-start credential gate: the refusal listing every missing secret,
@@ -225,10 +236,14 @@ class Runner:
   def __enter__(self) -> Self:
     if self._lifetime_active:
       raise RuntimeError('run lifetime is already active')
-    if session_dir() is None or os.environ.get(watches.OWNER_ENV) is None:
-      owner = watches.Owner.temporary(publish_environment=False)
-      owner.__enter__()
-      self._watch_owner = owner
+    with ExitStack() as resources:
+      resources.callback(self.registry.close)
+      if session_dir() is None or os.environ.get(watches.OWNER_ENV) is None:
+        self._watch_owner = resources.enter_context(
+          watches.Owner.temporary(publish_environment=False)
+        )
+      resources.enter_context(self._watch_pump())
+      self._lifetime_resources = resources.pop_all()
     self._lifetime_active = True
     self._last_end_reason = None
     self._last_end_detail = None
@@ -256,12 +271,12 @@ class Runner:
       detail = str(exception)
       self._record_error_step(exception)
 
-    with ExitStack() as cleanup:
-      cleanup.callback(self.registry.close)
-      if self._watch_owner is not None:
-        owner = self._watch_owner
-        self._watch_owner = None
-        cleanup.callback(owner.__exit__, None, None, None)
+    resources = self._lifetime_resources
+    if resources is None:
+      raise RuntimeError('run lifetime has no resources')
+    self._lifetime_resources = None
+    self._watch_owner = None
+    resources.close()
     self.bro.close()
     self._lifetime_active = False
     self._last_end_reason = reason
@@ -391,35 +406,20 @@ class Runner:
   async def _turns_until_settled(
     self, llm: LLM, messages: list[dict], *, request_timeout: Optional[float]
   ) -> str:
-    """the one-shot's turns: the input's, then a reminder turn for each turn that
-    ends with work still live, until a turn ends with nothing live or a reminded
-    turn ends with the same live set and no job news drained since the reminder.
-    """
     reply = await llm.send(messages, request_timeout=request_timeout)
-    reminded: Optional[frozenset[str]] = None
-    drains_at_reminder = 0
-    while True:
-      work = await off_loop(self._live_work)
-      if work.is_empty():
-        return reply
-      if reminded == work.keys() and self.inbox.job_news_drains == drains_at_reminder:
-        return reply
+    while not await off_loop(self._settle_turn_end):
       self._observer.on_event(InterimAssistantTextEvent(reply))
-      self.inbox.post(live_work_notice(work))
-      reminded = work.keys()
-      drains_at_reminder = self.inbox.job_news_drains
+      with self.inbox.waiter() as cancelled:
+        await off_loop(self.inbox.wait, None, cancelled)
+      self._raise_watch_pump_error()
       reply = await llm.wake(request_timeout=request_timeout)
-
-  def _live_work(self) -> LiveWork:
-    statuses = [job.status() for job in self.registry.values()]
-    jobs = tuple(status for status in statuses if status.state == 'running')
-    missions = tuple(live_missions()) if os.environ.get(BROKER_CHANNEL) is not None else ()
-    return LiveWork(jobs, missions)
+    return reply
 
   async def wake(self, request_timeout: Optional[float] = None) -> str:
     """Run one interactive turn from pending inbox news."""
     if self._llm is None:
       raise RuntimeError('cannot wake a conversation before its first turn')
+    self._raise_watch_pump_error()
     observer = self._observer
     try:
       result = await self._llm.wake(request_timeout=request_timeout)

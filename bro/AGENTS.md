@@ -166,7 +166,7 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
 - `watch` and `unwatch` with a declared `shell` roster on every harness, admitted against the same whole-command roster as a job;
   they start and stop the store's detached producer, while `unwatch` refuses the runtime-owned session watch.
 - the job tools of a declared `shell` roster, on the bro harness alone
-  — `job`, `poll`, `kill`, `jobs`, and `chill`, over the run's registry and inbox;
+  — `job`, `poll`, `kill`, and `jobs`, over the run's registry and inbox;
   with no `shell` declared, automatic `quest watch` admission mounts only the compatibility job tools narrowed to that command.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.

@@ -273,12 +273,12 @@ class TestProducers:
     watch = owner.store.start(command)
 
     deadline = time.monotonic() + 10
-    batch = None
-    while batch is None:
-      assert time.monotonic() < deadline, 'watch output did not arrive'
-      batch = owner.store.take()
+    while watch.producer_alive():
+      assert time.monotonic() < deadline, 'watch producer did not exit'
       time.sleep(0.01)
+    batch = owner.store.take()
 
+    assert batch is not None
     assert f'[{command}] one' in batch
     assert f'[{command}] two' in batch
     assert f'[{command}] [watch-run] exited 0' in batch

@@ -27,25 +27,30 @@ class Inbox:
   def __init__(self):
     self._condition = threading.Condition()
     self._jobs_with_news: set[Job] = set()
-    self._notices: list[str] = []
-    self._job_news_drains = 0
+    self._notices: list[tuple[int, str]] = []
+    self._next_notice_id = 0
+    self._last_drained_notice_id = 0
 
   def mark(self, job: Job) -> None:
     with self._condition:
       self._jobs_with_news.add(job)
       self._condition.notify_all()
 
-  def post(self, notice: str) -> None:
-    """Queue a framework-originated notice for the next drain."""
+  def post(self, notice: str) -> int:
+    """Queue a framework notice and return its delivery id."""
     with self._condition:
-      self._notices.append(notice)
+      self._next_notice_id += 1
+      notice_id = self._next_notice_id
+      self._notices.append((notice_id, notice))
       self._condition.notify_all()
+      return notice_id
 
-  @property
-  def job_news_drains(self) -> int:
-    """How many drains carried job news, framework notices aside."""
+  def wait_until_drained(self, notice_id: int, cancelled: threading.Event) -> bool:
+    """Wait until a drain takes the notice, or until the caller cancels."""
     with self._condition:
-      return self._job_news_drains
+      while self._last_drained_notice_id < notice_id and not cancelled.is_set():
+        self._condition.wait()
+      return self._last_drained_notice_id >= notice_id
 
   def notify(self) -> None:
     with self._condition:
@@ -90,6 +95,9 @@ class Inbox:
       self._jobs_with_news.clear()
       notices = self._notices
       self._notices = []
+      if len(notices) > 0:
+        self._last_drained_notice_id = notices[-1][0]
+        self._condition.notify_all()
 
     notifications: list[Notification] = []
     for job in jobs:
@@ -101,10 +109,8 @@ class Inbox:
 
     if len(notifications) == 0 and len(notices) == 0:
       return None
-    parts = list(notices)
+    parts = [text for _, text in notices]
     if len(notifications) > 0:
-      with self._condition:
-        self._job_news_drains += 1
       parts.insert(
         0, '\n'.join([_OPENING_LINE, *(_format(notification) for notification in notifications)])
       )
@@ -116,6 +122,5 @@ class Inbox:
 
 def _format(notification: Notification) -> str:
   command = notification.command.replace('`', '\\`')
-  exit_text = f' exited (code {notification.exit_code})' if notification.kind == 'exited' else ''
-  header = f'[{notification.job_id} {notification.mode} `{command}`{exit_text}]'
+  header = f'[{notification.job_id} {notification.mode} `{command}` exited (code {notification.exit_code})]'
   return header if len(notification.lines) == 0 else f'{header}\n{notification.lines}'

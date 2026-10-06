@@ -20,7 +20,7 @@ def _wait_finished(job: Job) -> None:
 
 def test_wait_wakes_without_consuming_news():
   inbox = Inbox()
-  job = Job('job-1', 'printf news', 'watch', inbox=inbox)
+  job = Job('job-1', 'printf news', 'bg', inbox=inbox)
   cancelled = threading.Event()
 
   assert inbox.wait(time.monotonic() + 10, cancelled)
@@ -57,20 +57,21 @@ def test_wait_ends_through_its_own_cancel_event():
   assert result == [False]
 
 
-def test_watch_drain_pages_oldest_output_and_keeps_remainder_pending():
+def test_posted_notice_reports_when_a_drain_takes_it():
   inbox = Inbox()
-  job = Job('job-1', 'seq 1 105', 'watch', inbox=inbox)
-  _wait_finished(job)
+  cancelled = threading.Event()
+  notice_id = inbox.post('one batch')
+  result: list[bool] = []
+  waiter = threading.Thread(
+    target=lambda: result.append(inbox.wait_until_drained(notice_id, cancelled))
+  )
+  waiter.start()
 
-  first = inbox.drain(limit=100)
-  second = inbox.drain(limit=100)
+  assert waiter.is_alive()
+  assert inbox.drain() is not None
+  waiter.join(timeout=10)
 
-  assert first is not None and second is not None
-  assert '[job-1 watch `seq 1 105` exited (code 0)]' in first.text
-  assert '[...pending: 5 lines' in first.text
-  assert 'poll job-1' in first.text
-  assert second.text.endswith('\n101\n102\n103\n104\n105')
-  assert inbox.drain() is None
+  assert result == [True]
 
 
 def test_background_exit_tail_jumps_the_cursor_and_is_consumed_once():
@@ -159,13 +160,12 @@ def test_a_posted_notice_wakes_waiters_and_drains_without_job_ids():
   assert batch is not None
   assert batch.text == '[notification: framework]\nact on it'
   assert batch.job_ids == ()
-  assert inbox.job_news_drains == 0
   assert inbox.drain() is None
 
 
-def test_a_drain_puts_job_news_before_the_posted_notice_and_counts_it():
+def test_a_drain_puts_job_news_before_the_posted_notice():
   inbox = Inbox()
-  job = Job('job-1', 'echo news', 'watch', inbox=inbox)
+  job = Job('job-1', 'echo news', 'bg', inbox=inbox)
   _wait_finished(job)
   inbox.post('[notification: framework]')
 
@@ -175,4 +175,3 @@ def test_a_drain_puts_job_news_before_the_posted_notice_and_counts_it():
   assert batch.job_ids == ('job-1',)
   assert batch.text.startswith('[notification: this run')
   assert batch.text.endswith('\nnews\n[notification: framework]')
-  assert inbox.job_news_drains == 1
