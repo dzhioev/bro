@@ -228,6 +228,9 @@ Each harness implements four operations for its sessions, behind two protocols i
 
 ### The slices after #850
 
+In the order they land, by dependency:
+the tool fold waits for #754's design and the persona declarations for the tool fold, so trails and prompts go first.
+
 1. **Service tools.**
    `answer` and `raise` end the session through `Harness.end_session`:
    the bro harness raises for its runner, and Claude emits the result and terminates the session.
@@ -236,12 +239,7 @@ Each harness implements four operations for its sessions, behind two protocols i
    the bro harness's `job`, `poll`, `kill`, `jobs`, and `skill`, which move into `bro-native` with `bro/jobs.py` and `bro/inbox.py`.
    `bro/job_supervisor.py` stays in core, shared with `watch-run`.
    Core's `LiveRun` keeps only the trail id and the tool position, and the `#tools` universe is core's tools plus the harness's own.
-2. **Tool fold, with #754.**
-   The fold produces a harness-neutral reach, and `Harness.serve(reach)` maps it:
-   Claude onto natives it blocks, narrows behind the command gate, or serves, and the bro harness onto its own tools, refusing native names.
-   #754's shell syntax and its matcher are general code that both the Claude gate and the bro job tool call, and Claude's `Bash` stays blocked unless a `shell(...)` declaration hands it back.
-   #754's pattern syntax and enforcement mechanism are settled in #754's own design, resumed before this slice starts.
-3. **Trails.**
+2. **Trails.**
    Trail formats register through an entry-point group of their own, one module each, apart from the harness registry:
    a trail outlives the installation that recorded it, and the trails server loads no harness.
    Both of today's formats stay in core, since the trails server's image installs only the core `bro` wheel;
@@ -257,12 +255,36 @@ Each harness implements four operations for its sessions, behind two protocols i
    The `body_encoding` fallback (`parse_json=harness != 'claude'` in `bro/trails/server/dynamo.py`) serves rows spilled before that field existed, which may all be gone:
    the stage counts rows with `body_s3` and no `body_encoding` in the live table, through a session with AWS access, and when there are none deletes the branch, so such a row fails loudly, or else makes it a format member.
    `native/bro/fork.py` refusing another harness's trail is the bro harness checking its own records, and stays.
-4. **Persona declarations, with #857.**
-   A persona declares its reach in neutral groups, opt-in on every harness:
-   files (read-only or read-write), shell (per #754), web, and delegation.
-   Groups are inherited like `tools`, so the base `bro` persona declares none
-   — a group on `Bro` would reach `browser` and `lead` —
-   and the bare `bro` persona keeps only the loop tools on Claude.
+3. **Prompts.**
+   What remains conditions on a fact the harness declares, or inserts a passage it supplies, through `Harness.facts()`:
+   `tool_names.md` inserts the harness's tool-name rule, and `holds/attended.md` and `holds/detached.md` insert Claude's passage on skipped permission prompts, which is empty elsewhere.
+   The gate-timeout lines in `run-pr.md` and `bump-bro.md` become one sentence true on both harnesses.
+   `#harness` stays a fact for a case no fact covers;
+   no prompt uses it once this slice lands, and no declaration once the persona slice does.
+   `bro/prompts/AGENTS.md` and the template and conditions references state the rule.
+4. **Tool fold, with #754.**
+   The fold produces a harness-neutral reach, and `Harness.serve(reach)` maps it:
+   Claude onto natives it blocks, narrows behind the command gate, or serves, and the bro harness onto its own tools, refusing native names.
+   #754's shell syntax and its matcher are general code that both the Claude gate and the bro job tool call, and Claude's `Bash` stays blocked unless a `shell(...)` declaration hands it back.
+   #754's pattern syntax and enforcement mechanism are settled in #754's own design, resumed before this slice starts.
+5. **Persona declarations, with #857.**
+   A persona declares its reach opt-in on every harness, in the `tools` vocabulary it uses today rather than a syntax of its own:
+   the groups are constructors beside `mount` and `cli`, each returning a `ToolLayer` that carries a harness-neutral reach entry, composed with `when` and `iff` as any entry is.
+   They are `files()`, read-write, and `files(write=False)`, read-only;
+   `shell(...)`, which has this shape already, its roster syntax per #754;
+   `web()`;
+   and `delegation()`.
+   `data_sources` folds into `tools`:
+   a data source becomes a `source(...)` entry and a reference page a `man('<topic>')` entry, so a persona declares one list.
+   Every entry has a key
+   — its group, its mounted toolset, its data source, or its `cli` tool —
+   and the fold resolves each key along the class hierarchy:
+   a class's entries for one key merge, shell rosters uniting and the wider files level winning, and they replace what its bases declare for that key.
+   That is how a subclass narrows, as `files(write=False)` under an inherited `files()` or a shorter `shell(...)` roster.
+   `revoke(...)` withholds a key, as in `revoke(delegation)` or `revoke(brog_mcp.toolset)`, and a descendant may grant it again:
+   the nearest declaration of each key applies, a revoke included.
+   `block`, `serve`, `allow_commands`, `claude.block`, and every `when(harness == …)` entry go, since nothing is on until declared.
+   The base `bro` persona declares no group, so personas grant what they use rather than revoke what `Bro` grants, and the bare `bro` persona keeps only the loop tools on Claude.
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
    Claude passes exactly the natives the groups map to through `--tools`, an allowlist, plus the loop tools the slice lists:
    among them `Skill`, since sessions rely on Claude's own skill loader, and the `LSP` tool the pyright plugin every session enables needs.
@@ -272,15 +294,10 @@ Each harness implements four operations for its sessions, behind two protocols i
    The bro harness serves files with the `dev` toolset, which moves into `bro-native`, and leaves web and delegation unserved, delegation until #863.
    Every registered persona declares the groups it reaches today, settled by the slice's inventory of the natives each one uses:
    `terminal` without delegation, which it blocks, and `browser` with none of the four.
+   #870 (read-only and pure tags on tools) can then define the read-only files level by tag rather than by a list each harness keeps.
    `bro/harness/claude.py`'s tool names move into `ride/ride/claude/`.
    With no component conditioned on the harness, a bro has one selection, and the `bro`-harness special case in `_components_for` and `assemble` goes.
    #857 closes with this slice.
-5. **Prompts.**
-   What remains conditions on a fact the harness declares, or inserts a passage it supplies, through `Harness.facts()`:
-   `tool_names.md` inserts the harness's tool-name rule, and `holds/attended.md` and `holds/detached.md` insert Claude's passage on skipped permission prompts, which is empty elsewhere.
-   The gate-timeout lines in `run-pr.md` and `bump-bro.md` become one sentence true on both harnesses.
-   `#harness` stays a fact for a case no fact covers, unused in the repository;
-   `bro/prompts/AGENTS.md` and the template and conditions references state the rule.
 
 ### Rollout and mixed versions
 
@@ -347,6 +364,11 @@ the trails landing deploys the trails server between the two.
 - **The installed names as the `#harness` domain:**
   a text naming a harness the installation does not carry would raise, breaking a Claude-only install;
   settled with the user for checking names where they are used.
+- **A syntax of its own for the reach groups:**
+  settled with the user for constructors in the `tools` vocabulary, which already composes conditions and layers.
+- **A final `revoke`, as `False` is for a feature:**
+  settled with the user for one rule, the nearest declaration of each key;
+  a subclass lives in the codebase its base does, so finality would guard no boundary.
 - **Removing `#harness`:**
   a consumer may still need a fork no fact covers, and the rule is to avoid one, not to forbid it.
 
@@ -363,10 +385,10 @@ the trails landing deploys the trails server between the two.
 
    Stages 4 to 6 change what the model is told and how it waits, so the branch reaches master once.
 2. Service tools.
-3. Tool fold, after #754's design.
-4. Trails.
-5. Persona declarations, with #857, after the tool fold.
-6. Prompts.
+3. Trails.
+4. Prompts.
+5. Tool fold, after #754's design.
+6. Persona declarations, with #857, after the tool fold.
 
 #863 (delegation through summons) follows #850 on its own.
 
