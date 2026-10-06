@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from bro.llm.llm import LLMUnavailable
 from bros.browser import mcp
 
 CAPTURE_REF = f'sha256:{"1" * 64}'
@@ -256,6 +257,22 @@ def test_reader_failure_adds_capture_narrowing_guidance(monkeypatch, tmp_path) -
     mcp.look('Summarize the page.', ref=SOURCE_REF)
 
   assert isinstance(error.value.__cause__, ValueError)
+
+
+def test_unavailable_reader_failure_omits_capture_narrowing_guidance(monkeypatch, tmp_path) -> None:
+  source = tmp_path / 'source.yml'
+  source.write_text('- heading "Small page" [ref=e1]\n')
+  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(source))
+
+  def fail_reader(prompt, content):
+    raise LLMUnavailable('LLM provider unavailable for 180 s: Request timed out.')
+
+  monkeypatch.setattr(mcp, '_read_page', fail_reader)
+
+  with pytest.raises(RuntimeError, match='unavailable') as error:
+    mcp.look('Summarize the page.', ref=SOURCE_REF)
+
+  assert 'target' not in str(error.value)
 
 
 def test_reader_answer_is_cut_to_the_inline_bound(monkeypatch, tmp_path) -> None:

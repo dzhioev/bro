@@ -7,7 +7,9 @@ from types import SimpleNamespace
 from typing import Any, Optional, cast
 from unittest.mock import MagicMock, call
 
+import httpx2
 import pytest
+from openai import APIStatusError, APITimeoutError
 from openai.types.responses import Response
 
 import bro.llm.usage as usage
@@ -32,6 +34,7 @@ from bro.trails.record.bro import Recorder
 # `ping` in this namespace surfaces to the LLM as `svc__ping`. the emit helpers
 # below wrap the local name the same way, modeling what the model calls back.
 _TEST_NAMESPACE = 'svc'
+_REQUEST = httpx2.Request('POST', 'https://api.example.test/v1/responses')
 
 
 class _StaticTool(Tool):
@@ -221,6 +224,22 @@ def _install_responses(gpt: OpenAI, sequence: list, captured: list[dict]) -> Non
   gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
 
+def _install_failing_create(gpt: OpenAI, captured: list[dict], error: Exception) -> None:
+  """fail the first create with `error`, then answer 'ok'"""
+
+  async def create(**kwargs):
+    captured.append(kwargs)
+    if len(captured) == 1:
+      raise error
+    return _fake_response(output=[_message_item('ok')])
+
+  gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+
+
+async def _no_wait(seconds: float) -> None:
+  del seconds
+
+
 @pytest.mark.asyncio
 async def test_tool_exception_becomes_function_call_output():
   tool = _StaticTool('boom', raise_with=RuntimeError('upstream down'))
@@ -398,6 +417,26 @@ class TestSendTrackerEmission:
     await gpt.send([{'role': 'user', 'content': 'hi'}])
 
     assert 'timeout' not in captured[0]
+
+  @pytest.mark.asyncio
+  async def test_a_transient_failure_is_retried(self, monkeypatch):
+    gpt, _, captured = _make_openai_with_tracker()
+    _install_failing_create(gpt, captured, APITimeoutError(request=_REQUEST))
+    monkeypatch.setattr('bro.base.retry.asyncio_sleep', _no_wait)
+
+    assert await gpt.send([{'role': 'user', 'content': 'hi'}]) == 'ok'
+    assert len(captured) == 2
+
+  @pytest.mark.asyncio
+  async def test_a_client_error_is_not_retried(self, monkeypatch):
+    gpt, _, captured = _make_openai_with_tracker()
+    error = APIStatusError('bad', response=httpx2.Response(400, request=_REQUEST), body=None)
+    _install_failing_create(gpt, captured, error)
+    monkeypatch.setattr('bro.base.retry.asyncio_sleep', _no_wait)
+
+    with pytest.raises(APIStatusError):
+      await gpt.send([{'role': 'user', 'content': 'hi'}])
+    assert len(captured) == 1
 
   @pytest.mark.asyncio
   async def test_llm_call_records_request_response_and_indexes(self):

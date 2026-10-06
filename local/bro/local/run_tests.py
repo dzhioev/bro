@@ -153,6 +153,7 @@ PYTEST_FILES = [
   'bro/llm/providers_test.py',
   'bro/llm/mu_test.py',
   'bro/llm/observer_test.py',
+  'bro/llm/openai_retry_test.py',
   'bro/llm/tracker_test.py',
   'bro/mcp_test.py',
   'bro/harness/claude_test.py',
