@@ -86,7 +86,7 @@ def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   assert 'eyebro' in bro.get_spell_body('land', harness='claude')
 
 
-def test_review_delegation_detaches_only_on_the_claude_harness(monkeypatch):
+def test_review_delegation_uses_one_asynchronous_tool_shape(monkeypatch):
   monkeypatch.setenv(
     LAUNCH_ENV,
     encode_launch({'bro': {'bros': frozenset({'eyebro'})}}),
@@ -96,5 +96,6 @@ def test_review_delegation_detaches_only_on_the_claude_harness(monkeypatch):
   native_body = bro.get_spell_body('run-pr', harness='bro')
   claude_body = bro.get_spell_body('run-pr', harness='claude')
 
-  assert 'with `detach: true`' not in native_body
-  assert 'with `detach: true`' in claude_body
+  assert native_body == claude_body
+  assert '`bro::summon` targeting the eyebro' in native_body
+  assert 'detach' not in native_body

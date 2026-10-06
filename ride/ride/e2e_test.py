@@ -13,14 +13,14 @@ lifecycle over the real ports (spawn
 routing, early exit, timeout, teardown, channel-pinned identity); C — the
 `BROKER_DISABLED` kill-switch; E — SIGINT handling through the attached root; F — `do-ride` as the
 session runner as the container command (exit-code propagation, in-container
-argv build: merged --settings, MCP namespaces);
+argv build, and a child's question and end delivered through Claude's session watch);
 G — the stop interrupt, so `docker stop` lands in claude as a keypress;
 H — joining a boxed party (a member `docker exec`'d into the party's running
 container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
 session, and the first session's exit tearing a live member down);
 I — spawned and manual credential ownership plus the full boxed → join → unboxed → join → boxed chain through summon control;
-J — native summon-watch wake routes through the real broker, and a native child's turn-end reminder;
+J — native summon-watch wake routes through the real broker, including a child's question and end with no model-started watch;
 K — a summoned child question, summoner steering and reply, and journal-backed collection;
 L — cancellation of a live child;
 M — a benchmark launch through its registered worker type, host job, and artifact result.
@@ -409,15 +409,84 @@ sys.exit(5)
 # the report file, proving the argv was built in-container by the frozen runtime;
 # under RIDE_E2E_LINGER it waits for the print-mode interrupt, SIGINT (exit 7),
 # so the harness can assert `docker stop` reaches claude through tini → runner.
-_FAKE_CLAUDE = """#!/usr/bin/env python3
-import json, os, signal, sys
+_FAKE_CLAUDE = (
+  f'#!{_RUNTIME_PYTHON}\n'
+  + """import json, os, signal, subprocess, sys
 from pathlib import Path
 
 report = {'argv': sys.argv[1:]}
 argv = sys.argv[1:]
+settings = {}
 if '--settings' in argv:
-  report['settings'] = json.loads(argv[argv.index('--settings') + 1])
+  settings = json.loads(argv[argv.index('--settings') + 1])
+  report['settings'] = settings
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+if os.environ.get('RIDE_E2E_QUEST_ROUTE') == '1':
+  from bro.quest import check, history, say
+  from bro.summon import summon_detached
+
+  def emit(**event):
+    print(json.dumps(event), flush=True)
+
+  def turn(reply):
+    emit(type='result', result=reply)
+
+  def deliver():
+    hook = settings['hooks']['Stop'][0]['hooks'][0]
+    completed = subprocess.run(
+      hook['command'],
+      shell=True,
+      input=json.dumps({'hook_event_name': 'Stop'}),
+      text=True,
+      capture_output=True,
+      check=False,
+    )
+    report.setdefault('deliveries', []).append(completed.stderr)
+    Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+    emit(
+      type='system',
+      subtype='hook_response',
+      hook_event='Stop',
+      exit_code=completed.returncode,
+      stdout=completed.stdout,
+      stderr=completed.stderr,
+    )
+    assert completed.returncode == 2, completed.stderr
+
+  sys.stdin.readline()
+  report['model_actions'] = ['summon']
+  quest_id = summon_detached(
+    'bro',
+    'ask through the session watch',
+    talk=['worker.question'],
+    llm='echo',
+    harness='bro',
+    timeout=120,
+  )
+  turn('summoned')
+  while True:
+    deliver()
+    conversation = history(quest_id)
+    if conversation.awaiting:
+      [question] = conversation.awaiting
+      break
+    turn('waiting for the question')
+  report['model_actions'].append('quest_say')
+  say(quest_id, 'approved', reply_to=question.id)
+  turn('answered')
+  while True:
+    deliver()
+    outcome = check(quest_id)
+    if outcome.state == 'completed':
+      break
+    turn('waiting for the end')
+  report['model_actions'].append('quest_check')
+  report['quest_id'] = quest_id
+  report['answer'] = outcome.answer
+  Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+  turn('collected the answer')
+  sys.stdin.read()
+  sys.exit(0)
 if os.environ.get('RIDE_E2E_LINGER') == '1':
   signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(7))
   Path('/workspace/.e2e-ready').touch()
@@ -425,6 +494,7 @@ if os.environ.get('RIDE_E2E_LINGER') == '1':
   sys.exit(8)
 sys.exit(12)
 """
+)
 
 _DO_RIDE_WRAPPER = 'exec "$@"\n'
 
@@ -443,6 +513,7 @@ exit "$status"
 # `ride solo|along` seam (`run_started_party`) under the isolated HOME/project root
 _DRIVER = """
 import json, os, sys
+from dataclasses import replace
 from ride.root import run_started_party
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, Launch
@@ -479,7 +550,12 @@ launch = Launch(name=name,
                      ISOLATION_ENV: workspace.isolation.value,
                      BRANCH_ENV: workspace.metadata.branch,
                      BASE_SHA_ENV: rev_parse_commit(project_root(), 'HEAD'),
-                     'RIDE_SESSION_DIR': '/var/ride/session'},
+                     'RIDE_SESSION_DIR': '/var/ride/session',
+                     **{
+                         key: os.environ[key]
+                         for key in ('RIDE_E2E_QUEST_ROUTE',)
+                         if key in os.environ
+                     }},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
                 tty=True,
                 image=os.environ['RIDE_E2E_IMAGE'],
@@ -488,10 +564,23 @@ launch = Launch(name=name,
                 repo=project_root())
 runtime_hash = os.environ['RIDE_E2E_RUNTIME_HASH']
 runtime_bundle = RuntimeBundle(runtime_base() / 'runtime' / runtime_hash, f'{sys.version_info.major}.{sys.version_info.minor}')
+child_command = os.environ.get('RIDE_E2E_CHILD_COMMAND')
+if child_command is not None:
+  import ride.bro_worker as ride_spawn
+  original_started_party_launch = ride_spawn.started_party_launch
+  def started_party_launch(*arguments, **keywords):
+    return replace(
+        original_started_party_launch(*arguments, **keywords),
+        command=json.loads(child_command),
+    )
+  ride_spawn.started_party_launch = started_party_launch
 code = run_started_party(
     launch,
     workspace,
-    launch_scope={'bro': {'party': frozenset({'boxed'})}},
+    launch_scope={'bro': {
+        'bros': frozenset(json.loads(os.environ.get('RIDE_E2E_TARGETS', '[]'))),
+        'party': frozenset({'boxed'}),
+    }},
     credential_scope=ScopedSecrets(set(launch.secrets), set()),
     container_runtime=ContainerRuntimeResolver.fixed(
         ContainerRuntime(
@@ -1220,6 +1309,66 @@ class TestDoRideContainerCommand:
   ) -> None:
     report = _report(isolated_env, f'{_NAME_PREFIX}f-root')
     assert report['settings']['fastMode'] is True
+
+
+_SESSION_WATCH_QUESTION_CHILD = """
+import contextlib
+from bro.quest import ask
+from bro.run_lifecycle import RunLifecycle
+
+channel = RunLifecycle.from_env()
+assert channel is not None
+with contextlib.closing(channel):
+  channel.trail('session-watch-question-child')
+  asked = ask('self', 'approve the change?', wait=120)
+  assert asked.state == 'answered', asked
+  channel.completed(asked.answer, 'ok')
+"""
+
+
+def test_claude_summoner_receives_a_child_question_and_end_through_its_session_watch(
+  isolated_env: IsolatedEnv, request: pytest.FixtureRequest
+) -> None:
+  env = isolated_env
+  name = f'{_NAME_PREFIX}f-claude-session-watch'
+  driver = _Driver(
+    env,
+    name,
+    _do_ride_command(
+      'do-ride',
+      'solo',
+      '--workspace',
+      name,
+      '--harness',
+      'claude',
+      '--repo',
+      str(env.project),
+      '--hold',
+      'unattended',
+      'bro-dev',
+      'exercise the session watch',
+    ),
+    extra_env={
+      'RIDE_BRO': 'bro-dev',
+      'RIDE_E2E_SECRETS': '["brog"]',
+      'RIDE_E2E_QUEST_ROUTE': '1',
+      'RIDE_E2E_TARGETS': '["bro"]',
+      'RIDE_E2E_CHILD_COMMAND': json.dumps(_session_broxy_probe(_SESSION_WATCH_QUESTION_CHILD)),
+    },
+  )
+  request.addfinalizer(driver.close)
+
+  run = LiveRun(exit_code=driver.wait(300), output=driver.output())
+  assert run.exit_code == 0, run.output
+  report = _report(env, name)
+
+  assert report['answer'] == 'approved'
+  assert report['model_actions'] == ['summon', 'quest_say', 'quest_check']
+  delivered = '\n'.join(report['deliveries'])
+  assert 'asks approve the change?' in delivered
+  assert 'summon ended ok' in delivered
+  assert all('watch' not in action for action in report['model_actions'])
+  assert env.live_containers() == []
 
 
 def test_a_launched_native_session_records_the_git_header(
@@ -2356,23 +2505,16 @@ def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
 
 _NATIVE_REMIND_GRANDCHILD = """
 import contextlib
-import time
-from bro.quest import history
+from bro.quest import ask
 from bro.run_lifecycle import RunLifecycle
 
-deadline = time.monotonic() + 120
-while not any(
-  entry.get('from') == 'owner' and entry['head']['text'] == 'release'
-  for entry in history('self').messages
-):
-  if time.monotonic() >= deadline:
-    raise TimeoutError('the reminded child never released the grandchild')
-  time.sleep(0.1)
 channel = RunLifecycle.from_env()
 assert channel is not None
 with contextlib.closing(channel):
   channel.trail('native-remind-grandchild')
-  channel.completed('grandchild result', 'ok')
+  asked = ask('self', 'approve the grandchild?', wait=120)
+  assert asked.state == 'answered', asked
+  channel.completed(asked.answer, 'ok')
 """
 
 _NATIVE_REMIND_CHILD = """
@@ -2398,9 +2540,11 @@ class ScriptedLLM(LLM):
     super().__init__(inbox, mcp_servers)
     self.notices = []
     self.quest_id = None
-    self.released = False
+    self.answered = False
+    self.actions = []
 
   async def send(self, messages, *, request_timeout=None):
+    self.actions.append('bro__summon')
     accepted = await self.tools.call(
       'bro__summon',
       {
@@ -2409,7 +2553,7 @@ class ScriptedLLM(LLM):
         'llm': 'echo',
         'harness': 'bro',
         'timeout': 120,
-        'talk': ['owner.say'],
+        'talk': ['worker.question'],
       },
     )
     assert accepted['state'] == 'accepted', accepted
@@ -2426,15 +2570,30 @@ class ScriptedLLM(LLM):
 
   async def wake(self, *, request_timeout=None):
     self._drain()
-    if not self.released:
-      await self.tools.call('bro__quest_say', {'quest_id': self.quest_id, 'text': 'release'})
-      self.released = True
-      return 'released the grandchild and ended the turn'
+    if not self.answered:
+      self.actions.append('bro__quest_history')
+      conversation = await self.tools.call('bro__quest_history', {'quest_id': self.quest_id})
+      pending = [message for message in conversation['messages'] if message.get('pending')]
+      if not pending:
+        return 'the grandchild has not asked yet'
+      [question] = pending
+      self.actions.append('bro__quest_say')
+      await self.tools.call(
+        'bro__quest_say',
+        {'quest_id': self.quest_id, 'text': 'approved', 'reply_to': question['id']},
+      )
+      self.answered = True
+      return 'answered the grandchild and ended the turn'
     if not self._grandchild_ended():
       return 'the grandchild is still in flight'
+    self.actions.append('bro__quest_check')
     outcome = await self.tools.call('bro__quest_check', {'quest_id': self.quest_id})
     assert outcome['state'] == 'completed', outcome
-    return json.dumps({'notices': self.notices, 'answer': outcome['answer']})
+    return json.dumps({
+      'notices': self.notices,
+      'answer': outcome['answer'],
+      'actions': self.actions,
+    })
 
 class ScriptedRunner(Runner):
   @contextmanager
@@ -2476,7 +2635,7 @@ Path('/workspace/.native-remind-report').write_text(json.dumps({
 """
 
 
-def test_native_child_waits_at_its_turn_end_and_delivers_the_grandchild_result(
+def test_native_summoner_receives_a_child_question_and_end_through_its_session_watch(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   import ride.bro_worker as ride_spawn
@@ -2536,8 +2695,10 @@ def test_native_child_waits_at_its_turn_end_and_delivers_the_grandchild_result(
   assert code == 0
   outcome = json.loads(report.read_text())
   delivered = json.loads(outcome['answer'])
-  assert delivered['answer'] == 'grandchild result'
+  assert delivered['answer'] == 'approved'
+  assert any('asks approve the grandchild?' in text for text in delivered['notices'])
   assert any('summon ended ok' in text for text in delivered['notices'])
+  assert all('watch' not in action for action in delivered['actions'])
   assert all('turn ended with work still live' not in text for text in delivered['notices'])
   assert env.live_containers() == []
 

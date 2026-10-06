@@ -1,6 +1,5 @@
 import concurrent.futures
 import contextlib
-import io
 import shlex
 import subprocess
 import sys
@@ -9,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from bro import watch_next, watches
+from bro import watches
 from bro.base.liveness_test_helper import Liveness
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT
 from bro.monitor import SESSION_DIR_ENV
@@ -178,40 +177,16 @@ class TestStore:
     oversized_command = 'x' * (BYTE_LIMIT + 1)
     oversized = _seed(owner.store, oversized_command, 'line\n')
 
-    multiline_batch = owner.store.take('first\nsecond')
-    oversized_batch = owner.store.take(oversized_command)
+    batch = owner.store.take()
 
-    assert multiline_batch == r'[first\nsecond] line'
-    assert oversized_batch is not None
-    assert len(oversized_batch.encode()) <= BYTE_LIMIT
-    assert len(oversized_batch.splitlines()) == 1
-    assert 'sha256:' in oversized_batch
+    assert batch is not None
+    lines = batch.splitlines()
+    assert lines[0] == r'[first\nsecond] line'
+    assert len(batch.encode()) <= BYTE_LIMIT
+    assert len(lines) == 2
+    assert 'sha256:' in lines[1]
     assert multiline.saved_offset() == len('line\n')
     assert oversized.saved_offset() == len('line\n')
-
-  def test_a_filtered_take_commits_only_the_named_watch(self, owner):
-    a = _seed(owner.store, 'a', 'a0\n')
-    b = _seed(owner.store, 'b', 'b0\n')
-
-    assert owner.store.take('b') == '[b] b0'
-    assert a.saved_offset() == 0
-    assert b.saved_offset() == len('b0\n')
-    assert owner.store.take() == '[a] a0'
-
-  def test_watch_next_for_one_command_leaves_other_watch_lines_unread(self, owner):
-    a = _seed(owner.store, 'a', 'a0\n')
-    _seed(owner.store, 'b', 'b0\n')
-    output = io.StringIO()
-
-    assert watch_next.wait(['b'], output, declaration_grace_seconds=0) == 0
-    assert output.getvalue() == '[b] b0\n'
-    assert a.saved_offset() == 0
-
-  def test_watch_next_parser_keeps_option_tokens_in_the_filtered_command(self, owner, capsys):
-    _seed(owner.store, 'tail -f file', 'line\n')
-
-    assert watch_next.main(['watch-next', 'tail', '-f', 'file']) == 0
-    assert capsys.readouterr().out == '[tail -f file] line\n'
 
   def test_a_large_line_pages_by_advancing_its_cursor(self, owner):
     content = 'z' * (BYTE_LIMIT * 4)

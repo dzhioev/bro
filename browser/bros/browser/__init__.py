@@ -42,7 +42,8 @@ Open with a profile or an `allow` list only when the request names one.
 
 ## Decisions
 
-When the quest permits a question, ask the summoner with `bro::quest_ask` on `self` without waiting, then read the answer from the quest watch.
+When the quest permits a question, ask the summoner with `bro::quest_ask` on `self`;
+the reply arrives through the session watch.
 In a session a human drives directly, ask in the conversation.
 Only when unattended with no way to ask, stop and `bro::raise` with the decision needed.
 

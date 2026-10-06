@@ -316,12 +316,9 @@ class Store:
       result.append(Watch(command_file.read_text().rstrip('\n'), self.directory, stem))
     return result
 
-  def declared(self, command: Optional[str] = None) -> list[Watch]:
+  def declared(self) -> list[Watch]:
     with self._locked():
-      if command is None:
-        return self._declared_locked()
-      watch = self._watch(command)
-      return [watch] if watch.command_file.exists() else []
+      return self._declared_locked()
 
   def has_pending_lines(self) -> bool:
     """Whether any declared watch has a complete line past its committed cursor."""
@@ -615,7 +612,7 @@ class Store:
       for candidate in ordered[watch_index + 1 :]
     )
 
-  def take(self, command: Optional[str] = None) -> Optional[str]:
+  def take(self) -> Optional[str]:
     """Commit and return the next bounded, fair batch, or None when no complete line waits."""
     marker_bytes = len(f'{_PENDING_MARKER}\n'.encode())
     byte_budget = BYTE_LIMIT - marker_bytes
@@ -626,11 +623,7 @@ class Store:
     last_served_watch: Optional[Watch] = None
 
     with self._locked():
-      if command is None:
-        ordered = self._ordered_locked()
-      else:
-        watch = self._watch(command)
-        ordered = [watch] if watch.command_file.exists() else []
+      ordered = self._ordered_locked()
       for watch_index, watch in enumerate(ordered):
         cursor = Cursor.read(watch.offset_file)
         while True:
@@ -690,8 +683,7 @@ class Store:
           break
 
       if cut_watch is not None:
-        if command is None:
-          (self.directory / _TURN_FILENAME).write_text(f'{cut_watch.slug}\n')
+        (self.directory / _TURN_FILENAME).write_text(f'{cut_watch.slug}\n')
         pieces.append(f'{_PENDING_MARKER}\n')
 
     if len(pieces) == 0:
@@ -796,15 +788,6 @@ def publish_journal_head(head: int) -> None:
   staging.write_text(f'{head}\n')
   os.replace(staging, path)
   _signal_journal_change(Path(raw_wake))
-
-
-def declared(command: Optional[list[str]] = None) -> list[Watch]:
-  value = shlex.join(command) if command is not None else None
-  return session_store().declared(value)
-
-
-def take() -> Optional[str]:
-  return session_store().take()
 
 
 def session_watch_admitted(

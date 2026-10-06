@@ -5,7 +5,7 @@ Five loading conventions:
 auto-inject into every bro + `ride solo|along` session (`shared/`);
 serve as a reference doc
 — injected into `ride solo|along` sessions or mounted as a `FileSource` tool (`*.md`);
-inject the session fragments at launch (`hold.md` composing `holds/`, plus `member.md`, `summoner.md`, and `summoned.md`);
+inject the session fragments at launch (`hold.md` composing `holds/`, plus `member.md`, `summoner.md`, `summoned.md`, and `turn_end.md`);
 splice into an opting-in text via `{{include}}` (`fragments/`);
 load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
@@ -78,7 +78,7 @@ Current reference docs:
 (`ride/ride/claude/system_prompt.py:session_append_prompt`, `bro/bro.py:BaseBro.system_prompt_for`).
 Those callers pass `bro.summon.talk()` as the `#talk` fact for the summoned contract;
 unset stays unpublished and empty means the run's quest is mute.
-It is the joined-party warning when the run is a member, the summoner’s watch when the run may summon, the summoned-delivery contract when the run is one another session is waiting on, then the hold fragment
+It is the joined-party warning when the run is a member, the summoner’s watch when the run may summon, the summoned-delivery contract when another session is waiting on it, their one shared turn-end contract, then the hold fragment
 — last, where instruction recency is strongest.
 
 ### Party-member contract
@@ -88,12 +88,10 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 
 ### Summoner contract
 
-`summoner.md` (top level) has a session that may summon keep the quest watch, so every summon's lifecycle and chat remains observable:
-it splices `fragments/watch.md`, the per-harness mechanics of keeping a command's lines in view, which the `watch` spell of the concrete-Bro family splices too.
+`summoner.md` (top level) tells a session that may summon about the runtime-owned session watch, so every summon's lifecycle and chat remains observable without a model-started command.
 It renders only for a run whose `launch.bro.bros` set (`bro.summon.effective_may_summon()`) is non-empty.
-The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and how a one-shot run ends on its surface:
-native ends when a turn ends with nothing running and nothing in flight and gives one notice otherwise,
-and managed Claude ends at a turn end with no background task running, so it stops the watch once every summon has ended.
+The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and wait by ending a turn.
+The concrete-Bro family's `watch` spell separately starts a persona-admitted command through `bro::watch` and stops it through `bro::unwatch`.
 
 ### Summoned contract
 
@@ -101,8 +99,12 @@ and managed Claude ends at a turn end with no background task running, so it sto
 It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-neutrally
 — the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
 Its `#talk` branches admit only the quest's live moves:
-a speaking summoner reaches the child through the same `fragments/watch.md` mechanics on `quest watch`.
-`worker.say` enables progress, `worker.question` uses the surface's non-blocking watch or bounded consult, and a child without that right raises instead of asking.
+a speaking summoner reaches the child through the runtime-owned session watch.
+`worker.say` enables progress, `worker.question` asks once and receives the reply through the watch, and a child without that right raises instead of asking.
+
+### One-shot turn-end contract
+
+`turn_end.md` is the one shared end-of-turn contract appended when either the summoner or summoned contract applies.
 
 ### Hold text
 
