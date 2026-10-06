@@ -20,6 +20,7 @@ from ride.claude.harness import CLAUDE, llm_spec
 from ride.claude.mcp import MCPEndpoint, http_mcp_config
 from ride.claude.statusline import REFRESH_SECONDS, statusline_command
 from ride.claude.system_prompt import session_append_prompt
+from ride.claude.waiter_state import WAITER_EVENTS, WAITER_MARK
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
@@ -57,36 +58,23 @@ def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
   }
 
 
-def _stop_guard_hooks() -> dict:
-  """the `hooks` settings block holding a one-shot session's turn end to its missions."""
-  return {
-    'Stop': [
-      {
-        'hooks': [
-          {
-            'type': 'command',
-            'command': _settings_command('ride.claude.stop_guard'),
-          }
-        ]
-      }
-    ]
-  }
+WAITER_TIMEOUT_SECONDS = 24 * 60 * 60
 
 
-def watch_delivery_hooks() -> dict:
-  """the `hooks` settings block attaching a finished `watch-next`'s lines to its notification."""
-  return {
-    'UserPromptSubmit': [
-      {
-        'hooks': [
-          {
-            'type': 'command',
-            'command': _settings_command('ride.claude.watch_delivery'),
-          }
-        ]
-      }
-    ]
+def watch_waiter_hooks() -> dict:
+  """the `hooks` settings block waking the session with its watches' lines."""
+  waiter_command = _settings_command('ride.claude.watch_waiter', str(WAITER_TIMEOUT_SECONDS))
+  waiter = {
+    'type': 'command',
+    # the mark precedes the interpreter, so a waiter that fails to start
+    # reports as the waiter too
+    'command': f'echo {shlex.quote(WAITER_MARK)}; exec {waiter_command}',
+    'asyncRewake': True,
+    'rewakeSummary': 'watch lines',
+    'rewakeMessage': "New lines from this session's watches:",
+    'timeout': WAITER_TIMEOUT_SECONDS,
   }
+  return {event: [{'hooks': [waiter]}] for event in WAITER_EVENTS}
 
 
 @dataclass(frozen=True)
@@ -101,7 +89,8 @@ class ClaudeLaunch:
 
 
 # print mode over stream-json: the prompt travels as the first user message
-# rather than in the argv
+# rather than in the argv, and the stream carries the hook events
+# `ride.claude.interrupt.run_streaming` reads a waiter's exits off
 STREAM_JSON_ARGS = (
   '-p',
   '--input-format',
@@ -109,6 +98,7 @@ STREAM_JSON_ARGS = (
   '--output-format',
   'stream-json',
   '--verbose',
+  '--include-hook-events',
 )
 
 # claude's built-in attribution, all off — an empty string is its "omit" value
@@ -151,11 +141,9 @@ def build_claude_launch(
     namespaces = list(dict.fromkeys(server.namespace for server in servers))
   blocked_tool_names = bro.blocked_tool_names(CLAUDE)
   narrowed_tool_commands = bro.narrowed_tool_commands(CLAUDE)
-  hooks = watch_delivery_hooks()
+  hooks = watch_waiter_hooks()
   if len(narrowed_tool_commands) > 0:
     hooks.update(_tool_gate_hooks(narrowed_tool_commands))
-  if spec.solo:
-    hooks.update(_stop_guard_hooks())
   settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   argv += [
