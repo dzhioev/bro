@@ -297,7 +297,10 @@ the tool fold and the persona declarations wait for #754's design and land toget
    `revoke(...)` withholds the keys of the entries it wraps, whatever their level or subset, as in `revoke(delegation())`, `revoke(mount(brog_mcp.toolset))`, or `revoke(cli('bro list'))`;
    a descendant may grant them again:
    the nearest declaration of each key applies, a revoke included.
-   The slice's tests cover each reduction and each refused pair, narrowing, a revoke and a regrant, conditional grants and revokes over inherited entries, a subclass replacing one `cli` entry while keeping its sibling, and one key declared by two bases of a class that has several.
+   The slice's tests cover each reduction and each refused pair;
+   narrowing, a revoke and a regrant, and conditional grants and revokes over inherited entries;
+   a subclass replacing one `cli` entry while keeping its sibling;
+   and one key declared by two bases of a class that has several.
    `block`, `serve`, `allow_commands`, `claude.block`, and every `when(harness == …)` entry go, since nothing is on until declared.
    The base `bro` persona declares no group, so personas grant what they use rather than revoke what `Bro` grants, and the bare `bro` persona keeps only the loop tools on Claude.
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
