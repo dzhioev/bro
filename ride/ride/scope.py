@@ -25,9 +25,9 @@ from ride.repository import Repository, attachment_identities, open_repository
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
+  from bro.harness import Harness
   from bro.llm.llm import LLMSpec
-  from bro.mcp import Harness
-  from ride.harness import Harness as Driver
+  from ride.harness import SessionHarness
 
 _RECORDING_CREDENTIAL = 'trails'
 _LAUNCH_BRO = ':launch.bro'
@@ -63,14 +63,6 @@ class ScopeRecipe:
   llm_key: bool
 
 
-BRO_RUN_RECIPE = ScopeRecipe(
-  name='bro-run',
-  harness='bro',
-  auth_secret=None,
-  llm_key=True,
-)
-
-
 def bind_launch_credentials(
   attachment: Optional[str], bro_name: str
 ) -> host_config.CredentialSelection:
@@ -93,7 +85,7 @@ def bind_launch_llm(attachment: Optional[str], bro_name: str, llm: Optional[str]
 
 
 def launch_llm_spec(
-  driver: 'Driver', attachment: Optional[str], bro_name: str, llm: Optional[str]
+  driver: 'SessionHarness', attachment: Optional[str], bro_name: str, llm: Optional[str]
 ) -> 'LLMSpec':
   """the recipe a launch as `bro_name` under `driver` runs: `llm` settled over
   the host's per-bro default (`bind_launch_llm`) and resolved within the driver.

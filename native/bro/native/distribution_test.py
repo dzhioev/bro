@@ -26,6 +26,7 @@ _NATIVE_DOMAIN = {
   'bro/launch/call_tui.py',
   'bro/launch/resume.py',
   'bro/launch/run.py',
+  'bro/native/harness.py',
   'bro/native/llm.py',
   'bro/native/llms/echo.py',
   'bro/native/llms/openai.py',
@@ -151,6 +152,13 @@ def test_native_distribution_owns_its_console_scripts(wheels):
   assert {'bro', 'bro.run', 'bro.native.llm'}.isdisjoint(core_scripts)
 
 
+def test_harnesses_register_from_their_own_distributions(wheels):
+  assert _entry_points(wheels['bro-native'])['bro.harnesses']['bro'] == ('bro.native.harness:BRO')
+  assert _entry_points(wheels['bro-ride'])['bro.harnesses']['claude'] == (
+    'ride.claude.harness:CLAUDE'
+  )
+
+
 def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   native_requirements = {
     _requirement_name(requirement)
@@ -159,6 +167,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   assert native_requirements == {
     'aiohttp',
     'bro',
+    'bro-ride',
     'humanize',
     'mcp',
     'openai',
@@ -199,6 +208,63 @@ def test_shared_namespaces_resolve_from_editable_source_roots():
     os.pathsep.join(
       str(_ROOT / directory) for directory in ('.', 'dev', 'native', 'oops', 'oops/cdk')
     )
+  )
+
+
+def test_core_and_ride_wheels_compose_a_claude_session_without_native(wheels, tmp_path):
+  venv = tmp_path / 'claude-only'
+  subprocess.run(
+    ['uv', 'venv', '--python', sys.executable, str(venv)], check=True, capture_output=True
+  )
+  subprocess.run(
+    [
+      'uv',
+      'pip',
+      'install',
+      '--python',
+      str(venv / 'bin' / 'python'),
+      str(wheels['bro']),
+      str(wheels['bro-ride']),
+    ],
+    check=True,
+    capture_output=True,
+  )
+  probe = (
+    'import sys; '
+    'from bro.harness import installed_harness_names; '
+    'from ride.claude.system_prompt import session_append_prompt; '
+    'assert installed_harness_names() == ("claude",); '
+    'assert "# Persona: bro" in session_append_prompt("unattended", "bro"); '
+    'assert "bro.native.harness" not in sys.modules'
+  )
+  subprocess.run([str(venv / 'bin' / 'python'), '-c', probe], check=True, capture_output=True)
+
+
+def test_bundled_ride_checks_native_without_the_runtime_on_path(wheels, tmp_path):
+  venv = tmp_path / 'native-runtime'
+  subprocess.run(
+    ['uv', 'venv', '--python', sys.executable, str(venv)], check=True, capture_output=True
+  )
+  subprocess.run(
+    [
+      'uv',
+      'pip',
+      'install',
+      '--python',
+      str(venv / 'bin' / 'python'),
+      str(wheels['bro']),
+      str(wheels['bro-ride']),
+      str(wheels['bro-native']),
+    ],
+    check=True,
+    capture_output=True,
+  )
+
+  subprocess.run(
+    [str(venv / 'bin' / 'ride'), 'check-harness', 'bro'],
+    check=True,
+    capture_output=True,
+    env={**os.environ, 'PATH': '/usr/bin:/bin'},
   )
 
 

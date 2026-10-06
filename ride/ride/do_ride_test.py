@@ -189,7 +189,6 @@ class TestRunSession:
     declaration = MagicMock()
     monkeypatch.setattr(do_ride, 'create_bro', lambda _name: declaration)
     monkeypatch.setattr(do_ride, '_install_credential_hooks', lambda: None)
-    monkeypatch.setattr(do_ride, '_prepare_claude_state', lambda _run: None)
     harness = MagicMock()
     if harness_effect is None:
       harness.run_session.return_value = harness_code
@@ -284,17 +283,12 @@ class TestClaudeState:
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
     monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
     with (
-      patch('ride.claude.claude_config.provision_unboxed_claude_dir') as provision,
-      patch('ride.claude.claude_config.seed_session_plugins') as seed,
+      patch('ride.claude.harness.provision_unboxed_claude_dir') as provision,
+      patch('ride.claude.harness.seed_session_plugins') as seed,
     ):
-      do_ride._prepare_claude_state(MagicMock(harness='claude'))
+      get_harness('claude').prepare_session(MagicMock(name='w'))
     provision.assert_not_called()
     seed.assert_called_once_with(config, container=True)
-
-  def test_non_claude_harness_does_nothing(self):
-    with patch('ride.claude.claude_config.seed_session_plugins') as seed:
-      do_ride._prepare_claude_state(MagicMock(harness='bro'))
-    seed.assert_not_called()
 
 
 class TestRequestedExitStatus:

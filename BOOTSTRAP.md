@@ -204,7 +204,8 @@ Fetch and read these paths before using their contracts:
 - `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Session permissions and credentials**;
 - `bro/reference/dive_in.md`;
 - `ride/ride/dive_in.py`;
-- `ride/ride/bro.py`;
+- `bro/harness/__init__.py` and `ride/ride/harness.py`;
+- `native/bro/native/harness.py` when the project installs `bro-native`;
 - `bro/setup/AGENTS.md`;
 - `bro/base/host_config.py`;
 - `bro/brog/system.py`;

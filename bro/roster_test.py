@@ -17,7 +17,7 @@ from bro.bro import BaseBro
 from bro.inbox import Inbox
 from bro.jobs import Registry
 from bro.llm.mcp import MCPServer, Tool
-from bro.mcp import Harness
+from bro.mcp import HarnessLike
 from bro.registry import create_bro, declared_specs
 
 
@@ -30,7 +30,7 @@ class _NoRun:
   registry = Registry(inbox)
 
 
-def _servers(bro: BaseBro, *, harness: Harness = 'bro') -> list[MCPServer]:
+def _servers(bro: BaseBro, *, harness: HarnessLike = 'bro') -> list[MCPServer]:
   return bro.assemble(harness=harness, include_raise=True, live_run=_NoRun())
 
 

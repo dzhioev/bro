@@ -1,20 +1,21 @@
 import json
-import shutil
+import subprocess
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
-from bro.base import log
+from bro.base import log, spawn
+from bro.harness import Harness
 from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
-from ride.do_ride import SessionRun, run_agent
 from ride.harness import ContainerExtras
-from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
+from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
+  from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
 
@@ -42,11 +43,11 @@ def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[
   return arguments
 
 
-class BroHarness:
+class BroHarness(Harness):
   name = 'bro'
 
   def scope_recipe(self) -> ScopeRecipe:
-    return BRO_RUN_RECIPE
+    return _BRO_RUN_RECIPE
 
   def resolve_llm(self, value: str | None, bro_name: str) -> NativeLLMSpec:
     from bro.registry import get_class
@@ -73,11 +74,19 @@ class BroHarness:
     spec = load_resume_spec(workspace)
     return None if spec is None else spec.subject
 
+  def prepare_session(self, run: 'SessionRun') -> None:
+    del run
+
+  def check_runtime(self) -> None:
+    subprocess.run([spawn.console_script('bro'), '--help'], check=True)
+
   def run_session(self, spec: 'SessionSpec | SessionRun') -> int:
-    if shutil.which('bro') is None:
-      log.error(
-        'the bro harness requires the bro-native distribution; install bro-native in this workspace'
-      )
+    from ride.do_ride import run_agent
+
+    try:
+      executable = spawn.console_script('bro')
+    except FileNotFoundError as error:
+      log.error('%s', error)
       return 1
     resume_trail: Optional[str] = None
     if spec.resume:
@@ -87,7 +96,13 @@ class BroHarness:
         log.error('no bro harness trail recorded for workspace %s', spec.name)
         return 1
     verb = 'run' if spec.solo else 'chat'
-    argv = ['bro', verb, spec.bro, *_session_arguments(spec, resume_trail), *spec.arguments]
+    argv = [
+      executable,
+      verb,
+      spec.bro,
+      *_session_arguments(spec, resume_trail),
+      *spec.arguments,
+    ]
     return run_agent(argv)
 
   def container_extras(
@@ -108,3 +123,9 @@ class BroHarness:
 
 
 BRO = BroHarness()
+_BRO_RUN_RECIPE = ScopeRecipe(
+  name='bro-run',
+  harness=BRO,
+  auth_secret=None,
+  llm_key=True,
+)

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, get_args
 
 from bro.base import condition, credentials, template
 from bro.base.condition import var
+from bro.harness import Harness, harness_name, name_of
 
 if TYPE_CHECKING:
   from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
@@ -28,14 +29,7 @@ def validate_segment(kind: str, value: str) -> None:
     )
 
 
-# the agent harness a rendered text is consumed under — the loop that drives the
-# work, which decides how the bro's tools are served and how the canonical
-# `namespace::tool` names are spelled: `bro` is the bro-native LLM loop, whose
-# tools run in-process and list as `namespace__tool`; `claude` is Claude Code
-# with its built-in tools, where the bro's additions are mounted as MCP servers
-# and list as `mcp__namespace__tool`.
-Harness = Literal['bro', 'claude']
-_HARNESSES = frozenset(get_args(Harness))
+type HarnessLike = Harness | str
 
 # the session's hold — its user-involvement level, ordered from no human
 # channel to human-driven. unlike the other facts it is supplied only when
@@ -54,7 +48,7 @@ creds = var('creds')
 def render_text(
   text: str,
   *,
-  harness: Optional[Harness] = None,
+  harness: Optional[HarnessLike] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
   talk: Optional[Iterable[str]] = None,
@@ -101,7 +95,7 @@ def _load_prompt(name: str) -> str:
 def select[T](
   entries: Iterable[condition.Entry[T]],
   *,
-  harness: Optional[Harness] = None,
+  harness: Optional[HarnessLike] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
   talk: Optional[Iterable[str]] = None,
@@ -145,7 +139,7 @@ def _answers_to(granted: frozenset[str]) -> Callable[[str], bool]:
 
 def surface_variables(
   *,
-  harness: Optional[Harness] = None,
+  harness: Optional[HarnessLike] = None,
   creds: Optional[Iterable[str]] = None,
   may_summon: Optional[Iterable[str]] = None,
   talk: Optional[Iterable[str]] = None,
@@ -156,9 +150,9 @@ def surface_variables(
   directly or merges them into a vocabulary of its own."""
   variables: dict[str, condition.StringVariable | condition.SetVariable | bool] = {}
   if harness is not None:
-    if harness not in _HARNESSES:
-      raise ValueError(f'unknown harness {harness!r}; known: {", ".join(sorted(_HARNESSES))}')
-    variables['harness'] = condition.StringVariable(harness, domain=_HARNESSES)
+    variables['harness'] = condition.StringVariable(
+      name_of(harness), literal_validator=harness_name
+    )
   if creds is not None:
     variables['creds'] = condition.SetVariable(credentials.available, universe=frozenset(creds))
   if may_summon is not None:

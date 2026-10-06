@@ -1606,8 +1606,13 @@ class TestBoxedPartyJoin:
 
 _SUMMON_CREDENTIAL_SITECUSTOMIZE = """
 from datetime import UTC, datetime, timedelta
+from bro.base import spawn
 from bro.extra.github import app
 
+original_console_script = spawn.console_script
+spawn.console_script = lambda name: (
+  '/tmp/e2e-bin/bro' if name == 'bro' else original_console_script(name)
+)
 app.mint_installation_token = lambda **kwargs: app.InstallationToken(
   'e2e-minted', datetime.now(UTC) + timedelta(hours=1)
 )

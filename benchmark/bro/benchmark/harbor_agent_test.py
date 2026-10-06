@@ -54,6 +54,13 @@ def _compose(monkeypatch):
     return _REAL_SUBPROCESS_RUN(command, **kwargs)
 
   monkeypatch.setattr(subprocess, 'run', run)
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(
+      harnesses=('bro', 'claude'), identity='sha256:bundle', interpreter=Path(sys.executable)
+    ),
+  )
   harbor_agent.docker_compose_missing.cache_clear()
   yield
   harbor_agent.docker_compose_missing.cache_clear()
@@ -173,10 +180,14 @@ def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
     agent(tmp_path, bro='terminal', model_name='anthropic/opus')
 
 
-def test_a_harness_is_one_ride_knows():
+def test_a_harness_is_registered_in_the_bundle(monkeypatch):
+  monkeypatch.setattr(
+    harbor_agent, 'benchmark_bundle', lambda: SimpleNamespace(harnesses=('claude',))
+  )
+
   assert harness_name('claude') == 'claude'
-  with pytest.raises(ValueError, match='codex'):
-    harness_name('codex')
+  with pytest.raises(ValueError, match='installed harnesses: claude'):
+    harness_name('bro')
 
 
 def test_a_bad_harness_fails_before_any_trial_runs(tmp_path):
@@ -335,7 +346,11 @@ def test_a_credential_the_bundle_cannot_resolve_fails_before_the_container(
 
 def test_the_recorded_identity_names_the_bro_harness_and_bundle_under_test(monkeypatch, tmp_path):
   identity = f'sha256:{"1" * 64}'
-  monkeypatch.setattr(harbor_agent, 'benchmark_bundle', lambda: SimpleNamespace(identity=identity))
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(identity=identity, harnesses=('bro', 'claude')),
+  )
   dev = agent(tmp_path, bro='dev', model_name='openai/gpt-5.6-terra').to_agent_info()
   terminal_agent = agent(tmp_path, bro='terminal', model_name='openai/gpt-5.6-terra')
   terminal = terminal_agent.to_agent_info()
@@ -466,9 +481,11 @@ async def test_the_install_uploads_both_trees_and_proves_the_bro(monkeypatch, tm
   bundle = tmp_path / 'bundle'
   interpreter = bundle / 'venv' / 'bin' / 'python3'
   _write_interpreter(interpreter)
-  monkeypatch.setattr(harbor_agent, 'workspace_root', lambda: tmp_path)
-  monkeypatch.setattr(harbor_agent, 'default_root', lambda root: bundle)
-  monkeypatch.setattr(harbor_agent, 'built', lambda root: harbor_agent.Bundle(root))
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(root=bundle, interpreter=interpreter, harnesses=('bro', 'claude')),
+  )
   environment = FakeEnvironment()
 
   await agent(tmp_path, bro='terminal', llm_credential=INSTANCE).install(
@@ -476,7 +493,8 @@ async def test_the_install_uploads_both_trees_and_proves_the_bro(monkeypatch, tm
   )
 
   assert [target for _, target in environment.uploads] == [str(BUNDLE.root), str(STORE_DIR)]
-  assert environment.commands[-1].endswith(f'{BUNDLE.script("bro")} show terminal')
+  assert environment.commands[-2].endswith(f'{BUNDLE.script("bro")} show terminal')
+  assert environment.commands[-1].endswith(f'{BUNDLE.script("ride")} check-harness bro')
 
 
 async def test_an_incompatible_bundle_fails_before_the_environment_is_touched(
@@ -488,7 +506,9 @@ async def test_an_incompatible_bundle_fails_before_the_environment_is_touched(
   monkeypatch.setattr(
     harbor_agent,
     'benchmark_bundle',
-    lambda: SimpleNamespace(root=tmp_path / 'bundle', interpreter=interpreter),
+    lambda: SimpleNamespace(
+      root=tmp_path / 'bundle', interpreter=interpreter, harnesses=('bro', 'claude')
+    ),
   )
   environment = FakeEnvironment()
 
@@ -501,10 +521,14 @@ async def test_an_incompatible_bundle_fails_before_the_environment_is_touched(
   assert environment.uploads == []
 
 
-async def test_the_install_proves_the_bundled_claude_on_its_harness(monkeypatch, tmp_path, store):
+async def test_the_install_checks_the_selected_harness_runtime(monkeypatch, tmp_path, store):
   interpreter = tmp_path / 'venv' / 'bin' / 'python3'
   _write_interpreter(interpreter)
-  monkeypatch.setattr(harbor_agent, 'benchmark_bundle', lambda: harbor_agent.Bundle(tmp_path))
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(root=tmp_path, interpreter=interpreter, harnesses=('bro', 'claude')),
+  )
   environment = FakeEnvironment()
 
   await agent(tmp_path, bro='terminal', harness='claude', llm_credential=INSTANCE).install(
@@ -512,7 +536,7 @@ async def test_the_install_proves_the_bundled_claude_on_its_harness(monkeypatch,
   )
 
   assert environment.commands[-2].endswith(f'{BUNDLE.script("bro")} show terminal')
-  assert environment.commands[-1].endswith(f'{BUNDLE.claude} --version')
+  assert environment.commands[-1].endswith(f'{BUNDLE.script("ride")} check-harness claude')
 
 
 async def test_a_cancelled_phase_reaps_the_ride_and_stays_cancelled(tmp_path):

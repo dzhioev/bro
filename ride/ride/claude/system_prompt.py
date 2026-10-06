@@ -49,6 +49,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   from bro import prompts, summon
   from bro.base import credentials
   from bro.registry import create_bro
+  from ride.claude.harness import CLAUDE
 
   bro = create_bro(bro_name)
   parts = [_load_base_prompts(), bro.persona]
@@ -57,14 +58,14 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
     parts.append(spell_instructions)
   rendered = mcp.render_text(
     '\n\n'.join(parts),
-    harness='claude',
+    harness=CLAUDE,
     creds=credentials.known_names(),
     may_summon=summon.effective_may_summon(),
     extra=bro.vocabulary(),
   )
   fragment = prompts.session_fragment(
     hold,
-    harness='claude',
+    harness=CLAUDE,
     creds=credentials.known_names(),
     talk=summon.talk(),
   )

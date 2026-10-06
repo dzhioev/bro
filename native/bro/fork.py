@@ -31,6 +31,7 @@ from typing import Any, Optional, cast
 import bro.native.llms.openai as native_openai
 from bro.llm.llm import LLMSpec, NativeLLMSpec
 from bro.llm.tracker import NullTracker, Tracker
+from bro.native.harness import BRO
 from bro.native.llm import LLM
 from bro.native.runner import Runner
 from bro.registry import create_bro
@@ -247,6 +248,7 @@ def fork(
   # This value is the complete recorded prompt, including its hold fragment;
   # pre-assigning it bypasses the runner's fresh-run fragment append.
   bro.system_prompt = effective_system_prompt
+  bro._system_prompt_override = effective_system_prompt
   effective_hold = hold if hold is not None else 'guided'
 
   runner = Runner(bro)
@@ -296,11 +298,11 @@ def _replace_hold_fragment(
   from bro.prompts import hold_fragment
 
   known_credentials = credentials.known_names()
-  recorded_fragment = hold_fragment(recorded_hold, harness='bro', creds=known_credentials)
+  recorded_fragment = hold_fragment(recorded_hold, harness=BRO, creds=known_credentials)
   suffix = f'\n\n{recorded_fragment}'
   if not system_prompt.endswith(suffix):
     raise ValueError('recorded system prompt does not end with its hold fragment')
-  resumed_fragment = hold_fragment(resumed_hold, harness='bro', creds=known_credentials)
+  resumed_fragment = hold_fragment(resumed_hold, harness=BRO, creds=known_credentials)
   return f'{system_prompt.removesuffix(suffix)}\n\n{resumed_fragment}'
 
 

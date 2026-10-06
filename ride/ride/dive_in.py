@@ -8,7 +8,7 @@ from typing import Optional
 
 import bro.brog.model as brog_model
 import bro.brog.system as brog_system
-from bro.base import log
+from bro.base import configs, log
 from bro.base.args import Parser
 from bro.launch.llm_flags import selection_from_args
 from bro.workspace.git import fetch_ref
@@ -126,7 +126,7 @@ def dive_in(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   bro: Optional[str] = None,
-  harness: str = 'claude',
+  harness: str = configs.DEFAULT_HARNESS,
   llm: Optional[str] = None,
   repo: Optional[Path] = None,
 ) -> int:

@@ -40,7 +40,7 @@ WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev', 'bro-ride')
 TARGET = ('linux', 'x86_64', 'glibc')
 # `TARGET`, as the Claude Code release manifest names it
 CLAUDE_CODE_PLATFORM = 'linux-x64'
-MANIFEST_FORMAT = 3
+MANIFEST_FORMAT = 4
 
 # a console script that finds its interpreter beside itself wherever the bundle
 # is copied: sh reads the second line as an `exec`, python as a string
@@ -81,23 +81,36 @@ def _load_manifest(path: Path) -> dict[str, object]:
     manifest = json.loads(path.read_text())
   except (OSError, json.JSONDecodeError) as error:
     raise ValueError(f'invalid bundle manifest at {path}: {error}') from error
-  if not isinstance(manifest, dict) or set(manifest) != {
+  if not isinstance(manifest, dict):
+    raise ValueError(f'invalid bundle manifest at {path}: expected an object')
+  if manifest.get('format') != MANIFEST_FORMAT:
+    raise ValueError(
+      f'bundle manifest at {path} uses an unsupported format; rebuild it with benchmark bundle'
+    )
+  if set(manifest) != {
     'format',
     'claude_code',
     'cpython',
+    'harnesses',
     'requirements',
     'source_commit',
     'target',
     'wheels',
   }:
     raise ValueError(f'invalid bundle manifest at {path}: unexpected fields')
+  harnesses = manifest['harnesses']
   target = manifest['target']
   wheels = manifest['wheels']
   if (
-    manifest['format'] != MANIFEST_FORMAT
-    or not _claude_code_valid(manifest['claude_code'])
+    not _claude_code_valid(manifest['claude_code'])
     or not isinstance(manifest['cpython'], str)
     or manifest['cpython'] == ''
+    or not isinstance(harnesses, list)
+    or len(harnesses) == 0
+    or not all(
+      isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9-]*', name) for name in harnesses
+    )
+    or harnesses != sorted(set(harnesses))
     or not isinstance(manifest['requirements'], str)
     or manifest['requirements'] == ''
     or not isinstance(manifest['source_commit'], str)
@@ -166,6 +179,12 @@ class Bundle:
   def source_commit(self) -> str:
     return str(_load_manifest(self.manifest)['source_commit'])
 
+  @property
+  def harnesses(self) -> tuple[str, ...]:
+    value = _load_manifest(self.manifest)['harnesses']
+    assert isinstance(value, list)
+    return tuple(str(name) for name in value)
+
   def missing(self) -> tuple[Path, ...]:
     parts = (
       self.interpreter,
@@ -187,12 +206,17 @@ def _file_digest(path: Path) -> str:
 
 
 def _bundle_manifest(
-  requirements: str, wheels: list[Path], source_commit: str, claude_code: dict[str, str]
+  requirements: str,
+  wheels: list[Path],
+  source_commit: str,
+  claude_code: dict[str, str],
+  harnesses: tuple[str, ...],
 ) -> dict[str, object]:
   return {
     'format': MANIFEST_FORMAT,
     'claude_code': claude_code,
     'cpython': CPYTHON_VERSION,
+    'harnesses': list(harnesses),
     'requirements': requirements,
     'source_commit': source_commit,
     'target': list(TARGET),
@@ -302,6 +326,17 @@ def _run(command: list[str]) -> None:
 def _capture(command: list[str]) -> str:
   log.verbose('%s', ' '.join(command))
   return spawn.run(command, capture_output=True, check=True, text=True).stdout
+
+
+def _installed_harnesses(bundle: Bundle) -> tuple[str, ...]:
+  script = (
+    'import json; from bro.harness import installed_harness_names; '
+    'print(json.dumps(installed_harness_names()))'
+  )
+  value = json.loads(_capture([str(bundle.interpreter), '-c', script]))
+  if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
+    raise ValueError('the bundled harness registry returned a malformed roster')
+  return tuple(value)
 
 
 def _source_commit(workspace: Path) -> str:
@@ -430,7 +465,9 @@ def build(workspace: Path, root: Path) -> Bundle:
     link_session_commands(bundle.root)
     claude_code = _install_claude_code(bundle)
     validate_materialized_runtime(bundle.root)
-    manifest = _bundle_manifest(requirements_text, wheels, source_commit, claude_code)
+    manifest = _bundle_manifest(
+      requirements_text, wheels, source_commit, claude_code, _installed_harnesses(bundle)
+    )
     bundle.manifest.write_bytes(_manifest_bytes(manifest) + b'\n')
   return built(root)
 
