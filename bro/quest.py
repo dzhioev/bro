@@ -19,7 +19,6 @@ broker implementation on pre-gate launch paths.
 
 import json
 import math
-import os
 import time
 from collections.abc import Generator
 from dataclasses import dataclass
@@ -54,7 +53,6 @@ resolve = mission_client.resolve
 caller_end = mission_client.caller_end
 trails_hint = mission_client.trails_hint
 call_ok = mission_client.call_ok
-_read_value = mission_client._read_value
 query_quest = mission_client.query_mission
 _poll_quest = mission_client._poll_mission
 wait_deadline = mission_client.wait_deadline
@@ -646,111 +644,22 @@ def _event_line(event: dict[str, Any], own: str) -> str:
   return _single_line(f'{head} ({_quest_clause(event, own)})')
 
 
-def _chat_entry_event(quest: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
-  quest_id = quest.get('id')
-  parent = quest.get('parent')
-  args = quest.get('args')
-  if not isinstance(quest_id, str) or not isinstance(parent, str) or not isinstance(args, dict):
-    raise QuestError('query returned a malformed quest for watch replay')
-  return {
-    'kind': quest.get('kind'),
-    'type': quest.get('type'),
-    'mission': quest_id,
-    'parent': parent,
-    'args': args,
-    **entry,
-  }
-
-
-def _arm_replay(client: 'Client', own: str, head: int) -> list[str]:
-  record = query_quest(client, own)
-  events = [
-    _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
-  ]
-  for quest in _query_listing(client):
-    state = quest.get('state')
-    if state in ('ended', 'denied', 'evicted'):
-      continue
-    if state not in ('accepted', 'started'):
-      raise QuestError(f'quest listing returned an unknown state: {state!r}')
-    pending = quest.get('pending')
-    if not isinstance(pending, list) or not all(isinstance(entry, dict) for entry in pending):
-      raise QuestError('quest listing returned malformed pending questions')
-    events.extend(_chat_entry_event(quest, entry) for entry in pending)
-
-  replay: dict[int, str] = {}
-  for event in events:
-    sequence = event.get('seq')
-    if not isinstance(sequence, int) or isinstance(sequence, bool):
-      raise QuestError('watch replay entry carried a malformed sequence')
-    if sequence > head:
-      continue
-    line = _chat_event_line(event, own)
-    if line is None:
-      continue
-    marked = _single_line(f'before the watch: {line}')
-    previous = replay.setdefault(sequence, marked)
-    if previous != marked:
-      raise QuestError(f'watch replay carried conflicting entries at sequence {sequence}')
-  return [replay[sequence] for sequence in sorted(replay)]
-
-
 def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
-  """Yield retained quest chat at arm, then ordered launch transitions."""
-  if wait_seconds <= 0:
-    raise QuestError('events wait must be positive')
-  from bro.broker.dispatcher import EVENTS
-  from bro.broker.environment import BROKER_MISSION
-
-  with open_client() as client:
-    own = os.environ.get(BROKER_MISSION)
-    if own is None:
-      raise QuestError(
-        f'broker channel present but {BROKER_MISSION} unset; '
-        'the launch did not name the quest this session answers'
-      )
-    baseline = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
-    head = baseline.get('head')
-    if not isinstance(head, int) or isinstance(head, bool):
-      raise QuestError('events arm returned a malformed head')
-    cursor = head
-    yield from _arm_replay(client, own, head)
-    while True:
-      try:
-        value = _read_value(
-          client,
-          EVENTS,
-          {'after': cursor, 'wait': wait_seconds},
-          timeout=max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT),
-        )
-      except QuestError as error:
-        if not str(error).startswith('events gap:'):
-          raise
-        baseline = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
-        head = baseline.get('head')
-        if not isinstance(head, int) or isinstance(head, bool):
-          raise QuestError('events re-arm returned a malformed head') from error
-        cursor = head
-        yield _single_line(f'quest watch gap: {error}; re-armed at {head}')
-        yield from _arm_replay(client, own, head)
-        continue
-      events = value.get('events')
-      if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
-        raise QuestError('events read returned malformed records')
-      for event in events:
-        sequence = event.get('seq')
-        if not isinstance(sequence, int) or isinstance(sequence, bool):
-          raise QuestError('events read returned a malformed sequence')
-        cursor = max(cursor, sequence)
-        if event.get('kind') != LAUNCH:
-          continue
-        if event.get('type') != BRO:
-          continue
-        chat_line = _chat_event_line(event, own)
-        if chat_line is not None:
-          yield chat_line
-        elif event.get('transition') not in ('message', 'refused', 'listening'):
-          yield _event_line(event, own)
+  """Yield the bro-quest view of the shared ordered mission stream."""
+  own = own_quest()
+  for item in mission_client.watch_stream(BRO, wait_seconds, include_own=True, strict_parent=True):
+    if isinstance(item, mission_client.WatchGap):
+      yield _single_line(f'quest watch gap: {item.reason}; re-armed at {item.head}')
+      continue
+    event = item.event
+    chat_line = _chat_event_line(event, own)
+    if chat_line is not None:
+      line = chat_line
+    elif event.get('transition') in ('message', 'refused', 'listening'):
+      continue
+    else:
+      line = _event_line(event, own)
+    yield _single_line(f'before the watch: {line}') if item.replayed else line
 
 
 # --- CLI ------------------------------------------------------------------------
