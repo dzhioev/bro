@@ -38,7 +38,7 @@ Where the choice is consent or pay, read the content under the overlay and ask b
 Report a CAPTCHA, bot check, or login wall instead of working around it, naming the profiles the session says it may pass.
 Upload only files the summoner shared for that purpose, naming each one.
 Never open `file://`.
-Open with a profile only when the request names it, and limit `allow` to the task's sites.
+Open with a profile or an `allow` list only when the request names one.
 
 ## Decisions
 

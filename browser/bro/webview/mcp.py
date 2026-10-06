@@ -86,15 +86,22 @@ def _launch(record: WebviewRecord) -> OpenedWebview:
 
 @toolset.tool(
   'open a browser webview and wait until it is ready. cookies names an available browser '
-  'profile; vnc requests a human-visible noVNC URL; allow and block are advisory origin lists; '
-  'share exposes artifact refs from startup.'
+  'profile; vnc requests a human-visible noVNC URL; allow limits the page to the listed origins '
+  'and block refuses the listed ones, so a refused frame, form submission, script, or API call '
+  'fails with net::ERR_BLOCKED_BY_CLIENT while top-level redirects pass, and neither is a '
+  'security boundary; share exposes artifact refs from startup.'
 )
 def open(
   context: Context[Webviews],
   cookies: Annotated[Optional[str], Field(description='cookies profile instance')] = None,
   vnc: Annotated[bool, Field(description='publish a noVNC view')] = False,
-  allow: Annotated[Optional[list[str]], Field(description='advisory allowed origins')] = None,
-  block: Annotated[Optional[list[str]], Field(description='advisory blocked origins')] = None,
+  allow: Annotated[
+    Optional[list[str]],
+    Field(description='the only origins the page may request, as https://host; omit for all'),
+  ] = None,
+  block: Annotated[
+    Optional[list[str]], Field(description='origins the page may not request, as https://host')
+  ] = None,
   share: Annotated[
     Optional[list[str]], Field(description='artifact refs to expose from startup')
   ] = None,
