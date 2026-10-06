@@ -13,8 +13,10 @@ Claude Code's own harness themed with the session's bro.
   It contributes the `persona:` resolver through `bro.mcp.targets`.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
   pinned absolute binary selection per isolation, resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
-- `interrupt.py` — how a Claude process is ended so its in-flight turn reaches the transcript:
-  SIGINT for print mode, and for a TUI the interrupt keypress on a runner-owned pty that proxies the session's terminal.
+- `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its in-flight turn reaches the transcript.
+  Print mode runs over stream-json as the harness's `bro.turn_end` port, settling each turn end and ended by SIGINT;
+  a TUI runs on a runner-owned pty that proxies the session's terminal, ended by the interrupt keypress.
+  Either stop stands the watch waiter down first.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config, the append prompt, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
 - `claude_auth.py` — the setup-token environment.
@@ -31,15 +33,13 @@ Claude Code's own harness themed with the session's bro.
 - `statusline.py` — the session-local projector process:
   it renders recording and every owned mission's state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
-- `watch_guard.py`, `stop_guard.py`, and `watch_delivery.py`
+- `watch_guard.py` and `watch_waiter.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`);
   the watch guard applies a folded finite shell roster to both Bash and Monitor calls,
-  and the stop guard is a solo session's `Stop` hook:
-  the runner ends a solo session at a turn end with no background task running and only a task's end starts a turn,
-  so it blocks a turn end once per turn when a watch runs with no `watch-next` waiting, when missions are in flight with no running task, or when tasks run with neither a mission in flight nor a wait,
-  reading the running tasks off the hook input's undocumented `background_tasks` and naming quest or mission routes for the worker types present;
-  the watch delivery is every session's `UserPromptSubmit` hook, attaching a finished `watch-next`'s lines to the task notification that wakes the model.
-- `watch_commands.py` — the patterns matching a shell command line that invokes `watch-run` or `watch-next`.
+  and the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch (`bro/reference/ride.md`, "Claude harness").
+- `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
+  the current waiter's registration, the count of rewakes waiters began, the stand-down mark, the stdout mark that attributes a waiter's hook events,
+  and the lock a waiter registers and takes a batch under and the runner settles a turn end under.
 
 ## Invariants
 

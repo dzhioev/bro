@@ -2,12 +2,14 @@ import os
 import signal
 import subprocess
 import time
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import ride.claude.runner as ride_runner
+from bro import watches
 from bro.llm.llms import claude_code
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import RUNTIME_ENV, SUMMONED_ENV
@@ -16,6 +18,7 @@ from ride.claude.fake_claude_test_helper import fake_claude_env
 from ride.claude.interrupt import StreamedRun
 from ride.claude.mcp import MCPEndpoint
 from ride.claude.shell_prefix import SHELL_PREFIX_ENV
+from ride.claude.waiter_state import WaiterState
 from ride.session_test import _spec
 
 _PINNED_CLAUDE = Path('/pinned/claude')
@@ -134,6 +137,25 @@ class TestSessionRun:
       (h.projects_dir / 'newer.jsonl').write_text('{}')
       assert ride_runner.run_session(_spec(resume=True, arguments=['--foo'])) == 0
       assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
+
+  def test_the_waiter_starts_afresh_and_is_stood_down_once_claude_exits(
+    self, monkeypatch, tmp_path
+  ):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      earlier = WaiterState.for_session()
+      earlier.reset()
+      earlier.stand_down()
+      stood_down_during_the_run = []
+
+      def _run(*_arguments) -> ride_runner.Run:
+        stood_down_during_the_run.append(WaiterState.for_session().stood_down())
+        return ride_runner.Run(0, stopped=False)
+
+      h.run_claude.side_effect = _run
+      assert ride_runner.run_session(_spec()) == 0
+      assert stood_down_during_the_run == [False]
+      assert WaiterState.for_session().stood_down()
 
   def test_resume_reuses_the_workspace_claude_temp_root(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -282,6 +304,16 @@ class TestSessionRun:
       assert h.run_claude.call_args.args[2]['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] == '1'
 
 
+@pytest.fixture
+def session_state(monkeypatch, tmp_path) -> Generator[Path]:
+  """a session state dir holding the session's watch store and waiter state."""
+  session = tmp_path / 'session'
+  monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
+  with watches.Owner.for_session():
+    WaiterState.for_session().reset()
+    yield session
+
+
 class _RecordingChannel:
   def __init__(self, events: list):
     self._events = events
@@ -298,7 +330,7 @@ class _RecordingChannel:
 
 class TestRunClaudeRootSolo:
   def test_clean_exit_reports_success_without_replacing_the_streamed_reply(
-    self, monkeypatch, tmp_path
+    self, monkeypatch, session_state
   ):
     events = []
 
@@ -307,9 +339,7 @@ class TestRunClaudeRootSolo:
       def from_env(cls):
         return _RecordingChannel(events)
 
-    session = tmp_path / 'session'
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
-    trail_pointer.write(session / trail_pointer.FILENAME, 't-root')
+    trail_pointer.write(session_state / trail_pointer.FILENAME, 't-root')
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     run_claude = MagicMock(return_value=StreamedRun(0, stopped=False, results=('hi',)))
     monkeypatch.setattr(ride_runner, 'run_streaming', run_claude)
@@ -327,7 +357,7 @@ class TestRunClaudeRootSolo:
       ('close',),
     ]
 
-  def test_zero_exit_stop_emits_no_terminal(self, monkeypatch, tmp_path):
+  def test_zero_exit_stop_emits_no_terminal(self, monkeypatch, session_state):
     events = []
 
     class FakeChannel:
@@ -359,12 +389,6 @@ class TestRunClaudeSummoned:
 
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     return events
-
-  @pytest.fixture
-  def session_state(self, monkeypatch, tmp_path) -> Path:
-    session = tmp_path / 'session'
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
-    return session
 
   def test_clean_exit_relays_the_reply_and_lifecycle(
     self, tmp_path, session_state, channel_events, capfd
@@ -448,7 +472,7 @@ class TestRunClaudeSummonedInteractive:
     monkeypatch.setattr(ride_runner, '_TRAIL_POLL_SECONDS', 0.05)
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-manual')
 
-    def _linger(*_arguments) -> ride_runner.Run:
+    def _linger(*_arguments, **_options) -> ride_runner.Run:
       deadline = time.monotonic() + 5
       while ('close',) not in channel_events:
         assert time.monotonic() < deadline, 'the trail watch never announced'
@@ -473,12 +497,6 @@ class TestRunClaudeSummonedInteractive:
 
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     return events
-
-  @pytest.fixture
-  def session_state(self, monkeypatch, tmp_path) -> Path:
-    session = tmp_path / 'session'
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(session))
-    return session
 
 
 class TestSoloSession:

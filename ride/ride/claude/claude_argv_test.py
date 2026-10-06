@@ -164,27 +164,22 @@ class TestRideSessionLaunch:
       'PreToolUse' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['hooks']
     )
 
-  def test_every_session_attaches_watch_lines_to_task_notifications(self):
+  def test_every_session_is_woken_by_the_watch_waiter_at_each_turn_end(self):
     for spec in (_spec(), _spec(solo=True, hold='unattended', prompt='go')):
-      (entry,) = _settings(_ride_session_launch(spec, claude_args=[]).argv)['hooks'][
-        'UserPromptSubmit'
-      ]
-      (hook,) = entry['hooks']
-      assert 'matcher' not in entry
-      assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.watch_delivery']
-
-  def test_a_solo_session_holds_its_turn_end_through_the_stop_guard(self):
-    argv = _ride_session_launch(
-      _spec(solo=True, hold='unattended', prompt='go'), claude_args=[]
-    ).argv
-
-    (entry,) = _settings(argv)['hooks']['Stop']
-    (hook,) = entry['hooks']
-    assert 'matcher' not in entry
-    assert shlex.split(hook['command']) == [sys.executable, '-m', 'ride.claude.stop_guard']
-
-  def test_an_interactive_session_carries_no_stop_guard(self):
-    assert 'Stop' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['hooks']
+      hooks = _settings(_ride_session_launch(spec, claude_args=[]).argv)['hooks']
+      assert 'UserPromptSubmit' not in hooks
+      for event in ('Stop', 'StopFailure'):
+        (entry,) = hooks[event]
+        (hook,) = entry['hooks']
+        assert 'matcher' not in entry
+        assert hook['asyncRewake'] is True
+        # the waiter's one argument is the bound claude ends it at
+        assert shlex.split(hook['command'])[-4:] == [
+          sys.executable,
+          '-m',
+          'ride.claude.watch_waiter',
+          str(hook['timeout']),
+        ]
 
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch):
     from bro.bro import BaseBro
@@ -210,7 +205,7 @@ class TestRideSessionLaunch:
 
     hooks = _settings(argv)['hooks']
     assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash']
-    assert shlex.split(hooks['Stop'][0]['hooks'][0]['command'])[-1] == 'ride.claude.stop_guard'
+    assert 'ride.claude.watch_waiter' in shlex.split(hooks['Stop'][0]['hooks'][0]['command'])
 
   def test_fast_mode_lands_in_settings(self):
     assert (

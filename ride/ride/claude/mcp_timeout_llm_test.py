@@ -7,7 +7,6 @@ idle cut and must still return through the environment the runner applies.
 import contextlib
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -17,9 +16,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import ride.claude.runner as runner
+from bro import watches
 from bro.llm.llms.claude_code import LLMSpec
 from ride.claude.claude_argv import STREAM_JSON_ARGS, ClaudeLaunch
-from ride.claude.live_claude_test_helper import REQUIRES_CLAUDE_CREDENTIAL, claude_token
+from ride.claude.live_claude_test_helper import (
+  REQUIRES_CLAUDE_CREDENTIAL,
+  bounded,
+  claude_token,
+)
 from ride.do_ride import SessionRun
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
@@ -93,23 +97,6 @@ def _slow_mcp_server(tmp_path: Path) -> Iterator[str]:
     cleanup.callback(_stop_process, process)
     _wait_until_listening(process, port)
     yield f'http://127.0.0.1:{port}/mcp'
-
-
-@contextlib.contextmanager
-def _bounded(seconds: int) -> Iterator[None]:
-  """fail a live session instead of leaving the opt-in stage hung."""
-
-  def expire(signum, frame):
-    del signum, frame
-    raise TimeoutError(f'the session did not end within {seconds}s')
-
-  previous = signal.signal(signal.SIGALRM, expire)
-  signal.alarm(seconds)
-  try:
-    yield
-  finally:
-    signal.alarm(0)
-    signal.signal(signal.SIGALRM, previous)
 
 
 def _environment(config: Path, session: Path) -> dict[str, str]:
@@ -191,7 +178,8 @@ def test_silent_http_mcp_call_survives_the_native_idle_cut(tmp_path: Path, capfd
       patch.object(runner, 'build_claude_launch', return_value=launch),
       patch.object(runner, 'start_statusline_projector'),
       patch.object(runner, 'apply_claude_auth'),
-      _bounded(_SESSION_TIMEOUT_SECONDS),
+      watches.Owner.for_session(),
+      bounded(_SESSION_TIMEOUT_SECONDS),
     ):
       code = runner.run_session(_session(prompt))
 
