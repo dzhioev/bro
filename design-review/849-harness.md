@@ -51,7 +51,7 @@ General code reaches a harness through that object, passed in by the engine that
 - **Ride.**
   `ride.harness.SessionHarness` is today's `Harness` protocol under a new name:
   scope recipe, auth preflight, LLM resolution, the session reads and run, and the boxed and unboxed extras.
-  It gains `prepare_session`, which takes over `do_ride._prepare_claude_state`.
+  It gains `prepare_session`, which takes over `do_ride._prepare_claude_state`, and `check_runtime`, which proves the harness's runtime starts where the installation runs (for Claude, the pinned binary) and which `ride check-harness <name>` exposes.
   Ride resolves a harness through the core registry and refuses one that does not implement it.
 - **Claude.**
   `ride/ride/claude/harness.py:CLAUDE`, registered as `claude` by `bro-ride`.
@@ -66,7 +66,9 @@ General code reaches a harness through that object, passed in by the engine that
   so a name is checked against the installed ones where it is used, not where it is configured.
   `[tool.bro] harness` and `summon-harness` (`bro/workspace/project.py`) and the defaults are read as well-formed names, and a launch or summon that selects an uninstalled harness fails naming the distribution to install.
   The defaults, `claude` for a launch and `bro` for a summon, are configuration values kept together in `bro.base.configs`.
-  The Terminal-Bench adapter in `benchmark/` checks a trial's harness against the bundle it builds, which carries `bro-native`, not against its own interpreter.
+  The Terminal-Bench adapter in `benchmark/` names no harness:
+  the relocatable bundle's manifest records the harness names its installation registers, under a new manifest format, and the launcher checks a trial's harness against them rather than against its own interpreter;
+  `install()`'s Claude-only binary probe, keyed on `bro.harness.claude.HARNESS`, becomes the selected harness's own check, `ride check-harness <name>` run from the bundle in the task image.
 - **The `#harness` fact** compares against any well-formed harness name rather than a closed domain, since a text may name a harness the installation does not carry;
   an `iff` chain still raises when no branch matches the running harness.
 - **No guessing.**
@@ -96,15 +98,20 @@ it is two protocols the harness's session runtime implements, below.
 - **One store.**
   `bro.watches` keeps every watch's lines under the session state dir for both harnesses, read by one reader.
   `take()` reads, under an exclusive lock, the complete lines past each watch's offset, at most 100 lines and 30 KB (the `bro.base.text_window` bounds), and tags each with `[<command>]`.
+  Watches take turns:
+  a batch starts at the watch after the one the last batch cut, and takes each watch's lines in turn until a bound binds, so no watch's volume keeps another's lines out.
+  A line wider than the byte bound goes out in bound-wide pieces, a batch each, the first naming the line's whole size, so an offset always advances, as `take_head` cuts a first line today.
   It ends a cut batch with a pending marker and commits the offsets past what it returns.
-  A run with no session state dir, an in-process `bro run|chat` outside ride, keeps its watches in a temporary store its runner owns.
+  A run with no session state dir, an in-process `bro run|chat` outside ride, keeps its watches in a temporary store its `Runner` owns.
 - **Producers.**
   `watch-run` runs its command under `bro.job_supervisor`, the process-group leader behind `bro::job`, detached from whatever process started the watch.
   Stopping a watch ends its whole process group, as `bro::kill` ends a job's.
-  The supervisor itself exits once its owner is gone:
-  for a watch the session that declared it
-  — `do-ride` (`RIDE_RUNNER_PID`) in a managed session, the runner in an in-process `bro run|chat` —
-  and for a job the process that started it.
+  A watch's owner is its session's:
+  `do-ride` in a managed session, and the `Runner` in an in-process `bro run|chat`, whose lifetime can end while the process embedding it lives on.
+  The owner stops its producers in its own teardown
+  — `do-ride` when the session ends, the `Runner` in `__exit__` beside its job registry —
+  and the supervisor also exits once a liveness handle the owner holds closes, so a killed owner leaves no producer behind;
+  a job's supervisor does the same for the process that started the job.
 - **The session watch.**
   `do-ride` arms `watch-run quest watch` before the harness session starts and stops it after, wherever today's admission rule admits it:
   a session that may summon, or a summoned one whose talk carries `owner.say`, `owner.question`, or `worker.question`.
@@ -119,6 +126,7 @@ it is two protocols the harness's session runtime implements, below.
 - **One stream.**
   `bro.mission` owns the stream behind both `quest watch` and `mission watch`:
   arming at the journal head, replaying retained chat, re-arming across a gap, and following the ordered events.
+  A re-arm after a gap replays only entries past the last one the stream yielded, where `bro/quest.py:_arm_replay` today repeats every retained owner entry.
   `quest watch` is its view of the session's own quest and the bro missions the session owns.
 - **One end-of-turn rule.**
   `bro/turn_end.py` settles a one-shot turn end from the live work:
@@ -126,6 +134,8 @@ it is two protocols the harness's session runtime implements, below.
   the model's live watches and the lines in the store not yet delivered;
   the harness's own background work;
   and whether a summoner may still speak or a question of the session's own awaits its reply.
+  The session's own quest reaches it only through the session watch, so the last two count only while that watch's producer runs;
+  with it down, they count as nothing to wait on, and the bro missions it covered as uncovered.
   The first verdict whose condition holds applies:
 
   1. **Wait** silently while a covered mission, a live watch of the model's, an undelivered line, or a question awaiting its reply exists:
@@ -133,8 +143,9 @@ it is two protocols the harness's session runtime implements, below.
   2. **Notice, then wait** while harness background work runs or a summoner may speak:
      the notice names that work and any mission no watch covers, says that ending the turn again keeps waiting, and, in a summoned session, that a finished result goes through `bro::answer`.
      The browser in an owner-led `[[browse]]` thread waits here, its webview mission live with no watch on it.
-  3. **Notice, then end** while only missions no watch covers remain:
-     nothing would wake the session for them, so the notice names them and the routes the session has (`bro::watch('mission watch')` where it is mounted, or cancelling them), and ending the turn again ends the run and orphans them.
+  3. **Notice, then end** while only missions no watch covers remain, or the session watch is down:
+     nothing would wake the session for them, so the notice names them, the dead watch's exit line, and the routes the session has (`bro::watch('mission watch')` where it is mounted, or cancelling them);
+     ending the turn again ends the run and orphans them.
   4. **End** otherwise.
 
   A notice comes once per distinct live set, from one text template both harnesses share.
@@ -206,8 +217,8 @@ Each harness implements four operations for its sessions, behind two protocols i
 - Whether `Stop` fires on a turn the human interrupts in the TUI is unprobed;
   if it does not, a waiter still waiting from an earlier turn end delivers, and otherwise lines wait for the next turn end, with the human present.
 - A session watch whose producer died, because the broker refused it for instance, covers nothing:
-  its exit line is delivered, and the rule counts its missions as uncovered.
-- A resume re-arms the session watch, whose replay re-delivers retained pending chat marked `before the watch:`.
+  its exit line is delivered, and the rule counts its missions as uncovered and its own quest's traffic as unable to arrive.
+- A resume starts a new root on a new quest, since `ride resume` launches no summoned child, so the session watch it re-arms replays nothing of the run before, and the store's committed offsets keep that run's delivered lines from returning.
 - A joined member keeps its own store under its own session state dir.
 - Lines whose offsets were committed are lost only if Claude dies before showing them, when the session is gone anyway.
 
@@ -230,7 +241,9 @@ Each harness implements four operations for its sessions, behind two protocols i
    Trail formats register through an entry-point group of their own, one module each, apart from the harness registry:
    a trail outlives the installation that recorded it, and the trails server loads no harness.
    Both of today's formats stay in core, since the trails server's image installs only the core `bro` wheel;
-   a harness distribution that ships a new format needs that image to install it.
+   a harness distribution that ships a new format needs that image to install it, in the order the rollout section gives.
+   The server refuses a trail whose format no installed module registers, at blaze and on import, naming the format;
+   the slice's tests hold that refusal on a server without a format and the same trail served by one with it.
    The group needs a name other than `bro.trails.formats`, which `bro/trails/formats.py` (the schema versions) already holds as a module path.
    The name comparisons become format members:
    whether a trail must name its bro, enforced on import as well as at blaze, where today only blaze checks it;
@@ -280,7 +293,11 @@ No landing changes a wire, store, or record format that two separately deployed 
   No landing changes what a trail records or what the server serves, so either side may run the older revision;
   the rewake reaches a Claude transcript as records the projection already handles, an unknown attachment as a notification and a user record as input, which the `llm` stage's input-channel probe holds.
   The trails landing changes the server's own code, so the server redeploys after it merges.
-- The benchmark launcher reads harness names off the bundle it builds rather than its own interpreter, so it keeps working whichever revision that bundle carries.
+- A trail format a harness distribution adds later reaches the trails server first:
+  the distribution goes into the server's image and deploys before any installation records in that format, since the server refuses an unknown format at blaze and a session whose recording fails stops.
+  The format stays installed while any retained trail uses it, so retiring it waits until no recorder writes it and its trails are gone.
+- The benchmark launcher reads harness names off the manifest of the bundle it builds rather than its own interpreter.
+  A bundle built before the registry carries the old manifest format, which the launcher refuses as stale, naming `benchmark bundle` to rebuild it, so a new launcher never reads an old bundle as carrying no harness.
 - A repository that pins the framework adopts each landing through its own bump, which adapts its persona declarations and prompts, and runs the revision it pins until then.
 
 Each landing goes live by installing the launcher from master and starting a fresh root;
@@ -351,14 +368,26 @@ the trails landing deploys the trails server between the two.
 
 ### Verification the #850 stages owe
 
+- **The registry and the names (stage 1):**
+  the installed names read from entry-point metadata without importing a harness, and a name loading its object lazily;
+  loading refusing an object that is not a `Harness` and one whose `name` differs from its entry;
+  ride's `--harness` choices and the summon check reading the registry;
+  a launch or summon selecting an uninstalled harness failing with the distribution to install;
+  `ride list` showing no subject for a workspace with no resume spec or an uninstalled harness;
+  a Claude-only installation
+  — the `bro` and `bro-ride` wheels alone in a fresh venv, as `ride/ride/runtime_bundle_test.py` builds one —
+  composing the core `bro` persona and a Claude session's prompt;
+  and the benchmark launcher checking a trial's harness against its bundle's manifest, refusing a manifest of the old format, and running `ride check-harness` in its setup.
 - **Unit tests:**
-  `take()` (the bounds, the pending marker, the offsets, two readers under the lock);
+  `take()` (the bounds, the pending marker, the offsets, two readers under the lock, the turns watches take, a line wider than the byte bound);
   the waiter's supersession and stand-down;
-  each verdict of the rule and their order over mixed live sets, the owner-led browser's wait among them, with the once-per-set memory;
+  each verdict of the rule and their order over mixed live sets, the owner-led browser's wait among them, with the once-per-set memory, and a dead session watch turning an awaited reply and a speaking summoner into a notice and an end;
   arming per admission rule, and the session's producers stopped at its end;
-  a stopped watch's whole process group gone, and the supervisor exiting once its owner is gone;
+  a stopped watch's whole process group gone, the supervisor exiting once its owner's handle closes, and a `Runner` that exits stopping its watches while the process embedding it lives on;
   `bro::watch` admission, and `bro::unwatch` refusing the session watch;
-  the native pump's one batch in flight, and the native one-shot idle and wake;
+  a re-arm after a gap replaying nothing it already yielded;
+  a resumed session's re-armed watch delivering no line its previous run delivered, and a joined member's watches kept in its own store, out of its summoner's;
+  the native pump's one batch in flight, the native one-shot idle and wake, and watch lines waking an idle `bro chat` while a human's message between turns still goes through;
   the Claude runner's verdicts over the fake claude, `ambient` tasks excluded.
 - **`llm` stage, against the pinned Claude Code**, replacing `stop_guard_llm_test.py`:
   an idle wake in stream-json and in the TUI;
