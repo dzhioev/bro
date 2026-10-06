@@ -2303,9 +2303,10 @@ class TestJobServiceTools:
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(native_server.close)
-      assert {'watch', 'unwatch', 'job', 'poll', 'kill', 'jobs', 'chill'} <= set(native)
+      assert {'watch', 'unwatch', 'job', 'poll', 'kill', 'jobs'} <= set(native)
+      assert 'chill' not in native
       mode = native['job'].parameters['properties']['mode']
-      assert set(mode['enum']) == {'fg', 'bg', 'watch'}
+      assert set(mode['enum']) == {'fg', 'bg'}
       claude_server = bro_module._build_service_server(
         self.AnyShellBro(), include_raise=False, harness='claude'
       )
@@ -2425,9 +2426,7 @@ class TestJobServiceTools:
       assert first is not None and 'job-2' in first.job_ids
 
       release.touch()
-      chilled = await tools['chill'].call({'seconds': 5})
-      assert isinstance(chilled, dict)
-      assert chilled['woken'] is True
+      assert await asyncio.to_thread(run.inbox.wait, time.monotonic() + 5, threading.Event())
       second = run.inbox.drain()
       assert second is not None
       assert f'[job-1 bg `{command}` exited (code 0)]' in second.text
@@ -2471,22 +2470,6 @@ class TestJobServiceTools:
       assert run.inbox.drain() is None
 
   @pytest.mark.asyncio
-  async def test_chill_refuses_without_a_live_job_and_names_its_clamp(self, monkeypatch):
-    run = StubRun()
-    server, tools = await self._tools(run=run)
-    with contextlib.ExitStack() as stack:
-      stack.callback(run.registry.close)
-      stack.callback(server.close)
-      with pytest.raises(ValueError, match='at least one live job'):
-        await tools['chill'].call({})
-      run.registry.start('sleep 0.3', 'bg')
-      monkeypatch.setattr(bro_module, '_JOB_WAIT_CAP_SECONDS', 0.05)
-      result = await tools['chill'].call({'seconds': 5})
-      assert isinstance(result, dict)
-      assert result['woken'] is False
-      assert result['note'] == 'seconds 5 clamped to 0.05'
-
-  @pytest.mark.asyncio
   async def test_cancelling_foreground_wait_leaves_a_background_job(self):
     run = StubRun()
     server, tools = await self._tools(run=run)
@@ -2514,7 +2497,8 @@ class TestJobServiceTools:
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(tools)
+      assert {'job', 'poll', 'kill', 'jobs'} <= set(tools)
+      assert 'chill' not in tools
       assert {'watch', 'unwatch'}.isdisjoint(tools)
       started = await tools['job'].call({'command': bro_module.QUEST_WATCH_COMMAND, 'mode': 'bg'})
       assert started == 'started job-1 (bg)'
@@ -2532,6 +2516,7 @@ class TestJobServiceTools:
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      assert {'job', 'chill'} <= set(tools)
+      assert 'job' in tools
+      assert 'chill' not in tools
       started = await tools['job'].call({'command': bro_module.QUEST_WATCH_COMMAND, 'mode': 'bg'})
       assert started == 'started job-1 (bg)'

@@ -2144,7 +2144,7 @@ started = time.monotonic()
 deadline = started + 30
 notifications = []
 with Runner(WatchBro()) as runner:
-  runner.registry.start('quest watch', 'watch')
+  runner.watch_store.start('quest watch')
   quest_id = summon_detached(
     'bro', 'raise for the native watch route', llm='echo', harness='bro', timeout=120
   )
@@ -2192,7 +2192,7 @@ def wait_for_incoming(text, deadline):
 wait_for_incoming('before arm', time.monotonic() + 30)
 notifications = []
 with Runner(WatchBro()) as runner:
-  runner.registry.start('quest watch', 'watch')
+  runner.watch_store.start('quest watch')
   deadline = time.monotonic() + 30
   while not any('before the watch: summoner says before arm' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
@@ -2378,6 +2378,7 @@ with contextlib.closing(channel):
 _NATIVE_REMIND_CHILD = """
 import asyncio
 import json
+from contextlib import contextmanager
 from typing import Optional
 
 from bro.bro import BaseBro
@@ -2397,10 +2398,9 @@ class ScriptedLLM(LLM):
     super().__init__(inbox, mcp_servers)
     self.notices = []
     self.quest_id = None
+    self.released = False
 
   async def send(self, messages, *, request_timeout=None):
-    started = await self.tools.call('bro__job', {'command': 'quest watch', 'mode': 'watch'})
-    assert started == 'started job-1 (watch)', started
     accepted = await self.tools.call(
       'bro__summon',
       {
@@ -2414,7 +2414,7 @@ class ScriptedLLM(LLM):
     )
     assert accepted['state'] == 'accepted', accepted
     self.quest_id = accepted['quest_id']
-    return 'ended the turn without chilling'
+    return 'ended the turn with the grandchild in flight'
 
   def _drain(self):
     batch = self.inbox.drain()
@@ -2426,17 +2426,23 @@ class ScriptedLLM(LLM):
 
   async def wake(self, *, request_timeout=None):
     self._drain()
-    await self.tools.call('bro__quest_say', {'quest_id': self.quest_id, 'text': 'release'})
-    while not self._grandchild_ended():
-      chilled = await self.tools.call('bro__chill', {'seconds': 60})
-      assert chilled['woken'], chilled
-      self._drain()
+    if not self.released:
+      await self.tools.call('bro__quest_say', {'quest_id': self.quest_id, 'text': 'release'})
+      self.released = True
+      return 'released the grandchild and ended the turn'
+    if not self._grandchild_ended():
+      return 'the grandchild is still in flight'
     outcome = await self.tools.call('bro__quest_check', {'quest_id': self.quest_id})
     assert outcome['state'] == 'completed', outcome
-    await self.tools.call('bro__kill', {'id': 'job-1'})
     return json.dumps({'notices': self.notices, 'answer': outcome['answer']})
 
 class ScriptedRunner(Runner):
+  @contextmanager
+  def _watch_pump(self):
+    with super()._watch_pump():
+      self.watch_store.start('quest watch')
+      yield
+
   def _create_llm(self, *, hold):
     servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
     return ScriptedLLM(self.inbox, servers)
@@ -2470,7 +2476,7 @@ Path('/workspace/.native-remind-report').write_text(json.dumps({
 """
 
 
-def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchild_result(
+def test_native_child_waits_at_its_turn_end_and_delivers_the_grandchild_result(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
   import ride.bro_worker as ride_spawn
@@ -2531,12 +2537,8 @@ def test_native_child_reminded_at_its_turn_end_chills_and_delivers_the_grandchil
   outcome = json.loads(report.read_text())
   delivered = json.loads(outcome['answer'])
   assert delivered['answer'] == 'grandchild result'
-  reminder = delivered['notices'][0]
-  assert reminder.startswith('[notification: the turn ended with work still running')
-  assert 'job-1 watch `quest watch`' in reminder
-  assert ' to bro\n' in reminder
-  assert 'bro::chill' in reminder
-  assert any('summon ended ok' in text for text in delivered['notices'][1:])
+  assert any('summon ended ok' in text for text in delivered['notices'])
+  assert all('turn ended with work still live' not in text for text in delivered['notices'])
   assert env.live_containers() == []
 
 

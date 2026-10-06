@@ -211,40 +211,39 @@ async def test_idle_race_gives_buffered_lines_the_turn_after_one_output_page():
   second = ('line', 'second')
   lines.put(first)
   lines.put(second)
-  job = runner.registry.start('seq 1 201; sleep 30', 'watch')
-  assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
+  with runner:
+    runner.watch_store.start('seq 1 201; sleep 30')
+    assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
 
-  first_kind, _ = await _next_idle_event(runner, lines)
-  batch = runner.inbox.drain(limit=100)
-  second_event = await _next_idle_event(runner, lines, prefer_lines=True)
+    first_kind, _ = await _next_idle_event(runner, lines)
+    batch = runner.inbox.drain(limit=100)
+    second_event = await _next_idle_event(runner, lines, prefer_lines=True)
 
-  assert first_kind == 'notification'
-  assert batch is not None and 'pending: 101 lines' in batch.text
-  assert runner.inbox.has_news()
-  assert second_event == first
-  assert lines.get() == second
-  await asyncio.to_thread(job.kill)
+    assert first_kind == 'notification'
+    assert batch is not None and 'pending watch lines' in batch.text
+    assert second_event == first
+    assert lines.get() == second
 
 
 @pytest.mark.asyncio
 async def test_text_notification_wins_while_a_line_remains_for_the_next_turn(capsys):
   runner = _MockRunner(response='reply')
   reader = _BlockingLine('human next')
-  conversation = asyncio.create_task(call_text(runner, 'first', read_line=reader, now=_fixed_now))
-  await asyncio.to_thread(reader.started.wait)
-  job = runner.registry.start('echo news; sleep 30', 'watch')
+  with runner:
+    conversation = asyncio.create_task(call_text(runner, 'first', read_line=reader, now=_fixed_now))
+    await asyncio.to_thread(reader.started.wait)
+    runner.watch_store.start('echo news; sleep 30')
 
-  await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
-  assert runner.mock_llm.wake_calls == 1
-  await asyncio.to_thread(job.kill)
-  assert len(runner.mock_llm.send_calls) == 1
-  reader.release.set()
-  await asyncio.wait_for(conversation, timeout=10)
+    await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
+    assert runner.mock_llm.wake_calls == 1
+    assert len(runner.mock_llm.send_calls) == 1
+    reader.release.set()
+    await asyncio.wait_for(conversation, timeout=10)
 
-  assert [call[-1]['content'] for call in runner.mock_llm.send_calls] == [
-    'first',
-    'human next',
-  ]
+    assert [call[-1]['content'] for call in runner.mock_llm.send_calls] == [
+      'first',
+      'human next',
+    ]
 
 
 @pytest.mark.asyncio
@@ -259,11 +258,10 @@ async def test_text_answer_ends_with_a_stdin_read_pending(capsys):
     raise AnswerDelivered('done')
 
   runner.mock_llm.wake = deliver
-  job = runner.registry.start('echo news; sleep 30', 'watch')
+  runner.inbox.post('[notification: news]')
 
   with pytest.raises(AnswerDelivered, match='done'):
     await asyncio.wait_for(conversation, timeout=10)
-  await asyncio.to_thread(job.kill)
   reader.release.set()
 
 
@@ -292,16 +290,16 @@ async def test_tui_starts_a_turn_when_news_arrives_while_idle(monkeypatch):
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   runner = _MockRunner(response='reply')
   app = ChatApp(runner, 'first')
-  async with app.run_test(size=(80, 40)) as pilot:
-    await app.workers.wait_for_complete()
-    job = runner.registry.start('echo news; sleep 30', 'watch')
-    await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
-    await asyncio.to_thread(job.kill)
-    await app.workers.wait_for_complete()
-    await pilot.pause()
+  with runner:
+    async with app.run_test(size=(80, 40)) as pilot:
+      await app.workers.wait_for_complete()
+      runner.watch_store.start('echo news; sleep 30')
+      await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
+      await app.workers.wait_for_complete()
+      await pilot.pause()
 
-    assert runner.mock_llm.wake_calls >= 1
-    assert app.query_one('#input-bar', MessageInput).disabled is False
+      assert runner.mock_llm.wake_calls >= 1
+      assert app.query_one('#input-bar', MessageInput).disabled is False
 
 
 @dataclass(frozen=True)

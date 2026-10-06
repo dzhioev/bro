@@ -29,7 +29,6 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import NullTracker, Tracker
 from bro.mcp import MCPServerSpec
-from bro.mission import LiveMission
 from bro.monitor import trail_pointer
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
@@ -693,14 +692,12 @@ class TestSend:
     llm = MockLLM(response='noticed')
     runner = StubRunner(llm)
     await runner.send('first', observer=observer, surface='test')
-    job = runner.registry.start('echo news; sleep 30', 'watch')
-    assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
+    runner.inbox.post('[notification: news]')
 
     assert await runner.wake() == 'noticed'
 
     assert llm.wake_calls == 1
     assert observer.events[-1] == TurnCompletedEvent('noticed')
-    await asyncio.to_thread(job.kill)
 
 
 class _ScriptedLLM(MockLLM):
@@ -720,10 +717,6 @@ class _ScriptedLLM(MockLLM):
     return await action(self)
 
 
-async def _end_without_acting(llm: MockLLM) -> str:
-  return 'ended again'
-
-
 def _kill_and_end(job):
   async def action(llm: MockLLM) -> str:
     await asyncio.to_thread(job.kill)
@@ -732,11 +725,9 @@ def _kill_and_end(job):
   return action
 
 
-class TestLiveWorkReminder:
-  """a one-shot turn that ends with work still live gets one notice to settle it."""
-
+class TestNativeTurnEnd:
   @pytest.mark.asyncio
-  async def test_a_live_background_job_earns_one_reminder_naming_it(self):
+  async def test_a_live_background_job_notifies_then_waits_for_its_end(self):
     observer = CapturingObserver()
     llm = _ScriptedLLM([])
     runner = StubRunner(llm)
@@ -747,9 +738,9 @@ class TestLiveWorkReminder:
 
     assert result == 'settled'
     [notice] = llm.drained
-    assert notice.startswith(native_runner._LIVE_WORK_HEADER)
-    assert '\njob-1 bg `sleep 30`\n' in notice
-    assert 'bro::chill' in notice
+    assert notice.startswith('[notification: the turn ended with work still live]')
+    assert 'background work: job-1 bg `sleep 30`' in notice
+    assert 'Ending the turn again keeps waiting' in notice
     assert observer.events == [
       TurnStartedEvent('go'),
       InterimAssistantTextEvent('first reply'),
@@ -757,77 +748,67 @@ class TestLiveWorkReminder:
     ]
 
   @pytest.mark.asyncio
-  async def test_a_live_watch_is_named_with_its_mode(self):
-    llm = _ScriptedLLM([])
+  async def test_one_shot_idles_until_watch_lines_wake_it(self):
+    class WatchLLM(MockLLM):
+      def __init__(self):
+        super().__init__(response='first reply')
+        self.runner: Runner | None = None
+        self.drained: list[str] = []
+
+      async def send(self, messages, *, request_timeout=None):
+        assert self.runner is not None
+        self.runner.watch_store.start('printf watched')
+        return await super().send(messages, request_timeout=request_timeout)
+
+      async def wake(self, *, request_timeout=None):
+        batch = self.inbox.drain()
+        assert batch is not None
+        self.drained.append(batch.text)
+        self.wake_calls += 1
+        return 'watch delivered'
+
+    llm = WatchLLM()
     runner = StubRunner(llm)
-    job = runner.registry.start('quest watch', 'watch')
-    llm.actions.append(_kill_and_end(job))
-
-    await runner.run('go', surface='test')
-
-    assert '\njob-1 watch `quest watch`\n' in llm.drained[0]
-
-  @pytest.mark.asyncio
-  async def test_in_flight_missions_are_named_by_id_and_label(self, monkeypatch):
-    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
-    monkeypatch.setattr(
-      native_runner,
-      'live_missions',
-      lambda: [
-        LiveMission('01m-child', 'bro', 'bro-eyebro'),
-        LiveMission('01m-benchmark', 'benchmark', 'benchmark'),
-      ],
-    )
-    llm = _ScriptedLLM([_end_without_acting])
-    runner = _ChannelRunner(None, llm)
+    llm.runner = runner
 
     result = await runner.run('go', surface='test')
 
-    assert result == 'ended again'
-    [notice] = llm.drained
-    assert '\nquest 01m-child to bro-eyebro\n' in notice
-    assert '\nmission 01m-benchmark: benchmark\n' in notice
-    assert "bro::job('quest watch', mode='watch')" in notice
-    assert 'bro::quest_cancel' in notice
-    assert '`mission watch`' in notice
-    assert '`mission cancel`' in notice
-    assert 'job-' not in notice
+    assert result == 'watch delivered'
+    assert any('[printf watched] watched' in batch for batch in llm.drained)
+
+  def test_watch_pump_keeps_only_one_batch_in_flight(self):
+    class Store:
+      def __init__(self):
+        self.batches = ['first', 'second']
+        self.take_calls = 0
+
+      def take(self):
+        self.take_calls += 1
+        return self.batches.pop(0) if len(self.batches) > 0 else None
+
+    class PumpRunner(StubRunner):
+      def __init__(self, store):
+        super().__init__()
+        self.store = store
+
+      @property
+      def watch_store(self):
+        return self.store
+
+    store = Store()
+    runner = PumpRunner(store)
+    with runner:
+      assert runner.inbox.wait(time.monotonic() + 10, threading.Event())
+      assert store.take_calls == 1
+      first = runner.inbox.drain()
+      assert first is not None and first.text == 'first'
+      assert runner.inbox.wait(time.monotonic() + 10, threading.Event())
+      assert store.take_calls == 2
+      second = runner.inbox.drain()
+      assert second is not None and second.text == 'second'
 
   @pytest.mark.asyncio
-  async def test_the_same_live_set_ending_again_ends_the_run_and_kills(self):
-    llm = _ScriptedLLM([_end_without_acting])
-    runner = StubRunner(llm)
-    job = runner.registry.start('sleep 30', 'bg')
-
-    result = await runner.run('go', surface='test')
-
-    assert result == 'ended again'
-    assert llm.wake_calls == 1
-    assert job.process.wait(timeout=10) == -9
-    assert runner._last_end_reason == 'ok'
-
-  @pytest.mark.asyncio
-  async def test_job_news_drained_in_the_reminder_turn_earns_a_fresh_reminder(self):
-    llm = _ScriptedLLM([_end_without_acting, _end_without_acting])
-    runner = StubRunner(llm)
-    exiting = runner.registry.start('echo done', 'bg')
-    live = runner.registry.start('sleep 30', 'bg')
-    assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
-
-    result = await runner.run('go', surface='test')
-
-    assert result == 'ended again'
-    assert llm.wake_calls == 2
-    first, second = llm.drained
-    assert '[job-1 bg `echo done` exited (code 0)]' in first
-    assert first.endswith(native_runner._LIVE_WORK_RULE)
-    assert second.startswith(native_runner._LIVE_WORK_HEADER)
-    assert 'job-2 bg `sleep 30`' in second
-    assert exiting.process.poll() == 0
-    assert live.process.wait(timeout=10) == -9
-
-  @pytest.mark.asyncio
-  async def test_a_delivered_answer_ends_the_run_without_a_reminder(self):
+  async def test_a_delivered_answer_ends_the_run_without_settlement(self):
     runner = StubRunner(_StubLLM(error=AnswerDelivered('the answer')))
     job = runner.registry.start('sleep 30', 'bg')
 
@@ -836,16 +817,6 @@ class TestLiveWorkReminder:
     assert result == 'the answer'
     assert runner.inbox.drain() is None
     assert job.process.wait(timeout=10) == -9
-
-  @pytest.mark.asyncio
-  async def test_an_exited_job_awaiting_its_exit_notice_is_not_live_work(self):
-    runner = StubRunner()
-    with runner:
-      job = runner.registry.start('true', 'bg')
-      assert await asyncio.to_thread(runner.inbox.wait, time.monotonic() + 10, threading.Event())
-      assert job.has_news()
-
-      assert runner._live_work().jobs == ()
 
   @pytest.mark.asyncio
   async def test_nothing_live_ends_as_before(self):

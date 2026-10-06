@@ -189,14 +189,16 @@ its runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGT
 Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
 
-A native session that can receive summon traffic also starts the compatibility `quest watch` as a watch-mode `bro::job`, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
-`bro::chill` waits on the run's whole background-job inbox when no other work remains.
-A one-shot `bro run` ends when a turn ends with nothing running and nothing in flight:
-a turn that ends with a live job or an owned mission still in flight gets one framework notice through the same seam (a user-role item recorded as a `notification` step),
-naming each `job-N <mode> <command>`, each bro mission as `quest <quest id> to <target>`, and each other mission by id and type,
-and the run ends only when a turn ends with nothing live or when a reminded turn ends with the same set and no job news drained since.
-The end still closes every job and orphans every in-flight mission, as a delivered `answer` or a `raise` does at once.
-`bro chat` stays idle on the inbox and starts a turn when news arrives.
+The native runner pumps each bounded batch from the session's watch store into the LLM inbox, taking the next only after the model drains the last.
+A managed session's runtime-owned `quest watch` therefore reaches the model without a watch-mode job;
+an in-process run uses the same path for each `bro::watch` it starts in its temporary store.
+Watch lines enter the model after tool results or wake an idle turn.
+
+At each one-shot turn end, the runner applies the shared end-of-turn rule over covered and uncovered missions, live model watches, pending watch lines, running jobs, and live session traffic.
+A notice reaches the LLM through the inbox as a user-role item recorded in a `notification` step.
+An end returns the last reply, while a wait idles on the inbox until job or watch news wakes the next turn.
+Ending the run still closes every job and orphans every in-flight mission, while a delivered `answer` or a `raise` ends it at once.
+`bro chat` uses the same inbox to wake on watch lines while continuing to accept a human's message between turns.
 
 Each session publishes its own current-trail pointer beside the workspace's `resume.json`:
 the native runner publishes when its trail opens, and the Claude recorder republishes as segments turn over.
