@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.3.0
+version: 5.4.0
 ---
 
 # land
@@ -57,6 +57,12 @@ only the session that summoned the reviewer knows it did, so [[run pr]] carries 
 A reviewer that ran and did not approve blocks the merge whatever `reviewDecision` says
 — stop and ask where questions reach the user, `raise` when unattended.
 A reviewer that never ran at all (no grant, or a summon denied at launch) leaves the merge to the gate below.{{end}}
+
+A merge no human approved waits for one where questions reach the user:
+where the base asks for no review (`reviewDecision` is `null`), report the PR ready to merge
+— with the reviewer's verdict and the checks
+— and run `land-pr` once they say to land it.
+A review the base requires is that approval already, and so is the user's own ask to land this open PR.
 
 ```bash
 land-pr
@@ -185,7 +191,8 @@ Dispatch it on the ref that carries the merge result.
 The rebase moves the tree, so a run against the branch as it stood before it green-lit a tree the push no longer delivers:
 push the rebased branch to the remote as a branch of its own and dispatch against that ref.
 
-Only once the review is clean and that run is green does `<base>` get written:
+Only once the review is clean and that run is green does `<base>` get written;
+with no pull request to carry a human's approval, the push also waits for the user to say to land it where questions reach them:
 
 ```bash
 git push origin HEAD:<base>
