@@ -37,14 +37,20 @@ A subpackage with a map of its own is pointed at, not described here.
   identity, features, credential manifest and optional tier, LLM key, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
-- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, ordered watch, and cancellation surfaces for every worker mission
-- `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
+- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and ordered journal stream for every worker mission.
+  The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
+- `quest.py` (`quest`) — the bro-only view over the mission surface and its shared stream, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
 - `watches.py`, `watch_run.py` (`watch-run`), and `watch_next.py` (`watch-next`) — one session-local watch store and its producers.
   `take()` commits fair, bounded batches under one exclusive lock;
   each line names its command, and a cut batch carries a pending marker.
+  The store also reports whether complete lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed.
   `watch-run` executes each shell command under `job_supervisor`, detached from its starter but held by an owner-liveness handle.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
   `watch-next` is the blocking CLI reader used by the current delivery paths.
+- `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered lines, harness background work, and live session traffic.
+  Settlement blocks on the store's journal signal until the session watch has emitted through the snapshot it reads.
+  A distinct live set receives at most one shared notice;
+  a second end with uncovered work ends the run, while covered work and work with a wake route keep it waiting.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   `artifact_mcp.py` is the registered `artifact` toolset, reading and grepping reachable text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`

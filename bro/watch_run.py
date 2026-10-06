@@ -43,6 +43,7 @@ def _produce() -> int:
     current = watch.producer_identity()
     if current == identity:
       watch.pid_file.unlink(missing_ok=True)
+    watch.signal_journal_change()
 
   with contextlib.ExitStack() as cleanup:
     cleanup.callback(clear_identity)

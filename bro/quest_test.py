@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bro import quest, summon
+from bro import mission, quest, summon
 from bro.artifact import SHARE
 from bro.broker import brotocol
 from bro.broker.client import Client
@@ -1147,7 +1147,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       monkeypatch.setenv(BROKER_CHANNEL, child_endpoint.channel.host_endpoint.address(LOCAL_HOST))
       monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
       quest.query_quest(child, grandchild_endpoint.quest, wait_seconds=1, since=0)
-      original_read = quest._read_value
+      original_read = mission._read_value
       raced = False
 
       def inject_racing_message(client, kind, args, *, timeout):
@@ -1163,7 +1163,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
           monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
         return value
 
-      monkeypatch.setattr(quest, '_read_value', inject_racing_message)
+      monkeypatch.setattr(mission, '_read_value', inject_racing_message)
       with contextlib.closing(quest.watch(wait_seconds=0.05)) as watch:
         assert await asyncio.to_thread(next, watch) == (
           'before the watch: summoner says start with docs'
@@ -1423,13 +1423,28 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
+async def test_watch_rearm_replays_only_chat_past_the_last_yielded_entry(monkeypatch):
   async with running_server(monkeypatch) as server:
     with contextlib.closing(quest.watch(wait_seconds=0.05)) as watch:
-      gap_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      before_gap = entry(8, 'owner', 'already delivered')
+      first_line = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, arm = await next_message(server)
       await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
-      await _reply_empty_watch_replay(server)
+      channel, own_query = await next_message(server)
+      await reply(
+        server,
+        channel,
+        own_query,
+        outcome='ok',
+        value={
+          'mission': quest_record('ROOT', 'started', kind='root', messages=[before_gap], chat_seq=8)
+        },
+      )
+      channel, listing = await next_message(server)
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      assert await first_line == 'before the watch: summoner says already delivered'
+
+      gap_line = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, poll = await next_message(server)
       assert poll.args == {'after': 10, 'wait': 0.05}
       await reply(server, channel, poll, outcome='denied', error='events gap: oldest is 15')
@@ -1447,7 +1462,13 @@ async def test_watch_replays_retained_chat_after_an_event_gap(monkeypatch):
         own_query,
         outcome='ok',
         value={
-          'mission': quest_record('ROOT', 'started', kind='root', messages=[retained], chat_seq=18)
+          'mission': quest_record(
+            'ROOT',
+            'started',
+            kind='root',
+            messages=[before_gap, retained],
+            chat_seq=18,
+          )
         },
       )
       channel, listing = await next_message(server)
@@ -1599,7 +1620,7 @@ async def test_watch_refuses_a_quest_this_session_did_not_summon(monkeypatch):
         ],
       },
     )
-    with pytest.raises(quest.QuestError, match='did not summon'):
+    with pytest.raises(quest.QuestError, match='did not launch'):
       await first_line
 
 
