@@ -48,10 +48,8 @@ from harbor.models.trial.result import AgentInfo
 from bro.base import credentials
 from bro.benchmark.bundle import Bundle, built, default_root, workspace_root
 from bro.benchmark.trial_store import TRAILS_DIRECTORY, token_totals
-from bro.harness.claude import HARNESS as CLAUDE_HARNESS
 from bro.llm.llm import FAILURE_CATEGORIES
 from bro.llm.providers import failure_signatures, known_names, parse
-from ride.harness import HARNESS_NAMES
 from ride.workspace.spawn import PROCESS_TERM_GRACE
 
 AGENT_NAME = 'bro'
@@ -169,8 +167,12 @@ def bare_recipe(model_name: Optional[str]) -> Optional[str]:
 
 
 def harness_name(value: str) -> str:
-  if value not in HARNESS_NAMES:
-    raise ValueError(f'harness {value!r} is not one of {", ".join(HARNESS_NAMES)}')
+  installed = benchmark_bundle().harnesses
+  if value not in installed:
+    raise ValueError(
+      f'harness {value!r} is not registered in the benchmark bundle; '
+      f'installed harnesses: {", ".join(installed) or "(none)"}'
+    )
   return value
 
 
@@ -391,8 +393,8 @@ class BroAgent(BaseInstalledAgent):
     bundle would otherwise touch. The trailing `bro show` is the only check the
     host cannot make — it rejects an unknown bro name and smoke-tests the bundle
     in this task's own image, in the setup phase, so a misconfigured job aborts
-    instead of being graded as a run of failed attempts; on the claude harness
-    the bundled `claude` proves it runs there too.
+    instead of being graded as a run of failed attempts. `ride check-harness`
+    then starts the selected harness's own runtime probe.
     """
     bundle = benchmark_bundle()
     with scoped_store(self._llm_credential) as directory:
@@ -407,8 +409,10 @@ class BroAgent(BaseInstalledAgent):
     await self.exec_as_agent(
       environment, command=shlex.join([str(BUNDLE.script('bro')), 'show', self._bro])
     )
-    if self._harness == CLAUDE_HARNESS:
-      await self.exec_as_agent(environment, command=shlex.join([str(BUNDLE.claude), '--version']))
+    await self.exec_as_agent(
+      environment,
+      command=shlex.join([str(BUNDLE.script('ride')), 'check-harness', self._harness]),
+    )
 
   def run_env(self) -> dict[str, str]:
     return {

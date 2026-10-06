@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import ride.bro as bro_harness
+import bro.native.harness as bro_harness
 import ride.session as ride_session
 from bro.llm.llms.openai import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
@@ -75,13 +75,31 @@ def local_trails(monkeypatch):
   monkeypatch.setattr(ride_session, 'local_trails_mounts', lambda scoped: ())
 
 
+def test_prepare_session_has_no_native_state_side_effects():
+  bro_harness.BRO.prepare_session(MagicMock())
+
+
+def test_check_runtime_starts_the_sibling_native_command_without_path(monkeypatch, tmp_path):
+  executable = tmp_path / 'venv' / 'bin' / 'bro'
+  executable.parent.mkdir(parents=True)
+  executable.touch()
+  run = MagicMock()
+  monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: str(executable))
+  monkeypatch.setenv('PATH', '/usr/bin:/bin')
+  monkeypatch.setattr(bro_harness.subprocess, 'run', run)
+
+  bro_harness.BRO.check_runtime()
+
+  run.assert_called_once_with([str(executable), '--help'], check=True)
+
+
 class TestNativeArgv:
   """The argv the bro harness runner spawns."""
 
   def _argv(self, spec, monkeypatch) -> list[str]:
     spawned: list[list[str]] = []
-    monkeypatch.setattr(bro_harness.shutil, 'which', lambda command: f'/venv/bin/{command}')
-    monkeypatch.setattr(bro_harness, 'run_agent', lambda argv: spawned.append(argv) or 0)
+    monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
+    monkeypatch.setattr('ride.do_ride.run_agent', lambda argv: spawned.append(argv) or 0)
     assert bro_harness.BRO.run_session(spec) == 0
     return spawned[0]
 
@@ -94,7 +112,7 @@ class TestNativeArgv:
   def test_chat_composes_the_native_argv(self, monkeypatch):
     spec = _spec(llm='openai:fable:high+fast')
     assert self._argv(spec, monkeypatch) == [
-      'bro',
+      '/venv/bin/bro',
       'chat',
       'dev',
       'start here',
@@ -106,29 +124,33 @@ class TestNativeArgv:
 
   def test_forwarded_arguments_splice_into_the_native_argv(self, monkeypatch):
     argv = self._argv(_spec(arguments=['--fork']), monkeypatch)
-    assert argv == ['bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork']
+    assert argv == ['/venv/bin/bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork']
 
   def test_resume_carries_the_session_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
     session = self._session_dir(monkeypatch, tmp_path)
     trail_pointer.write(session / trail_pointer.FILENAME, 'trail-1')
     argv = self._argv(_spec(resume=True, prompt=None), monkeypatch)
-    assert argv[:3] == ['bro', 'chat', 'dev']
+    assert argv[:3] == ['/venv/bin/bro', 'chat', 'dev']
     assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
     assert '"type":"openai"' in argv[argv.index('--continue-llm') + 1]
 
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
-    monkeypatch.setattr(bro_harness.shutil, 'which', lambda command: f'/venv/bin/{command}')
+    monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
     assert bro_harness.BRO.run_session(_spec(resume=True)) == 1
     assert 'no bro harness trail recorded' in caplog.text
 
   def test_missing_native_distribution_fails_before_spawn(self, monkeypatch, caplog):
     run_agent = MagicMock()
-    monkeypatch.setattr(bro_harness.shutil, 'which', lambda _command: None)
-    monkeypatch.setattr(bro_harness, 'run_agent', run_agent)
+    monkeypatch.setattr(
+      bro_harness.spawn,
+      'console_script',
+      MagicMock(side_effect=FileNotFoundError('native missing')),
+    )
+    monkeypatch.setattr('ride.do_ride.run_agent', run_agent)
 
     assert bro_harness.BRO.run_session(_spec()) == 1
-    assert 'install bro-native' in caplog.text
+    assert 'native missing' in caplog.text
     run_agent.assert_not_called()
 
 

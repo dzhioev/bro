@@ -69,7 +69,9 @@ A subpackage with a map of its own is pointed at, not described here.
 - `datasources/` — the `DataSource` ABC and the read-only connectors;
   see `datasources/AGENTS.md`
 - `extra/github/` — the GitHub API client (`api.py`), the GitHub App authentication source (`app.py`), and pull-request reads (`pulls.py`)
-- `harness/` — what a consuming harness brings of its own, named where a persona can declare against it.
+- `harness/` — the framework half of a driving harness and what a consuming harness brings of its own.
+  `__init__.py` holds the `Harness` identity and the `bro.harnesses` registry:
+  installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
@@ -119,18 +121,20 @@ this section is what `BaseBro` renders, mounts, and counts when one runs.
 
 ### Prompt composition
 
-`BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading, and composes the bro-native `system_prompt` around it:
-every `bro/prompts/shared/*.md` first, then the persona, the tool-name rule (`bro/prompts/tool_names.md`), a `## Data sources` block describing each declared `DataSource`,
-the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
-The composition renders once with its surface facts (`bro.mcp.render_text`: harness `bro`, the environment's credentials and `launch.bro.bros` members, the `#features` vocabulary).
+`BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading.
+When the native harness is installed, it composes the bro-native `system_prompt` around that persona.
+The composition starts with every `bro/prompts/shared/*.md`, then the persona and the tool-name rule (`bro/prompts/tool_names.md`).
+It adds a `## Data sources` block describing each declared `DataSource`, the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
+The composition renders with the registered harness object, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary.
+A Claude-only installation can therefore construct the core persona without loading or carrying `bro-native`.
 A managed Claude session runs under a prompt of its own;
-its append prompt injects `persona` beside the shared prompts (`bro/reference/ride.md`, "Auto-injected system prompt").
-`system_prompt_for(hold=…)` is the text a bro-native run starts under:
-the composed prompt plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
+its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`bro/reference/ride.md`, "Auto-injected system prompt").
+`system_prompt_for(hold=…, harness=…)` is the text a bro-native run starts under:
+the harness-composed prompt plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
 
 ### Service tools
 
-Every assembly (`assemble(harness, …)`) appends the `bro` service server;
+Every assembly (`assemble(harness, …)`) receives the engine's registered `Harness` object and appends the `bro` service server;
 `_build_service_server` decides its roster from the surface and the process environment:
 
 - `banner`, always:

@@ -11,7 +11,7 @@ import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from bro.benchmark import retention
-from bro.benchmark.bundle import Bundle
+from bro.benchmark.bundle import MANIFEST_FORMAT, Bundle
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest
 from bro.trails.record.spine import Recording
@@ -63,9 +63,10 @@ class FakeS3:
 
 def _bundle_manifest(job_directory: Path) -> str:
   manifest = {
-    'format': 3,
+    'format': MANIFEST_FORMAT,
     'claude_code': {'version': '2.1.258', 'sha256': '3' * 64},
     'cpython': '3.12.14',
+    'harnesses': ['bro', 'claude'],
     'requirements': 'bro==0.1\n',
     'source_commit': SOURCE_COMMIT,
     'target': ['linux', 'x86_64', 'glibc'],

@@ -4,6 +4,7 @@ from bro.bro import BaseBro
 from bro.launch.hold import UNATTENDED, session_hold
 from bro.llm.mcp import MCPServer
 from bro.registry import create_bro
+from ride.claude.harness import CLAUDE
 
 
 def _include_raise() -> bool:
@@ -12,7 +13,7 @@ def _include_raise() -> bool:
 
 def persona_servers(bro: BaseBro) -> list[MCPServer]:
   """assemble additions to Claude Code's native tool surface."""
-  return bro.assemble(harness='claude', include_raise=_include_raise())
+  return bro.assemble(harness=CLAUDE, include_raise=_include_raise())
 
 
 def resolve_persona_target(name: str) -> list[MCPServer]:

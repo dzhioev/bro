@@ -54,7 +54,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   every console script relocated to find the interpreter beside itself,
   ride's shim farm over the session commands,
   and the Claude Code binary at ride's pinned version under `claude/`, copied from ride's locked host release cache with its checksum record beside it.
-  Its manifest records those inputs and gives the bundle a content-derived identity.
+  Its manifest records those inputs plus the harness names registered inside the bundle and gives the bundle a content-derived identity.
   `Bundle` is the layout a consumer addresses — interpreter, scripts, shim farm, `claude`, manifest, and identity;
   `built(root)` reports an absent, incomplete, or malformed bundle rather than building one behind the caller's back
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
@@ -63,7 +63,8 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   `bro show <bro>` through the uploaded bundle
   — the one validation the host cannot make, and a
   smoke test of the bundle in the task's own image
-  — and `claude --version` on the claude harness.
+  — then `ride check-harness <name>`, so the selected harness owns its runtime probe.
+  The launcher validates the trial's harness against the uploaded bundle's manifest rather than against its own installation.
   `run()` is a single
   `ride solo --unboxed --tree "$PWD" --runtime-bundle <bundle> …` under `setsid`,
   a join-only ride in the task's directory whose records land under the collected agent directory,

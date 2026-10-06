@@ -2,7 +2,7 @@ import json
 import sys
 import types
 from pathlib import Path
-from typing import Optional, cast, get_args
+from typing import Optional, cast
 
 import pytest
 
@@ -11,6 +11,7 @@ import bro.mcp as mcp
 from bro import bro as bro_module, spells as spell_store
 from bro.base.condition import SetVariable
 from bro.bro import BaseBro
+from bro.harness import get_harness, installed_harness_names
 from bro.inbox import Inbox
 from bro.jobs import Registry
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
@@ -67,7 +68,7 @@ def _spell_server(bro: BaseBro) -> llm_mcp.MCPServer:
 
 
 def _service_server(
-  bro: BaseBro, *, harness: mcp.Harness = 'bro', include_raise: bool = True
+  bro: BaseBro, *, harness: mcp.HarnessLike = 'bro', include_raise: bool = True
 ) -> llm_mcp.MCPServer:
   # built on its own rather than picked out of a full assembly: these tests read
   # service tools only, and materializing a bro's declared servers would demand
@@ -166,7 +167,8 @@ class TestSpellStore:
     feature_names = frozenset({'brog'})
     for path in spell_files:
       spell = load_spell(path.stem, path)
-      for harness in get_args(mcp.Harness):
+      for name in installed_harness_names():
+        harness = get_harness(name)
         for enabled in (True, False):
           mcp.render_text(
             spell.body,
@@ -372,7 +374,7 @@ class TestSpellServer:
 
 class TestCast:
   @staticmethod
-  async def _tool(bro: BaseBro, *, harness: mcp.Harness = 'bro'):
+  async def _tool(bro: BaseBro, *, harness: mcp.HarnessLike = 'bro'):
     tools = await _service_server(bro, harness=harness).list_tools()
     return next(tool for tool in tools if tool.name == 'cast')
 

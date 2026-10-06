@@ -1055,7 +1055,18 @@ class TestResumeSpecRecord:
     assert ride_session.load_resume_spec(workspace) == first
 
   def test_missing_record_reads_as_none(self, tmp_path):
-    assert ride_session.load_resume_spec(_workspace(tmp_path)) is None
+    workspace = _workspace(tmp_path)
+    assert ride_session.load_resume_spec(workspace) is None
+    assert ride_session.harness_for_workspace(workspace) is None
+
+  def test_workspace_with_an_uninstalled_harness_has_no_subject_driver(self, tmp_path, caplog):
+    workspace = _workspace(tmp_path)
+    workspace.resume_file.write_text(
+      json.dumps(replace(_spec(), harness='other').resume_variant().dump())
+    )
+
+    assert ride_session.harness_for_workspace(workspace) is None
+    assert 'installed harnesses: bro, claude' in caplog.text
 
   def test_record_from_an_incompatible_ride_reads_as_none(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)

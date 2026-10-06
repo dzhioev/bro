@@ -30,11 +30,11 @@ class ConditionError(ValueError):
 
 @dataclass(frozen=True)
 class StringVariable:
-  """a string-valued variable. `domain`, when given, is the closed set of legal
-  comparands: comparing the variable against a literal outside it raises."""
+  """A string-valued variable with an optional closed domain or open validator."""
 
   value: str
   domain: Optional[frozenset[str]] = None
+  literal_validator: Optional[Callable[[str], object]] = None
 
 
 @dataclass(frozen=True)
@@ -157,12 +157,19 @@ class Equals(Condition):
     # a literal compared against a domain-closed variable must belong to the
     # domain — a misspelled literal is a bug, not a false comparison.
     if isinstance(operand, str):
-      if isinstance(other, StringVariable) and other.domain is not None:
-        if operand not in other.domain:
+      if isinstance(other, StringVariable):
+        if other.domain is not None and operand not in other.domain:
           raise ConditionError(
             f'literal {operand!r} outside the domain of its comparand in {str(self)!r}; '
             f'domain: {", ".join(sorted(other.domain))}'
           )
+        if other.literal_validator is not None:
+          try:
+            other.literal_validator(operand)
+          except (TypeError, ValueError) as error:
+            raise ConditionError(
+              f'invalid literal {operand!r} for its comparand in {str(self)!r}: {error}'
+            ) from error
       return operand
     return operand.value
 

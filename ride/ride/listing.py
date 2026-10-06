@@ -31,9 +31,10 @@ def list_workspaces() -> int:
   containers = [workspace for workspace in workspaces if workspace.isolation is Isolation.BOXED]
 
   def _read(workspace: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
+    harness = harness_for_workspace(workspace)
     return (
       workspace,
-      harness_for_workspace(workspace).read_subject(workspace),
+      None if harness is None else harness.read_subject(workspace),
       workspace.last_active(),
     )
 

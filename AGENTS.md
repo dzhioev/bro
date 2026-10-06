@@ -12,14 +12,15 @@ Run any script with `--help` for flags.
 
 The repository is a uv workspace.
 All published members depend on `bro`;
-core imports none of them, and `bro-ride` spawns rather than imports `bro-native`.
+core imports none of them, and `bro-native` depends on `bro-ride` for the managed-session seam.
+`bro-ride` loads `bro-native` only when the installed `bro.harnesses` entry for the native harness is selected.
 
 | Directory | Distribution | What it is | Map |
 |---|---|---|---|
 | `bro/`, `bros/bro/` | `bro` | the framework core: the persona declaration and what composes and runs one, the declaration vocabulary, and the minimal `bro` persona with the spells every bro inherits | `bro/AGENTS.md` |
-| `native/` | `bro-native` | the native engine and `bro` command | `native/AGENTS.md` |
+| `native/` | `bro-native` | the native engine, its registered harness, and the `bro` command | `native/AGENTS.md` |
 | `dev/` | `bro-dev` | the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas | `dev/AGENTS.md` |
-| `ride/` | `bro-ride` | top-level `ride`, the managed-workspace runtime and both harness adapters | `ride/AGENTS.md` |
+| `ride/` | `bro-ride` | top-level `ride`, the managed-workspace runtime, and the Claude harness | `ride/AGENTS.md` |
 | `oops/` | `bro-oops` | consumer-neutral deployment and operations machinery | `oops/AGENTS.md` |
 | `oops/cdk/` | `bro-oops-cdk` | the AWS CDK stacks `bro-oops` deploys, and this repository's CDK app; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `oops/cdk/AGENTS.md` |
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |

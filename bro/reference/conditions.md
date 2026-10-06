@@ -19,7 +19,7 @@ Conditioning derives each surface's variant from one declaration, and fails fast
 The facts a surface supplies, typed:
 
 - `StringVariable` — a string value;
-  an optional closed `domain` makes comparing against a literal outside it an error
+  an optional closed `domain` makes comparing against a literal outside it an error, while an optional `literal_validator` admits an open set with a checked grammar
 
 - `SetVariable` — a set for membership tests;
   an optional closed `universe` makes testing a name outside it an error.
@@ -45,7 +45,7 @@ Evaluation is fail-fast — it raises `ConditionError` instead of silently decid
 - a set compared with `==`;
   a non-set container or a non-string element in `contains`
 - a boolean compared against a string
-- a literal outside a domain-closed comparand's domain
+- a literal outside a domain-closed comparand's domain or refused by an open comparand's validator
 - a tested name outside a set's universe
 
 Three declaration-time guards close off the Python operators that cannot build deferred conditions:
@@ -78,8 +78,9 @@ Three declaration-time guards close off the Python operators that cannot build d
 
 Consumers:
 
-- a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped;
-  `BaseBro.__init__` selects at harness `bro`, so an unmatched declaration is never applied.
+- a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped.
+  Each consumer injects its registered `Harness` object when selecting the entries, so an unmatched declaration is never applied.
+  When the native harness is installed, `BaseBro.__init__` also selects its metadata to compose the inspectable native prompt without inventing a second harness object.
   E.g. the dev toolset mounts only on the bro harness (Claude has built-in file/search tools):
   `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]`.
   The same wrapper gates native blocks:
@@ -92,9 +93,10 @@ Consumers:
 
 The facts pair a conditioning surface knows, exported by `bro/mcp.py` as ready-made placeholders (`from bro.mcp import creds, harness`):
 
-- `harness` — the loop that drives the work, which decides how the bro's tools are served and how canonical `namespace::tool` names are spelled:
-  `bro` (the bro-native LLM loop, whose tools run in-process and list as `namespace__tool`)
-  or `claude` (Claude Code with its built-in tools, where the bro's additions are mounted as MCP servers and list as `mcp__namespace__tool`)
+- `harness` — the registered loop that drives the work, supplied as a `bro.harness.Harness` object and exposed to conditions through its name.
+  Names follow `[a-z][a-z0-9-]*`, an open grammar independent of what this installation carries, so a well-formed uninstalled literal compares false rather than raising.
+  A malformed literal still fails every evaluation, and an unmatched `iff` chain still raises.
+  Today's `bro` harness runs tools in-process as `namespace__tool`, while `claude` keeps Claude Code's built-ins and mounts additions as `mcp__namespace__tool`.
 
 - `creds` — the set of secrets the environment resolves.
   The supplied universe is closed (the registry's known names) and membership probes `bro.base.credentials.available` lazily

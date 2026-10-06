@@ -13,6 +13,7 @@ from typing import Optional
 from bro.base import configs, credentials, log
 from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM
+from bro.harness import harness_name
 from bro.llm.llm import LLMSpec
 from bro.monitor import (
   SESSION_DIR_ENV,
@@ -44,7 +45,7 @@ from ride.do_ride import (
   encode_resolved_llm,
 )
 from ride.flags import default_hold
-from ride.harness import HARNESS_NAMES, Harness, get_harness
+from ride.harness import SessionHarness, get_harness
 from ride.identity import human_git_identity_env
 from ride.repository import (
   Repository,
@@ -131,8 +132,8 @@ class SessionSpec:
       raise ValueError('runtime bundle reference must not be empty')
     if type(self.summon_depth) is not int or self.summon_depth <= 0:
       raise ValueError('summon depth must be a positive integer')
-    if self.summon_harness not in HARNESS_NAMES:
-      raise ValueError(f'summon harness must be one of {", ".join(HARNESS_NAMES)}')
+    harness_name(self.harness)
+    harness_name(self.summon_harness)
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -318,9 +319,9 @@ def recorded_runtime_reference(name: str) -> Optional[str]:
   return reference
 
 
-def harness_for_workspace(workspace: Workspace) -> Harness:
+def harness_for_workspace(workspace: Workspace) -> SessionHarness | None:
   spec = load_resume_spec(workspace)
-  return get_harness('claude' if spec is None else spec.harness)
+  return None if spec is None else get_harness(spec.harness)
 
 
 def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
@@ -384,7 +385,7 @@ def _attached_session_env(workspace: Workspace, base_sha: str) -> dict[str, str]
 
 
 def container_launch(
-  harness: Harness,
+  harness: SessionHarness,
   spec: SessionSpec,
   workspace: Workspace,
   launch_scope: ScopedLaunch,

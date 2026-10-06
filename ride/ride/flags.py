@@ -1,4 +1,4 @@
-from bro.base import log
+from bro.base import configs, log
 from bro.base.args import Parser
 from bro.base.scope import launch_choices
 from ride.harness import HARNESS_NAMES
@@ -24,7 +24,7 @@ def add_harness_flags(parser: Parser) -> None:
     '--harness',
     choices=HARNESS_NAMES,
     default=None,
-    help='driving harness (default: project [tool.bro] harness, then claude)',
+    help=(f'driving harness (default: project [tool.bro] harness, then {configs.DEFAULT_HARNESS})'),
   )
 
 

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import bro.base.args as base_args
 from bro import quest
 from bro.base import log
+from bro.harness import installed_harness_names
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -72,9 +73,8 @@ MANUAL_HELP = (
   '`ride solo --summoned <token>` runs the request one-shot'
 )
 HARNESS_HELP = (
-  "the harness the child runs under: 'bro' (the target's own LLM process) or 'claude' "
-  "(a one-shot managed Claude Code session); omitted runs it under the project's "
-  '`[tool.bro] summon-harness`'
+  'the installed harness the child runs under '
+  f'({", ".join(installed_harness_names()) or "none"}); omitted uses the project summon harness'
 )
 GRANT_HELP = (
   'add a launch permission (@BRO, :launch.<type>[.<field>[.<value>]], including '
