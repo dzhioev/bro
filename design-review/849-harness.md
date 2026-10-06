@@ -277,18 +277,27 @@ the tool fold and the persona declarations wait for #754's design and land toget
    `data_sources` folds into `tools`:
    a data source becomes a `source(...)` entry and a reference page a `man('<topic>')` entry, so a persona declares one list.
    Every entry has a key:
-   the group it reaches, or the MCP namespace it serves, which `MCPServerSpec` gains a field for so a key is known before anything is built
-   — a toolset's namespace, a data source's, a reference page's topic, a `cli` tool's —
-   and a layer carrying several, a raw `ToolLayer(server_specs=…)` or a `|` of layers, contributes each under its own.
+   a group's name (`files`, `shell`, `web`, `delegation`);
+   a mounted toolset's namespace;
+   a data source's namespace;
+   a reference page's topic, since the pages fold into one manual;
+   a `cli` entry's generated tool name, since every `cli` tool serves under the one `cli` namespace;
+   and for a raw server spec, the namespace it serves, which `MCPServerSpec` gains a field for so the key is known before anything is built.
+   A layer carrying several entries, a raw `ToolLayer(server_specs=…)` or a `|` of layers, contributes each under its own key.
    Conditions select first, as today:
    a `when` or `iff` entry whose condition does not hold is omitted before keys resolve.
    A subclass's unmet `when(feature('x'), files(write=False))` thus leaves its base's `files()` in force, and a conditional `revoke(...)` withholds only where its condition holds.
    Then each key resolves along the Python MRO:
-   the first class in it that declares the key decides it, its entries for that key merging, shell rosters uniting and the wider files level winning.
+   the first class in it that declares the key decides it.
+   That class's selected entries for the key reduce by kind:
+   files levels to the wider, shell rosters to their union with `ANY` absorbing them, mounts of one toolset to the union of their tool subsets, and identical entries to one.
+   Any other pair under one key fails the fold rather than letting list order decide:
+   a `revoke` beside a grant, two different sources or raw specs, or two `cli` entries for one tool exposing different arguments.
    That is how a subclass narrows, as `files(write=False)` under an inherited `files()` or a shorter `shell(...)` roster.
-   `revoke(...)` withholds a key, as in `revoke(delegation)` or `revoke(brog_mcp.toolset)`, and a descendant may grant it again:
+   `revoke(...)` withholds the keys of the entries it wraps, whatever their level or subset, as in `revoke(delegation())`, `revoke(mount(brog_mcp.toolset))`, or `revoke(cli('bro list'))`;
+   a descendant may grant them again:
    the nearest declaration of each key applies, a revoke included.
-   The slice's tests cover a merge within a class, narrowing, a revoke and a regrant, conditional grants and revokes over inherited entries, and one key declared by two bases of a class that has several.
+   The slice's tests cover each reduction and each refused pair, narrowing, a revoke and a regrant, conditional grants and revokes over inherited entries, a subclass replacing one `cli` entry while keeping its sibling, and one key declared by two bases of a class that has several.
    `block`, `serve`, `allow_commands`, `claude.block`, and every `when(harness == …)` entry go, since nothing is on until declared.
    The base `bro` persona declares no group, so personas grant what they use rather than revoke what `Bro` grants, and the bare `bro` persona keeps only the loop tools on Claude.
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
