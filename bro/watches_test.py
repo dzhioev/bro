@@ -58,6 +58,32 @@ class TestStore:
     assert owner.store.take() == '[printf lines] partial'
     assert watch.saved_offset() == len('one\ntwo\npartial\n')
 
+  def test_pending_observation_does_not_commit_and_the_last_line_is_complete(self, owner):
+    watch = _seed(owner.store, 'producer', 'complete\npartial')
+
+    assert owner.store.has_pending_lines()
+    assert watch.saved_offset() == 0
+    assert watch.last_complete_line() == 'complete'
+
+    assert owner.store.take() == '[producer] complete'
+    assert not owner.store.has_pending_lines()
+    assert watch.last_complete_line() == 'complete'
+
+  def test_stream_head_and_notice_memory_are_session_state(self, owner, monkeypatch):
+    watch = owner.store.start('sleep 30')
+    monkeypatch.setenv(watches.PRODUCER_JOURNAL_HEAD_ENV, str(watch.journal_head_file))
+    monkeypatch.setenv(watches.PRODUCER_JOURNAL_WAKE_ENV, str(watch.journal_wake_file))
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+      caught_up = executor.submit(owner.store.wait_for_journal_head, 'sleep 30', 12)
+      watches.publish_journal_head(12)
+      assert caught_up.result(timeout=10)
+
+    assert watch.journal_head() == 12
+    assert owner.store.mark_notified(frozenset({'mission:M1'}))
+    assert not owner.store.mark_notified(frozenset({'mission:M1'}))
+    assert owner.store.mark_notified(frozenset({'mission:M2'}))
+
   def test_take_stays_within_the_shared_bounds_and_marks_pending(self, owner):
     _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(150)))
 
@@ -231,7 +257,14 @@ class TestProducers:
     command = f'printf ok # {"界" * 80}'
     watch = owner.store.start(command)
 
-    for path in (watch.command_file, watch.log, watch.offset_file, watch.pid_file):
+    for path in (
+      watch.command_file,
+      watch.log,
+      watch.offset_file,
+      watch.pid_file,
+      watch.journal_head_file,
+      watch.journal_wake_file,
+    ):
       assert len(path.name.encode()) <= 255
     assert watch.command_file.read_text().rstrip() == command
 

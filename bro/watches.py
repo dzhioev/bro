@@ -2,6 +2,7 @@
 
 import codecs
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -32,18 +33,24 @@ PRODUCER_OWNER_PATH_ENV = 'BRO_WATCH_OWNER_PATH'
 PRODUCER_DIRECTORY_ENV = 'BRO_WATCH_DIRECTORY'
 PRODUCER_SLUG_ENV = 'BRO_WATCH_SLUG'
 PRODUCER_COMMAND_ENV = 'BRO_WATCH_COMMAND'
+PRODUCER_JOURNAL_HEAD_ENV = 'BRO_WATCH_JOURNAL_HEAD'
+PRODUCER_JOURNAL_WAKE_ENV = 'BRO_WATCH_JOURNAL_WAKE'
 SESSION_WATCH_COMMAND = 'quest watch'
 _PENDING_MARKER = '[...pending watch lines...]'
 _COMMAND_SUFFIX = '.command'
 _LOG_SUFFIX = '.log'
 _OFFSET_SUFFIX = '.offset'
 _PID_SUFFIX = '.pid'
+_JOURNAL_HEAD_SUFFIX = '.journal-head'
+_JOURNAL_WAKE_SUFFIX = '.journal-wake'
 _TURN_FILENAME = '.turn'
+_NOTIFIED_FILENAME = '.notified'
 _LOCK_FILENAME = '.lock'
 _OWNER_FILENAME = '.owner'
 _TERM_GRACE_SECONDS = 5.0
 _COMMAND_TAG_BYTES = 1_024
 _READ_CHUNK_BYTES = 65_536
+_LAST_LINE_BYTES = 4_096
 _LINE_BREAK_ESCAPES = {
   '\n': r'\n',
   '\r': r'\r',
@@ -60,6 +67,18 @@ _LINE_BREAK_ESCAPES = {
 
 class WatchError(Exception):
   """A watch cannot be declared, found, or controlled."""
+
+
+def _signal_journal_change(path: Path) -> None:
+  try:
+    file_descriptor = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+  except OSError as error:
+    if error.errno in (errno.ENOENT, errno.ENXIO):
+      return
+    raise
+  with os.fdopen(file_descriptor, 'wb', buffering=0) as wake:
+    with contextlib.suppress(BrokenPipeError):
+      wake.write(b'1')
 
 
 def _normalized(command: str) -> str:
@@ -202,6 +221,14 @@ class Watch:
   def pid_file(self) -> Path:
     return self.directory / f'{self.slug}{_PID_SUFFIX}'
 
+  @property
+  def journal_head_file(self) -> Path:
+    return self.directory / f'{self.slug}{_JOURNAL_HEAD_SUFFIX}'
+
+  @property
+  def journal_wake_file(self) -> Path:
+    return self.directory / f'{self.slug}{_JOURNAL_WAKE_SUFFIX}'
+
   def producer_identity(self) -> Optional[ProcessIdentity]:
     return ProcessIdentity.read(self.pid_file)
 
@@ -212,8 +239,53 @@ class Watch:
   def saved_offset(self) -> int:
     return Cursor.read(self.offset_file).offset
 
+  def journal_head(self) -> Optional[int]:
+    try:
+      raw = self.journal_head_file.read_text()
+    except FileNotFoundError:
+      return None
+    try:
+      value = int(raw)
+    except ValueError:
+      raise WatchError(f'{self.journal_head_file} carries a malformed journal head') from None
+    if value < 0 or raw != f'{value}\n':
+      raise WatchError(f'{self.journal_head_file} carries a malformed journal head')
+    return value
+
+  def signal_journal_change(self) -> None:
+    _signal_journal_change(self.journal_wake_file)
+
+  def last_complete_line(self) -> Optional[str]:
+    """Return the bounded final complete line, or None when it is absent or wider."""
+    try:
+      with self.log.open('rb') as log_file:
+        log_file.seek(0, os.SEEK_END)
+        end = log_file.tell()
+        start = max(0, end - _LAST_LINE_BYTES - 1)
+        log_file.seek(start)
+        data = log_file.read()
+    except FileNotFoundError:
+      return None
+    if not data.endswith(b'\n'):
+      data, separator, _partial = data.rpartition(b'\n')
+      if len(separator) == 0:
+        return None
+    else:
+      data = data[:-1]
+    _previous, separator, line = data.rpartition(b'\n')
+    if start > 0 and len(separator) == 0:
+      return None
+    return line.decode(errors='replace')
+
   def clear(self) -> None:
-    for path in (self.command_file, self.log, self.offset_file, self.pid_file):
+    for path in (
+      self.command_file,
+      self.log,
+      self.offset_file,
+      self.pid_file,
+      self.journal_head_file,
+      self.journal_wake_file,
+    ):
       path.unlink(missing_ok=True)
 
 
@@ -251,6 +323,70 @@ class Store:
       watch = self._watch(command)
       return [watch] if watch.command_file.exists() else []
 
+  def has_pending_lines(self) -> bool:
+    """Whether any declared watch has a complete line past its committed cursor."""
+    with self._locked():
+      return any(
+        self._has_complete_line(watch, Cursor.read(watch.offset_file))
+        for watch in self._declared_locked()
+      )
+
+  def mark_notified(self, live_set: frozenset[str]) -> bool:
+    """Record a live set and return whether this is its first notice."""
+    encoded = json.dumps(sorted(live_set), ensure_ascii=False, separators=(',', ':')).encode()
+    digest = hashlib.sha256(encoded).hexdigest()
+    path = self.directory / _NOTIFIED_FILENAME
+    with self._locked():
+      try:
+        entries = path.read_text().splitlines()
+      except FileNotFoundError:
+        entries = []
+      if any(re.fullmatch(r'[0-9a-f]{64}', entry) is None for entry in entries):
+        raise WatchError(f'{path} carries malformed notice memory')
+      seen = set(entries)
+      if digest in seen:
+        return False
+      with path.open('a') as notified:
+        notified.write(f'{digest}\n')
+      return True
+
+  def wait_for_journal_head(self, command: str, target: int) -> bool:
+    """Block for a producer to publish `target`, or return false when it ends first."""
+    if not isinstance(target, int) or isinstance(target, bool) or target < 0:
+      raise ValueError('journal target must be a non-negative integer')
+    watch = self._watch(command)
+    while True:
+      published = watch.journal_head()
+      if published is not None and published >= target:
+        return True
+      identity = watch.producer_identity()
+      if identity is None or not identity.alive():
+        return False
+      try:
+        wake_fd = os.open(watch.journal_wake_file, os.O_RDWR | os.O_NONBLOCK)
+      except FileNotFoundError:
+        raise WatchError(f'`{watch.command}` has no journal wake handle') from None
+      with contextlib.ExitStack() as cleanup:
+        cleanup.callback(os.close, wake_fd)
+        published = watch.journal_head()
+        if published is not None and published >= target:
+          return True
+        if not identity.alive():
+          return False
+        pidfd_open = getattr(os, 'pidfd_open', None)
+        if pidfd_open is None:
+          os.set_blocking(wake_fd, True)
+          os.read(wake_fd, 1)
+          continue
+        try:
+          process_fd = pidfd_open(identity.process_id)
+        except ProcessLookupError:
+          continue
+        cleanup.callback(os.close, process_fd)
+        ready, _, _ = select.select([wake_fd, process_fd], [], [])
+        if wake_fd in ready:
+          os.read(wake_fd, 1)
+
   def start(self, command: str) -> Watch:
     watch = self._watch(command)
     with self._locked():
@@ -258,6 +394,7 @@ class Store:
         raise WatchError(f'`{watch.command}` already runs in this session')
       watch.clear()
       watch.command_file.write_text(f'{watch.command}\n')
+      os.mkfifo(watch.journal_wake_file)
       ready_read_fd, ready_write_fd = os.pipe()
       environment = {
         **os.environ,
@@ -267,6 +404,8 @@ class Store:
         PRODUCER_DIRECTORY_ENV: str(self.directory),
         PRODUCER_SLUG_ENV: watch.slug,
         PRODUCER_COMMAND_ENV: watch.command,
+        PRODUCER_JOURNAL_HEAD_ENV: str(watch.journal_head_file),
+        PRODUCER_JOURNAL_WAKE_ENV: str(watch.journal_wake_file),
       }
       process: Optional[subprocess.Popen] = None
       try:
@@ -640,6 +779,23 @@ def watch_dir() -> Path:
       f'{SESSION_DIR_ENV} is unset: a watch keeps its lines in the session state dir'
     )
   return state / WATCH_DIRNAME
+
+
+def publish_journal_head(head: int) -> None:
+  """Publish the ordered journal head after a watched stream emitted through it."""
+  if not isinstance(head, int) or isinstance(head, bool) or head < 0:
+    raise ValueError('journal head must be a non-negative integer')
+  raw_path = os.environ.get(PRODUCER_JOURNAL_HEAD_ENV)
+  raw_wake = os.environ.get(PRODUCER_JOURNAL_WAKE_ENV)
+  if raw_path is None and raw_wake is None:
+    return
+  if raw_path is None or raw_wake is None:
+    raise WatchError('watch producer published an incomplete journal synchronization environment')
+  path = Path(raw_path)
+  staging = path.with_name(f'{path.name}.{os.getpid()}.tmp')
+  staging.write_text(f'{head}\n')
+  os.replace(staging, path)
+  _signal_journal_change(Path(raw_wake))
 
 
 def declared(command: Optional[list[str]] = None) -> list[Watch]:

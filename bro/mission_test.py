@@ -9,6 +9,7 @@ from bro import mission
 from bro.artifact import DEFAULT_TIMEOUT as ARTIFACT_TIMEOUT, SHARE
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_MISSION
+from bro.broker.journal import MAX_EVENT_BATCH
 from bro.quest_test_helper import next_message, quest_record, reply, running_server
 
 REF = f'sha256:{"a" * 64}'
@@ -397,6 +398,78 @@ async def test_watch_renders_both_types_and_cuts_an_oversized_chat_line(monkeypa
     assert len(cut.encode()) == mission.WATCH_LINE_BYTES
     assert cut.endswith('[1544 bytes, cut; seq 2 in mission history WEB-1]')
     watch.close()
+
+
+@pytest.mark.asyncio
+async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(monkeypatch):
+  def event(sequence: int) -> dict:
+    return {
+      'seq': sequence,
+      'kind': 'launch',
+      'type': 'webview',
+      'mission': f'WEB-{sequence}',
+      'parent': 'ROOT',
+      'args': {'type': 'webview'},
+      'transition': 'started',
+    }
+
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
+    with contextlib.closing(mission.watch('webview', wait_seconds=0.05)) as watch:
+      first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await next_message(server)
+      await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
+      channel, listing = await next_message(server)
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      channel, first_poll = await next_message(server)
+      assert first_poll.args == {'after': 0, 'wait': 0.05}
+      await reply(
+        server,
+        channel,
+        first_poll,
+        outcome='ok',
+        value={
+          'head': 300,
+          'events': [event(sequence) for sequence in range(1, MAX_EVENT_BATCH + 1)],
+        },
+      )
+      assert await first_line == 'mission WEB-1 (webview) started'
+      assert [next(watch) for _ in range(2, MAX_EVENT_BATCH + 1)][-1] == (
+        f'mission WEB-{MAX_EVENT_BATCH} (webview) started'
+      )
+
+      frame_cut_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, frame_cut_poll = await next_message(server)
+      assert frame_cut_poll.args == {'after': MAX_EVENT_BATCH, 'wait': 0.05}
+      await reply(
+        server,
+        channel,
+        frame_cut_poll,
+        outcome='ok',
+        value={'head': 300, 'events': [event(sequence) for sequence in range(257, 281)]},
+      )
+      assert await frame_cut_line == 'mission WEB-257 (webview) started'
+      assert [next(watch) for _ in range(258, 281)][-1] == ('mission WEB-280 (webview) started')
+
+      tail_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, tail_poll = await next_message(server)
+      assert tail_poll.args == {'after': 280, 'wait': 0.05}
+      await reply(
+        server,
+        channel,
+        tail_poll,
+        outcome='ok',
+        value={'head': 300, 'events': [event(sequence) for sequence in range(281, 301)]},
+      )
+      assert await tail_line == 'mission WEB-281 (webview) started'
+      assert [next(watch) for _ in range(282, 301)][-1] == ('mission WEB-300 (webview) started')
+
+      resumed = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, resumed_poll = await next_message(server)
+      assert resumed_poll.args == {'after': 300, 'wait': 0.05}
+      await reply(server, channel, resumed_poll, outcome='denied', error='done')
+      with pytest.raises(mission.MissionError, match='done'):
+        await resumed
 
 
 def test_watch_renders_an_untyped_denial_without_guessing_a_worker_type():

@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 import bro.base.args as base_args
+from bro import watches
 from bro.base import log
 
 if TYPE_CHECKING:
@@ -882,36 +883,116 @@ def _chat_entry_event(mission: dict[str, Any], entry: dict[str, Any]) -> dict[st
   }
 
 
-def _arm_replay(client: 'Client', own: str, head: int, worker_type: Optional[str]) -> list[str]:
+@dataclass(frozen=True)
+class WatchEvent:
+  event: dict[str, Any]
+  replayed: bool = False
+
+
+@dataclass(frozen=True)
+class WatchGap:
+  reason: str
+  head: int
+
+
+WatchItem = WatchEvent | WatchGap
+
+
+def _event_head(client: 'Client', *, rearm: bool = False) -> int:
+  from bro.broker.dispatcher import EVENTS
+
+  value = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
+  head = value.get('head')
+  if not isinstance(head, int) or isinstance(head, bool) or head < 0:
+    action = 're-arm' if rearm else 'arm'
+    raise MissionError(f'events {action} returned a malformed head')
+  return head
+
+
+def event_head() -> int:
+  """Read the current ordered journal head for this session."""
+  with open_client() as client:
+    return _event_head(client)
+
+
+def _stream_event_relevant(
+  event: dict[str, Any],
+  own: str,
+  worker_type: Optional[str],
+  *,
+  include_own: bool,
+  strict_parent: bool,
+) -> bool:
+  is_own = event.get('mission') == own
+  if is_own:
+    if not include_own:
+      return False
+    transition = event.get('transition')
+    return transition == 'refused' or (transition == 'message' and event.get('from') == 'owner')
+  if event.get('kind') != LAUNCH:
+    return False
+  if worker_type is not None and _worker_type(event) != worker_type:
+    return False
+  if event.get('parent') != own:
+    if strict_parent:
+      raise MissionError('events read returned a mission this session did not launch')
+    return False
+  return event.get('transition') != 'message' or event.get('from') == 'worker'
+
+
+def _replay_events(
+  client: 'Client',
+  own: str,
+  head: int,
+  worker_type: Optional[str],
+  *,
+  include_own: bool,
+  strict_parent: bool,
+  after: int,
+) -> list[WatchEvent]:
   events: list[dict[str, Any]] = []
-  for mission in _query_listing(client, worker_type):
-    if _ended(mission):
+  if include_own:
+    record = query_mission(client, own)
+    events.extend(
+      _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
+    )
+  for record in _query_listing(client, worker_type):
+    if record.get('parent') != own or _ended(record):
       continue
-    pending = mission.get('pending')
+    pending = record.get('pending')
     if not isinstance(pending, list) or not all(isinstance(entry, dict) for entry in pending):
       raise MissionError('mission listing returned malformed pending questions')
-    events.extend(_chat_entry_event(mission, entry) for entry in pending)
-  replay: dict[int, str] = {}
+    events.extend(_chat_entry_event(record, entry) for entry in pending)
+
+  replay: dict[int, dict[str, Any]] = {}
   for event in events:
     sequence = event.get('seq')
     if not isinstance(sequence, int) or isinstance(sequence, bool):
       raise MissionError('watch replay entry carried a malformed sequence')
-    if sequence > head:
+    if sequence <= after or sequence > head:
       continue
-    line = _chat_event_line(event, own)
-    if line is None:
+    if not _stream_event_relevant(
+      event,
+      own,
+      worker_type,
+      include_own=include_own,
+      strict_parent=strict_parent,
+    ):
       continue
-    marked = _single_line(f'before the watch: {line}')
-    previous = replay.setdefault(sequence, marked)
-    if previous != marked:
+    previous = replay.setdefault(sequence, event)
+    if previous != event:
       raise MissionError(f'watch replay carried conflicting entries at sequence {sequence}')
-  return [replay[sequence] for sequence in sorted(replay)]
+  return [WatchEvent(replay[sequence], replayed=True) for sequence in sorted(replay)]
 
 
-def watch(
-  worker_type: Optional[str] = None, wait_seconds: float = READ_WAIT_SECONDS
-) -> Generator[str]:
-  """Yield retained pending chat, then ordered lifecycle and chat events."""
+def watch_stream(
+  worker_type: Optional[str] = None,
+  wait_seconds: float = READ_WAIT_SECONDS,
+  *,
+  include_own: bool = False,
+  strict_parent: bool = False,
+) -> Generator[WatchItem]:
+  """Yield one arm/replay/gap stream for mission and quest watch projections."""
   if worker_type == '':
     raise ValueError('mission type must be non-empty')
   if wait_seconds <= 0:
@@ -920,12 +1001,21 @@ def watch(
 
   own = own_mission()
   with open_client() as client:
-    baseline = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
-    head = baseline.get('head')
-    if not isinstance(head, int) or isinstance(head, bool):
-      raise MissionError('events arm returned a malformed head')
+    head = _event_head(client)
     cursor = head
-    yield from _arm_replay(client, own, head, worker_type)
+    last_yielded = 0
+    for item in _replay_events(
+      client,
+      own,
+      head,
+      worker_type,
+      include_own=include_own,
+      strict_parent=strict_parent,
+      after=last_yielded,
+    ):
+      last_yielded = cast(int, item.event['seq'])
+      yield item
+    watches.publish_journal_head(cursor)
     while True:
       try:
         value = _read_value(
@@ -937,31 +1027,70 @@ def watch(
       except MissionError as error:
         if not str(error).startswith('events gap:'):
           raise
-        baseline = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
-        head = baseline.get('head')
-        if not isinstance(head, int) or isinstance(head, bool):
-          raise MissionError('events re-arm returned a malformed head') from error
+        head = _event_head(client, rearm=True)
         cursor = head
-        yield _single_line(f'mission watch gap: {error}; re-armed at {head}')
-        yield from _arm_replay(client, own, head, worker_type)
+        yield WatchGap(str(error), head)
+        for item in _replay_events(
+          client,
+          own,
+          head,
+          worker_type,
+          include_own=include_own,
+          strict_parent=strict_parent,
+          after=last_yielded,
+        ):
+          last_yielded = cast(int, item.event['seq'])
+          yield item
+        watches.publish_journal_head(cursor)
         continue
       events = value.get('events')
       if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
         raise MissionError('events read returned malformed records')
+      batch_head = value.get('head')
+      if not isinstance(batch_head, int) or isinstance(batch_head, bool) or batch_head < cursor:
+        raise MissionError('events read returned a malformed head')
       for event in events:
         sequence = event.get('seq')
-        if not isinstance(sequence, int) or isinstance(sequence, bool):
+        if (
+          not isinstance(sequence, int)
+          or isinstance(sequence, bool)
+          or sequence <= cursor
+          or sequence > batch_head
+        ):
           raise MissionError('events read returned a malformed sequence')
         cursor = max(cursor, sequence)
-        if event.get('kind') != LAUNCH or event.get('parent') != own:
+        if not _stream_event_relevant(
+          event,
+          own,
+          worker_type,
+          include_own=include_own,
+          strict_parent=strict_parent,
+        ):
           continue
-        if worker_type is not None and _worker_type(event) != worker_type:
-          continue
-        chat_line = _chat_event_line(event, own)
-        if chat_line is not None:
-          yield chat_line
-        elif event.get('transition') not in ('message', 'refused'):
-          yield _event_line(event, own)
+        last_yielded = sequence
+        yield WatchEvent(event)
+      if len(events) == 0:
+        cursor = batch_head
+      watches.publish_journal_head(cursor)
+
+
+def watch(
+  worker_type: Optional[str] = None, wait_seconds: float = READ_WAIT_SECONDS
+) -> Generator[str]:
+  """Yield retained pending chat, then ordered lifecycle and chat events."""
+  if worker_type == '':
+    raise ValueError('mission type must be non-empty')
+  if wait_seconds <= 0:
+    raise MissionError('events wait must be positive')
+  own = own_mission()
+  for item in watch_stream(worker_type, wait_seconds):
+    if isinstance(item, WatchGap):
+      yield _single_line(f'mission watch gap: {item.reason}; re-armed at {item.head}')
+      continue
+    event = item.event
+    chat_line = _chat_event_line(event, own)
+    line = chat_line if chat_line is not None else _event_line(event, own)
+    yield _single_line(f'before the watch: {line}') if item.replayed else line
 
 
 # --- CLI ------------------------------------------------------------------------
