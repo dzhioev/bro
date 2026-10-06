@@ -391,14 +391,14 @@ def main(argv: list[str]) -> Optional[int]:
     action='append',
     dest='allowed_origins',
     metavar='ORIGIN',
-    help='advisory Playwright origin allow entry; repeat to add another',
+    help='an origin the page may request, refusing every other; repeat to add another',
   )
   open_parser.add_argument(
     '--block',
     action='append',
     dest='blocked_origins',
     metavar='ORIGIN',
-    help='advisory Playwright origin block entry; repeat to add another',
+    help='an origin the page may not request; repeat to add another',
   )
   open_parser.add_argument(
     '--share',

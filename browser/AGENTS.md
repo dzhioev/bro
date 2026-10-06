@@ -50,7 +50,8 @@ The `webview` toolset is the typed owner surface over the mission wire.
 
 ## Owner command
 
-`webview open` forwards optional VNC, a requested VNC port, a `cookies` profile pass, advisory origin lists, shared artifact refs, and a lifetime bound to `launch`, then waits through the accepted and started marks for the daemon's ready event.
+`webview open` forwards optional VNC, a requested VNC port, a `cookies` profile pass, origin allow and block lists, shared artifact refs, and a lifetime bound to `launch`,
+then waits through the accepted and started marks for the daemon's ready event.
 `--cookies <instance>` passes that profile without putting it in the owner's store;
 `--vnc --port <port>` fixes the noVNC view's launcher-loopback port.
 It prints the mission id and optional noVNC URL as JSON;
