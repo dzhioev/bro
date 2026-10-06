@@ -7,6 +7,7 @@ import pytest
 
 import bro.workspace.session as workspace_session
 import ride.do_ride as do_ride
+from bro import watches
 from ride.harness import get_harness
 from ride.session_test import _spec
 from ride.workspace.metadata import Isolation
@@ -247,6 +248,60 @@ class TestRunSession:
     assert seen[0]['pid'] == os.getpid()
     assert seen[0]['start_time'].startswith(('linux-ticks:', 'ps:'))
     assert not process_path.exists()
+
+  def test_arms_the_admitted_session_watch_before_the_harness(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
+    started: list[str] = []
+
+    def record_start(store, command):
+      started.append(command)
+      return MagicMock()
+
+    monkeypatch.setattr(watches.Store, 'start', record_start)
+
+    def capture(_run):
+      assert started == [watches.SESSION_WATCH_COMMAND]
+      return 0
+
+    self._run(monkeypatch, tmp_path, harness_effect=capture)
+
+  def test_skips_the_session_watch_when_the_rule_does_not_admit_it(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
+    with patch.object(watches.Store, 'start') as start:
+      self._run(monkeypatch, tmp_path)
+    start.assert_not_called()
+
+  def test_session_exit_stops_its_watch_producers(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
+    identities = []
+
+    def start_watch(_run):
+      watch = watches.session_store().start('sleep 30')
+      identity = watch.producer_identity()
+      assert identity is not None
+      identities.append(identity)
+      return 0
+
+    self._run(monkeypatch, tmp_path, harness_effect=start_watch)
+
+    assert len(identities) == 1
+    assert not identities[0].alive()
+
+  def test_resumed_session_clears_the_previous_watch_store(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
+    watch_directory = tmp_path / 'session' / watches.WATCH_DIRNAME
+    watch_directory.mkdir(parents=True)
+    stale = watches.Watch('old command', watch_directory, watches.slug('old command'))
+    stale.command_file.write_text('old command\n')
+    stale.log.write_text('uncommitted\n[watch-run] exited 0\n')
+
+    def capture(_run):
+      store = watches.session_store()
+      assert store.declared() == []
+      assert store.take() is None
+      return 0
+
+    self._run(monkeypatch, tmp_path, harness_effect=capture)
 
 
 class TestCredentialHooks:

@@ -39,13 +39,17 @@ A subpackage with a map of its own is pointed at, not described here.
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
 - `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, ordered watch, and cancellation surfaces for every worker mission
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
-- `watches.py`, `watch_run.py` (`watch-run`), and `watch_next.py` (`watch-next`) — a session's watches:
-  a command run once for the run with its lines kept under the session state dir, and the wait that returns the lines a reader has not seen
+- `watches.py`, `watch_run.py` (`watch-run`), and `watch_next.py` (`watch-next`) — one session-local watch store and its producers.
+  `take()` commits fair, bounded batches under one exclusive lock;
+  each line names its command, and a cut batch carries a pending marker.
+  `watch-run` executes each shell command under `job_supervisor`, detached from its starter but held by an owner-liveness handle.
+  Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
+  `watch-next` is the blocking CLI reader used by the current delivery paths.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   `artifact_mcp.py` is the registered `artifact` toolset, reading and grepping reachable text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
-  a supervisor remains the live process-group leader until every command descendant exits;
+  a supervisor remains the live process-group leader until every command descendant exits, and exits when the owner-liveness handle closes;
   merged output drains into a memory-bounded temporary spool, head and tail consumers share one cursor, and the exit is consumed once;
   an inbox wait only observes the set of jobs with news and the framework notices posted to it, while its drain renders and consumes their bounded notification slices.
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
@@ -75,9 +79,10 @@ A subpackage with a map of its own is pointed at, not described here.
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
-  `quest watch` needs no declaring:
+  The compatibility delivery path for `quest watch` needs no declaring:
   for a run that may summon, or a summoned run whose talk lets its summoner say or question or lets the run itself ask,
   the fold admits `watch-run quest watch` and `watch-next` through `Bash` over any block or narrowing of that tool, with the job controls that stop the watch.
+  The same rule in `watches.py` decides whether `do-ride` arms the runtime-owned session watch.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
 - `launch/` + `native/bro/launch/` — core owns cross-harness launch primitives;
   `bro-native` owns the in-process `run` / `chat` launchers, chat UIs, and fork-resume flow.
@@ -152,9 +157,11 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
   the bro harness raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
   the claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
 - `cast` when the bro has spells and its key resolves, and `skill` on the harnesses without a native skill loader (`bro/reference/ride.md`, "Bro spells and skills").
+- `watch` and `unwatch` with a declared `shell` roster on every harness, admitted against the same whole-command roster as a job;
+  they start and stop the store's detached producer, while `unwatch` refuses the runtime-owned session watch.
 - the job tools of a declared `shell` roster, on the bro harness alone
   — `job`, `poll`, `kill`, `jobs`, and `chill`, over the run's registry and inbox;
-  with no `shell` declared, automatic `quest watch` admission mounts the same tools narrowed to that command.
+  with no `shell` declared, automatic `quest watch` admission mounts only the compatibility job tools narrowed to that command.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 

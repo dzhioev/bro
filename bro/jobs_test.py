@@ -1,10 +1,15 @@
+import contextlib
 import gc
+import os
+import subprocess
+import sys
 import time
 import weakref
 from pathlib import Path
 
 import pytest
 
+from bro.base.liveness_test_helper import Liveness
 from bro.base.text_window import BYTE_LIMIT
 from bro.jobs import Job, Registry
 
@@ -173,6 +178,49 @@ def test_supervisor_anchors_the_group_until_nested_descendants_exit():
   assert _process_is_running(child_process_id)
   assert job.kill(grace_seconds=0.3) == 'job-1 exited (code -15)'
   assert not _process_is_running(child_process_id)
+
+
+def test_supervisor_keeps_the_group_when_the_readiness_reader_dies(tmp_path):
+  with contextlib.closing(Liveness(tmp_path / 'readiness-liveness')) as liveness:
+    ready_read_fd, ready_write_fd = os.pipe()
+    owner_read_fd, owner_write_fd = os.pipe()
+    os.close(ready_read_fd)
+    process = subprocess.Popen(
+      [
+        sys.executable,
+        '-m',
+        'bro.job_supervisor',
+        str(ready_write_fd),
+        str(owner_read_fd),
+        liveness.holding('sleep 30'),
+      ],
+      pass_fds=(ready_write_fd, owner_read_fd),
+      start_new_session=True,
+    )
+    with process, os.fdopen(owner_write_fd, 'wb') as owner_writer:
+      os.close(ready_write_fd)
+      os.close(owner_read_fd)
+      liveness.wait_started()
+      assert process.poll() is None
+
+      owner_writer.close()
+      assert process.wait(timeout=10) == -15
+      liveness.assert_reaped()
+
+
+@pytest.mark.parametrize('subject', ['sleep 30', "trap '' TERM; exec sleep 30"])
+def test_supervisor_exits_when_the_process_that_started_the_job_dies(tmp_path, subject):
+  with contextlib.closing(Liveness(tmp_path / 'liveness')) as liveness:
+    command = liveness.holding(subject)
+    script = (
+      'import os; from bro.jobs import Job; '
+      f'Job("job-1", {command!r}); print("started", flush=True); os._exit(0)'
+    )
+    process = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, text=True)
+    assert process.stdout is not None
+    assert process.stdout.readline() == 'started\n'
+    assert process.wait(timeout=10) == 0
+    liveness.assert_reaped()
 
 
 def test_registry_close_unregisters_the_atexit_backstop():

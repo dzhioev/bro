@@ -24,7 +24,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
   `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
-  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, persona provisioning, the session broxy, and the selected harness's preparation and SIGTERM-forwarded agent spawn.
+  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, persona provisioning, the session broxy, and the owned watch store and session watch;
+  plus the selected harness's preparation and SIGTERM-forwarded agent spawn.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
   the generic `ScopeRecipe`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, `launch`-section computation, and the launch preflight,
