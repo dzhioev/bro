@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pytest
 
+from bro.base import retry
 from bro.extra.github import api
 
 
@@ -63,7 +64,7 @@ class _FakeUrlopen:
 
 def _install(monkeypatch, fake: _FakeUrlopen) -> None:
   monkeypatch.setattr(api.urllib.request, 'urlopen', fake)
-  monkeypatch.setattr(api.time, 'sleep', lambda _: None)
+  monkeypatch.setattr(retry, 'sleep', lambda _: None)
 
 
 class TestVerbs:

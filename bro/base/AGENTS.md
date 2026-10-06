@@ -91,6 +91,10 @@ run those with `--help` for flags.
   The `asyncio.to_thread` alternative wherever a call may still be running when the process wants to exit:
   the default executor's threads are joined at interpreter shutdown, so one idle call there delays the exit by its full remaining runtime.
   A cancelled `off_loop` await abandons the thread instead, leaving whatever it holds to the caller.
+- `retry.py` — one retry loop over a `RetryPolicy`:
+  which failures to repeat, the wait before each repeat, and an attempt count, a time window, or both to stop at.
+  `retry` blocks and `retry_async` awaits;
+  the last failure propagates unchanged, and `exponential_backoff` builds the common doubling wait.
 - `log.py` — module-level `logging` to stderr (`debug` / `verbose` / `info` / `warning` / `error` / `exception`), tagging each record with the caller's module as `scope`.
   VERBOSE is a custom level between DEBUG and INFO:
   top-level stages log INFO,
