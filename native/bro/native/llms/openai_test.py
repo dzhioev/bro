@@ -589,7 +589,7 @@ class _NewsTool(_StaticTool):
     self.registry = registry
 
   async def call(self, arguments: dict):
-    job = self.registry.start('printf "background news\\n"', 'watch')
+    job = self.registry.start('printf "background news\\n"', 'bg')
     await asyncio.to_thread(_wait_for_job, job)
     return 'tool done'
 
@@ -635,7 +635,6 @@ class TestNotificationDelivery:
   @pytest.mark.asyncio
   async def test_pending_news_precedes_the_next_user_message(self):
     inbox = Inbox()
-    registry = Registry(inbox)
     gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
     _install_responses(
       gpt,
@@ -646,8 +645,7 @@ class TestNotificationDelivery:
       captured,
     )
     await gpt.send([{'role': 'user', 'content': 'first'}])
-    job = registry.start('echo between turns', 'watch')
-    await asyncio.to_thread(_wait_for_job, job)
+    inbox.post('[watch] between turns')
 
     await gpt.send([{'role': 'user', 'content': 'second'}])
 
@@ -666,7 +664,6 @@ class TestNotificationDelivery:
   @pytest.mark.asyncio
   async def test_wake_starts_a_notification_only_turn(self):
     inbox = Inbox()
-    registry = Registry(inbox)
     gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
     _install_responses(
       gpt,
@@ -677,8 +674,7 @@ class TestNotificationDelivery:
       captured,
     )
     await gpt.send([{'role': 'user', 'content': 'first'}])
-    job = registry.start('echo wake', 'watch')
-    await asyncio.to_thread(_wait_for_job, job)
+    inbox.post('[watch] wake')
 
     assert await gpt.wake() == 'noticed'
 

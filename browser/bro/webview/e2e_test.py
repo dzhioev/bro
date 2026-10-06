@@ -372,6 +372,7 @@ _BROWSER_THREAD_CHILD = r"""
 import asyncio
 import re
 import urllib.parse
+from contextlib import contextmanager
 
 from bro import quest
 from bro.llm.llms.echo import LLMSpec as EchoSpec
@@ -426,104 +427,106 @@ class ScriptedLLM(LLM):
       {'question': 'Which Done controls are available?', 'webview': self.webview},
     )
     assert len(looked['elements']) == 2, looked
-    started = await self.tools.call(
-      'bro__job', {'command': 'quest watch', 'mode': 'watch'}
-    )
-    assert 'started' in started, started
-    self.watch_job = started.split()[1]
+    self.phase = 'click'
     return 'waiting for the owner'
 
-  async def next_question(self):
-    while True:
-      history = quest.history('self')
-      if history.awaiting:
-        return history.awaiting[0]
-      await self.tools.call('bro__chill', {'seconds': 180})
-      self.inbox.drain()
+  def next_question(self):
+    history = quest.history('self')
+    return history.awaiting[0] if history.awaiting else None
 
   async def wake(self, *, request_timeout=None):
-    instruction = await self.next_question()
-    assert instruction.text == 'Click Done', instruction
-    await self.tools.call(
-      'bro__quest_ask',
-      {
-        'quest_id': 'self',
-        'text': 'There are two Done buttons: one in the order edit section and one in the address section. Which one?',
-        'reply_to': instruction.id,
-      },
-    )
+    self.inbox.drain()
+    instruction = self.next_question()
+    if instruction is None:
+      return 'waiting for the owner'
 
-    clarification = await self.next_question()
-    assert clarification.text == 'Use the one in the order edit section', clarification
-    await self.tools.call(
-      'webview__command',
-      {
-        'webview': self.webview,
-        'tool': 'browser_click',
-        'arguments': {'element': 'order edit Done button', 'target': '#order-done'},
-      },
-    )
-    await self.tools.call(
-      'bro__quest_say',
-      {
-        'quest_id': 'self',
-        'text': 'Clicked Done in the order edit section; the order editor remains open.',
-        'reply_to': clarification.id,
-      },
-    )
+    if self.phase == 'click':
+      assert instruction.text == 'Click Done', instruction
+      await self.tools.call(
+        'bro__quest_ask',
+        {
+          'quest_id': 'self',
+          'text': 'There are two Done buttons: one in the order edit section and one in the address section. Which one?',
+          'reply_to': instruction.id,
+        },
+      )
+      self.phase = 'clarification'
+      return 'asked which Done button the owner meant'
 
-    upload = await self.next_question()
-    match = re.search(r'sha256:[0-9a-f]{64}', upload.text)
-    assert match is not None, upload
-    shared = await self.tools.call(
-      'webview__share', {'webview': self.webview, 'ref': match.group(0)}
-    )
-    assert 'resume.txt' in shared['entries'], shared
-    await self.tools.call(
-      'webview__command',
-      {
-        'webview': self.webview,
-        'tool': 'browser_click',
-        'arguments': {'element': 'file input', 'target': '#upload'},
-      },
-    )
-    await self.tools.call(
-      'webview__command',
-      {
-        'webview': self.webview,
-        'tool': 'browser_file_upload',
-        'arguments': {'paths': [shared['path'] + '/resume.txt']},
-      },
-    )
-    filename = text_result(
+    if self.phase == 'clarification':
+      assert instruction.text == 'Use the one in the order edit section', instruction
       await self.tools.call(
         'webview__command',
         {
           'webview': self.webview,
-          'tool': 'browser_evaluate',
-          'arguments': {'function': "() => document.querySelector('#upload').files[0].name"},
+          'tool': 'browser_click',
+          'arguments': {'element': 'order edit Done button', 'target': '#order-done'},
         },
       )
-    )
-    assert 'resume.txt' in filename, filename
-    await self.tools.call(
-      'bro__quest_say',
-      {
-        'quest_id': 'self',
-        'text': 'Uploaded resume.txt; the order editor remains open.',
-        'reply_to': upload.id,
-      },
-    )
+      await self.tools.call(
+        'bro__quest_say',
+        {
+          'quest_id': 'self',
+          'text': 'Clicked Done in the order edit section; the order editor remains open.',
+          'reply_to': instruction.id,
+        },
+      )
+      self.phase = 'upload'
+      return 'clicked the requested Done button'
 
-    done = await self.next_question()
-    assert done.text == 'done', done
+    if self.phase == 'upload':
+      match = re.search(r'sha256:[0-9a-f]{64}', instruction.text)
+      assert match is not None, instruction
+      shared = await self.tools.call(
+        'webview__share', {'webview': self.webview, 'ref': match.group(0)}
+      )
+      assert 'resume.txt' in shared['entries'], shared
+      await self.tools.call(
+        'webview__command',
+        {
+          'webview': self.webview,
+          'tool': 'browser_click',
+          'arguments': {'element': 'file input', 'target': '#upload'},
+        },
+      )
+      await self.tools.call(
+        'webview__command',
+        {
+          'webview': self.webview,
+          'tool': 'browser_file_upload',
+          'arguments': {'paths': [shared['path'] + '/resume.txt']},
+        },
+      )
+      filename = text_result(
+        await self.tools.call(
+          'webview__command',
+          {
+            'webview': self.webview,
+            'tool': 'browser_evaluate',
+            'arguments': {'function': "() => document.querySelector('#upload').files[0].name"},
+          },
+        )
+      )
+      assert 'resume.txt' in filename, filename
+      await self.tools.call(
+        'bro__quest_say',
+        {
+          'quest_id': 'self',
+          'text': 'Uploaded resume.txt; the order editor remains open.',
+          'reply_to': instruction.id,
+        },
+      )
+      self.phase = 'done'
+      return 'uploaded the requested file'
+
+    assert self.phase == 'done', self.phase
+    assert instruction.text == 'done', instruction
     closed = await self.tools.call('webview__close', {'webview': self.webview})
     assert closed['outcome'] == 'ok', closed
     await self.tools.call(
       'bro__quest_say',
-      {'quest_id': 'self', 'text': 'The webview is closed.', 'reply_to': done.id},
+      {'quest_id': 'self', 'text': 'The webview is closed.', 'reply_to': instruction.id},
     )
-    await self.tools.call('bro__kill', {'id': self.watch_job})
     await self.tools.call(
       'bro__answer',
       {
@@ -534,6 +537,12 @@ class ScriptedLLM(LLM):
 
 
 class ScriptedRunner(Runner):
+  @contextmanager
+  def _watch_pump(self):
+    with super()._watch_pump():
+      self.watch_store.start('quest watch')
+      yield
+
   def _create_llm(self, *, hold):
     servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
     return ScriptedLLM(self.inbox, servers)

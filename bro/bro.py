@@ -842,8 +842,7 @@ _JOB_DESCRIPTION = (
   'exact; unrestricted personas may run any command. `fg` waits for exit and returns tail-kept '
   'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
   'result names its id and `poll` continuation. `bg` returns immediately and reports only its '
-  'exit through this run’s notifications; `watch` returns immediately and reports output as it '
-  'arrives plus its exit. `timeout_seconds` is capped at '
+  'exit through this run’s notifications. `timeout_seconds` is capped at '
   f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
   'lines and the shared byte '
   'cap, with skipped/pending markers.'
@@ -867,13 +866,6 @@ _KILL_DESCRIPTION = (
 _JOBS_DESCRIPTION = (
   'list every job in this service registry with its id, mode, command, running/exited state, '
   'exit code, and count of unread output lines.'
-)
-
-_CHILL_DESCRIPTION = (
-  'wait until this run’s background jobs have news or the requested seconds pass, without '
-  'consuming the news. refuses when no job is live because nothing could wake it early. seconds '
-  f'defaults to and is capped at {_JOB_WAIT_CAP_SECONDS:g}; a clamp is named in the result. an '
-  'interrupted tool call cancels its worker wait immediately.'
 )
 
 
@@ -935,7 +927,7 @@ def _job_tools(
 
   async def job(
     command: str,
-    mode: Literal['fg', 'bg', 'watch'] = 'fg',
+    mode: Literal['fg', 'bg'] = 'fg',
     timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
     limit: int = DEFAULT_LIMIT,
   ) -> str:
@@ -1004,27 +996,6 @@ def _watch_tools(
   ]
 
 
-def _chill_tool(live_run: LiveRun, variables: Variables) -> llm_mcp.Tool:
-  async def chill(seconds: float = _JOB_WAIT_CAP_SECONDS) -> dict[str, Any]:
-    if not live_run.registry.has_live_jobs():
-      raise ValueError('chill needs at least one live job')
-    wait_seconds, clamp_note = _bounded_wait(seconds, 'seconds')
-    started = time.monotonic()
-    with live_run.inbox.waiter() as cancelled:
-      woken = await off_loop(live_run.inbox.wait, time.monotonic() + wait_seconds, cancelled)
-    result: dict[str, Any] = {
-      'slept': round(time.monotonic() - started, 3),
-      'woken': woken,
-    }
-    if clamp_note is not None:
-      result['note'] = clamp_note
-    return result
-
-  return llm_mcp.FunctionTool(
-    chill, name='chill', description=_CHILL_DESCRIPTION, variables=variables
-  )
-
-
 # the service roster's tool names — the closed `#tools` universe the service
 # descriptions render against
 _SERVICE_TOOL_NAMES = (
@@ -1047,7 +1018,6 @@ _SERVICE_TOOL_NAMES = (
   'poll',
   'kill',
   'jobs',
-  'chill',
 )
 
 
@@ -1111,7 +1081,7 @@ def _build_service_server(
   if has_watches:
     mounted.extend(['watch', 'unwatch'])
   if has_jobs:
-    mounted.extend(['job', 'poll', 'kill', 'jobs', 'chill'])
+    mounted.extend(['job', 'poll', 'kill', 'jobs'])
   variables: Variables = {
     **mcp.surface_variables(harness=harness),
     'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
@@ -1155,7 +1125,6 @@ def _build_service_server(
         variables=variables,
       )
     )
-    tools.append(_chill_tool(live_run, variables))
   assert [tool.name for tool in tools] == mounted
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = _SERVICE_TOOL_NAMES

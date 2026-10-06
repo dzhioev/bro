@@ -18,7 +18,7 @@ from bro.base.text_window import DEFAULT_LIMIT, apply_limit, format_size, take_h
 if TYPE_CHECKING:
   from bro.inbox import Inbox
 
-JobMode = Literal['fg', 'bg', 'watch']
+JobMode = Literal['fg', 'bg']
 
 TERM_GRACE_SECONDS = 5.0
 SPOOL_MEMORY_BYTES = 1_000_000
@@ -30,10 +30,8 @@ class Notification:
   job_id: str
   mode: JobMode
   command: str
-  kind: Literal['output', 'exited']
   lines: str
   exit_code: Optional[int] = None
-  pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,13 +44,11 @@ class JobStatus:
   unread_lines: int
 
 
-def _pending_marker(remainder: str, clamp_note: str, job_id: Optional[str] = None) -> Optional[str]:
+def _pending_marker(remainder: str, clamp_note: str) -> Optional[str]:
   if len(remainder) == 0:
     return f'[...{clamp_note}...]' if len(clamp_note) > 0 else None
   body = f'{len(remainder.splitlines()):,} lines / {format_size(len(remainder))}'
-  poll_note = f'poll {job_id}' if job_id is not None else ''
-  notes = ' — '.join(note for note in (poll_note, clamp_note) if len(note) > 0)
-  suffix = f' — {notes}' if len(notes) > 0 else ''
+  suffix = f' — {clamp_note}' if len(clamp_note) > 0 else ''
   return f'[...pending: {body}{suffix}...]'
 
 
@@ -68,7 +64,7 @@ class Job:
     inbox: Optional['Inbox'] = None,
     spool_memory_bytes: int = SPOOL_MEMORY_BYTES,
   ):
-    if mode not in {'fg', 'bg', 'watch'}:
+    if mode not in {'fg', 'bg'}:
       raise ValueError(f'unknown job mode {mode!r}')
     self.id = job_id
     self.command = command
@@ -142,10 +138,7 @@ class Job:
       self._spool.seek(0, os.SEEK_END)
       self._spool.write(text)
       self._spool.flush()
-      reports_output = self.mode == 'watch'
       self._condition.notify_all()
-    if reports_output:
-      self._mark_news()
 
   def _record_exit(self) -> None:
     returncode = self.process.wait()
@@ -198,17 +191,11 @@ class Job:
 
   def _has_news_locked(self) -> bool:
     exited = self._process_finished_locked() and not self._exit_consumed
-    if self.mode in {'fg', 'bg'}:
-      return exited
-    return len(self._unread_locked()) > 0 or exited
+    return exited
 
   def has_news(self) -> bool:
     with self._condition:
       return self._has_news_locked()
-
-  def is_live(self) -> bool:
-    with self._condition:
-      return self._returncode is None
 
   def become_background(self) -> None:
     with self._condition:
@@ -297,43 +284,15 @@ class Job:
     with self._condition:
       if not self._has_news_locked():
         return None
-      if self.mode in {'fg', 'bg'}:
-        section = self._unread_locked()
-        self._cursor = self._end_locked()
-        self._exit_consumed = True
-        return Notification(
-          self.id,
-          self.mode,
-          self.command,
-          'exited',
-          apply_limit(section, limit, keep='tail'),
-          exit_code=self._returncode,
-        )
-
-      pending = self._unread_locked()
-      kept = ''
-      marker = None
-      if len(pending) > 0:
-        kept, clamp_note = take_head(pending, limit)
-        self._advance_locked(len(kept))
-        marker = _pending_marker(pending[len(kept) :], clamp_note, self.id)
-      exited = self._finished_locked() and not self._exit_consumed
-      if exited:
-        self._exit_consumed = True
-      pieces = []
-      body = kept.rstrip('\n')
-      if len(body) > 0:
-        pieces.append(body)
-      if marker is not None:
-        pieces.append(marker)
+      section = self._unread_locked()
+      self._cursor = self._end_locked()
+      self._exit_consumed = True
       return Notification(
         self.id,
         self.mode,
         self.command,
-        'exited' if exited else 'output',
-        '\n'.join(pieces),
-        exit_code=self._returncode if exited else None,
-        pending=marker is not None and marker.startswith('[...pending:'),
+        apply_limit(section, limit, keep='tail'),
+        exit_code=self._returncode,
       )
 
   def kill(self, *, grace_seconds: float = TERM_GRACE_SECONDS) -> str:
@@ -356,10 +315,7 @@ class Job:
         self._condition.wait()
       returncode = self._returncode
       self._exit_consumed = True
-      output_remains = self.mode == 'watch' and len(self._unread_locked()) > 0
       self._condition.notify_all()
-    if output_remains:
-      self._mark_news()
     prefix = 'already exited' if already_exited else 'exited'
     return f'{self.id} {prefix} (code {returncode})'
 
@@ -412,9 +368,6 @@ class Registry:
   def values(self) -> list[Job]:
     with self._lock:
       return list(self._jobs.values())
-
-  def has_live_jobs(self) -> bool:
-    return any(job.is_live() for job in self.values())
 
   def close(self) -> None:
     with self._lock:
