@@ -49,9 +49,6 @@ __cli_name__ = 'land-pr'
 
 _CHECK_POLL_INTERVAL = 15.0
 _CHECK_FIELDS = ['statusCheckRollup', 'mergeStateStatus']
-# GitHub's merge states of a head whose commit status passes with nothing
-# required left to report
-_NOTHING_EXPECTED = ('CLEAN', 'HAS_HOOKS')
 
 
 class LandError(Exception):
@@ -142,7 +139,7 @@ def _checks_settled(pr: dict[str, Any]) -> bool:
   """every check on the head concluded, or none reported and GitHub expects none."""
   entries = _rollup(pr)
   if len(entries) == 0:
-    return pr['mergeStateStatus'] in _NOTHING_EXPECTED
+    return api.expects_no_check(pr['mergeStateStatus'])
   pending, _ = _split_checks(entries)
   return len(pending) == 0
 
@@ -176,7 +173,7 @@ def _checks_error(number: int, pr: dict[str, Any]) -> Optional[str]:
       f'PR #{number} still has pending checks: {", ".join(pending)}; '
       're-run land-pr once they conclude'
     )
-  if len(entries) == 0 and pr['mergeStateStatus'] not in _NOTHING_EXPECTED:
+  if len(entries) == 0 and not api.expects_no_check(pr['mergeStateStatus']):
     return (
       f'no status check reported on the head of PR #{number} while GitHub reports its '
       f'merge state as {pr["mergeStateStatus"]}, not CLEAN, so the head is not one GitHub '

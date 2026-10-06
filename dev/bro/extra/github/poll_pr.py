@@ -26,7 +26,7 @@ import urllib.error
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, TypeVar
+from typing import Any, Literal, Optional, TypeVar
 
 from bro.base import credentials, log
 from bro.base.args import Parser
@@ -195,60 +195,66 @@ class HeadTracker:
 
 @dataclass(frozen=True)
 class CheckTransition:
+  state: Literal['red', 'green', 'pending']
   failed_runs: list[dict[str, Any]]
 
 
 class CheckTracker:
   """edge-triggered check detection over each head commit.
 
-  `update` returns a transition with failed runs when checks turn red, a
-  transition without failed runs when every run has concluded without failure,
-  and None while there is no new edge. A new head re-arms both edges; a pending
-  or failed run also re-arms the green edge. An empty check suite is not green.
+  `update` returns a `red` transition with the failed runs when checks turn
+  red, a `green` one when every run has concluded without failure — or, before
+  any run reports, when GitHub's merge state holds the merge for none — a
+  `pending` one when a green head stops being green without failing, and None
+  while there is no new edge. A new head re-arms both edges.
   """
 
   def __init__(self):
     self._sha: Optional[str] = None
     self._failing = False
-    self._green_armed = True
+    self._green = False
 
-  def update(self, sha: str, check_runs: list[dict[str, Any]]) -> Optional[CheckTransition]:
+  def update(
+    self, sha: str, check_runs: list[dict[str, Any]], merge_state: str
+  ) -> Optional[CheckTransition]:
     if sha != self._sha:
       self._sha = sha
       self._failing = False
-      self._green_armed = True
+      self._green = False
 
     states = [api.check_state(run.get('status'), run.get('conclusion')) for run in check_runs]
-    if 'pending' in states:
-      self._green_armed = True
-
     failed = [run for run, state in zip(check_runs, states, strict=True) if state == 'failed']
     if len(failed) > 0:
-      self._green_armed = True
+      self._green = False
       if self._failing:
         return None
       self._failing = True
-      return CheckTransition(failed)
+      return CheckTransition('red', failed)
 
     self._failing = False
-    if len(check_runs) == 0 or 'pending' in states or not self._green_armed:
+    if len(check_runs) == 0 and merge_state.lower() == 'unknown':
+      # GitHub has not computed the merge state yet: no edge either way
       return None
-    self._green_armed = False
-    return CheckTransition([])
+    green = 'pending' not in states and (len(check_runs) > 0 or api.expects_no_check(merge_state))
+    if green == self._green:
+      return None
+    self._green = green
+    return CheckTransition('green' if green else 'pending', [])
 
 
-def _checks_event(pr: int, head: str, failed: list[dict[str, Any]]) -> dict[str, Any]:
+def _checks_event(pr: int, head: str, transition: CheckTransition) -> dict[str, Any]:
   return {
     'event': 'checks',
     'pr': pr,
     'head': head,
+    'state': transition.state,
     'failing': [
       {
         'name': run.get('name', ''),
         'conclusion': run.get('conclusion', ''),
         'url': run.get('html_url') or run.get('details_url', ''),
       }
-      for run in failed
+      for run in transition.failed_runs
     ],
   }
 
@@ -395,9 +401,9 @@ def poll_pr(
             'checks', _fetch_check_runs, owner, repo, head_sha, cycle_token
           )
           if check_runs is not None:
-            transition = checks.update(head_sha, check_runs)
+            transition = checks.update(head_sha, check_runs, pr_data['mergeable_state'])
             if transition is not None:
-              _emit(_checks_event(pr, head_sha, transition.failed_runs))
+              _emit(_checks_event(pr, head_sha, transition))
 
       sources.probe(
         'reviews',

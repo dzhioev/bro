@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.9.0
+version: 7.10.0
 ---
 
 # run-pr
@@ -406,11 +406,13 @@ poll-pr <owner>/<repo> <pr_number>
   — the PR became unmergeable into its base (GitHub's `mergeable` turned false, typically after something landed on the base).
   Fires once per conflicted episode
   — it re-arms only after the PR turns mergeable again.
-- `{"event": "checks", "pr": N, "head": "...", "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}`
+- `{"event": "checks", "pr": N, "head": "...", "state": "red|green|pending", "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}`
   — the check result changed on `head`, the PR head it was read for.
-  A non-empty `failing` array fires once per red episode;
-  an empty array fires once when a non-empty set of check runs has all concluded without failure.
-  The green edge re-arms on a new head or a newly pending or failed run.
+  `red` fires once per red episode, its failures in `failing`;
+  `green` fires once every check run has concluded without failure
+  — and before any check reports, once GitHub's merge state holds the merge for none:
+  the checks the base requires decide a head nothing reported on, and a check that reports later gates it from then on;
+  `pending` fires when a green head stops being green without failing, a check starting on it or GitHub's merge state holding it again.
   Watcher silence is not evidence that checks are green.
 - `{"event": "pushed", "pr": N, "head": "..."}`
   — a push from somewhere other than this checkout moved the PR's head;
@@ -567,9 +569,9 @@ nothing is broken, and the approval is still coming.
 handle it as feedback above.
 
 **The head checks.**
-Only a `checks` event with an empty `failing` array whose `head` is the current head clears this gate.
+Only a `checks` event with `state: "green"` whose `head` is the current head clears this gate.
 Retain all cleared gates against that head SHA;
-a push invalidates the reviewer, base, and check results together, while a non-empty `failing` array clears the check result.
+a push invalidates the reviewer, base, and check results together, while a `red` or `pending` event clears the check result.
 Watcher silence is not evidence that checks finished.
 If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
 
@@ -580,7 +582,7 @@ With all three gates clear, chain into the merge, and batch it
 informational;
 the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
 
-**`checks` event with a non-empty `failing` array**:
+**`checks` event with `state: "red"`**:
 CI went red on what you pushed;
 clear any green state retained for the current head.
 Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage
@@ -591,7 +593,11 @@ Report the failure and your fix to the user;
 never wait for it to disappear on a re-run you didn't trigger, and never land around it
 — `land-pr` refuses a failed check anyway.
 
-**`checks` event with an empty `failing` array**:
+**`checks` event with `state: "pending"`**:
+a check started on a head that was green, or GitHub holds its merge again;
+clear the green retained for that `head` and keep watching.
+
+**`checks` event with `state: "green"`**:
 retain that its `head` is green.
 If an APPROVED review already cleared the reviewer and base gates for this same head, resume that handler and chain into the merge;
 otherwise keep watching for review events.
