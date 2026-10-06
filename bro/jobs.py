@@ -80,26 +80,39 @@ class Job:
     )
     self._drained = False
     self._returncode: Optional[int] = None
+    self._settled = False
     self._exit_consumed = False
     self._cursor = self._spool.tell()
     ready_read_fd, ready_write_fd = os.pipe()
+    owner_read_fd, self._owner_write_fd = os.pipe()
     with (
       os.fdopen(ready_read_fd, 'rb') as ready_reader,
       os.fdopen(ready_write_fd, 'wb') as ready_writer,
+      os.fdopen(owner_read_fd, 'rb') as owner_reader,
     ):
       self.process = spawn.popen(
-        [sys.executable, '-m', 'bro.job_supervisor', str(ready_write_fd), command],
-        pass_fds=(ready_write_fd,),
+        [
+          sys.executable,
+          '-m',
+          'bro.job_supervisor',
+          str(ready_write_fd),
+          str(owner_read_fd),
+          command,
+        ],
+        pass_fds=(ready_write_fd, owner_read_fd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
       )
       ready_writer.close()
+      owner_reader.close()
       if ready_reader.read(1) != b'1':
         self.process.wait()
         stdout = self.process.stdout
         assert stdout is not None
         failure = stdout.read().decode(errors='replace').strip()
         stdout.close()
+        os.close(self._owner_write_fd)
+        self._owner_write_fd = -1
         self._spool.close()
         raise RuntimeError(f'job supervisor failed to start: {failure}')
     self._reader_thread = threading.Thread(target=self._drain, daemon=True)
@@ -120,7 +133,6 @@ class Job:
     stdout.close()
     with self._condition:
       self._drained = True
-      self._condition.notify_all()
     self._signal_exit_if_finished()
 
   def _append(self, text: str) -> None:
@@ -139,15 +151,24 @@ class Job:
     returncode = self.process.wait()
     with self._condition:
       self._returncode = returncode
-      self._condition.notify_all()
+      owner_write_fd = self._owner_write_fd
+      self._owner_write_fd = -1
+    if owner_write_fd >= 0:
+      os.close(owner_write_fd)
     self._signal_exit_if_finished()
 
   def _signal_exit_if_finished(self) -> None:
     with self._condition:
-      finished = self._finished_locked()
+      process_finished = self._process_finished_locked()
       reports_exit = not self._exit_consumed
-    if finished and reports_exit:
+      already_settled = self._settled
+    if not process_finished or already_settled:
+      return
+    if reports_exit:
       self._mark_news()
+    with self._condition:
+      self._settled = True
+      self._condition.notify_all()
 
   def _mark_news(self) -> None:
     if self._inbox is not None:
@@ -156,8 +177,11 @@ class Job:
   def _state_line_locked(self) -> str:
     return 'running' if self._returncode is None else f'exited (code {self._returncode})'
 
-  def _finished_locked(self) -> bool:
+  def _process_finished_locked(self) -> bool:
     return self._returncode is not None and self._drained
+
+  def _finished_locked(self) -> bool:
+    return self._process_finished_locked() and self._settled
 
   def _end_locked(self) -> int:
     self._spool.seek(0, os.SEEK_END)
@@ -173,7 +197,7 @@ class Job:
     self._cursor = self._spool.tell()
 
   def _has_news_locked(self) -> bool:
-    exited = self._finished_locked() and not self._exit_consumed
+    exited = self._process_finished_locked() and not self._exit_consumed
     if self.mode in {'fg', 'bg'}:
       return exited
     return len(self._unread_locked()) > 0 or exited

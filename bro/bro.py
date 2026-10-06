@@ -7,12 +7,12 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Protocol, Self
+from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
 
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
-from bro import spells as spell_store, summon
+from bro import spells as spell_store, summon, watches
 from bro.base import credentials, log
 from bro.base.condition import (
   Condition,
@@ -130,6 +130,11 @@ class LiveRun(Protocol):
 
   @property
   def registry(self) -> Registry: ...
+
+
+class WatchRun(LiveRun, Protocol):
+  @property
+  def watch_store(self) -> watches.Store: ...
 
 
 RAISE_EXIT_STATUS = 1
@@ -959,6 +964,46 @@ def _job_tools(
   ]
 
 
+_WATCH_DESCRIPTION = (
+  'start an admitted shell command as a detached producer for the rest of this session. the '
+  'command must match this persona’s shell roster whole and exact; unrestricted personas may '
+  'run any command. its bounded output reaches the session through the shared watch store.'
+)
+
+_UNWATCH_DESCRIPTION = (
+  'stop the admitted command’s watch and its whole process group. the runtime-owned session '
+  'watch cannot be stopped through this tool.'
+)
+
+
+def _watch_tools(
+  *,
+  live_run: Optional[WatchRun],
+  commands: tuple[str, ...],
+  unrestricted: bool,
+  variables: Variables,
+) -> list[llm_mcp.Tool]:
+  def store() -> watches.Store:
+    return watches.session_store() if live_run is None else live_run.watch_store
+
+  def watch(command: str) -> str:
+    admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
+    started = store().start(admitted)
+    return f'watching `{started.command}`'
+
+  def unwatch(command: str) -> str:
+    admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
+    store().stop(admitted)
+    return f'stopped watching `{admitted}`'
+
+  return [
+    llm_mcp.FunctionTool(watch, name='watch', description=_WATCH_DESCRIPTION, variables=variables),
+    llm_mcp.FunctionTool(
+      unwatch, name='unwatch', description=_UNWATCH_DESCRIPTION, variables=variables
+    ),
+  ]
+
+
 def _chill_tool(live_run: LiveRun, variables: Variables) -> llm_mcp.Tool:
   async def chill(seconds: float = _JOB_WAIT_CAP_SECONDS) -> dict[str, Any]:
     if not live_run.registry.has_live_jobs():
@@ -996,6 +1041,8 @@ _SERVICE_TOOL_NAMES = (
   'quest_share',
   'quest_list',
   'quest_cancel',
+  'watch',
+  'unwatch',
   'job',
   'poll',
   'kill',
@@ -1035,6 +1082,7 @@ def _build_service_server(
     and (name_of(harness) == 'bro' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
   selection = bro._selected_tools_for(harness)
+  has_watches = selection.shell_declared
   has_jobs = name_of(harness) == 'bro' and (
     selection.shell_unrestricted or len(selection.shell_commands) > 0
   )
@@ -1060,6 +1108,8 @@ def _build_service_server(
         'quest_cancel',
       ]
     )
+  if has_watches:
+    mounted.extend(['watch', 'unwatch'])
   if has_jobs:
     mounted.extend(['job', 'poll', 'kill', 'jobs', 'chill'])
   variables: Variables = {
@@ -1085,6 +1135,15 @@ def _build_service_server(
     tools.append(_quest_share_tool(variables))
     tools.append(_quest_list_tool(variables))
     tools.append(_quest_cancel_tool(variables, harness))
+  if has_watches:
+    tools.extend(
+      _watch_tools(
+        live_run=cast(Optional[WatchRun], live_run),
+        commands=selection.shell_commands,
+        unrestricted=selection.shell_unrestricted,
+        variables=variables,
+      )
+    )
   if has_jobs:
     if live_run is None:
       raise RuntimeError('job tools require a live run')
@@ -1133,8 +1192,7 @@ def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> se
   return set(component.optional_secrets)
 
 
-QUEST_WATCH_COMMAND = 'quest watch'
-# how a claude session keeps the quest watch, as the `watch` spell prescribes it
+QUEST_WATCH_COMMAND = watches.SESSION_WATCH_COMMAND
 QUEST_WATCH_SHELL_COMMANDS = (
   f'watch-run {QUEST_WATCH_COMMAND}',
   'watch-next',
@@ -1154,17 +1212,7 @@ class _ToolSelection:
   narrowed_tool_commands: dict[str, tuple[str, ...]]
   shell_commands: tuple[str, ...]
   shell_unrestricted: bool
-
-
-def _quest_watch_is_admitted(
-  *, may_summon: tuple[str, ...], summoned: bool, talk: Optional[tuple[str, ...]]
-) -> bool:
-  # a summoned run hears its summoner's says and questions, and the replies to its own
-  # questions, only through the watch
-  quest_traffic = talk is not None and any(
-    right in talk for right in ('owner.say', 'owner.question', 'worker.question')
-  )
-  return len(may_summon) > 0 or (summoned and quest_traffic)
+  shell_declared: bool
 
 
 def _fold_tool_layers(
@@ -1207,6 +1255,7 @@ def _fold_tool_layers(
         declared_shell_commands.append(command)
 
   shell_commands = list(dict.fromkeys(declared_shell_commands))
+  shell_declared = shell_unrestricted or len(shell_commands) > 0
   if name_of(harness) == 'claude' and len(shell_commands) > 0 and not shell_unrestricted:
     for name in _CLAUDE_COMMAND_TOOLS:
       narrowed.setdefault(name, []).extend(shell_commands)
@@ -1224,7 +1273,7 @@ def _fold_tool_layers(
       )
     del blocked[name]
 
-  if _quest_watch_is_admitted(may_summon=may_summon, summoned=summoned, talk=talk):
+  if watches.session_watch_admitted(may_summon=may_summon, summoned=summoned, talk=talk):
     if name_of(harness) == 'bro':
       if not shell_unrestricted and QUEST_WATCH_COMMAND not in shell_commands:
         shell_commands.append(QUEST_WATCH_COMMAND)
@@ -1247,6 +1296,7 @@ def _fold_tool_layers(
     },
     shell_commands=tuple(shell_commands),
     shell_unrestricted=shell_unrestricted,
+    shell_declared=shell_declared,
   )
 
 

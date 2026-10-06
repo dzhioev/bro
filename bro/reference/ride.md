@@ -122,6 +122,30 @@ The native recipe and implementation ship from `bro-native`;
 Claude's recipe and implementation ship from `bro-ride`.
 A Claude-only installation therefore registers only `claude`, while `bro-native` adds `bro` by depending on ride rather than ride importing the native engine.
 
+## Session watches
+
+Every managed harness keeps its command watches in one store under the session state directory.
+`do-ride` clears that store when a session starts, owns its producers for the session lifetime, and stops them in teardown.
+An in-process `bro run|chat` outside ride uses a temporary store owned by its `Runner` instead.
+
+A producer runs its shell command under the same process-group supervisor as a job.
+It is detached from the process that requested it, but exits when its session owner's liveness handle closes;
+stopping it terminates the whole process group.
+A job carries the same backstop from the process that started it.
+
+`take()` is the store's single reader.
+Under an exclusive lock it commits complete output past each watch's offset and returns at most the shared 100-line and 30 KB bounds, with every line tagged by command.
+A cut batch ends in a pending marker and the next batch starts after the watch that was cut, so a busy producer cannot exclude another.
+A line wider than the byte bound is delivered in successive pieces, with its first piece naming the whole line size.
+
+Where a persona declares shell reach, both harnesses mount `bro::watch(command)` and `bro::unwatch(command)`.
+The command must match the persona's shell roster exactly, as `bro::job` requires;
+`unwatch` refuses the runtime-owned session watch.
+`do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
+Each joined party member has its own session directory and therefore its own store.
+
+Claude's compatibility delivery uses `watch-next` as its blocking reader, so its quest-watch commands remain admitted alongside the runtime-owned producer.
+
 ## Claude harness
 
 A Claude session retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
@@ -165,7 +189,7 @@ its runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGT
 Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
 
-A native session that can receive summon traffic starts `quest watch` as a watch-mode `bro::job` once, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
+A native session that can receive summon traffic also starts the compatibility `quest watch` as a watch-mode `bro::job`, and its output reaches the LLM as notifications after tool results or in an idle interactive turn.
 `bro::chill` waits on the run's whole background-job inbox when no other work remains.
 A one-shot `bro run` ends when a turn ends with nothing running and nothing in flight:
 a turn that ends with a live job or an owned mission still in flight gets one framework notice through the same seam (a user-role item recorded as a `notification` step),
@@ -296,6 +320,7 @@ A directory under the store that records no workspace is ignored by enumeration,
   session/            what the running session records about itself:
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
+    watch/                        the session's watch declarations, offsets, and output
     claude/                       claude harness artifacts (recorder/projector logs, live statusLine projection, and the persistent Claude temp root)
   claude/             the claude harness's state dir ("Unboxed Claude-state isolation")
   party/<member>/     records for a session that joined this workspace's party:
@@ -312,7 +337,7 @@ Of the last three, `session/` is the unconditional one
 It is the only record the session reaches from *inside* itself:
 unboxed isolation uses its absolute path, and boxed isolation uses a bind at `/var/ride/session`, either way named by `RIDE_SESSION_DIR`.
 That reach is what it exists for:
-the trail pointer and the recording health signal are published by the session and read back host-side, so both ends need one path.
+the trail pointer and the recording health signal are published by the session and read back host-side, while the session's producer and reader processes share `watch/`.
 Signals every harness shares sit at its root, a harness's own artifacts under `<harness>/`
 — where the claude recorder's stderr goes.
 Every unboxed session puts its scoped store and install-hook output under one private temporary root removed when the session ends, so retained or collected records hold no secret.

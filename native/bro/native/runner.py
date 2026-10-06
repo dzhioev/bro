@@ -3,11 +3,12 @@
 import os
 import traceback
 from collections.abc import Callable
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Optional, Self
 
+from bro import watches
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
@@ -25,7 +26,7 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.mission import LiveMission, live_mission_line, live_missions
-from bro.monitor import trail_pointer
+from bro.monitor import session_dir, trail_pointer
 from bro.native import providers as native_providers
 from bro.native.harness import BRO
 from bro.native.llm import LLM
@@ -140,6 +141,7 @@ class Runner:
     self.bro = bro
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
+    self._watch_owner: Optional[watches.Owner] = None
     self._llm: Optional[LLM] = None
     # a bro renders only through an observer its caller passes: an embedding
     # application must not get terminal output, or a display session, it never
@@ -161,6 +163,12 @@ class Runner:
   @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]:
     return self._tracker.current_tool_step_id
+
+  @property
+  def watch_store(self) -> watches.Store:
+    if self._watch_owner is not None:
+      return self._watch_owner.store
+    return watches.session_store()
 
   def _start_refusal(self) -> Optional[str]:
     # the run-start credential gate: the refusal listing every missing secret,
@@ -217,6 +225,10 @@ class Runner:
   def __enter__(self) -> Self:
     if self._lifetime_active:
       raise RuntimeError('run lifetime is already active')
+    if session_dir() is None or os.environ.get(watches.OWNER_ENV) is None:
+      owner = watches.Owner.temporary(publish_environment=False)
+      owner.__enter__()
+      self._watch_owner = owner
     self._lifetime_active = True
     self._last_end_reason = None
     self._last_end_detail = None
@@ -244,7 +256,12 @@ class Runner:
       detail = str(exception)
       self._record_error_step(exception)
 
-    self.registry.close()
+    with ExitStack() as cleanup:
+      cleanup.callback(self.registry.close)
+      if self._watch_owner is not None:
+        owner = self._watch_owner
+        self._watch_owner = None
+        cleanup.callback(owner.__exit__, None, None, None)
     self.bro.close()
     self._lifetime_active = False
     self._last_end_reason = reason
