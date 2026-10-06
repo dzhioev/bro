@@ -229,7 +229,7 @@ Each harness implements four operations for its sessions, behind two protocols i
 ### The slices after #850
 
 In the order they land, by dependency:
-the tool fold waits for #754's design and the persona declarations for the tool fold, so trails and prompts go first.
+the tool fold and the persona declarations wait for #754's design and land together, so trails and prompts go first.
 
 1. **Service tools.**
    `answer` and `raise` end the session through `Harness.end_session`:
@@ -262,10 +262,10 @@ the tool fold waits for #754's design and the persona declarations for the tool 
    `#harness` stays a fact for a case no fact covers;
    no prompt uses it once this slice lands, and no declaration once the persona slice does.
    `bro/prompts/AGENTS.md` and the template and conditions references state the rule.
-4. **Tool fold, with #754.**
+4. **Tool fold, with #754**, landing with the persona declarations.
    The fold produces a harness-neutral reach, and `Harness.serve(reach)` maps it:
-   Claude onto natives it blocks, narrows behind the command gate, or serves, and the bro harness onto its own tools, refusing native names.
-   #754's shell syntax and its matcher are general code that both the Claude gate and the bro job tool call, and Claude's `Bash` stays blocked unless a `shell(...)` declaration hands it back.
+   Claude onto the natives it passes through `--tools` and the shell it narrows behind the command gate, and the bro harness onto its own tools, refusing native names.
+   #754's shell syntax and its matcher are general code that both the Claude gate and the bro job tool call, and Claude serves `Bash` only where a `shell(...)` entry declares it.
    #754's pattern syntax and enforcement mechanism are settled in #754's own design, resumed before this slice starts.
 5. **Persona declarations, with #857.**
    A persona declares its reach opt-in on every harness, in the `tools` vocabulary it uses today rather than a syntax of its own:
@@ -276,13 +276,19 @@ the tool fold waits for #754's design and the persona declarations for the tool 
    and `delegation()`.
    `data_sources` folds into `tools`:
    a data source becomes a `source(...)` entry and a reference page a `man('<topic>')` entry, so a persona declares one list.
-   Every entry has a key
-   — its group, its mounted toolset, its data source, or its `cli` tool —
-   and the fold resolves each key along the class hierarchy:
-   a class's entries for one key merge, shell rosters uniting and the wider files level winning, and they replace what its bases declare for that key.
+   Every entry has a key:
+   the group it reaches, or the MCP namespace it serves, which `MCPServerSpec` gains a field for so a key is known before anything is built
+   — a toolset's namespace, a data source's, a reference page's topic, a `cli` tool's —
+   and a layer carrying several, a raw `ToolLayer(server_specs=…)` or a `|` of layers, contributes each under its own.
+   Conditions select first, as today:
+   a `when` or `iff` entry whose condition does not hold is omitted before keys resolve.
+   A subclass's unmet `when(feature('x'), files(write=False))` thus leaves its base's `files()` in force, and a conditional `revoke(...)` withholds only where its condition holds.
+   Then each key resolves along the Python MRO:
+   the first class in it that declares the key decides it, its entries for that key merging, shell rosters uniting and the wider files level winning.
    That is how a subclass narrows, as `files(write=False)` under an inherited `files()` or a shorter `shell(...)` roster.
    `revoke(...)` withholds a key, as in `revoke(delegation)` or `revoke(brog_mcp.toolset)`, and a descendant may grant it again:
    the nearest declaration of each key applies, a revoke included.
+   The slice's tests cover a merge within a class, narrowing, a revoke and a regrant, conditional grants and revokes over inherited entries, and one key declared by two bases of a class that has several.
    `block`, `serve`, `allow_commands`, `claude.block`, and every `when(harness == …)` entry go, since nothing is on until declared.
    The base `bro` persona declares no group, so personas grant what they use rather than revoke what `Bro` grants, and the bare `bro` persona keeps only the loop tools on Claude.
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
@@ -367,8 +373,11 @@ the trails landing deploys the trails server between the two.
 - **A syntax of its own for the reach groups:**
   settled with the user for constructors in the `tools` vocabulary, which already composes conditions and layers.
 - **A final `revoke`, as `False` is for a feature:**
-  settled with the user for one rule, the nearest declaration of each key;
-  a subclass lives in the codebase its base does, so finality would guard no boundary.
+  settled with the user for one rule, the nearest declaration of each key.
+  A subclass, in its base's distribution or another one, is trusted code that could do whatever its base withholds, so finality would guard no boundary;
+  the session's permission document and the harness's enforcement are what limit a session.
+- **The tool fold as a landing before the persona declarations:**
+  the revision released between them would carry the old declarations over the new fold, a state nobody designed, and no rollout step needs to sit between them.
 - **Removing `#harness`:**
   a consumer may still need a fork no fact covers, and the rule is to avoid one, not to forbid it.
 
@@ -387,8 +396,8 @@ the trails landing deploys the trails server between the two.
 2. Service tools.
 3. Trails.
 4. Prompts.
-5. Tool fold, after #754's design.
-6. Persona declarations, with #857, after the tool fold.
+5. Tool fold and persona declarations, with #754 and #857, after #754's design:
+   the fold's neutral reach and the declarations that produce it change together, so no released revision carries the old declarations over the new fold.
 
 #863 (delegation through summons) follows #850 on its own.
 
