@@ -125,7 +125,7 @@ and it is the only call that supplies the `#hold` fact, so all other text stays 
 a stray `#hold` directive in a spell or procedure doc raises.
 
 The level files are the single place the levels differ:
-unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the end-the-turn-at-pivotal-points convention, guided the confirm-each-significant-step convention.
+unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the confirm-its-own-conclusions convention, guided the confirm-each-significant-step convention.
 
 ## Top-level one-shot prompts
 

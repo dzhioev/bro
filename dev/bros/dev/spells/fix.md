@@ -14,7 +14,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.7.0
+version: 4.8.0
 ---
 
 {{iff #features contains brog}}
@@ -100,9 +100,6 @@ Then put the design to the user as two summaries:
 - the problem — what is wrong or missing, where it shows, and why it matters
 - the implementation — what changes and where, what the user will see differ once it lands,
   and any alternative you rejected, in a line
-
-Starting the implementation is the user's decision, not a step the task already authorizes:
-go on with their confirmation.
 
 ## Step 4 — development log
 
