@@ -29,9 +29,11 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 
 ## Browser persona
 
-`browser` is the plain-text interface to webview missions.
+`browser` is the semantic interface to webview missions.
 Its own seed grants the whole webview worker type, while profile passes and a visible view remain host or launch decisions.
 It mounts `webview::`, `browser::`, and `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
+Its answers omit element refs, page markup such as snapshot syntax or HTML, and tool names;
+Markdown formatting is allowed.
 The `[[browse]]` spell keeps one webview open while the owner sends each instruction as a quest question;
 a clarification is a counter-question in that thread, and "done" closes the webview and returns the session log.
 

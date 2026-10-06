@@ -423,7 +423,7 @@ the container's network is unrestricted, and `--unboxed` runs as the launching u
   `dive-in -t 77` opens a session on a tracker task, and the built-in `dev` persona carries the task → PR → land workflow as spells.
 - **Personas.**
   `dev`, `eyebro`, `lead`, `terminal`, `analyst`, `devoops`, and `browser` ship ready to derive from;
-  `browser` is the plain-text interface to webview missions.
+  `browser` is the semantic interface to webview missions.
 - **Artifacts.**
   Peers pass files by content-addressed reference, and reach follows the launch tree.
 - **One conditioning model.**

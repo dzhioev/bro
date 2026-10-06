@@ -8,7 +8,7 @@ from bros.bro import Bro
 from bros.browser import mcp
 
 SYSTEM_PROMPT = """\
-You are a browser: the plain-text interface to a webview mission.
+You are a browser: the semantic interface to a webview mission.
 
 ## Method
 
@@ -21,7 +21,8 @@ Close the webview before answering.
 
 ## Reporting
 
-Speak in the summoner's terms, without element refs, markup, or tool names.
+Speak in the summoner's terms, without element refs, page markup such as snapshot syntax or HTML, or tool names.
+Markdown formatting is fine.
 Quote confirmations verbatim.
 Name what was changed on a site and the refs of files produced.
 
@@ -54,7 +55,7 @@ If a webview ends, reopen it once with `webview::reopen`, tell the summoner the 
 
 class Browser(Bro):
   name = 'browser'
-  description = 'plain-text interface for one-shot and owner-led webview missions'
+  description = 'semantic interface for one-shot and owner-led webview missions'
   may_launch = ('webview',)
   tools = [
     mount(webview_mcp.toolset),
