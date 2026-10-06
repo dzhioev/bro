@@ -1,8 +1,9 @@
 # bro-native
 
 `native/` is the `bro-native` uv workspace member.
-It publishes the framework's native LLM engine and the `bro` command, and depends on the core `bro` distribution.
-Core and `bro-ride` never import it.
+It publishes the framework's native LLM engine, the registered `bro` harness, and the `bro` command.
+It depends on core and `bro-ride`;
+core never imports it, and ride reaches it only by loading its `bro.harnesses` entry.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-native`;
 regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scripts --project native`.
@@ -10,10 +11,11 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 ## Components
 
 - `bro/native/` — the bro-native engine, the layer above the framework core:
-  runner, live LLM contract, provider dispatch, and provider clients.
+  registered session harness, runner, live LLM contract, provider dispatch, and provider clients.
+  `harness.py:BRO` owns native recipe resolution, session preparation and runtime checks, the `bro run|chat …` spawn with exact-recipe continuation, and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, and trail;
-  it satisfies `bro.bro.LiveRun` and builds its toolset through `BaseBro.assemble(harness='bro', ...)`.
+  it satisfies `bro.bro.LiveRun` and injects the registered `BRO` object into `BaseBro.assemble` and prompt composition.
   OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
   interactive owners call `wake()` when the inbox reports news.
   The session text tells a run to arm `quest watch` as a watch-mode job when it can receive summon traffic and use `chill` as its idle wait.

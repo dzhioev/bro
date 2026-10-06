@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -673,6 +673,23 @@ class TestAlong:
       assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
     assert start.call_args.args[0].harness == 'bro'
 
+  def test_project_uninstalled_harness_fails_with_the_installed_roster(self, monkeypatch, capsys):
+    monkeypatch.setattr(
+      ride_cli,
+      'project_config',
+      lambda _repo: SimpleNamespace(
+        default_bro='bro-dev',
+        harness='other',
+        summon_harness=configs.DEFAULT_SUMMON_HARNESS,
+        summon_depth=configs.DEFAULT_SUMMON_DEPTH,
+      ),
+    )
+    monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
+
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
+    assert 'installed harnesses: bro, claude' in capsys.readouterr().err
+
   def test_project_summon_harness_reaches_the_spec(self, monkeypatch):
     monkeypatch.setattr(
       ride_cli,
@@ -708,6 +725,13 @@ class TestLifecycle:
       'grant': ['@dev'],
       'revoke': [],
     }
+
+  def test_check_harness_starts_its_runtime_probe(self):
+    driver = MagicMock()
+    with patch.object(ride_cli, 'get_harness', return_value=driver) as resolve:
+      assert ride_cli.main(['ride', 'check-harness', 'claude']) is None
+    resolve.assert_called_once_with('claude')
+    driver.check_runtime.assert_called_once_with()
 
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:

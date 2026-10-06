@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import bro.native.harness as native_harness
 import ride.artifacts
-import ride.bro
 import ride.bro_worker
 import ride.broker_root
 import ride.do_ride
@@ -324,7 +324,7 @@ class TestSummonLowering:
     spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
     assert spec is not None
     assert spec.llm == 'openai:sol:low'
-    assert spec.resolved_llm == ride.bro.BRO.resolve_llm('openai:sol:low', 'dev').dump()
+    assert spec.resolved_llm == native_harness.BRO.resolve_llm('openai:sol:low', 'dev').dump()
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
@@ -355,7 +355,7 @@ class TestSummonLowering:
       llm='echo',
     )
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert captured == [ride.bro.BRO.resolve_llm('echo', 'dev')]
+    assert captured == [native_harness.BRO.resolve_llm('echo', 'dev')]
 
   def test_lowering_records_the_childs_resume_spec(self, lowering_harness, tmp_path):
     launch = ride.bro_worker.SummonLaunchSpec(
@@ -392,7 +392,7 @@ class TestSummonLowering:
         grant=['github', '@reviewer'],
         revoke=[],
         llm='openai:sol:high',
-        resolved_llm=ride.bro.BRO.resolve_llm('openai:sol:high', 'dev').dump(),
+        resolved_llm=native_harness.BRO.resolve_llm('openai:sol:high', 'dev').dump(),
         solo=True,
         resume=False,
         into=None,
@@ -439,7 +439,7 @@ class TestSummonLowering:
       ride.session, 'local_trails_mounts', lambda scoped: ('/host/trails:/var/ride/trails',)
     )
     monkeypatch.setattr(
-      ride.bro.BRO,
+      native_harness.BRO,
       'container_extras',
       lambda spec, workspace, scoped: ride.harness.ContainerExtras(
         env={}, mounts=('/host/state:/state',)

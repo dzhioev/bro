@@ -174,7 +174,7 @@ def _render_spell_call(
   spell: Spell,
   arguments: dict[str, Any],
   *,
-  harness: mcp.Harness,
+  harness: mcp.HarnessLike,
   offset: int = 0,
 ) -> str:
   body = bro.get_spell_body(spell.name, harness=harness)
@@ -224,7 +224,7 @@ async def _interpret(
   command: str,
   spells: list[Spell],
   bro: 'BaseBro',
-  harness: mcp.Harness,
+  harness: mcp.HarnessLike,
 ) -> dict[str, Any] | str:
   from bro.llm.mu import JSON, mu
   from bro.prompts import get_prompt
@@ -252,11 +252,11 @@ class SpellTool(llm_mcp.Tool):
     bro: 'BaseBro',
     spell: Spell,
     *,
-    harness: mcp.Harness,
+    harness: mcp.HarnessLike,
   ):
     self._bro = bro
     self._spell = spell
-    self._harness: mcp.Harness = harness
+    self._harness: mcp.HarnessLike = harness
     properties: dict[str, dict[str, Any]] = {
       parameter.name: {'type': 'string', 'description': parameter.description}
       for parameter in spell.parameters
@@ -347,11 +347,11 @@ class CastTool(llm_mcp.Tool):
     bro: 'BaseBro',
     spells: list[Spell],
     *,
-    harness: mcp.Harness,
+    harness: mcp.HarnessLike,
   ):
     self._bro = bro
     self._spells = spells
-    self._harness: mcp.Harness = harness
+    self._harness: mcp.HarnessLike = harness
 
   @property
   def name(self) -> str:
@@ -390,7 +390,7 @@ def _load_bro_spells(bro: 'BaseBro') -> list[Spell]:
   return [load_spell(name, path) for name, path in bro.spell_paths.items()]
 
 
-def build_cast_tool(bro: 'BaseBro', *, harness: mcp.Harness) -> llm_mcp.Tool:
+def build_cast_tool(bro: 'BaseBro', *, harness: mcp.HarnessLike) -> llm_mcp.Tool:
   return CastTool(bro, _load_bro_spells(bro), harness=harness)
 
 
@@ -398,7 +398,7 @@ def build_skill_tool() -> llm_mcp.Tool:
   return SkillTool()
 
 
-def build_spell_server(bro: 'BaseBro', *, harness: mcp.Harness) -> llm_mcp.MCPServer:
+def build_spell_server(bro: 'BaseBro', *, harness: mcp.HarnessLike) -> llm_mcp.MCPServer:
   tools: list[llm_mcp.Tool] = [
     SpellTool(bro, spell, harness=harness) for spell in _load_bro_spells(bro)
   ]

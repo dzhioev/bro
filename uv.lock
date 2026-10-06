@@ -380,6 +380,7 @@ source = { editable = "native" }
 dependencies = [
     { name = "aiohttp" },
     { name = "bro" },
+    { name = "bro-ride" },
     { name = "humanize" },
     { name = "mcp" },
     { name = "openai" },
@@ -392,6 +393,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", specifier = "==3.14.1" },
     { name = "bro", editable = "." },
+    { name = "bro-ride", editable = "ride" },
     { name = "humanize", specifier = "==4.16.0" },
     { name = "mcp", specifier = "==1.28.1" },
     { name = "openai", specifier = "==3.0.0" },

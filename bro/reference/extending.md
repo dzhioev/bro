@@ -19,6 +19,8 @@ A distribution contributes through these `[project.entry-points]` groups of its 
 - `bro.session_commands` — console scripts exposed on a managed session's PATH
 - `bro.worker_types` — worker classes served through the common `launch` kind;
   each entry's name matches its `bro.worker_types.WorkerType.name`
+- `bro.harnesses` — one installed driving-harness object per entry, `<name> = "<module>:<object>"`;
+  each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
 
 Entry points are installation metadata:
 sync the environment (`uv sync`) after adding or removing one, while editing an already-declared target module needs no reinstall.

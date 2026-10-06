@@ -30,6 +30,7 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
+from bro.harness import name_of
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
@@ -194,8 +195,8 @@ _RAISE_DESCRIPTION = (
 )
 
 
-def _raise_tool(harness: mcp.Harness, variables: Variables) -> llm_mcp.Tool:
-  target = _claude_raise if harness == 'claude' else _raise
+def _raise_tool(harness: mcp.HarnessLike, variables: Variables) -> llm_mcp.Tool:
+  target = _claude_raise if name_of(harness) == 'claude' else _raise
   return llm_mcp.FunctionTool(
     target, name='raise', description=_RAISE_DESCRIPTION, variables=variables
   )
@@ -244,8 +245,8 @@ _ANSWER_DESCRIPTION = (
 )
 
 
-def _answer_tool(harness: mcp.Harness, variables: Variables) -> llm_mcp.Tool:
-  target = _claude_answer if harness == 'claude' else _answer
+def _answer_tool(harness: mcp.HarnessLike, variables: Variables) -> llm_mcp.Tool:
+  target = _claude_answer if name_of(harness) == 'claude' else _answer
   return llm_mcp.FunctionTool(
     target, name='answer', description=_ANSWER_DESCRIPTION, variables=variables
   )
@@ -615,9 +616,9 @@ def _claude_summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> ll
 
 
 def _summon_tool(
-  variables: Variables, live_run: Optional[LiveRun], harness: mcp.Harness
+  variables: Variables, live_run: Optional[LiveRun], harness: mcp.HarnessLike
 ) -> llm_mcp.Tool:
-  if harness == 'claude':
+  if name_of(harness) == 'claude':
     return _claude_summon_tool(variables, live_run)
 
   async def _summon(
@@ -662,10 +663,10 @@ def _summon_tool(
   )
 
 
-def _quest_check_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
+def _quest_check_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if harness == 'claude':
+  if name_of(harness) == 'claude':
 
     async def _claude_quest_check(
       quest_id: str, wait: bool = False, timeout: Optional[float] = None
@@ -695,10 +696,10 @@ def _quest_check_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Too
   )
 
 
-def _quest_history_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
+def _quest_history_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if harness == 'claude':
+  if name_of(harness) == 'claude':
 
     async def _claude_quest_history(
       quest_id: str, wait: bool = False, timeout: Optional[float] = None
@@ -740,10 +741,10 @@ def _quest_say_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_ask_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
+def _quest_ask_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if harness == 'claude':
+  if name_of(harness) == 'claude':
 
     async def _claude_quest_ask(
       quest_id: str,
@@ -795,10 +796,10 @@ def _quest_list_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_cancel_tool(variables: Variables, harness: mcp.Harness) -> llm_mcp.Tool:
+def _quest_cancel_tool(variables: Variables, harness: mcp.HarnessLike) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
-  if harness == 'claude':
+  if name_of(harness) == 'claude':
 
     async def _claude_quest_cancel(
       quest_id: str, timeout: Optional[float] = None
@@ -1007,7 +1008,7 @@ def _build_service_server(
   bro: 'BaseBro',
   *,
   include_raise: bool,
-  harness: mcp.Harness,
+  harness: mcp.HarnessLike,
   live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
   # built only on the paths that serve a bro, never at construction: deriving the
@@ -1031,16 +1032,16 @@ def _build_service_server(
   has_answer = (
     has_broker
     and summoned()
-    and (harness == 'bro' or os.environ.get('RIDE_RUNNER_PID') is not None)
+    and (name_of(harness) == 'bro' or os.environ.get('RIDE_RUNNER_PID') is not None)
   )
   selection = bro._selected_tools_for(harness)
-  has_jobs = harness == 'bro' and (
+  has_jobs = name_of(harness) == 'bro' and (
     selection.shell_unrestricted or len(selection.shell_commands) > 0
   )
   mounted = ['banner']
   if has_cast:
     mounted.append('cast')
-  if harness == 'bro':
+  if name_of(harness) == 'bro':
     mounted.append('skill')
   if include_raise:
     mounted.append('raise')
@@ -1069,7 +1070,7 @@ def _build_service_server(
   tools: list[llm_mcp.Tool] = [_banner_tool(bro, live_run, variables)]
   if has_cast:
     tools.append(spell_store.build_cast_tool(bro, harness=harness))
-  if harness == 'bro':
+  if name_of(harness) == 'bro':
     tools.append(spell_store.build_skill_tool())
   if include_raise:
     tools.append(_raise_tool(harness, variables))
@@ -1168,7 +1169,7 @@ def _quest_watch_is_admitted(
 
 def _fold_tool_layers(
   layers: list[mcp.ToolLayer],
-  harness: mcp.Harness,
+  harness: mcp.HarnessLike,
   *,
   may_summon: tuple[str, ...],
   summoned: bool,
@@ -1187,9 +1188,9 @@ def _fold_tool_layers(
       + layer.served_native_tool_names
       + tuple(name for name, _ in layer.native_tool_commands)
     )
-    if len(native) > 0 and harness != 'claude':
+    if len(native) > 0 and name_of(harness) != 'claude':
       raise ValueError(
-        f'cannot declare native tools {native!r} on the {harness!r} harness; '
+        f'cannot declare native tools {native!r} on the {name_of(harness)!r} harness; '
         'it serves only the tools the bro declares'
       )
     blocked_names.extend(layer.blocked_native_tool_names)
@@ -1206,7 +1207,7 @@ def _fold_tool_layers(
         declared_shell_commands.append(command)
 
   shell_commands = list(dict.fromkeys(declared_shell_commands))
-  if harness == 'claude' and len(shell_commands) > 0 and not shell_unrestricted:
+  if name_of(harness) == 'claude' and len(shell_commands) > 0 and not shell_unrestricted:
     for name in _CLAUDE_COMMAND_TOOLS:
       narrowed.setdefault(name, []).extend(shell_commands)
       handed_back[name] = 'narrowed through the shell roster'
@@ -1224,7 +1225,7 @@ def _fold_tool_layers(
     del blocked[name]
 
   if _quest_watch_is_admitted(may_summon=may_summon, summoned=summoned, talk=talk):
-    if harness == 'bro':
+    if name_of(harness) == 'bro':
       if not shell_unrestricted and QUEST_WATCH_COMMAND not in shell_commands:
         shell_commands.append(QUEST_WATCH_COMMAND)
     else:
@@ -1497,35 +1498,17 @@ class BaseBro(ABC):
     self._may_launch: tuple[str, ...] = tuple(may_launch_types)
     self._provisioning: tuple[ProvisionStep, ...] = tuple(provision_steps)
     self._spells: dict[str, Path] = spell_paths
+    for spell_name, spell_path in self._spells.items():
+      spell_store.load_spell(spell_name, spell_path)
     self._features: dict[str, Condition | bool] = feature_gates
     self._feature_credentials: dict[str, str] = feature_credentials
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
     self._feature_vocabulary: Variables = _feature_variables(feature_gates)
-    # the declaration entries as declared, kept for per-harness selection
-    # (_components_for); the bro-harness selection is materialized eagerly —
-    # the prompt composition below and the live-server cache read it.
     self._tool_entries = tool_entries
     self._data_source_entries = data_source_entries
-    surface_creds = credentials.known_names()
-    selected_tools = mcp.select(
-      tool_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
-    )
-    self._mcp_specs = _fold_tool_layers(
-      selected_tools,
-      'bro',
-      may_summon=summon.effective_may_summon(),
-      summoned=summon.summoned(),
-      talk=summon.talk(),
-    ).server_specs
-    self._data_sources: list[DataSource] = _fold_man_pages(
-      mcp.select(
-        data_source_entries, harness='bro', creds=surface_creds, extra=self._feature_vocabulary
-      )
-    )
-    # built lazily by _live_mcp_servers(): metadata surfaces (needed_secrets on
-    # hosts, prompt composition) never construct live servers.
     self._live_mcp: Optional[list[llm_mcp.MCPServer]] = None
+    self._system_prompt_override: Optional[str] = None
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -1539,22 +1522,35 @@ class BaseBro(ABC):
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
-    shared = _load_shared_prompts()
-    spell_instructions = self.spell_instructions()
+    from bro.harness import get_harness, installed_harness_names
+
+    if 'bro' in installed_harness_names():
+      native_harness = get_harness('bro')
+      self._mcp_specs, self._data_sources = self._components_for(native_harness)
+      self.system_prompt = self._composed_prompt(native_harness)
+    else:
+      self._mcp_specs = []
+      self._data_sources = []
+      self.system_prompt = ''
+
+  def _composed_prompt(self, harness: mcp.HarnessLike) -> str:
+    _, data_sources = self._components_for(harness)
     parts = []
+    shared = _load_shared_prompts()
     if len(shared) > 0:
       parts.append(shared)
     if len(self.persona) > 0:
       parts.append(self.persona)
     parts.append(get_prompt('tool_names.md').strip())
-    if len(self._data_sources) > 0:
-      parts.append(_render_data_sources(self._data_sources))
+    if len(data_sources) > 0:
+      parts.append(_render_data_sources(data_sources))
+    spell_instructions = self.spell_instructions()
     if len(spell_instructions) > 0:
       parts.append(spell_instructions)
     parts.append(_render_skill_loader())
-    self.system_prompt = mcp.render_text(
+    return mcp.render_text(
       '\n\n'.join(parts),
-      harness='bro',
+      harness=harness,
       creds=credentials.known_names(),
       may_summon=summon.effective_may_summon(),
       extra=self._feature_vocabulary,
@@ -1593,7 +1589,7 @@ class BaseBro(ABC):
     """the bro's spell files by spell name, read-only."""
     return MappingProxyType(self._spells)
 
-  def get_spell_body(self, name: str, *, harness: mcp.Harness) -> str:
+  def get_spell_body(self, name: str, *, harness: mcp.HarnessLike) -> str:
     path = self._spells.get(name)
     if path is None:
       available = ', '.join(sorted(self._spells)) if len(self._spells) > 0 else '(none)'
@@ -1617,7 +1613,7 @@ class BaseBro(ABC):
       return ''
     return _render_spells(include_cast=spell_store.cast_available())
 
-  def _selected_tools_for(self, harness: mcp.Harness) -> '_ToolSelection':
+  def _selected_tools_for(self, harness: mcp.HarnessLike) -> '_ToolSelection':
     selected: list[mcp.ToolLayer] = mcp.select(
       self._tool_entries,
       harness=harness,
@@ -1632,24 +1628,18 @@ class BaseBro(ABC):
       talk=summon.talk(),
     )
 
-  def blocked_tool_names(self, harness: mcp.Harness) -> tuple[str, ...]:
+  def blocked_tool_names(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
     """harness-native tool names blocked by this bro's selected layers."""
     return self._selected_tools_for(harness).blocked_tool_names
 
-  def narrowed_tool_commands(self, harness: mcp.Harness) -> dict[str, tuple[str, ...]]:
+  def narrowed_tool_commands(self, harness: mcp.HarnessLike) -> dict[str, tuple[str, ...]]:
     """harness-native tool name -> the commands this bro's selected layers narrow
     it to; the harness rejects every other command the tool is called with."""
     return self._selected_tools_for(harness).narrowed_tool_commands
 
   def _components_for(
-    self, harness: mcp.Harness
+    self, harness: mcp.HarnessLike
   ) -> tuple[list[mcp.MCPServerSpec], list[DataSource]]:
-    # the declared components that hold on `harness`. the bro-harness selection
-    # is the one materialized in __init__ (prompt composition and the
-    # live-server cache read it); any other harness selects on demand from the
-    # raw entries.
-    if harness == 'bro':
-      return self._mcp_specs, self._data_sources
     specs = self._selected_tools_for(harness).server_specs
     sources = _fold_man_pages(
       mcp.select(
@@ -1668,7 +1658,7 @@ class BaseBro(ABC):
       if self._features[name] is not False and (self._features[name] is True) == pinned
     }
 
-  def needed_secrets(self, harness: mcp.Harness = 'bro') -> tuple[str, ...]:
+  def needed_secrets(self, harness: Optional[mcp.HarnessLike] = None) -> tuple[str, ...]:
     # the bro's component credential manifest for a consuming harness: the union
     # of each declared MCP server's + data source's `needed_secrets`, over only
     # the components that hold on `harness` — a surface never hydrates a secret
@@ -1679,6 +1669,10 @@ class BaseBro(ABC):
     # own auth, not the bro's spec. the host hydrates the
     # per-surface set into a scoped store; a secret used but not declared
     # surfaces as SecretNotFound — an under-declaration to fix.
+    if harness is None:
+      from bro.harness import get_harness
+
+      harness = get_harness('bro')
     specs, sources = self._components_for(harness)
     names: set[str] = set()
     for spec in specs:
@@ -1689,13 +1683,17 @@ class BaseBro(ABC):
     names.update(self._feature_secrets(pinned=True))
     return tuple(sorted(names))
 
-  def optional_secrets(self, harness: mcp.Harness = 'bro') -> tuple[str, ...]:
+  def optional_secrets(self, harness: Optional[mcp.HarnessLike] = None) -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
     # server's + data source's `optional_secrets` over the same per-harness
     # component set as `needed_secrets`, plus the credentials of its gated
     # features and the cast key when this bro has spells. minus anything
     # already required — a hard requirement is never downgraded. an unpicked
     # optional empty instance may be absent without failing a managed launch.
+    if harness is None:
+      from bro.harness import get_harness
+
+      harness = get_harness('bro')
     specs, sources = self._components_for(harness)
     names: set[str] = set()
     for spec in specs:
@@ -1707,11 +1705,11 @@ class BaseBro(ABC):
       names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
-  def missing_secrets(self) -> tuple[str, ...]:
+  def missing_secrets(self, harness: Optional[mcp.HarnessLike] = None) -> tuple[str, ...]:
     # every required name — the component manifest plus the LLM key, since
     # run()/send() execute the bro as an LLM process — that does not resolve in
     # this process's credential store. the optional tier is never gated.
-    required = set(self.needed_secrets()) | set(self.llm_spec.needed_secrets())
+    required = set(self.needed_secrets(harness)) | set(self.llm_spec.needed_secrets())
     return tuple(sorted(name for name in required if not credentials.available(name)))
 
   @classmethod
@@ -1726,7 +1724,7 @@ class BaseBro(ABC):
     return bro
 
   def _servers_with_spell_tools(
-    self, servers: list[llm_mcp.MCPServer], *, harness: mcp.Harness
+    self, servers: list[llm_mcp.MCPServer], *, harness: mcp.HarnessLike
   ) -> list[llm_mcp.MCPServer]:
     if any(server.namespace == spell_store.NAMESPACE for server in servers):
       raise ValueError(f'namespace {spell_store.NAMESPACE!r} is reserved for bro framework tools')
@@ -1734,13 +1732,18 @@ class BaseBro(ABC):
       return servers
     return [*servers, spell_store.build_spell_server(self, harness=harness)]
 
-  def _live_mcp_servers(self) -> list[llm_mcp.MCPServer]:
+  def _live_mcp_servers(self, harness: Optional[mcp.HarnessLike] = None) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
     # post-secrets — and are built once: a live server may hold real resources
     # and every run through this bro reuses the same set.
+    if harness is None:
+      from bro.harness import get_harness
+
+      harness = get_harness('bro')
     if self._live_mcp is None:
-      self._live_mcp = [spec.build() for spec in self._mcp_specs]
-      self._live_mcp.extend(ds.as_mcp_server() for ds in self._data_sources)
+      specs, sources = self._components_for(harness)
+      self._live_mcp = [spec.build() for spec in specs]
+      self._live_mcp.extend(source.as_mcp_server() for source in sources)
     return self._live_mcp
 
   def close(self) -> None:
@@ -1758,13 +1761,13 @@ class BaseBro(ABC):
   def assemble(
     self,
     *,
-    harness: mcp.Harness,
+    harness: mcp.HarnessLike,
     include_raise: bool,
     live_run: Optional[LiveRun] = None,
   ) -> list[llm_mcp.MCPServer]:
     """materialize this declaration for one consuming surface."""
-    if harness == 'bro':
-      servers = list(self._live_mcp_servers())
+    if name_of(harness) == 'bro':
+      servers = list(self._live_mcp_servers(harness))
     else:
       specs, sources = self._components_for(harness)
       servers = [spec.build() for spec in specs]
@@ -1774,17 +1777,26 @@ class BaseBro(ABC):
     )
     return self._servers_with_spell_tools(servers, harness=harness)
 
-  def system_prompt_for(self, *, hold: str) -> str:
+  def system_prompt_for(self, *, hold: str, harness: Optional[mcp.HarnessLike] = None) -> str:
     """the bro-native system prompt under a hold — the composed prompt plus the
     session fragments."""
     # the hold is pinned at run start, so the matching hold fragment is
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
     # (the level files are documented in prompts/AGENTS.md).
+    if harness is None:
+      from bro.harness import get_harness
+
+      harness = get_harness('bro')
     fragment = session_fragment(
       hold,
-      harness='bro',
+      harness=harness,
       creds=credentials.known_names(),
       talk=summon.talk(),
     )
-    return f'{self.system_prompt}\n\n{fragment}'
+    prompt = (
+      self._system_prompt_override
+      if self._system_prompt_override is not None
+      else self._composed_prompt(harness)
+    )
+    return f'{prompt}\n\n{fragment}'

@@ -55,14 +55,18 @@ class TestProjectConfig:
 
   def test_harness_defaults_to_claude(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
-    assert project_config().harness == 'claude'
+    assert project_config().harness == configs.DEFAULT_HARNESS
 
   def test_harness_parses(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\nharness = "bro"\n')
     assert project_config().harness == 'bro'
 
-  @pytest.mark.parametrize('value', ['"other"', '5', '""'])
-  def test_harness_must_be_supported(self, project_dir, value):
+  def test_harness_may_name_an_uninstalled_driver(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\nharness = "other"\n')
+    assert project_config().harness == 'other'
+
+  @pytest.mark.parametrize('value', ['"Other"', '5', '""'])
+  def test_harness_must_be_well_formed(self, project_dir, value):
     (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\nharness = {value}\n')
     with pytest.raises(ValueError, match=r'\[tool.bro\] harness'):
       project_config()
@@ -77,8 +81,14 @@ class TestProjectConfig:
     )
     assert project_config().summon_harness == 'claude'
 
-  @pytest.mark.parametrize('value', ['"other"', '5', '""'])
-  def test_summon_harness_must_be_supported(self, project_dir, value):
+  def test_summon_harness_may_name_an_uninstalled_driver(self, project_dir):
+    (project_dir / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "foo"\nsummon-harness = "other"\n'
+    )
+    assert project_config().summon_harness == 'other'
+
+  @pytest.mark.parametrize('value', ['"Other"', '5', '""'])
+  def test_summon_harness_must_be_well_formed(self, project_dir, value):
     (project_dir / 'pyproject.toml').write_text(
       f'[tool.bro]\ndefault = "foo"\nsummon-harness = {value}\n'
     )

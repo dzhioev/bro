@@ -3,8 +3,8 @@
 `ride/` is the `bro-ride` uv workspace member.
 It publishes the top-level `ride` package, depends on the framework's `bro` distribution, and declares its own runtime/UI dependencies directly;
 `bro` never imports `ride`.
-It does not depend on `bro-native`:
-the native adapter spawns the `bro` command and reports a missing engine before spawn.
+It does not depend on `bro-native`.
+`bro-native` depends on this distribution and registers the native adapter through `bro.harnesses`, so a Claude-only installation never imports the native engine.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-ride`;
 regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts --project ride`.
@@ -24,10 +24,10 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
   `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
-  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, missing Claude state and plugin seed, persona provisioning, the session broxy, and SIGTERM-forwarded agent spawning.
+  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, persona provisioning, the session broxy, and the selected harness's preparation and SIGTERM-forwarded agent spawn.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
-  `ScopeRecipe`, `BRO_RUN_RECIPE`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, `launch`-section computation, and the launch preflight,
+  the generic `ScopeRecipe`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, `launch`-section computation, and the launch preflight,
   plus `bind_launch_llm`, the launch's LLM selection settled over the host's per-bro entry for the attachment and returned as the canonical `--llm` the session records and forwards,
   and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
@@ -56,9 +56,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
 - `ride/harness.py`
-  — the `Harness` protocol (scope, auth, session reads, and the launch hooks: the session run, boxed extras, unboxed runner env), the harness roster, and the lazy harness resolver.
-- `ride/bro.py` — native harness implementation:
-  native recipe resolution, the session runner spawning `bro run|chat …` with exact-recipe continuation, and the launch hooks.
+  — the `SessionHarness` protocol (scope, auth, session reads, preparation, the runtime probe, and the launch hooks), the metadata-derived harness roster, and the lazy checked resolver.
+  The framework identity and `bro.harnesses` registry live in `bro/harness/__init__.py`.
 - `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
   assignment parsing for the CLI, and the validation every reader of a recorded mapping applies.
@@ -75,8 +74,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 ## Invariants
 
 - The neutral layer owns one started-party launcher parameterized by isolation;
-  the harness seam supplies scope recipes, auth, LLM resolution, the session run under `do-ride`, session-state reads, and the per-harness launch extras.
-  `do-ride` owns every session's common setup before calling the selected harness runner.
+  the harness seam supplies scope recipes, auth, LLM resolution, session preparation and the run under `do-ride`, runtime checks, session-state reads, and per-harness launch extras.
+  `do-ride` owns every session's common setup before asking the selected harness to prepare and run it.
   A managed boxed or unboxed workspace is always launched by `ride`;
   a summon child is spawned by `summon`
   — except a manual one, which the user launches with `ride along --summoned <token>` or the one-shot `ride solo --summoned <token>` against the summoner's provisioned channel.

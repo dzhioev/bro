@@ -89,31 +89,38 @@ the launcher's own `--log` never reaches the session.
 
 ## Harness selection
 
-`--harness {claude,bro}` selects the driving loop.
+`--harness` selects any name registered by this installation's `bro.harnesses` entry points.
 An attached launch reads `[tool.bro] harness`;
-a detached launch and an attached project that omits the key use `claude`.
+a detached launch and an attached project that omits the key use the framework's `claude` default.
+Project `harness` and `summon-harness` values may name a well-formed harness another installation carries;
+a launch or summon checks the selected name where it is used and reports the installed roster when it is absent.
 
 LLM flags resolve within the selected harness.
 They never switch the harness implicitly.
 A recipe whose provider the harness cannot run errors with `--harness` as the remedy.
+`ride check-harness <name>` starts the selected harness's runtime probe in the current installation.
 
 ### Harness seam
 
-`ride.harness.Harness` is the runtime boundary.
+`bro.harness.Harness` is the framework identity, registered as one object per harness through `bro.harnesses`.
+The registry reads installed names from metadata without importing their modules and lazily loads only the selected object.
+`ride.harness.SessionHarness` is the managed-runtime boundary that object implements.
 The neutral layer (`ride/ride/session.py`) owns one started-party launcher parameterized by workspace isolation.
-It prepares either a container `Launch` or an explicit process launch, and a harness implementation supplies what differs:
+It prepares either a container `Launch` or an explicit process launch, and a session harness supplies what differs:
 
 - its `ScopeRecipe`, the auth preflight, and LLM resolution;
-- the session run under `do-ride` inside the prepared workspace, consumed by both isolations;
-- session existence with its resume-refusal wording, the subject read, and the session trail-pointer path;
+- session preparation and the run under `do-ride` inside the prepared workspace, consumed by both isolations;
+- a runtime probe for `ride check-harness`;
+- session existence with its resume-refusal wording and the subject read;
 - the boxed extras (env, mounts) and the unboxed runner-env preparation.
 
 `scope_recipe` takes no session, so surfaces with no session
 — `ride scope`, dive-in's task prefetch
 — resolve their recipe through the same seam.
-
-The generic scope computation and the bro-run recipe live beside the seam in `ride.scope`, so native launch and summon lowering share the same policy.
-Claude's recipe remains private to `ride.claude`.
+The recipe carries the harness object into persona credential selection.
+The native recipe and implementation ship from `bro-native`;
+Claude's recipe and implementation ship from `bro-ride`.
+A Claude-only installation therefore registers only `claude`, while `bro-native` adds `bro` by depending on ride rather than ride importing the native engine.
 
 ## Claude harness
 
@@ -1223,11 +1230,11 @@ The distribution declares `do-ride` as both a console script and a session comma
 
 `do-ride` receives `RIDE_ISOLATION` and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
 It then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
-It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, prepares missing Claude state and the installation's plugin seed, and owns the optional session broxy.
+It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, asks the selected harness to prepare its session state, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
 While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the executable's pid and operating-system start-time identity as JSON;
 `do-ride` removes only the record it owns when the session exits.
-A harness supplies only `run_session`, so nothing every session needs is written once per agent loop.
+Harness-specific preparation lives in `SessionHarness.prepare_session`, followed by `run_session`, so the neutral executable compares no harness names.
 
 The Claude harness's runner (`ride/ride/claude/runner.py`) then, in order:
 resolves a resume's Claude session id from its cwd's projects dir;
@@ -1278,7 +1285,7 @@ Its output lands in a `ride-mcp-*` temp dir alongside the port file.
 `bro-ride` contributes the `persona:` target prefix through `bro.mcp.targets`;
 the core `mcp-server` discovers the matching resolver without knowing the target.
 `ride.claude.assembly` resolves `persona:<name>` through `persona_servers()`
-— `BaseBro.assemble(harness='claude', ...)`, yielding only the additions that hold on the Claude harness, plus the `spell` and bro service servers;
+— `BaseBro.assemble(harness=CLAUDE, ...)`, with the registered object injected by the Claude engine, yielding only the additions that hold on that harness plus the `spell` and bro service servers;
 an entry gated `harness == 'bro'`, like the dev toolset, never mounts, since Claude's built-ins cover it.
 `bro::cast` joins the service server when the bro has spells and OpenAI resolves.
 Selected `block(...)` layers join `--disallowed-tools`, removing the named Claude-native tools;

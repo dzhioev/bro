@@ -126,6 +126,13 @@ def build_parser() -> Parser:
   )
   check_clean.add_argument('name', help='workspace to check')
 
+  check_harness = subparsers.add_parser(
+    'check-harness', help='start an installed harness runtime and exit'
+  )
+  from ride.harness import HARNESS_NAMES
+
+  check_harness.add_argument('name', choices=HARNESS_NAMES, help='installed harness to check')
+
   exec_command = subparsers.add_parser(
     'exec', help='exec a command in a running boxed workspace (default: interactive bash)'
   )
@@ -241,7 +248,9 @@ def _start_mode(
     if repository is None
     else (repository.project_config() if repository.is_url else project_config(repository.git_dir))
   )
-  harness_name = args.pop('harness') or (config.harness if config is not None else 'claude')
+  harness_name = args.pop('harness') or (
+    config.harness if config is not None else configs.DEFAULT_HARNESS
+  )
   try:
     harness = get_harness(harness_name)
     canonicalize(args, selection_from_args(args, project=config))
@@ -389,6 +398,9 @@ def main(argv: list[str]) -> Optional[int]:
     )
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
+  if command == 'check-harness':
+    get_harness(args['name']).check_runtime()
+    return None
   if command == 'check-clean':
     try:
       workspace = Workspace.open(args['name'])
@@ -418,7 +430,7 @@ def main(argv: list[str]) -> Optional[int]:
           else project_config(None if repository is None else repository.git_dir)
         ).harness
         if repository is not None
-        else 'claude'
+        else configs.DEFAULT_HARNESS
       )
     except ValueError as error:
       parser.error(str(error))
