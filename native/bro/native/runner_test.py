@@ -8,6 +8,7 @@ import pytest
 
 import bro.mcp as mcp
 import bro.native.runner as native_runner
+from bro import watches
 from bro.base import credentials
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.broker.brotocol import Message
@@ -471,6 +472,39 @@ class TestLifetime:
       pass
 
     assert job.process.wait(timeout=10) == -9
+
+  def test_exit_stops_in_process_watches_while_the_embedding_process_lives(self, monkeypatch):
+    monkeypatch.delenv(watches.OWNER_ENV, raising=False)
+    runner = StubRunner()
+    identity = None
+    with runner:
+      watch = runner.watch_store.start('sleep 30')
+      identity = watch.producer_identity()
+      assert identity is not None and identity.alive()
+
+    assert identity is not None
+    assert not identity.alive()
+
+  def test_overlapping_in_process_runners_own_independent_watch_stores(self, monkeypatch):
+    monkeypatch.delenv(watches.OWNER_ENV, raising=False)
+    first = StubRunner()
+    second = StubRunner()
+    first_identity = None
+    second_identity = None
+    with first:
+      first_watch = first.watch_store.start('sleep 30')
+      first_identity = first_watch.producer_identity()
+      assert first_identity is not None
+      with second:
+        assert second.watch_store.directory != first.watch_store.directory
+        second_watch = second.watch_store.start('sleep 30')
+        second_identity = second_watch.producer_identity()
+        assert second_identity is not None and second_identity.alive()
+      assert first_identity.alive()
+
+    assert first_identity is not None and second_identity is not None
+    assert not first_identity.alive()
+    assert not second_identity.alive()
 
   @pytest.mark.asyncio
   async def test_context_ends_one_interactive_conversation(self):

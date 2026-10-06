@@ -1,4 +1,4 @@
-"""deliver the next lines of the session's watches, blocking until there are some."""
+"""Deliver the next bounded batch from the session's one watch store."""
 
 import shlex
 import sys
@@ -10,59 +10,48 @@ from bro import watches
 from bro.base import log
 
 __cli_name__ = 'watch-next'
-
-POLL_SECONDS = 0.5
-# how long a wait started beside its `watch-run` gives the declaration to land
-DECLARATION_GRACE_SECONDS = 10.0
+_DECLARATION_GRACE_SECONDS = 1.0
+_POLL_SECONDS = 0.2
 
 
-def _declared_within(
-  command: Optional[list[str]], grace_seconds: float, poll_seconds: float
-) -> list[watches.Watch]:
-  deadline = time.monotonic() + grace_seconds
-  while True:
-    targets = watches.declared(command)
-    if len(targets) > 0:
-      return targets
-    if time.monotonic() >= deadline:
-      if command is None:
-        raise watches.WatchError(
-          'no watch runs in this session; start one with `watch-run <command>`'
-        )
-      raise watches.WatchError(
-        f'no watch runs `{shlex.join(command)}` in this session; start it with '
-        f'`watch-run {shlex.join(command)}`'
-      )
-    time.sleep(poll_seconds)
+def _targets(store: watches.Store, command: Optional[list[str]]) -> list[watches.Watch]:
+  if command is None:
+    return store.declared()
+  return store.declared(shlex.join(command))
 
 
 def wait(
   command: Optional[list[str]],
   out: TextIO,
   *,
-  poll_seconds: float = POLL_SECONDS,
-  declaration_grace_seconds: float = DECLARATION_GRACE_SECONDS,
+  poll_seconds: float = _POLL_SECONDS,
+  declaration_grace_seconds: float = _DECLARATION_GRACE_SECONDS,
 ) -> int:
-  """block until one of the watches (the one running `command`, or every one)
-  has lines past its offset, print them tagged by watch, and record the offset
-  once they are out; refuse once every watch has ended with nothing left, or
-  when none is declared within the grace."""
-  targets = _declared_within(command, declaration_grace_seconds, poll_seconds)
+  """Block until the unified store has a batch, or every selected producer ended."""
+  store = watches.session_store()
+  deadline = time.monotonic() + declaration_grace_seconds
+  targets = _targets(store, command)
+  while len(targets) == 0 and time.monotonic() < deadline:
+    time.sleep(poll_seconds)
+    targets = _targets(store, command)
+  if len(targets) == 0:
+    if command is None:
+      raise watches.WatchError(
+        'no watch runs in this session; start one with `watch-run <command>`'
+      )
+    rendered = shlex.join(command)
+    raise watches.WatchError(
+      f'no watch runs `{rendered}` in this session; start it with `watch-run {rendered}`'
+    )
+
   while True:
-    alive = any(watch.producer_alive() for watch in targets)
-    delivered = False
-    for watch in targets:
-      lines, offset = watch.read_new()
-      if len(lines) == 0:
-        continue
-      for line in lines:
-        out.write(f'[{watch.command}] {line}\n')
+    batch = store.take(shlex.join(command) if command is not None else None)
+    if batch is not None:
+      out.write(f'{batch}\n')
       out.flush()
-      watch.save_offset(offset)
-      delivered = True
-    if delivered:
       return 0
-    if not alive:
+    targets = _targets(store, command)
+    if not any(watch.producer_alive() for watch in targets):
       ended = ', '.join(f'`{watch.command}`' for watch in targets)
       raise watches.WatchError(f'every watch has ended: {ended}')
     time.sleep(poll_seconds)
@@ -70,18 +59,18 @@ def wait(
 
 def main(argv: list[str]) -> int:
   parser = base_args.Parser(
-    description="deliver the next lines of the session's watches, blocking until there are some"
+    description='deliver the next bounded batch from the session watch store'
   )
   parser.add_argument(
     'command',
     nargs=base_args.REMAINDER,
-    metavar='COMMAND',
-    help='the watched command to read; every watch when omitted',
+    default=None,
+    help='the watched command to await; every watch when omitted',
   )
   arguments = parser.parse(argv)
-  command = arguments['command']
+  command = arguments['command'] or None
   try:
-    return wait(command if len(command) > 0 else None, sys.stdout)
+    return wait(command, sys.stdout)
   except watches.WatchError as error:
     log.error('%s', error)
     return 1
