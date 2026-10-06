@@ -22,6 +22,7 @@ from bro.llm.openai_content import (
   png_to_content,
   text_to_content,
 )
+from bro.llm.openai_retry import retry_openai
 
 DEFAULT_MODEL = 'gpt-5.6-terra'
 
@@ -176,11 +177,13 @@ class _Mu:
     # responses.parse would validate the partial text of a truncated reply and surface the
     # cut-off as a schema error, so the completion check has to run on an unparsed response
     async with AsyncOpenAI(api_key=credentials.get_json('openai')['api_key']) as client:
-      response = await client.responses.create(
-        model=model,
-        input=create_input(prompt, *args),
-        reasoning={'effort': reasoning_effort},
-        text=_text_format(result),
+      response = await retry_openai(
+        lambda: client.responses.create(
+          model=model,
+          input=create_input(prompt, *args),
+          reasoning={'effort': reasoning_effort},
+          text=_text_format(result),
+        )
       )
     return result.model_validate_json(_completed_text(response))
 

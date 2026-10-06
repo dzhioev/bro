@@ -38,6 +38,10 @@ class FailureSignature:
       )
 
 
+class LLMUnavailable(RuntimeError):
+  """The LLM provider kept failing transiently through a client's whole retry window."""
+
+
 @dataclass(frozen=True)
 class LLMSpec(ABC):
   """recipe for an LLM: model + provider-specific knobs.

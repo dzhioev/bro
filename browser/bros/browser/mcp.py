@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from bro.artifact import get_artifact, is_ref, mint_artifact
 from bro.base import credentials
+from bro.llm.llm import LLMUnavailable
 from bro.mcp import Toolset
 
 INLINE_ANSWER_BYTES = 4 * 1024
@@ -239,6 +240,8 @@ def look(
 
   try:
     reader = _ReaderResult.model_validate(_read_page(_reader_prompt(question), content))
+  except LLMUnavailable as error:
+    raise RuntimeError(f'page reader failed: {error}') from error
   except Exception as error:
     raise RuntimeError(
       f'page reader failed: {error}; if the capture is too large, narrow it with `target` '

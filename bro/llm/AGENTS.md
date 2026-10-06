@@ -26,6 +26,7 @@ The bro-native engine and provider clients live in `bro.native`.
   and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
   `NativeLLMSpec` is the marker for recipes the bro-native engine can run;
   a provider whose harness drives its own loop (`claude_code`) remains a bare `LLMSpec`.
+  `LLMUnavailable` is the provider-neutral failure a client raises once its provider stays down through the client's retries.
 - `providers.py` — the provider roster.
   `_PROVIDER_MODULES` maps a name to the module declaring its `LLMSpec`, `DEFAULT_MODEL`, `MODELS` short-name table, and `FAILURE_SIGNATURES`, imported per name.
   Model resolution tries the short name, then full id, then verbatim;
@@ -46,6 +47,9 @@ The bro-native engine and provider clients live in `bro.native`.
   `mu` reads the `openai` key itself, so its caller's component must declare that secret for host hydration.
 - `openai_content.py` — OpenAI input-content conversion shared by `mu` and the native OpenAI client.
   SDK imports stay inside conversion calls, so importing recipes remains SDK-free.
+- `openai_retry.py` — `retry_openai`, retrying one OpenAI call through a provider outage:
+  connection failures, timeouts, and server errors repeat until `RETRY_WINDOW_SECONDS` run out,
+  then raise `llm.py`'s provider-neutral `LLMUnavailable`.
 - `mcp.py` — the live tool layer.
   `Tool` / `MCPServer` ABCs, `FunctionTool`, and `ToolRegistry`, which assembles servers under `namespace__tool` wire names and dispatches calls.
   `Context[T]` is the per-call state envelope;

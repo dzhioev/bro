@@ -25,6 +25,7 @@ from bro.llm.observer import (
   ToolResultEvent,
 )
 from bro.llm.openai_content import image_file_to_content, text_to_content
+from bro.llm.openai_retry import retry_openai
 from bro.llm.tracker import StepKind, ToolStepSource, Tracker
 from bro.native.llm import LLM
 
@@ -428,9 +429,12 @@ class OpenAI(LLM):
     # non-streaming — no bytes return until generation finishes — so without a
     # tighter bound a stalled request blocks the full client timeout before the
     # SDK's automatic retry fires.
-    if request_timeout is not None:
-      return await self.client.responses.create(**request_kwargs, timeout=request_timeout)
-    return await self.client.responses.create(**request_kwargs)
+    async def create() -> Response:
+      if request_timeout is not None:
+        return await self.client.responses.create(**request_kwargs, timeout=request_timeout)
+      return await self.client.responses.create(**request_kwargs)
+
+    return await retry_openai(create)
 
   async def _exchange(
     self,
