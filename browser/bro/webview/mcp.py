@@ -350,12 +350,20 @@ def _render_tools(text: str) -> str:
     sentence = _first_sentence(entry.get('description'))
     suffix = '' if len(sentence) == 0 else f' — {sentence}'
     lines.append(f'{name}({parameters}){suffix}')
+    for parameter, parameter_schema in properties.items():
+      described = (
+        _first_sentence(parameter_schema.get('description'))
+        if isinstance(parameter_schema, dict)
+        else ''
+      )
+      if len(described) > 0:
+        lines.append(f'  {parameter} — {described}')
   return '\n'.join(lines)
 
 
 @toolset.tool(
   'list the live Playwright tools compactly as each tool name, its parameters, and the first '
-  'sentence of its description.'
+  'sentence of its description, followed by the first sentence of each described parameter.'
 )
 def tools(context: Context[Webviews], webview: Annotated[str, _WEBVIEW_FIELD]) -> str:
   context.state.get(webview)

@@ -177,11 +177,11 @@ def test_tools_renders_the_spilled_live_roster_compactly(monkeypatch, tmp_path) 
       'inputSchema': {
         'type': 'object',
         'properties': {
-          'element': {'type': 'string'},
-          'target': {'type': 'string'},
+          'element': {'type': 'string', 'description': 'Human-readable element description.'},
+          'target': {'type': 'string', 'description': 'Exact element reference. Or a selector.'},
           'button': {'enum': ['left', 'right']},
         },
-        'required': ['element', 'target'],
+        'required': ['target'],
       },
     }
   ]
@@ -197,7 +197,9 @@ def test_tools_renders_the_spilled_live_roster_compactly(monkeypatch, tmp_path) 
   )
 
   assert mcp.tools(context, 'webview-1') == (
-    'browser_click(element: string, target: string, button?: "left"|"right") — Click an element.'
+    'browser_click(element?: string, target: string, button?: "left"|"right") — Click an element.\n'
+    '  element — Human-readable element description.\n'
+    '  target — Exact element reference.'
   )
 
 
