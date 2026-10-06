@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from bro import watches
 from bro.base import credentials
 from bro.base.args import Parser
 from bro.launch.broxy import session_broxy
@@ -281,7 +282,9 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
   clear_requested_exit_status()
   _install_credential_hooks()
   harness.prepare_session(run)
-  with _process_record(), session_broxy():
+  with _process_record(), session_broxy(), watches.Owner.for_session() as watch_owner:
+    if watches.session_watch_admitted():
+      watch_owner.store.start(watches.SESSION_WATCH_COMMAND)
     code = harness.run_session(run)
   requested = requested_exit_status()
   return code if requested is None else requested

@@ -1,120 +1,347 @@
+import concurrent.futures
+import contextlib
 import io
+import shlex
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
-from bro import watch_next, watch_run, watches
+from bro import watch_next, watches
+from bro.base.liveness_test_helper import Liveness
+from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT
 from bro.monitor import SESSION_DIR_ENV
 
 
 @pytest.fixture
-def session_dir(monkeypatch, tmp_path):
+def owner(monkeypatch, tmp_path):
   monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
-  return tmp_path
+  with watches.Owner.for_session() as watch_owner:
+    yield watch_owner
 
 
-def _echo(*lines: str) -> list[str]:
-  return ['bash', '-c', '; '.join(f'echo {line}' for line in lines)]
+def _seed(store: watches.Store, command: str, content: str) -> watches.Watch:
+  watch = watches.Watch(command, store.directory, watches.slug(command))
+  watch.command_file.write_text(f'{command}\n')
+  watch.log.write_text(content)
+  return watch
 
 
-class TestWatchRun:
-  def test_keeps_the_lines_and_marks_the_exit(self, session_dir, capsys):
-    assert watch_run.run(_echo('one', 'two')) == 0
+def _process_is_running(process_id: int) -> bool:
+  try:
+    state = Path(f'/proc/{process_id}/stat').read_text().split()[2]
+  except (FileNotFoundError, ProcessLookupError):
+    return False
+  return state != 'Z'
 
-    (watch,) = watches.declared()
-    assert watch.log.read_text() == 'one\ntwo\n[watch-run] exited 0\n'
-    assert capsys.readouterr().out == 'one\ntwo\n'
+
+def _wait_for_file(path: Path) -> str:
+  deadline = time.monotonic() + 10
+  while not path.exists():
+    assert time.monotonic() < deadline, f'{path} was not created'
+    time.sleep(0.01)
+  return path.read_text()
+
+
+class TestStore:
+  def test_take_tags_complete_lines_and_commits_offsets(self, owner):
+    watch = _seed(owner.store, 'printf lines', 'one\ntwo\npartial')
+
+    assert owner.store.take() == '[printf lines] one\n[printf lines] two'
+    assert watch.saved_offset() == len('one\ntwo\n')
+    assert owner.store.take() is None
+
+    with watch.log.open('a') as log_file:
+      log_file.write('\n')
+    assert owner.store.take() == '[printf lines] partial'
+    assert watch.saved_offset() == len('one\ntwo\npartial\n')
+
+  def test_take_stays_within_the_shared_bounds_and_marks_pending(self, owner):
+    _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(150)))
+
+    first = owner.store.take()
+    assert first is not None
+    assert len(first.splitlines()) == DEFAULT_LIMIT
+    assert len(first.encode()) <= BYTE_LIMIT
+    assert first.splitlines()[-1] == '[...pending watch lines...]'
+
+    second = owner.store.take()
+    assert second is not None
+    delivered = [
+      int(line.removeprefix('[seq] '))
+      for batch in (first, second)
+      for line in batch.splitlines()
+      if line.startswith('[seq] ')
+    ]
+    assert delivered == list(range(150))
+
+  def test_two_readers_commit_disjoint_batches_under_the_lock(self, owner):
+    _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(180)))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+      batches = list(executor.map(lambda _index: owner.store.take(), range(2)))
+
+    delivered = [
+      int(line.removeprefix('[seq] '))
+      for batch in batches
+      if batch is not None
+      for line in batch.splitlines()
+      if line.startswith('[seq] ')
+    ]
+    assert sorted(delivered) == list(range(180))
+    assert len(delivered) == len(set(delivered))
+
+  def test_a_cut_watch_yields_the_first_turn_of_the_next_batch(self, owner):
+    a = _seed(owner.store, 'a', ''.join(f'a{number}\n' for number in range(99)))
+    _seed(owner.store, 'b', 'b0\n')
+
+    first = owner.store.take()
+    with a.log.open('a') as log_file:
+      log_file.write(''.join(f'a{number}\n' for number in range(99, 198)))
+    second = owner.store.take()
+
+    assert first is not None and first.startswith('[a] a0\n')
+    assert second is not None and second.startswith('[b] b0\n')
+
+  def test_a_wide_line_is_paged_without_loss_and_names_its_size_once(self, owner):
+    content = 'x' * (BYTE_LIMIT + 500)
+    _seed(owner.store, 'wide', f'{content}\n')
+
+    first = owner.store.take()
+    second = owner.store.take()
+
+    assert first is not None and second is not None
+    assert f'[line: {(len(content) / 1_000):.1f} KB]' in first
+    assert '[line:' not in second
+    delivered = ''.join(
+      line.split('] ', 1)[1].removeprefix(f'[line: {(len(content) / 1_000):.1f} KB] ')
+      for batch in (first, second)
+      for line in batch.splitlines()
+      if line.startswith('[wide] ')
+    )
+    assert delivered == content
+
+  def test_invalid_utf8_expansion_stays_bounded_and_advances(self, owner):
+    watch = watches.Watch('binary', owner.store.directory, watches.slug('binary'))
+    watch.command_file.write_text('binary\n')
+    watch.log.write_bytes(b'\xff' * BYTE_LIMIT + b'\n')
+
+    batches = []
+    while watch.saved_offset() < BYTE_LIMIT + 1:
+      batch = owner.store.take()
+      assert batch is not None
+      batches.append(batch)
+      assert len(batch.encode()) <= BYTE_LIMIT
+      assert len(batch.splitlines()) <= DEFAULT_LIMIT
+
+    assert len(batches) > 1
+    assert watch.saved_offset() == BYTE_LIMIT + 1
+
+  def test_a_replacement_does_not_commit_the_next_buffered_lead_byte(self, owner):
+    watch = watches.Watch('binary', owner.store.directory, watches.slug('binary'))
+    watch.command_file.write_text('binary\n')
+    watch.log.write_bytes(b'\xc2\xc2\n')
+
+    assert owner.store.take() == '[binary] ��'
+    assert watch.saved_offset() == 3
+
+  def test_multiline_and_oversized_commands_have_single_bounded_tags(self, owner):
+    multiline = _seed(owner.store, 'first\nsecond', 'line\n')
+    oversized_command = 'x' * (BYTE_LIMIT + 1)
+    oversized = _seed(owner.store, oversized_command, 'line\n')
+
+    multiline_batch = owner.store.take('first\nsecond')
+    oversized_batch = owner.store.take(oversized_command)
+
+    assert multiline_batch == r'[first\nsecond] line'
+    assert oversized_batch is not None
+    assert len(oversized_batch.encode()) <= BYTE_LIMIT
+    assert len(oversized_batch.splitlines()) == 1
+    assert 'sha256:' in oversized_batch
+    assert multiline.saved_offset() == len('line\n')
+    assert oversized.saved_offset() == len('line\n')
+
+  def test_a_filtered_take_commits_only_the_named_watch(self, owner):
+    a = _seed(owner.store, 'a', 'a0\n')
+    b = _seed(owner.store, 'b', 'b0\n')
+
+    assert owner.store.take('b') == '[b] b0'
+    assert a.saved_offset() == 0
+    assert b.saved_offset() == len('b0\n')
+    assert owner.store.take() == '[a] a0'
+
+  def test_watch_next_for_one_command_leaves_other_watch_lines_unread(self, owner):
+    a = _seed(owner.store, 'a', 'a0\n')
+    _seed(owner.store, 'b', 'b0\n')
+    output = io.StringIO()
+
+    assert watch_next.wait(['b'], output, declaration_grace_seconds=0) == 0
+    assert output.getvalue() == '[b] b0\n'
+    assert a.saved_offset() == 0
+
+  def test_watch_next_parser_keeps_option_tokens_in_the_filtered_command(self, owner, capsys):
+    _seed(owner.store, 'tail -f file', 'line\n')
+
+    assert watch_next.main(['watch-next', 'tail', '-f', 'file']) == 0
+    assert capsys.readouterr().out == '[tail -f file] line\n'
+
+  def test_a_large_line_pages_by_advancing_its_cursor(self, owner):
+    content = 'z' * (BYTE_LIMIT * 4)
+    watch = _seed(owner.store, 'large', f'{content}\n')
+    offsets = []
+
+    while watch.saved_offset() < len(content) + 1:
+      batch = owner.store.take()
+      assert batch is not None
+      offsets.append(watch.saved_offset())
+
+    assert offsets == sorted(set(offsets))
+    assert offsets[-1] == len(content) + 1
+
+
+class TestProducers:
+  def test_producer_start_observes_an_owner_that_already_closed(self, tmp_path):
+    directory = tmp_path / 'closed-owner'
+    owner_path = directory / '.owner'
+    script = (
+      'import os; from pathlib import Path; from bro import watches; '
+      f'directory = Path({str(directory)!r}); directory.mkdir(); '
+      f'owner_path = Path({str(owner_path)!r}); os.mkfifo(owner_path); '
+      'store = watches.Store(directory, owner_path); '
+      'watch = store.start("sleep 30"); identity = watch.producer_identity(); '
+      'print(-1 if identity is None else identity.process_id)'
+    )
+
+    result = subprocess.run(
+      [sys.executable, '-c', script],
+      check=True,
+      capture_output=True,
+      text=True,
+      timeout=10,
+    )
+    producer_process_id = int(result.stdout)
+    deadline = time.monotonic() + 10
+    while producer_process_id >= 0 and _process_is_running(producer_process_id):
+      assert time.monotonic() < deadline, 'producer survived its absent owner'
+      time.sleep(0.01)
+
+  def test_multibyte_command_names_stay_within_filesystem_component_bounds(self, owner):
+    command = f'printf ok # {"界" * 80}'
+    watch = owner.store.start(command)
+
+    for path in (watch.command_file, watch.log, watch.offset_file, watch.pid_file):
+      assert len(path.name.encode()) <= 255
+    assert watch.command_file.read_text().rstrip() == command
+
+  def test_watch_run_detaches_and_keeps_output_and_exit(self, owner):
+    command = 'printf "one\\ntwo\\n"'
+    watch = owner.store.start(command)
+
+    deadline = time.monotonic() + 10
+    batch = None
+    while batch is None:
+      assert time.monotonic() < deadline, 'watch output did not arrive'
+      batch = owner.store.take()
+      time.sleep(0.01)
+
+    assert f'[{command}] one' in batch
+    assert f'[{command}] two' in batch
+    assert f'[{command}] [watch-run] exited 0' in batch
     assert not watch.producer_alive()
 
-  def test_the_exit_code_is_the_commands(self, session_dir):
-    assert watch_run.run(['bash', '-c', 'exit 3']) == 3
+  def test_stopping_a_watch_ends_its_whole_process_group(self, owner, tmp_path):
+    child_path = tmp_path / 'child'
+    command = f'sleep 30 & echo $! > {shlex.quote(str(child_path))}; wait'
+    watch = owner.store.start(command)
+    child_process_id = int(_wait_for_file(child_path))
+    identity = watch.producer_identity()
+    assert identity is not None
 
-  def test_refuses_a_second_producer_of_the_same_command(self, session_dir):
-    watches.declare(_echo('one'))
-    with pytest.raises(watches.WatchError, match='already runs'):
-      watch_run.run(_echo('one'))
+    owner.store.stop(command)
 
-  def test_refuses_without_a_session_dir(self, monkeypatch):
-    monkeypatch.delenv(SESSION_DIR_ENV, raising=False)
-    with pytest.raises(watches.WatchError, match=SESSION_DIR_ENV):
-      watch_run.run(_echo('one'))
+    assert not _process_is_running(identity.process_id)
+    assert not _process_is_running(child_process_id)
 
-  def test_the_cli_requires_a_command(self, session_dir):
-    with pytest.raises(SystemExit):
-      watch_run.main(['watch-run'])
-    assert watch_run.main(['watch-run', *_echo('hi')]) == 0
+  def test_owner_exit_stops_producers_while_the_embedding_process_lives(
+    self, monkeypatch, tmp_path
+  ):
+    monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path / 'session'))
+    child_path = tmp_path / 'owned-child'
+    command = f'sleep 30 & echo $! > {shlex.quote(str(child_path))}; wait'
+    with watches.Owner.for_session() as watch_owner:
+      watch = watch_owner.store.start(command)
+      child_process_id = int(_wait_for_file(child_path))
+      identity = watch.producer_identity()
+      assert identity is not None
+
+    assert not _process_is_running(identity.process_id)
+    assert not _process_is_running(child_process_id)
+
+  def test_owner_process_death_escalates_past_a_term_resistant_watch(self, tmp_path):
+    with contextlib.closing(Liveness(tmp_path / 'abrupt-liveness')) as liveness:
+      command = liveness.holding("trap '' TERM; exec sleep 30")
+      session = tmp_path / 'abrupt-session'
+      script = (
+        'import os; '
+        f'os.environ[{SESSION_DIR_ENV!r}] = {str(session)!r}; '
+        'from bro import watches; '
+        'owner = watches.Owner.for_session(); owner.__enter__(); '
+        f'owner.store.start({command!r}); '
+        'print("started", flush=True); os._exit(0)'
+      )
+      process = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, text=True)
+      assert process.stdout is not None
+      assert process.stdout.readline() == 'started\n'
+      assert process.wait(timeout=10) == 0
+      liveness.assert_reaped()
+
+  def test_unwatch_refuses_the_runtime_owned_session_watch(self, owner):
+    with pytest.raises(watches.WatchError, match='owned by the runtime'):
+      owner.store.stop(watches.SESSION_WATCH_COMMAND)
 
 
-class TestWatchNext:
-  def test_delivers_new_lines_once_tagged_by_watch(self, session_dir):
-    command = _echo('one', 'two')
-    watch_run.run(command)
-    out = io.StringIO()
+class TestOwner:
+  def test_a_new_owner_starts_with_an_empty_store(self, monkeypatch, tmp_path):
+    monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+    with watches.Owner.for_session() as first:
+      watch = _seed(first.store, 'old', 'uncommitted\n[watch-run] exited 0\n')
+      watch.pid_file.unlink(missing_ok=True)
 
-    assert watch_next.wait(command, out) == 0
+    with watches.Owner.for_session() as resumed:
+      assert resumed.store.declared() == []
+      assert resumed.store.take() is None
 
-    tag = f'[{watches.declared(command)[0].command}]'
-    assert out.getvalue() == f'{tag} one\n{tag} two\n{tag} [watch-run] exited 0\n'
-    with pytest.raises(watches.WatchError, match='every watch has ended'):
-      watch_next.wait(command, io.StringIO())
+  def test_party_members_use_their_own_session_store(self, tmp_path):
+    root_directory = tmp_path / 'root' / watches.WATCH_DIRNAME
+    member_directory = tmp_path / 'member' / watches.WATCH_DIRNAME
+    root = watches.Store(root_directory, root_directory / '.owner')
+    member = watches.Store(member_directory, member_directory / '.owner')
+    root_directory.mkdir(parents=True)
+    member_directory.mkdir(parents=True)
+    _seed(root, 'root command', 'root\n')
+    _seed(member, 'member command', 'member\n')
 
-  def test_blocks_until_a_line_arrives(self, session_dir):
-    command = ['bash', '-c', 'sleep 0.3; echo late']
-    producer = subprocess.Popen(
-      [sys.executable, '-m', 'bro.watch_run', *command], stdout=subprocess.DEVNULL
-    )
-    try:
-      deadline = time.monotonic() + 5
-      while len(watches.declared()) == 0:
-        assert time.monotonic() < deadline, 'the producer never declared its watch'
-        time.sleep(0.02)
-      out = io.StringIO()
-      assert watch_next.wait(command, out, poll_seconds=0.05) == 0
-      assert '] late\n' in out.getvalue()
-    finally:
-      assert producer.wait(timeout=10) == 0
+    assert root.take() == '[root command] root'
+    assert member.take() == '[member command] member'
 
-  def test_reads_every_watch_when_none_is_named(self, session_dir):
-    watch_run.run(_echo('a'))
-    watch_run.run(['bash', '-c', 'echo b'])
-    out = io.StringIO()
 
-    assert watch_next.wait(None, out) == 0
-
-    assert '] a\n' in out.getvalue() and '] b\n' in out.getvalue()
-
-  def test_a_partial_line_waits_for_its_newline(self, session_dir):
-    watch = watches.declare(['tail'])
-    watch.log.write_text('partial')
-    assert watch.read_new() == ([], 0)
-    watch.log.write_text('partial\n')
-    assert watch.read_new() == (['partial'], len('partial\n'))
-
-  def test_refuses_an_undeclared_watch_once_the_grace_passes(self, session_dir):
-    with pytest.raises(watches.WatchError, match='no watch runs `nothing here`'):
-      watch_next.wait(['nothing', 'here'], io.StringIO(), declaration_grace_seconds=0)
-    with pytest.raises(watches.WatchError, match='no watch runs in this session'):
-      watch_next.wait(None, io.StringIO(), declaration_grace_seconds=0)
-
-  def test_waits_for_a_watch_declared_after_it_started(self, session_dir):
-    command = _echo('late-declared')
-    producer = subprocess.Popen(
-      [
-        sys.executable,
-        '-c',
-        'import time; time.sleep(0.4); from bro import watch_run; '
-        f'raise SystemExit(watch_run.run({command!r}))',
-      ],
-      stdout=subprocess.DEVNULL,
-    )
-    try:
-      out = io.StringIO()
-      assert watch_next.wait(command, out, poll_seconds=0.05) == 0
-      assert '] late-declared\n' in out.getvalue()
-    finally:
-      assert producer.wait(timeout=10) == 0
+@pytest.mark.parametrize(
+  'may_summon,summoned,talk,expected',
+  [
+    (('reviewer',), False, None, True),
+    ((), True, ('owner.say',), True),
+    ((), True, ('owner.question',), True),
+    ((), True, ('worker.question',), True),
+    ((), True, ('worker.say',), False),
+    ((), False, ('owner.say',), False),
+  ],
+)
+def test_session_watch_admission(may_summon, summoned, talk, expected):
+  assert (
+    watches.session_watch_admitted(may_summon=may_summon, summoned=summoned, talk=talk) is expected
+  )
 
 
 def test_slugs_keep_commands_apart_and_out_of_subdirectories():

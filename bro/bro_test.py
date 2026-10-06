@@ -16,6 +16,7 @@ import bro.bro as bro_module
 import bro.llm.llms.echo as llm_llms_echo
 import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
+from bro import watches
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
 from bro.bro import BaseBro, BroRaised, feature
@@ -48,6 +49,7 @@ class StubRun:
     self.current_tool_step_id = tool_step
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
+    self.watch_store: watches.Store = MagicMock(spec=watches.Store)
 
 
 def _native_servers(
@@ -2301,13 +2303,14 @@ class TestJobServiceTools:
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(native_server.close)
-      assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(native)
+      assert {'watch', 'unwatch', 'job', 'poll', 'kill', 'jobs', 'chill'} <= set(native)
       mode = native['job'].parameters['properties']['mode']
       assert set(mode['enum']) == {'fg', 'bg', 'watch'}
       claude_server = bro_module._build_service_server(
         self.AnyShellBro(), include_raise=False, harness='claude'
       )
       claude_names = {tool.name for tool in await claude_server.list_tools()}
+      assert {'watch', 'unwatch'} <= claude_names
       assert claude_names.isdisjoint({'job', 'poll', 'kill', 'jobs', 'chill'})
 
   @pytest.mark.asyncio
@@ -2330,6 +2333,64 @@ class TestJobServiceTools:
       assert result == 'exited (code 0)\nallowed'
       with pytest.raises(ValueError, match='must match exactly'):
         await tools['job'].call({'command': 'printf allowed; true', 'mode': 'fg'})
+
+  @pytest.mark.asyncio
+  async def test_watch_tools_apply_the_exact_shell_roster_on_both_harnesses(self):
+    class ExactShellBro(BaseBro):
+      name = 'exact-watch-shell'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('printf allowed')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class ExactClaudeShellBro(ExactShellBro):
+      name = 'exact-claude-watch-shell'
+      tools: ClassVar = [claude.block(*claude.SHELL)]
+
+    with watches.Owner.temporary() as owner:
+      run = StubRun()
+      run.watch_store = owner.store
+      for harness, declaration in (
+        ('bro', ExactShellBro()),
+        ('claude', ExactClaudeShellBro()),
+      ):
+        server = _service_server(declaration, run=run, harness=harness)
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        try:
+          assert await tools['watch'].call({'command': ' printf allowed '}) == (
+            'watching `printf allowed`'
+          )
+          with pytest.raises(ValueError, match='must match exactly'):
+            await tools['watch'].call({'command': 'printf allowed; true'})
+          assert await tools['unwatch'].call({'command': 'printf allowed'}) == (
+            'stopped watching `printf allowed`'
+          )
+        finally:
+          server.close()
+      run.registry.close()
+
+  @pytest.mark.asyncio
+  async def test_unwatch_refuses_the_runtime_owned_session_watch(self):
+    class SessionShellBro(BaseBro):
+      name = 'session-watch-shell'
+      description = 'd'
+      tools: ClassVar = [mcp.shell(bro_module.QUEST_WATCH_COMMAND)]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with watches.Owner.temporary() as owner:
+      run = StubRun()
+      run.watch_store = owner.store
+      server = _service_server(SessionShellBro(), run=run)
+      tools = {tool.name: tool for tool in await server.list_tools()}
+      try:
+        with pytest.raises(watches.WatchError, match='owned by the runtime'):
+          await tools['unwatch'].call({'command': bro_module.QUEST_WATCH_COMMAND})
+      finally:
+        server.close()
+        run.registry.close()
 
   @pytest.mark.asyncio
   async def test_foreground_job_interrupted_by_other_news_becomes_background(self, tmp_path):
@@ -2454,6 +2515,7 @@ class TestJobServiceTools:
       stack.callback(run.registry.close)
       stack.callback(server.close)
       assert {'job', 'poll', 'kill', 'jobs', 'chill'} <= set(tools)
+      assert {'watch', 'unwatch'}.isdisjoint(tools)
       started = await tools['job'].call({'command': bro_module.QUEST_WATCH_COMMAND, 'mode': 'bg'})
       assert started == 'started job-1 (bg)'
       with pytest.raises(ValueError, match='must match exactly'):
