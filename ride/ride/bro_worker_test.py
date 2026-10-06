@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -107,6 +108,15 @@ def launch_scope(monkeypatch):
     },
   )
   monkeypatch.setattr(bro_worker, 'workspace_isolation', lambda name: Isolation.BOXED)
+
+
+def test_worker_defers_an_uninstalled_summon_default_until_a_request(monkeypatch):
+  resolve = MagicMock(side_effect=ValueError("harness 'bro' is not installed"))
+  monkeypatch.setattr(bro_worker, 'get_harness', resolve)
+
+  BroType(Host())
+
+  resolve.assert_not_called()
 
 
 def test_talk_widens_the_bro_default(tmp_path):

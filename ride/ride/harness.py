@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Optional, Protocol
+from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
+from bro.harness import get_harness as load_harness, installed_harness_names
 from bro.llm.llm import LLMSpec
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -20,8 +21,9 @@ class ContainerExtras:
   mounts: tuple[str, ...]
 
 
-class Harness(Protocol):
-  """the runtime operations supplied by one driving agent loop."""
+@runtime_checkable
+class SessionHarness(Protocol):
+  """The managed-session operations supplied by one driving harness."""
 
   name: str
 
@@ -36,6 +38,10 @@ class Harness(Protocol):
   def missing_session_error(self, workspace: Workspace) -> str: ...
 
   def read_subject(self, workspace: Workspace) -> str | None: ...
+
+  def prepare_session(self, run: 'SessionRun') -> None: ...
+
+  def check_runtime(self) -> None: ...
 
   def run_session(self, spec: 'SessionRun') -> int: ...
 
@@ -52,16 +58,11 @@ class Harness(Protocol):
   ) -> None: ...
 
 
-HARNESS_NAMES = ('claude', 'bro')
+HARNESS_NAMES = installed_harness_names()
 
 
-def get_harness(name: str) -> Harness:
-  if name == 'claude':
-    from ride.claude.harness import CLAUDE
-
-    return CLAUDE
-  if name == 'bro':
-    from ride.bro import BRO
-
-    return BRO
-  raise ValueError(f'unknown harness: {name}')
+def get_harness(name: str) -> SessionHarness:
+  harness = load_harness(name)
+  if not isinstance(harness, SessionHarness):
+    raise TypeError(f'installed harness {name!r} does not implement ride SessionHarness')
+  return harness

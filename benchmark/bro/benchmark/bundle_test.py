@@ -46,6 +46,7 @@ def _manifest(**overrides: object) -> dict[str, object]:
     'format': MANIFEST_FORMAT,
     'claude_code': {'version': '2.1.258', 'sha256': '3' * 64},
     'cpython': CPYTHON_VERSION,
+    'harnesses': ['bro', 'claude'],
     'requirements': 'certifi==1\n',
     'source_commit': 'a' * 40,
     'target': list(TARGET),
@@ -162,7 +163,7 @@ def test_built_refuses_a_manifest_off_the_format(tmp_path, manifest):
   bundle = _fake_bundle(tmp_path / 'bundle')
   bundle.manifest.write_text(json.dumps(manifest))
 
-  with pytest.raises(ValueError, match='malformed values|unexpected fields'):
+  with pytest.raises(ValueError, match='malformed values|unexpected fields|benchmark bundle'):
     built(bundle.root)
 
 

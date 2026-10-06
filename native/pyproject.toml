@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "bro",
+  "bro-ride",
   "aiohttp==3.14.1",
   "humanize==4.16.0",
   "mcp==1.28.1",
@@ -25,14 +26,19 @@ dependencies = [
 "bro.native.llm" = "bro.native._entrypoints:bro_native_llm"
 "bro.run" = "bro.native._entrypoints:bro_run"
 
+[project.entry-points."bro.harnesses"]
+bro = "bro.native.harness:BRO"
+
 [project.entry-points."bro.session_commands"]
 "bro" = "bro.native._entrypoints:bro_run"
 
 [tool.uv.sources]
 bro = { workspace = true }
+bro-ride = { workspace = true }
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
+bro-ride = ["ride"]
 
 [tool.deptry.per_rule_ignores]
 # Runtime dependencies imported by core modules that the native surfaces execute.

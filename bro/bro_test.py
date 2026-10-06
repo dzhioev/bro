@@ -61,7 +61,7 @@ def _native_servers(
 
 
 def _service_server(
-  bro: BaseBro, *, run: Optional[StubRun] = None, harness: mcp.Harness = 'bro'
+  bro: BaseBro, *, run: Optional[StubRun] = None, harness: mcp.HarnessLike = 'bro'
 ) -> MCPServer:
   return bro_module._build_service_server(
     bro,
@@ -1238,7 +1238,7 @@ async def _find_tool(
   name: str,
   *,
   run: Optional[StubRun] = None,
-  harness: mcp.Harness = 'bro',
+  harness: mcp.HarnessLike = 'bro',
 ):
   for candidate in await _service_server(bro, run=run, harness=harness).list_tools():
     if candidate.name == name:

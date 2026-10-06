@@ -136,12 +136,6 @@ def launch_covers(*args, **kwargs):
   return resolve(*args, **kwargs)
 
 
-def _harness_names() -> tuple[str, ...]:
-  from ride.harness import HARNESS_NAMES
-
-  return HARNESS_NAMES
-
-
 def record_resume_spec(*args, **kwargs):
   from ride.session import record_resume_spec as lower
 
@@ -667,9 +661,13 @@ def _validate_bro_arguments(args: dict[str, Any], *, manual: bool) -> None:
     except LLMSelectionError as error:
       raise LaunchDenied(f"bro launch 'llm': {error}") from error
   harness = args.get('harness')
-  harness_names = _harness_names()
-  if harness is not None and harness not in harness_names:
-    raise LaunchDenied(f"bro launch 'harness' must be one of {', '.join(harness_names)}")
+  if harness is not None:
+    if not isinstance(harness, str):
+      raise LaunchDenied("bro launch 'harness' must be a string")
+    try:
+      get_harness(harness)
+    except (TypeError, ValueError) as error:
+      raise LaunchDenied(str(error)) from error
   party = args.get('party')
   if party is not None and party not in ('start', 'join'):
     raise LaunchDenied("bro launch 'party' must be 'start' or 'join'")
@@ -745,9 +743,6 @@ class BroType(WorkerType):
       not isinstance(host.depth_cap, int) or isinstance(host.depth_cap, bool) or host.depth_cap <= 0
     ):
       raise ValueError('summon depth cap must be a positive integer')
-    harness_names = _harness_names()
-    if host.summon_harness not in harness_names:
-      raise ValueError(f'summon harness must be one of {", ".join(harness_names)}')
 
   def talk(self, request: LaunchRequest) -> Talk:
     return cast('Talk', _DEFAULT_TALK | request.requested_talk)

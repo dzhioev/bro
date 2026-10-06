@@ -39,6 +39,9 @@ dependencies = [
 "do-ride" = "ride._entrypoints:ride_do_ride"
 "ride" = "ride._entrypoints:ride_cli"
 
+[project.entry-points."bro.harnesses"]
+claude = "ride.claude.harness:CLAUDE"
+
 [project.entry-points."bro.worker_types"]
 bro = "ride.bro_worker:BroType"
 

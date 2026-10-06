@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from bro.base import configs
 from bro.base.scope import ScopeLayer, validate_scope_layer
+from bro.harness import harness_name
 from bro.workspace.paths import find_project_root, project_root
 
 _LAUNCH_KEYS = frozenset(
@@ -39,7 +40,7 @@ class ProjectConfig:
 
   default_bro: str
   image_repository: str
-  harness: str = 'claude'
+  harness: str = configs.DEFAULT_HARNESS
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
   build_context_command: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
@@ -57,9 +58,10 @@ def _optional_string(table: dict, source: str, key: str) -> Optional[str]:
 
 def _harness(table: dict, source: str, key: str, default: str) -> str:
   value = _optional_string(table, source, key) or default
-  if value not in ('claude', 'bro'):
-    raise ValueError(f'[tool.bro] {key} in {source} must be `claude` or `bro`')
-  return value
+  try:
+    return harness_name(value)
+  except ValueError as error:
+    raise ValueError(f'[tool.bro] {key} in {source}: {error}') from error
 
 
 def _positive_integer(value: object, source: str, key: str) -> int:
@@ -120,7 +122,7 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
-    harness=_harness(table, source, 'harness', 'claude'),
+    harness=_harness(table, source, 'harness', configs.DEFAULT_HARNESS),
     summon_harness=_harness(table, source, 'summon-harness', configs.DEFAULT_SUMMON_HARNESS),
     build_context_command=_optional_string(table, source, 'build-context-command'),
     summon_depth=_positive_integer(

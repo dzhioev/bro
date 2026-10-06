@@ -70,13 +70,19 @@ class TestRenderText:
     monkeypatch.setattr(mcp.credentials, 'available', boom)
     assert render_text('plain text', creds=[]) == 'plain text'
 
-  def test_unknown_literal_raises(self):
-    with pytest.raises(ValueError, match='domain'):
-      render_text('{{when #harness = claud}}x{{end}}', harness='claude')
+  def test_well_formed_uninstalled_literal_reads_as_false(self):
+    assert render_text('{{when #harness = codex}}x{{end}}', harness='claude') == ''
 
-  def test_unknown_harness_argument_raises(self):
-    with pytest.raises(ValueError, match='unknown harness'):
-      render_text('{{iff a = a}}x{{end}}', harness='gemini')  # type: ignore[arg-type]
+  def test_malformed_harness_literal_raises(self):
+    with pytest.raises(ValueError, match='invalid literal'):
+      render_text('{{when #harness = Claude}}x{{end}}', harness='claude')
+
+  def test_well_formed_uninstalled_harness_argument_is_allowed(self):
+    assert render_text('{{iff a = a}}x{{end}}', harness='gemini') == 'x'
+
+  def test_malformed_harness_argument_raises(self):
+    with pytest.raises(ValueError, match='invalid harness name'):
+      render_text('{{iff a = a}}x{{end}}', harness='Gemini')
 
   def test_hold_fact_selects_a_branch(self):
     text = '{{iff #hold = unattended}}U{{else}}other{{end}}'
@@ -290,9 +296,12 @@ class TestSelect:
     with pytest.raises(ConditionError, match='unknown variable #creds'):
       select([when(mcp.creds.contains('openai'), 'x')], harness='bro')
 
-  def test_unknown_harness_argument_raises(self):
-    with pytest.raises(ValueError, match='unknown harness'):
-      select([], harness='gemini')  # type: ignore[arg-type]
+  def test_well_formed_uninstalled_harness_argument_is_allowed(self):
+    assert select([], harness='gemini') == []
+
+  def test_malformed_harness_argument_raises(self):
+    with pytest.raises(ValueError, match='invalid harness name'):
+      select([], harness='Gemini')
 
 
 class TestWithoutMCPPackage:

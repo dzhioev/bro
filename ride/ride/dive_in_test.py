@@ -14,6 +14,7 @@ import bro.workspace.paths as workspace_paths
 import ride.cli as ride_cli
 import ride.dive_in as dive_in
 from bro.base import credentials
+from ride.harness import get_harness
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
 HEX = '0123456789abcdef0123456789abcdef'
@@ -403,17 +404,15 @@ class TestTaskSystem:
     assert calls['scoped'] == ('dev', CLAUDE.scope_recipe(), [], [], [])
 
   def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
-    from ride.scope import BRO_RUN_RECIPE
+    bro_recipe = get_harness('bro').scope_recipe()
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
     dive_in._task_system(Path('/repo'), [], [], [], None, 'bro', None)
-    assert calls['scoped'] == ('bro-dev', BRO_RUN_RECIPE, [], [], [])
+    assert calls['scoped'] == ('bro-dev', bro_recipe, [], [], [])
 
   def test_the_prefetch_scope_follows_the_settled_recipe(self, monkeypatch, tmp_path):
     import json
-
-    import ride.bro
 
     config = tmp_path / 'bro.json'
     config.write_text(
@@ -423,7 +422,7 @@ class TestTaskSystem:
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
     dive_in._task_system(Path('/repo'), [], [], [], None, 'bro', '::low')
-    assert calls['llm_spec'] == ride.bro.BRO.resolve_llm('openai:sol:low', 'bro-dev')
+    assert calls['llm_spec'] == get_harness('bro').resolve_llm('openai:sol:low', 'bro-dev')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError

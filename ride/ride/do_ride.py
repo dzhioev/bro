@@ -16,7 +16,7 @@ from bro.base.args import Parser
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import LLMSpec
-from bro.monitor import CLAUDE_CONFIG_DIR_ENV, PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
+from bro.monitor import PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
 from bro.summon import party_member
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
@@ -26,7 +26,7 @@ from ride.identity import bro_git_identity_env
 from ride.repository import recorded_origin_url
 
 if TYPE_CHECKING:
-  from ride.harness import Harness
+  from ride.harness import SessionHarness
   from ride.session import SessionSpec
 
 __cli_name__ = 'do-ride'
@@ -132,7 +132,7 @@ def encode_resolved_llm(resolved_llm: dict) -> str:
   return json.dumps(resolved_llm, separators=(',', ':'))
 
 
-def _resolved_llm(harness: 'Harness', llm: Optional[str], bro: str) -> dict:
+def _resolved_llm(harness: 'SessionHarness', llm: Optional[str], bro: str) -> dict:
   encoded = os.environ.get(RESOLVED_LLM_ENV)
   if encoded is None:
     return harness.resolve_llm(llm, bro).dump()
@@ -142,7 +142,7 @@ def _resolved_llm(harness: 'Harness', llm: Optional[str], bro: str) -> dict:
   return LLMSpec.from_dict(data).dump()
 
 
-def _session_run(args: dict, arguments: list[str]) -> tuple['Harness', SessionRun]:
+def _session_run(args: dict, arguments: list[str]) -> tuple['SessionHarness', SessionRun]:
   from ride.harness import get_harness
 
   mode = args.pop('mode')
@@ -233,25 +233,6 @@ def _install_credential_hooks() -> None:
   )
 
 
-def _prepare_claude_state(run: SessionRun) -> None:
-  if run.harness != 'claude':
-    return
-  from ride.claude.claude_config import provision_unboxed_claude_dir, seed_session_plugins
-
-  boxed = _boxed()
-  config_value = os.environ.get(CLAUDE_CONFIG_DIR_ENV)
-  if config_value is None:
-    if boxed:
-      config_directory = Path.home() / '.claude'
-      config_directory.mkdir(parents=True, exist_ok=True)
-    else:
-      config_directory = provision_unboxed_claude_dir(workspace_dir(run.name), Path.cwd())
-    os.environ[CLAUDE_CONFIG_DIR_ENV] = str(config_directory)
-  else:
-    config_directory = Path(config_value)
-  seed_session_plugins(config_directory, container=boxed)
-
-
 @contextlib.contextmanager
 def stopped_on_sigterm(stop: Callable[[], None]) -> Generator[threading.Event]:
   """Run stop once when SIGTERM arrives during the block."""
@@ -278,7 +259,7 @@ def run_agent(argv: list[str], env: Optional[dict[str, str]] = None) -> int:
     return process.wait()
 
 
-def run_session(harness: 'Harness', run: SessionRun) -> int:
+def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
   """Run the session in this process's prepared working directory."""
   os.environ.update(bro_git_identity_env(run.bro))
   os.environ['RIDE_WORKSPACE'] = run.name
@@ -299,7 +280,7 @@ def run_session(harness: 'Harness', run: SessionRun) -> int:
     create_bro(run.bro).provision_workspace(Path.cwd())
   clear_requested_exit_status()
   _install_credential_hooks()
-  _prepare_claude_state(run)
+  harness.prepare_session(run)
   with _process_record(), session_broxy():
     code = harness.run_session(run)
   requested = requested_exit_status()

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 from ride.claude.assembly import persona_servers
-from ride.claude.harness import llm_spec
+from ride.claude.harness import CLAUDE, llm_spec
 from ride.claude.mcp import MCPEndpoint, http_mcp_config
 from ride.claude.statusline import REFRESH_SECONDS, statusline_command
 from ride.claude.system_prompt import session_append_prompt
@@ -149,8 +149,8 @@ def build_claude_launch(
     for server in servers:
       server_stack.callback(server.close)
     namespaces = list(dict.fromkeys(server.namespace for server in servers))
-  blocked_tool_names = bro.blocked_tool_names('claude')
-  narrowed_tool_commands = bro.narrowed_tool_commands('claude')
+  blocked_tool_names = bro.blocked_tool_names(CLAUDE)
+  narrowed_tool_commands = bro.narrowed_tool_commands(CLAUDE)
   hooks = watch_delivery_hooks()
   if len(narrowed_tool_commands) > 0:
     hooks.update(_tool_gate_hooks(narrowed_tool_commands))

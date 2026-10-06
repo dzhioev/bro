@@ -10,6 +10,7 @@ if STORE_DIR == '':
 
 # The host's own launch policy, beside the store rather than inside it.
 DEFAULT_HOST_CONFIG = os.path.expanduser('~/.bro.json')
+DEFAULT_HARNESS = 'claude'
 DEFAULT_SUMMON_DEPTH = 2
 DEFAULT_SUMMON_HARNESS = 'bro'
 

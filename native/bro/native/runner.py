@@ -27,6 +27,7 @@ from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.mission import LiveMission, live_mission_line, live_missions
 from bro.monitor import trail_pointer
 from bro.native import providers as native_providers
+from bro.native.harness import BRO
 from bro.native.llm import LLM
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summoned, summoned_by_from_env
@@ -166,7 +167,7 @@ class Runner:
     # or None to start. checked before any machinery (tracker, LLM, live
     # servers) so a missing secret surfaces at start, not mid-run at first use;
     # each surface delivers it per its mode — run() raises and send() returns it.
-    missing = self.bro.missing_secrets()
+    missing = self.bro.missing_secrets(BRO)
     if len(missing) == 0:
       return None
     return f'{self.bro.name} cannot start: missing credentials: {", ".join(missing)}'
@@ -193,7 +194,7 @@ class Runner:
     self._observer = observer
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
-    system_prompt = self.bro.system_prompt_for(hold=hold)
+    system_prompt = self.bro.system_prompt_for(hold=hold, harness=BRO)
     trail_id = self._tracker.start_trail(
       bro=self.bro.name,
       llm_spec=self.bro.llm_spec.dump(),
@@ -433,9 +434,7 @@ class Runner:
     return native_providers.create(
       self.bro.llm_spec,
       self.inbox,
-      mcp_servers=self.bro.assemble(
-        harness='bro', include_raise=hold == 'unattended', live_run=self
-      ),
+      mcp_servers=self.bro.assemble(harness=BRO, include_raise=hold == 'unattended', live_run=self),
       observer=self._observer,
       tracker=self._tracker,
       # the LLM publishes cumulative usage under the bro's surface identity (the

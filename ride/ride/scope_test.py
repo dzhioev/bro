@@ -10,14 +10,22 @@ from bro.base import credentials
 from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources.web_search import WebSearch
+from bro.harness import Harness
 from bro.llm.mcp import InProcessMCPServer
 from bro.mcp import MCPServerSpec, ToolLayer, creds
 from bros.bro import Bro
-from ride.scope import BRO_RUN_RECIPE, ScopeRecipe
+from ride.harness import get_harness
+from ride.scope import ScopeRecipe
 
+BRO_RUN_RECIPE = ScopeRecipe(
+  name='test-bro-run',
+  harness=Harness('bro'),
+  auth_secret=None,
+  llm_key=True,
+)
 CLAUDE_RECIPE = ScopeRecipe(
   name='test-claude',
-  harness='claude',
+  harness=Harness('claude'),
   auth_secret='claude_code',
   llm_key=False,
 )
@@ -211,7 +219,8 @@ class TestLaunchLLMSpec:
   def test_a_selection_only_the_settled_recipe_reads_is_read(self, tmp_path, monkeypatch):
     from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
     from bro.registry import get_class
-    from ride.bro import BRO
+
+    BRO = get_harness('bro')
 
     monkeypatch.setattr(get_class('bro-dev'), 'llm_spec', EchoLLMSpec())
     # spells put the cast key in the optional tier, which would read the
@@ -243,7 +252,7 @@ class TestLaunchLLMSpec:
       ride.scope.scoped_secrets('bro-dev', BRO_RUN_RECIPE, attachment=attachment)
 
   def test_an_unknown_bro_fails_the_launch(self):
-    from ride.bro import BRO
+    BRO = get_harness('bro')
 
     with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'no-such-bro'"):
       ride.scope.launch_llm_spec(BRO, None, 'no-such-bro', None)
