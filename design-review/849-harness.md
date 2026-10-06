@@ -64,7 +64,8 @@ General code reaches a harness through that object, passed in by the engine that
   An installation may carry one harness without the other
   — `bro-ride` without `bro-native` is a Claude-only runtime (`native/README.md`), and the benchmark launcher's interpreter cannot hold `bro-native`'s openai major —
   so a name is checked against the installed ones where it is used, not where it is configured.
-  `[tool.bro] harness` and `summon-harness` (`bro/workspace/project.py`) and the defaults are read as well-formed names, and a launch or summon that selects an uninstalled harness fails naming the distribution to install.
+  `[tool.bro] harness` and `summon-harness` (`bro/workspace/project.py`) and the defaults are read as well-formed names, and a launch or summon that selects an uninstalled harness fails listing the installed ones;
+  the registry knows only what is installed, so it names no distribution for a harness it has never seen.
   The defaults, `claude` for a launch and `bro` for a summon, are configuration values kept together in `bro.base.configs`.
   The Terminal-Bench adapter in `benchmark/` names no harness:
   the relocatable bundle's manifest records the harness names its installation registers, under a new manifest format, and the launcher checks a trial's harness against them rather than against its own interpreter;
@@ -117,6 +118,8 @@ it is two protocols the harness's session runtime implements, below.
   a session that may summon, or a summoned one whose talk carries `owner.say`, `owner.question`, or `worker.question`.
   The rule moves out of `_fold_tool_layers` into the module that arms the watch.
   When the session ends, `do-ride` stops every producer still live in its store.
+  Each session starts with an empty store:
+  before arming, `do-ride` stops any producer a killed run left behind and clears the rest, since what the run before left unread, its producers' closing lines among them, belongs to a quest that ended with it.
 - **Watches the model starts.**
   `bro::watch(command)` keeps an admitted command running for the rest of the session through the store, and `bro::unwatch(command)` stops it.
   Both mount wherever the persona declares shell reach, on every harness, and admit commands against the persona's shell roster, as `job` does;
@@ -218,7 +221,8 @@ Each harness implements four operations for its sessions, behind two protocols i
   if it does not, a waiter still waiting from an earlier turn end delivers, and otherwise lines wait for the next turn end, with the human present.
 - A session watch whose producer died, because the broker refused it for instance, covers nothing:
   its exit line is delivered, and the rule counts its missions as uncovered and its own quest's traffic as unable to arrive.
-- A resume starts a new root on a new quest, since `ride resume` launches no summoned child, so the session watch it re-arms replays nothing of the run before, and the store's committed offsets keep that run's delivered lines from returning.
+- A resume starts a new root on a new quest, since `ride resume` launches no summoned child, so the session watch it re-arms replays nothing of the run before;
+  its empty store keeps that run's unread lines, a closing `[watch-run] exited` among them, from reading as news about the watches it re-arms.
 - A joined member keeps its own store under its own session state dir.
 - Lines whose offsets were committed are lost only if Claude dies before showing them, when the session is gone anyway.
 
@@ -241,7 +245,7 @@ Each harness implements four operations for its sessions, behind two protocols i
    Trail formats register through an entry-point group of their own, one module each, apart from the harness registry:
    a trail outlives the installation that recorded it, and the trails server loads no harness.
    Both of today's formats stay in core, since the trails server's image installs only the core `bro` wheel;
-   a harness distribution that ships a new format needs that image to install it, in the order the rollout section gives.
+   a format a harness adds may ship in the harness's own distribution or one of its own, which that image then installs, in the order the rollout section gives.
    The server refuses a trail whose format no installed module registers, at blaze and on import, naming the format;
    the slice's tests hold that refusal on a server without a format and the same trail served by one with it.
    The group needs a name other than `bro.trails.formats`, which `bro/trails/formats.py` (the schema versions) already holds as a module path.
@@ -295,7 +299,7 @@ No landing changes a wire, store, or record format that two separately deployed 
   The trails landing changes the server's own code, so the server redeploys after it merges.
 - A trail format a harness distribution adds later reaches the trails server first:
   the distribution goes into the server's image and deploys before any installation records in that format, since the server refuses an unknown format at blaze and a session whose recording fails stops.
-  The format stays installed while any retained trail uses it, so retiring it waits until no recorder writes it and its trails are gone.
+  The server's image keeps installing that distribution while any retained trail uses the format, whatever the recording installations carry, so retiring a format waits until no recorder writes it and its trails are gone.
 - The benchmark launcher reads harness names off the manifest of the bundle it builds rather than its own interpreter.
   A bundle built before the registry carries the old manifest format, which the launcher refuses as stale, naming `benchmark bundle` to rebuild it, so a new launcher never reads an old bundle as carrying no harness.
 - A repository that pins the framework adopts each landing through its own bump, which adapts its persona declarations and prompts, and runs the revision it pins until then.
@@ -338,8 +342,8 @@ the trails landing deploys the trails server between the two.
   the model keeps paying turns and shell admissions for plumbing (#793, #677).
 - **Two entry-point groups, one per half, or ride's session types moved into core:**
   settled with the user for one group and one object per harness.
-- **Trail formats on the harness object, or in the harness distributions:**
-  a trail outlives the installation that recorded it, and the trails server installs only core.
+- **Trail formats on the harness object:**
+  a trail outlives the installation that recorded it, and the trails server loads no harness, so a format is an entry point of its own, loadable where no harness is.
 - **The installed names as the `#harness` domain:**
   a text naming a harness the installation does not carry would raise, breaking a Claude-only install;
   settled with the user for checking names where they are used.
@@ -372,7 +376,7 @@ the trails landing deploys the trails server between the two.
   the installed names read from entry-point metadata without importing a harness, and a name loading its object lazily;
   loading refusing an object that is not a `Harness` and one whose `name` differs from its entry;
   ride's `--harness` choices and the summon check reading the registry;
-  a launch or summon selecting an uninstalled harness failing with the distribution to install;
+  a launch or summon selecting an uninstalled harness failing with the installed roster;
   `ride list` showing no subject for a workspace with no resume spec or an uninstalled harness;
   a Claude-only installation
   — the `bro` and `bro-ride` wheels alone in a fresh venv, as `ride/ride/runtime_bundle_test.py` builds one —
@@ -386,7 +390,7 @@ the trails landing deploys the trails server between the two.
   a stopped watch's whole process group gone, the supervisor exiting once its owner's handle closes, and a `Runner` that exits stopping its watches while the process embedding it lives on;
   `bro::watch` admission, and `bro::unwatch` refusing the session watch;
   a re-arm after a gap replaying nothing it already yielded;
-  a resumed session's re-armed watch delivering no line its previous run delivered, and a joined member's watches kept in its own store, out of its summoner's;
+  a resumed session starting with an empty store, so an uncommitted line the run before left, its closing `[watch-run] exited` among them, never reaches the model, and a joined member's watches kept in its own store, out of its summoner's;
   the native pump's one batch in flight, the native one-shot idle and wake, and watch lines waking an idle `bro chat` while a human's message between turns still goes through;
   the Claude runner's verdicts over the fake claude, `ambient` tasks excluded.
 - **`llm` stage, against the pinned Claude Code**, replacing `stop_guard_llm_test.py`:
