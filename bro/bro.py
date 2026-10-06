@@ -307,10 +307,11 @@ _SUMMON_DESCRIPTION = (
   'manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the user’s '
   'launch owns them, and requires boxed or unboxed in its `launch.bro.party` set.'
   + _claude_blocking_caution(
-    'prefer `detach: true` for long work, and do NOT re-summon if the background task is '
-    'interrupted{{iff #tools contains quest_list}}: recover the quest id with quest_list and '
-    'read its retained outcome with quest_check{{else}}; if you lost the id, surface the '
-    'interruption instead of retrying{{end}}.'
+    'blocking summons sent together still run one after another, so prefer `detach: true` for '
+    'long work and for summons meant to run side by side, and do NOT re-summon if the '
+    'background task is interrupted{{iff #tools contains quest_list}}: recover the quest id '
+    'with quest_list and read its retained outcome with quest_check{{else}}; if you lost the '
+    'id, surface the interruption instead of retrying{{end}}.'
   )
 )
 
