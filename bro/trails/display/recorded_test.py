@@ -12,6 +12,8 @@ from bro.llm.observer import (
   TurnCompletedEvent,
   TurnStartedEvent,
 )
+from bro.trails import backends
+from bro.trails.bro_format import BRO_FORMAT
 from bro.trails.display import (
   AssistantText,
   DisplayDataError,
@@ -308,6 +310,20 @@ class TestCollection:
 
 
 class TestStructures:
+  def test_owner_and_native_header_fields_come_from_the_trail_format(self, monkeypatch):
+    trail_format = replace(
+      BRO_FORMAT,
+      name='synthetic',
+      owner=lambda header: f'owner:{header["id"]}',
+      native_header_fields=lambda header: [('format field', header['native']['marker'])],
+    )
+    monkeypatch.setattr(backends, 'get_format', lambda name: trail_format)
+    adapter = RecordedAdapter(_client(FakeClient()))
+    header = _header('trail', harness='synthetic', native={'marker': 'value'})
+
+    assert adapter.trail_list_row(header).owner == 'owner:trail'
+    assert ('format field', 'value') in adapter.trail_metadata(header).fields
+
   def test_header_native_step_list_and_lineage_have_typed_records(self):
     fake = FakeClient()
     legacy_context = [{'title': 'recorded prompt', 'content': 'legacy text'}]

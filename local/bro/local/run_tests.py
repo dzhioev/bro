@@ -182,6 +182,7 @@ PYTEST_FILES = [
   'native/bro/run_test.py',
   'bro/packaging_test.py',
   'native/bro/native/distribution_test.py',
+  'bro/trails/backends_test.py',
   'bro/trails/network_test.py',
   'bro/trails/contract_test.py',
   'bro/trails/cost_test.py',

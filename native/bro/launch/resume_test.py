@@ -6,7 +6,7 @@ import pytest
 
 from bro.launch.resume import RESUME_LATEST, conversation_history, find_latest_call_trail, resume
 from bro.llm.llms.openai import LLMSpec
-from bro.trails import backends
+from bro.trails.bro_format import BRO_FORMAT
 from bro.trails.display import AssistantText, InterimAssistantText, ToolCall, UserInput
 from bro.trails.model import spill_descriptor
 
@@ -46,7 +46,7 @@ class FakeTrailsStore:
 
   def iter_messages(self, trail_id: str, *, types: Optional[set[str]] = None):
     for row in self._steps[trail_id]:
-      for event in backends.BRO_ADAPTER.project(row):
+      for event in BRO_FORMAT.project(row):
         if types is None or event['type'] in types:
           resolved = dict(event)
           if 'content' in resolved:

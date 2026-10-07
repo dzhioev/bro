@@ -51,6 +51,7 @@ class LocalStore(TrailsStore):
     # to another backend — what a summoned session's trail adopted into a store
     # its summoner did not record to carries; live recording never checks parents
     self._external_parents_ok = external_parents_ok
+    self._formats = backends.FormatRegistry()
     self.trails_directory.mkdir(parents=True, exist_ok=True)
 
   def list_trails(
@@ -155,7 +156,7 @@ class LocalStore(TrailsStore):
   ) -> dict:
     page = self.get_steps(trail_id, after=after, limit=limit)
     header = self.get_trail(trail_id)
-    messages = rows.project_messages(self._adapter(header['harness']), page['steps'], types)
+    messages = rows.project_messages(self._trail_format(header['harness']), page['steps'], types)
     return {'messages': messages, 'next': page['next'], 'through': page['through']}
 
   def get_tool(self, sha256: str) -> Any:
@@ -182,18 +183,18 @@ class LocalStore(TrailsStore):
       return self._read_stored_rows(trail_id)
 
   def blaze(self, request: BlazeRequest) -> dict:
-    adapter = self._adapter(request.harness)
+    trail_format = self._trail_format(request.harness)
     with refusing_invalid_requests('blaze request'):
-      adapter.validate_create(request.native)
-      if request.harness == 'bro' and request.bro is None:
-        raise ValueError('bro is required for the bro harness')
+      trail_format.validate_create(request.native)
+      if trail_format.requires_bro and request.bro is None:
+        raise ValueError(f'bro is required for the {trail_format.name} trail format')
     with refusing_invalid_requests('blaze body'):
-      opened = adapter.open(request.body)
+      opened = trail_format.open(request.body)
     decision = None
     forked_from = request.forked_from
     native = dict(request.native)
     if request.lineage is not None:
-      decision = backends.resolve_lineage(adapter, request, self)
+      decision = backends.resolve_lineage(trail_format, request, self)
       if not decision.adopt:
         return {'adopted': False, 'reason': decision.reason}
       if decision.attach_to is not None:
@@ -201,7 +202,7 @@ class LocalStore(TrailsStore):
       forked_from = decision.forked_from
     if forked_from is not None:
       parent_id = forked_from['trail_id']
-      native.update(rows.inherited_native(adapter, lambda: self.get_trail(parent_id)))
+      native.update(rows.inherited_native(trail_format, lambda: self.get_trail(parent_id)))
     if decision is not None:
       native.update(rows.minted_native(native, decision.chunks))
     trail_id = lulid()
@@ -228,12 +229,12 @@ class LocalStore(TrailsStore):
         value = getattr(request, field)
         if value is not None:
           header[field] = value
-      state = rows.AggregateState(header, adapter)
+      state = rows.AggregateState(header, trail_format)
       prepared = rows.build_rows(
         trail_id=trail_id,
         offset=0,
         payloads=opened.records,
-        adapter=adapter,
+        trail_format=trail_format,
         default_timestamp=started_at,
         state=state,
         seen_billing_keys=set(),
@@ -287,13 +288,13 @@ class LocalStore(TrailsStore):
       self._store_tools({} if tools is None else tools)
       if len(records) == 0:
         return {'extent': actual, 'appended': 0}
-      adapter = self._adapter(header['harness'])
-      state = rows.AggregateState(header, adapter)
+      trail_format = self._trail_format(header['harness'])
+      state = rows.AggregateState(header, trail_format)
       prepared = rows.build_rows(
         trail_id=trail_id,
         offset=offset,
         payloads=records,
-        adapter=adapter,
+        trail_format=trail_format,
         default_timestamp=_now_iso(),
         state=state,
         seen_billing_keys=set(),
@@ -383,8 +384,8 @@ class LocalStore(TrailsStore):
 
   def begin_import(self, header: dict) -> dict:
     with refusing_invalid_requests('imported header'):
-      adapter = self._adapter(header['harness'])
-      imported = importing.imported_header(header, adapter)
+      trail_format = self._trail_format(header['harness'])
+      imported = importing.imported_header(header, trail_format)
     trail_id = imported['id']
     directory = self._trail_directory(trail_id)
     importing.require_parents(
@@ -411,7 +412,7 @@ class LocalStore(TrailsStore):
       stored = len(self._read_row_lines(trail_id))
     importing.verify_same_import(
       trail_id,
-      adapter,
+      trail_format,
       existing,
       imported,
     )
@@ -429,8 +430,8 @@ class LocalStore(TrailsStore):
       raise ValueError('offset must be non-negative')
     with self._locked(trail_id, shared=False):
       header = self._read_header(trail_id)
-      adapter = self._adapter(header['harness'])
-      importing.validate_rows(trail_id, offset, rows, adapter)
+      trail_format = self._trail_format(header['harness'])
+      importing.validate_rows(trail_id, offset, rows, trail_format)
       pending = importing.import_state(header)
       # the row file is what an import has written; the header's extent
       # follows it, a crash between the two leaving it behind
@@ -462,8 +463,8 @@ class LocalStore(TrailsStore):
       if pending is None:
         return {'trail_id': trail_id, 'extent': len(stored), 'duplicate': True}
       importing.verify_complete(trail_id, pending, len(stored))
-      adapter = self._adapter(header['harness'])
-      fields = importing.sealed_fields(header, stored, adapter, pending['end'])
+      trail_format = self._trail_format(header['harness'])
+      fields = importing.sealed_fields(header, stored, trail_format, pending['end'])
       for key in ('importing', 'last_billed_message_id'):
         header.pop(key, None)
       header.update(fields)
@@ -473,12 +474,8 @@ class LocalStore(TrailsStore):
   def close(self) -> None:
     pass
 
-  @staticmethod
-  def _adapter(harness: str) -> backends.Adapter:
-    try:
-      return backends.BACKENDS[harness]
-    except KeyError as exception:
-      raise ValueError(f'unsupported harness: {harness}') from exception
+  def _trail_format(self, name: str) -> backends.TrailFormat:
+    return self._formats.get(name)
 
   def _trail_directory(self, trail_id: str) -> Path:
     if (

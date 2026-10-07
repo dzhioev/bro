@@ -1,3 +1,4 @@
+import importlib.metadata
 import json
 import threading
 from typing import Any, Optional, cast
@@ -5,7 +6,7 @@ from typing import Any, Optional, cast
 import pytest
 from aiohttp import web
 
-from bro.trails import model
+from bro.trails import backends, model
 from bro.trails.local import LocalStore
 from bro.trails.model import (
   BlazeRequest,
@@ -157,6 +158,30 @@ async def test_blaze_dispatches_the_real_store_off_loop(client, store, monkeypat
   assert store.get_trail(trail_id)['surface'] == 'ask'
   assert len(operation_threads) == 1
   assert operation_threads[0] != event_loop_thread
+
+
+@pytest.mark.asyncio
+async def test_server_refuses_an_uninstalled_format_then_serves_it_when_installed(
+  client, monkeypatch
+):
+  client = await client
+  monkeypatch.setattr(backends, '_entry_points', lambda: ())
+
+  refused = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+
+  assert refused.status == 400
+  assert "trail format 'bro' is not installed" in (await refused.json())['error']
+
+  entry = importlib.metadata.EntryPoint(
+    'bro', 'bro.trails.bro_format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
+  )
+  monkeypatch.setattr(backends, '_entry_points', lambda: (entry,))
+  served = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+
+  assert served.status == 201
+  trail_id = (await served.json())['id']
+  messages = await client.get(f'/v1/trails/{trail_id}/messages', headers=_auth())
+  assert [message['type'] for message in (await messages.json())['messages']] == ['system_prompt']
 
 
 @pytest.mark.asyncio
