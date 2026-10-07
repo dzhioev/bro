@@ -6,11 +6,11 @@ _PROMPTS_DIR = Path(prompts.__file__).parent
 # auto-injected into every `ride solo|along` session via --append-system-prompt. Files in
 # `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
 # put cross-surface conventions there. Prompt files may carry template
-# directives (`#harness`/`#creds`, plus the bro's own `#features`) —
+# directives (the harness's facts, `#creds`, plus the bro's own `#features`) —
 # the whole append text renders once in `session_append_prompt` with this
 # surface's facts and the session bro's vocabulary. The one top-level file
-# injected here is `tool_names.md` — the tool-name resolution rule, templated
-# on `#harness`; bro-native LLM runs compose its own rendering into
+# injected here is `tool_names.md` — it inserts the harness's tool-name rule;
+# bro-native LLM runs compose their own rendering into
 # `BaseBro.system_prompt` — do not give a bro a `FileSource` for this file.
 # Other reference docs (`environment.md`, …) reach every harness as `FileSource`
 # tools instead (bro/datasources/references.py).

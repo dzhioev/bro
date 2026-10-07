@@ -11,6 +11,7 @@ import bro.native.llms.openai as openai_module
 from bro.fork import fork, latest_fork_point, replay_messages
 from bro.llm.llms.openai import LLMSpec as OpenAISpec
 from bro.llm.tracker import NullTracker, Tracker
+from bro.native.harness import BRO
 from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 _SYS_TEXT = 'you are a test bro'
@@ -671,8 +672,8 @@ class TestForkLinkage:
     from bro.prompts import hold_fragment
 
     known_credentials = credentials.known_names()
-    unattended = hold_fragment('unattended', harness='bro', creds=known_credentials)
-    attended = hold_fragment('attended', harness='bro', creds=known_credentials)
+    unattended = hold_fragment('unattended', harness=BRO, creds=known_credentials)
+    attended = hold_fragment('attended', harness=BRO, creds=known_credentials)
     recorded = _simple_trail(hold='unattended')
     trail = RecordedTrail(
       header=recorded.header,

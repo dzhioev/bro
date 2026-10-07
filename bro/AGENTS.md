@@ -79,7 +79,8 @@ A subpackage with a map of its own is pointed at, not described here.
 - `extra/github/` — the GitHub API client (`api.py`), the GitHub App authentication source (`app.py`), and pull-request reads (`pulls.py`)
 - `harness/` — the framework half of a driving harness and what a consuming harness brings of its own.
   `__init__.py` holds the `Harness` interface and the `bro.harnesses` registry:
-  installed names come from metadata without imports, one selected object loads lazily with its type and name checked, and terminal service-tool results pass through its session-ending methods.
+  Installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
+  Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
@@ -132,7 +133,7 @@ this section is what `BaseBro` renders, mounts, and counts when one runs.
 When the native harness is installed, it composes the bro-native `system_prompt` around that persona.
 The composition starts with every `bro/prompts/shared/*.md`, then the persona and the tool-name rule (`bro/prompts/tool_names.md`).
 It adds a `## Data sources` block describing each declared `DataSource`, the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
-The composition renders with the registered harness object, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary.
+The composition renders with the registered harness object's own facts, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary.
 A Claude-only installation can therefore construct the core persona without loading or carrying `bro-native`.
 A managed Claude session runs under a prompt of its own;
 its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`bro/reference/ride.md`, "Auto-injected system prompt").

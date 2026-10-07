@@ -600,8 +600,8 @@ def _build_service_server(
   # this session; the summon tools need the same intent. The harness contributes
   # the tools it serves itself. The combined roster then feeds the tools'
   # rendering vocabulary: service tools are harness features, the one tool
-  # surface that conditions on system facts, so `#harness` is injected next to
-  # the `#tools` roster.
+  # surface that conditions on system and harness-contributed facts, injected
+  # next to the `#tools` roster.
   from bro.summon import summoned
 
   session_harness = harness if isinstance(harness, Harness) else get_harness(harness)
@@ -1324,10 +1324,12 @@ class BaseBro(ABC):
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
     # (the level files are documented in prompts/AGENTS.md).
-    if harness is None:
-      from bro.harness import get_harness
+    from bro.harness import get_harness
 
+    if harness is None:
       harness = get_harness('bro')
+    elif not isinstance(harness, Harness):
+      harness = get_harness(harness)
     fragment = session_fragment(
       hold,
       harness=harness,

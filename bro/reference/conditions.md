@@ -91,17 +91,24 @@ Consumers:
 
 ## Facts
 
-The facts pair a conditioning surface knows, exported by `bro/mcp.py` as ready-made placeholders (`from bro.mcp import creds, harness`):
+Two framework facts are exported by `bro/mcp.py` as ready-made placeholders (`from bro.mcp import creds, harness`):
 
 - `harness` — the registered loop that drives the work, supplied as a `bro.harness.Harness` object and exposed to conditions through its name.
   Names follow `[a-z][a-z0-9-]*`, an open grammar independent of what this installation carries, so a well-formed uninstalled literal compares false rather than raising.
   A malformed literal still fails every evaluation, and an unmatched `iff` chain still raises.
-  Today's `bro` harness runs tools in-process as `namespace__tool`, while `claude` keeps Claude Code's built-ins and mounts additions as `mcp__namespace__tool`.
+  Prompt text uses this identity only when no capability fact or harness-supplied passage expresses the distinction.
 
 - `creds` — the set of secrets the environment resolves.
   The supplied universe is closed (the registry's known names) and membership probes `bro.base.credentials.available` lazily
 
-Three more facts sit outside the pair.
+A registered harness contributes its prompt vocabulary through `Harness.facts()`.
+The values are the same typed variables as every other conditioning vocabulary, merged beside `harness` when a surface receives the harness object.
+A harness fact cannot reuse a framework fact name;
+rendering refuses the collision instead of picking one value.
+A prompt conditions on a declared capability when it owns the wording, or inserts a string passage when the harness owns it.
+The current passages are `tool_name_rule`, which spells canonical tool names on the harness's wire, and `skipped_permission_prompt_notice`, which is empty when the harness injects no such notice.
+
+Three more facts sit outside the framework pair and harness vocabulary.
 
 `may_summon` — the bros in the session's fixed `launch.bro.bros` set
 (`bro.summon.effective_may_summon()` off `RIDE_LAUNCH`, an unpublished section collapsed to empty).
@@ -173,7 +180,7 @@ a server must read the same served standalone, so it renders at build time again
   The source's own name rides along as `source` (for `{{insert #source}}`)
 
 The one exception is the `bro` service-tool build:
-service tools are harness features, so it injects the system `#harness` fact (`bro.mcp.surface_variables`) next to its `#tools` roster.
+service tools are harness features, so it injects the system and harness-contributed facts (`bro.mcp.surface_variables`) next to its `#tools` roster.
 
 ## Code map
 

@@ -4,6 +4,8 @@ import importlib.metadata
 import re
 from typing import TYPE_CHECKING, Literal, cast
 
+from bro.base.condition import Variables
+
 if TYPE_CHECKING:
   from bro.bro import BaseBro, LiveRun
   from bro.llm.mcp import Tool
@@ -24,6 +26,10 @@ class Harness:
       self.name = harness_name(name)
     else:
       harness_name(self.name)
+
+  def facts(self) -> Variables:
+    """Typed facts and passages this harness contributes to prompt rendering."""
+    return {}
 
   def can_end_session(self) -> bool:
     """Whether this harness can end its current session."""

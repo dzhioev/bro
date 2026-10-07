@@ -38,6 +38,7 @@ type HarnessLike = Harness | str
 Hold = Literal['unattended', 'detached', 'attended', 'guided']
 HOLDS: tuple[str, ...] = get_args(Hold)
 _HOLDS = frozenset(HOLDS)
+_FRAMEWORK_FACT_NAMES = frozenset({'harness', 'creds', 'may_summon', 'talk', 'hold'})
 
 # the facts pair as ready-made condition variables, so declarations read
 # `harness == 'bro'` / `creds.contains('openai')`.
@@ -57,7 +58,8 @@ def render_text(
 ) -> str:
   """render `bro.base.template` directives in static agent-facing text (system
   prompts, spell bodies, service-tool descriptions) against the surface facts
-  the call site knows: `harness` → `#harness`, `creds` →
+  the call site knows: a `Harness` object contributes its own facts and its name as
+  `#harness`; `creds` →
   `#creds` (the closed universe; membership probes `credentials.available`
   lazily, so render in the process that consumes the text, where the store is
   the session's own), `may_summon` → `#may_summon` (the session's effective
@@ -145,11 +147,20 @@ def surface_variables(
   talk: Optional[Iterable[str]] = None,
   hold: Optional[str] = None,
 ) -> dict[str, condition.StringVariable | condition.SetVariable | bool]:
-  """the harness facts as a `Variables` mapping — what `render_text` / `select`
+  """surface facts as a `Variables` mapping — what `render_text` / `select`
   evaluate against, for a caller that evaluates a condition against them
-  directly or merges them into a vocabulary of its own."""
+  directly or merges them into a vocabulary of its own. A `Harness` object
+  contributes its prompt vocabulary in addition to the framework facts."""
   variables: dict[str, condition.StringVariable | condition.SetVariable | bool] = {}
   if harness is not None:
+    if isinstance(harness, Harness):
+      harness_facts = harness.facts()
+      conflicts = sorted(harness_facts.keys() & _FRAMEWORK_FACT_NAMES)
+      if len(conflicts) > 0:
+        raise ValueError(
+          f'harness {harness.name!r} facts conflict with framework facts: {", ".join(conflicts)}'
+        )
+      variables.update(harness_facts)
     variables['harness'] = condition.StringVariable(
       name_of(harness), literal_validator=harness_name
     )

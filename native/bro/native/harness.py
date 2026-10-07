@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, Optional, Protocol, cast
 import bro.llm.mcp as llm_mcp
 from bro import spells as spell_store
 from bro.base import log, spawn
+from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, SessionEndReason
@@ -172,6 +173,15 @@ def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[
 
 class BroHarness(Harness):
   name = 'bro'
+
+  def facts(self) -> Variables:
+    return {
+      'tool_name_rule': StringVariable(
+        'In your tool list it is `namespace__tool`:\n'
+        'replace `::` with `__` and call that wire name directly.'
+      ),
+      'skipped_permission_prompt_notice': StringVariable(''),
+    }
 
   def can_end_session(self) -> bool:
     return True
