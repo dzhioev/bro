@@ -2,7 +2,11 @@
 
 import importlib.metadata
 import re
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
+
+if TYPE_CHECKING:
+  from bro.bro import BaseBro, LiveRun
+  from bro.llm.mcp import Tool
 
 SessionEndReason = Literal['ok', 'raised']
 
@@ -24,6 +28,11 @@ class Harness:
   def can_end_session(self) -> bool:
     """Whether this harness can end its current session."""
     return False
+
+  def own_tools(self, bro: 'BaseBro', live_run: 'LiveRun | None') -> tuple['Tool', ...]:
+    """Service tools this harness serves itself for the selected declaration."""
+    del bro, live_run
+    return ()
 
   async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
     """End the current session with its terminal result."""
