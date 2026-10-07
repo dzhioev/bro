@@ -170,13 +170,28 @@ def test_the_live_broker_stages_name_their_own_modules(invocations):
   ]
 
 
-def test_the_llm_stage_names_each_probe_on_the_command_line(invocations):
+def test_the_token_spending_stages_name_each_probe_on_the_command_line(invocations):
   run_tests.llm_stage()
+  run_tests.conformance_stage()
 
-  assert invocations == [(sys.executable, '-m', 'pytest', '-q', *run_tests.LLM_PYTEST_FILES)]
+  assert invocations == [
+    (sys.executable, '-m', 'pytest', '-q', *run_tests.LLM_PYTEST_FILES),
+    (sys.executable, '-m', 'pytest', '-q', *run_tests.CONFORMANCE_PYTEST_FILES),
+  ]
 
 
-def test_a_probe_is_collected_only_as_a_named_file():
+@pytest.mark.parametrize(
+  ('probe', 'roster'),
+  [
+    pytest.param('dev/bros/dev/commit_llm_test.py', 'LLM_PYTEST_FILES', id='llm'),
+    pytest.param(
+      'local/bro/local/watch_wait_conformance_test.py',
+      'CONFORMANCE_PYTEST_FILES',
+      id='conformance',
+    ),
+  ],
+)
+def test_a_probe_is_collected_only_as_a_named_file(probe, roster):
   def collected(path: str) -> str:
     return subprocess.run(
       [sys.executable, '-m', 'pytest', '--collect-only', '-q', '-p', 'no:cacheprovider', path],
@@ -186,10 +201,9 @@ def test_a_probe_is_collected_only_as_a_named_file():
       text=True,
     ).stdout
 
-  probe = 'dev/bros/dev/commit_llm_test.py'
-  assert probe in run_tests.LLM_PYTEST_FILES
+  assert probe in getattr(run_tests, roster)
 
-  assert probe not in collected('dev/bros/dev')
+  assert probe not in collected(str(Path(probe).parent))
   assert probe in collected(probe)
 
 
@@ -426,6 +440,7 @@ def rosters(repository, monkeypatch):
     'DOCKER_PYTEST_FILES',
     'WEBVIEW_E2E_PYTEST_FILES',
     'LLM_PYTEST_FILES',
+    'CONFORMANCE_PYTEST_FILES',
     'BENCHMARK_E2E_PYTEST_FILES',
   ):
     monkeypatch.setattr(run_tests, name, [])

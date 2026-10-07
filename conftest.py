@@ -22,10 +22,11 @@ a later test would read an earlier one's file; and a test parsing `--log` /
 `--verbose` through a real CLI sets the log level, which the next
 level-sensitive test — including every subprocess it spawns — must not see.
 
-`*_llm_test.py` files are live-LLM behavior probes: they run a real bro against
-the configured provider and spend real tokens, so they stay outside the default
-roster and `collect_ignore_glob` below keeps a directory walk from reaching
-them — pytest collects one only as a file named on its command line.
+`*_llm_test.py` files are live-LLM behavior probes, and `*_conformance_test.py`
+files run real sessions on every installed harness: both spend real tokens, so
+they stay outside the default roster and `collect_ignore_glob` below keeps a
+directory walk from reaching them — pytest collects one only as a file named on
+its command line.
 """
 
 import logging
@@ -42,7 +43,7 @@ from bro.native.runner import set_default_tracker_factory
 set_default_tracker_factory(NullTracker)
 rebuild_environment()
 
-collect_ignore_glob = ['*_llm_test.py']
+collect_ignore_glob = ['*_llm_test.py', '*_conformance_test.py']
 pytest_plugins = ['bro.dev.sharding']
 
 

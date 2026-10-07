@@ -151,7 +151,7 @@ _RAISE_DESCRIPTION = (
   'source is available, the request contains contradictory constraints, the '
   'input is unclear or cannot be understood (gibberish, ambiguous, or missing '
   'the context needed to act), or any other blocker prevents completing the '
-  'task. Do NOT reply with a clarifying question — no human answer will follow; '
+  'task. Do NOT reply with a clarifying question — no human will respond to it; '
   'raise instead. Pass a clear, specific reason — it surfaces to the caller as '
   'the failure cause. The call ends the session; nothing after it will run, so '
   'make the reason self-contained.'
