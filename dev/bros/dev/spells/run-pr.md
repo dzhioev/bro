@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.10.0
+version: 7.10.1
 ---
 
 # run-pr
@@ -470,8 +470,7 @@ Don't wait for a review to arrive — hand it over:
    Its verdict does not.
    **Keep the quest id**: the child's own answer is what gates the merge, and `bro::quest_check` is the only channel that carries it.
    Nothing on the PR records which account you handed the review to, so an approving review read off the PR says a review approved, not that the reviewer you delegated to did.
-   Don't block on it meanwhile
-   — the child runs as long as the review takes;
+   The child runs as long as the review takes;
    step 15's APPROVED handler is where you collect it.
    It is not the only place, because the child can finish without posting anything new:
    one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
@@ -540,8 +539,9 @@ stopping it is what you would have to undo, and a fresh `poll-pr` baselines ever
 **The reviewer's verdict.**{{iff #may_summon contains eyebro}}
 With no eyebro summoned this event is it.
 Where you did summon one, its own answer is the verdict:
-`bro::quest_check` on the quest id, without waiting
-— the child exits moments after posting its approval, so a `running` state wants one more check rather than a blocking wait.
+`bro::quest_check` on the quest id
+— the child exits moments after posting its approval, so a `running` state means its `summon ended` line is still coming:
+check again when it arrives.
 An answer that is not an approval
 — findings still standing, a `raise`, an error
 — blocks the merge whatever the PR says:
