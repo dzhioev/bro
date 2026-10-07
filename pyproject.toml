@@ -122,6 +122,10 @@ bro = "bros.bro:Bro"
 [project.entry-points."bro.credential_sources"]
 github_app = "bro.extra.github.app:Source"
 
+[project.entry-points."bro.trail_formats"]
+bro = "bro.trails.bro_format:BRO_FORMAT"
+claude = "bro.trails.claude_format:CLAUDE_FORMAT"
+
 [project.entry-points."bro.toolsets"]
 artifact = "bro.artifact_mcp:toolset"
 brog = "bro.brog.mcp:toolset"

@@ -11,7 +11,7 @@ from bro.trails.store import refusing_invalid_requests
 
 
 class AggregateState:
-  def __init__(self, header: dict, adapter: backends.Adapter):
+  def __init__(self, header: dict, trail_format: backends.TrailFormat):
     native = dict(header.get('native', {}))
     raw_usage = native.get('usage')
     self.usage = dict(raw_usage) if isinstance(raw_usage, dict) else {}
@@ -22,10 +22,10 @@ class AggregateState:
     last_billed = header.get('last_billed_message_id')
     self.last_billed_message_id = last_billed if isinstance(last_billed, str) else None
     self.subject = header.get('subject')
-    self.head = LineageHead.stored(native) if adapter.resolve_lineage is not None else None
+    self.head = LineageHead.stored(native) if trail_format.resolve_lineage is not None else None
 
   @classmethod
-  def replaying(cls, header: dict, adapter: backends.Adapter) -> 'AggregateState':
+  def replaying(cls, header: dict, trail_format: backends.TrailFormat) -> 'AggregateState':
     """The state a re-fold of a trail's whole row stream starts from: every field
     the fold derives is cleared, leaving what the trail was minted with."""
     native = {
@@ -33,8 +33,8 @@ class AggregateState:
       for key, value in header.get('native', {}).items()
       if key not in backends.SERVER_DERIVED_NATIVE_FIELDS
     }
-    native.update(replayed_native(adapter, header))
-    return cls({'native': native, 'turn_count': 0}, adapter)
+    native.update(replayed_native(trail_format, header))
+    return cls({'native': native, 'turn_count': 0}, trail_format)
 
   def apply(
     self,
@@ -81,20 +81,20 @@ class AggregateState:
     return contribution
 
 
-def inherited_native(adapter: backends.Adapter, parent: Callable[[], dict]) -> dict:
+def inherited_native(trail_format: backends.TrailFormat, parent: Callable[[], dict]) -> dict:
   """The native fields a fork of `parent` opens with: the conversation's first
   record, which no trail's rows carry once a history copy is skipped. The parent
   header is read only where the harness folds a head at all."""
-  if adapter.resolve_lineage is None:
+  if trail_format.resolve_lineage is None:
     return {}
   head = LineageHead.stored(parent().get('native', {})).inherited()
   return {'lineage_head': head.fields()}
 
 
-def replayed_native(adapter: backends.Adapter, header: dict) -> dict:
+def replayed_native(trail_format: backends.TrailFormat, header: dict) -> dict:
   """The native fields a re-fold of a trail's own row stream starts from: what
   its fork inherited, plus the spans its mint awarded it."""
-  if adapter.resolve_lineage is None:
+  if trail_format.resolve_lineage is None:
     return {}
   head = LineageHead.stored(header.get('native', {})).replayed()
   return {'lineage_head': head.fields()}
@@ -137,16 +137,16 @@ class ReplayedRow:
 
 
 def replay(
-  header: dict, rows: list[dict], adapter: backends.Adapter
+  header: dict, rows: list[dict], trail_format: backends.TrailFormat
 ) -> tuple[AggregateState, list[ReplayedRow]]:
   """Fold a trail's whole row stream from its minted state, each row parsed
   afresh at its position in the stream and folded under its stored digest."""
-  state = AggregateState.replaying(header, adapter)
+  state = AggregateState.replaying(header, trail_format)
   seen_billing_keys: set[str] = set()
   replayed: list[ReplayedRow] = []
   for step_id, row in enumerate(rows):
-    parsed = adapter.parse(row)
-    classification = adapter.classify(parsed)
+    parsed = trail_format.parse(row)
+    classification = trail_format.classify(parsed)
     contribution = state.apply(
       parsed, classification, seen_billing_keys, step_id=step_id, digest=row_digest(row)
     )
@@ -159,7 +159,7 @@ def build_rows(
   trail_id: str,
   offset: int,
   payloads: list[Any],
-  adapter: backends.Adapter,
+  trail_format: backends.TrailFormat,
   default_timestamp: str,
   state: AggregateState,
   seen_billing_keys: set[str],
@@ -167,8 +167,8 @@ def build_rows(
   result: list[dict] = []
   for step_id, payload in enumerate(payloads, start=offset):
     with refusing_invalid_requests(f'record at offset {step_id}'):
-      parsed = adapter.parse(payload)
-      classification = adapter.classify(parsed)
+      parsed = trail_format.parse(payload)
+      classification = trail_format.classify(parsed)
     digest = payload_sha256(payload)
     contribution = state.apply(
       parsed, classification, seen_billing_keys, step_id=step_id, digest=digest
@@ -190,14 +190,14 @@ def build_rows(
 
 
 def project_messages(
-  adapter: backends.Adapter, records: list[dict], types: Optional[set[str]] = None
+  trail_format: backends.TrailFormat, records: list[dict], types: Optional[set[str]] = None
 ) -> list[dict]:
   messages = [
-    message for record in records for message in adapter.project(formats.upgrade_row(record))
+    message for record in records for message in trail_format.project(formats.upgrade_row(record))
   ]
-  undeclared = {message['type'] for message in messages} - adapter.emitted_message_types
+  undeclared = {message['type'] for message in messages} - trail_format.emitted_message_types
   if len(undeclared) > 0:
-    raise RuntimeError(f'adapter emitted undeclared message types: {sorted(undeclared)}')
+    raise RuntimeError(f'trail format emitted undeclared message types: {sorted(undeclared)}')
   if types is not None:
     messages = [message for message in messages if message['type'] in types]
   return messages

@@ -161,6 +161,13 @@ def test_harnesses_register_from_their_own_distributions(wheels):
   )
 
 
+def test_core_registers_the_builtin_trail_formats(wheels):
+  assert dict(_entry_points(wheels['bro'])['bro.trail_formats']) == {
+    'bro': 'bro.trails.bro_format:BRO_FORMAT',
+    'claude': 'bro.trails.claude_format:CLAUDE_FORMAT',
+  }
+
+
 def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   native_requirements = {
     _requirement_name(requirement)

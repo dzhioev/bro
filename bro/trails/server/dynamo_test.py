@@ -326,15 +326,16 @@ def _claude_assistant(message_id: str, text: str, *, uuid: str) -> str:
   )
 
 
-def test_five_function_registry_and_declared_projection_contract():
-  assert set(backends.BACKENDS) == {'bro', 'claude'}
-  for adapter in backends.BACKENDS.values():
+def test_installed_formats_declare_the_storage_and_projection_contract():
+  names = backends.installed_format_names()
+  assert set(names) == {'bro', 'claude'}
+  for trail_format in (backends.get_format(name) for name in names):
     assert {
       name
       for name in ('parse', 'classify', 'project', 'open', 'validate_create')
-      if callable(getattr(adapter, name))
+      if callable(getattr(trail_format, name))
     } == {'parse', 'classify', 'project', 'open', 'validate_create'}
-    assert adapter.emitted_message_types <= MESSAGE_TYPES
+    assert trail_format.emitted_message_types <= MESSAGE_TYPES
 
 
 def test_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
@@ -770,6 +771,18 @@ def test_spilled_claude_lines_resolve_in_the_store_thread_pool(components):
   assert [step['body'] for step in steps] == raw_lines
   assert all(thread != caller_thread for thread in s3.get_threads)
   assert all('raw' not in step and 'record' not in step for step in steps)
+
+
+def test_a_spilled_row_without_body_encoding_fails_loudly(components):
+  store, dynamo, _ = components
+  trail_id = _blaze_bro(store)
+  large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
+  store.append_records(trail_id, 1, [{'kind': 'tool_result', 'body': large}])
+  with dynamo.editing_step(trail_id, 1) as step:
+    step.pop('body_encoding')
+
+  with pytest.raises(ValueError, match='missing body_encoding'):
+    store.get_step(trail_id, 1)
 
 
 def test_candidate_trails_come_from_the_segment_index(components):

@@ -6,7 +6,7 @@ from typing import Any, Optional, cast
 import pytest
 
 import bro.trails.rewind as rewind
-from bro.trails.backends import BACKENDS
+from bro.trails.backends import get_format
 from bro.trails.display import ColorMode, preset
 from bro.trails.rewind import (
   _command_grep,
@@ -93,7 +93,7 @@ class FakeClient:
   def iter_messages(self, trail_id: str, *, after: Optional[int] = None):
     harness = self.trails[trail_id]['harness']
     for row in self.iter_steps(trail_id, after=after):
-      yield from BACKENDS[harness].project(row)
+      yield from get_format(harness).project(row)
 
   def collect_steps(self, trail_id: str, *, extent: int) -> list[dict[str, Any]]:
     return [row for row in self.iter_steps(trail_id) if row['step_id'] < extent]

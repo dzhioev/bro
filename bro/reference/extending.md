@@ -21,6 +21,8 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   each entry's name matches its `bro.worker_types.WorkerType.name`
 - `bro.harnesses` — one installed driving-harness object per entry, `<name> = "<module>:<object>"`;
   each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
+- `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
+  each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 
 Entry points are installation metadata:
 sync the environment (`uv sync`) after adding or removing one, while editing an already-declared target module needs no reinstall.

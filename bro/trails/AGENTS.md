@@ -87,12 +87,13 @@ bro · claude recorders                     readers
 - Stored rows are served rows.
   Claude message projection reparses the row's `body`;
   reads do not add `raw` or `record`.
-  Dynamo's `body_s3` fields are resolved back to inline `body` values before a row leaves the store.
-- `backends.py` is the harness seam.
-  An adapter supplies `parse`, `classify`, `project`, `open`, `validate_create`, and optionally `resolve_lineage`, plus its declared emitted message types;
-  the registry is the complete harness dispatch surface.
-  Reads are harness-neutral:
-  `blaze` is the one store method taking harness-specific data, in its own `native`, `body`, and `lineage` arguments.
+  Dynamo's `body_s3` fields are resolved back to inline `body` values before a row leaves the store, and every spilled row must carry `body_encoding`.
+- `backends.py` owns the `TrailFormat` contract and the `bro.trail_formats` entry-point registry.
+  A format supplies `parse`, `classify`, `project`, `open`, `validate_create`, ownership and native-header display fields, whether its trails require a bro, and optionally `resolve_lineage`, plus its declared emitted message types.
+  `bro_format.py` and `claude_format.py` hold the two core formats and core registers both, since the trails server installs only the core wheel.
+  Reads are format-neutral:
+  `blaze` is the one store method taking format-specific data, in its own `native`, `body`, and `lineage` arguments.
+  A server refuses blaze and import requests naming an uninstalled format.
 - `display/` owns the typed process-local display records, immutable scenario presets, stateful presentation core, renderer-neutral block operations,
   the live and recorded adapters, plain stream/retained terminal renderers, and the lazy embedded Textual trail view.
   A structured value renders as YAML (`_yaml.py`)
@@ -131,8 +132,8 @@ bro · claude recorders                     readers
   so a trail carries them whichever harness records it and a run outside a managed session carries none.
   Each engine distribution owns its recorder:
   `bro-native` contributes `bro.trails.record.bro`, while `bro-ride` contributes `ride.claude.trail_recorder`.
-  They may import the core store contract, schema, adapters, and write spine, never the reverse.
-- Harness adapters mint lineage only when blazing a trail, and a trail's step ids are its rows' line ordinals in local storage.
+  They may import the core store contract, schema, formats, and write spine, never the reverse.
+- Trail formats mint lineage only when blazing a trail, and a trail's step ids are its rows' line ordinals in local storage.
   Writers cannot mutate an edge;
   the Dynamo operator can repair one through manifested `relink`, and audits detect copied records across trails.
 - Bro tool schemas are content-addressed and referenced by `tools_sha256` on a row;
@@ -170,7 +171,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   projects to a `notification` whose `event` names it: the attachment type, or `task-notification`.
   A prompt queued mid-turn from any other origin is a `user_input`, like the `user` record it would have been at a turn's start.
 - Header responses expose provider-raw usage by model.
-  Provider normalization belongs to the provider-aware usage layer, not the harness adapter.
+  Provider normalization belongs to the provider-aware usage layer, not the trail format.
 - List queries accept exactly one selector
   — `harness`, `bro`, or `forked_from`
   — plus the common time range and opaque cursor.

@@ -121,7 +121,7 @@ class DynamoStore(TrailsStore):
     self._steps_table = steps_table
     self._bucket = bucket
     self._uuid_index = uuid_index
-    self._backends = dict(backends.BACKENDS)
+    self._formats = backends.FormatRegistry()
     self._executor = ThreadPoolExecutor(
       max_workers=_FAN_OUT_WORKERS, thread_name_prefix='trails-dynamo'
     )
@@ -131,16 +131,13 @@ class DynamoStore(TrailsStore):
       trails_table=trails_table,
       steps_table=self._steps_table,
       bucket=bucket,
-      backend=self._backend,
+      format_for=self._trail_format,
       required_header=self._required_header,
       resolve_row_body=self._resolve_row_body,
     )
 
-  def _backend(self, harness: str) -> backends.Adapter:
-    try:
-      return self._backends[harness]
-    except KeyError as exception:
-      raise ValueError(f'unsupported harness: {harness}') from exception
+  def _trail_format(self, name: str) -> backends.TrailFormat:
+    return self._formats.get(name)
 
   def _prepare_rows(
     self,
@@ -148,7 +145,7 @@ class DynamoStore(TrailsStore):
     trail_id: str,
     offset: int,
     payloads: list[Any],
-    adapter: backends.Adapter,
+    trail_format: backends.TrailFormat,
     default_timestamp: str,
     state: rows.AggregateState,
     seen_billing_keys: set[str],
@@ -157,7 +154,7 @@ class DynamoStore(TrailsStore):
       trail_id=trail_id,
       offset=offset,
       payloads=payloads,
-      adapter=adapter,
+      trail_format=trail_format,
       default_timestamp=default_timestamp,
       state=state,
       seen_billing_keys=seen_billing_keys,
@@ -185,18 +182,18 @@ class DynamoStore(TrailsStore):
     return stored
 
   def blaze(self, request: BlazeRequest) -> dict:
-    adapter = self._backend(request.harness)
+    trail_format = self._trail_format(request.harness)
     with refusing_invalid_requests('blaze request'):
-      adapter.validate_create(request.native)
-      if request.harness == 'bro' and request.bro is None:
-        raise ValueError('bro is required for the bro harness')
+      trail_format.validate_create(request.native)
+      if trail_format.requires_bro and request.bro is None:
+        raise ValueError(f'bro is required for the {trail_format.name} trail format')
     with refusing_invalid_requests('blaze body'):
-      opened = adapter.open(request.body)
+      opened = trail_format.open(request.body)
     decision = None
     forked_from = request.forked_from
     native = dict(request.native)
     if request.lineage is not None:
-      decision = backends.resolve_lineage(adapter, request, self)
+      decision = backends.resolve_lineage(trail_format, request, self)
       if not decision.adopt:
         return {'adopted': False, 'reason': decision.reason}
       if decision.attach_to is not None:
@@ -205,7 +202,9 @@ class DynamoStore(TrailsStore):
     if forked_from is not None:
       parent_id = forked_from['trail_id']
       native.update(
-        inherited_native(adapter, lambda: formats.upgrade_header(self._required_header(parent_id)))
+        inherited_native(
+          trail_format, lambda: formats.upgrade_header(self._required_header(parent_id))
+        )
       )
     if decision is not None:
       native.update(minted_native(native, decision.chunks))
@@ -240,13 +239,13 @@ class DynamoStore(TrailsStore):
     header.update({key: value for key, value in optional.items() if value is not None})
     header['extent'] = 0
     item = _header_item(header)
-    state = AggregateState(item, adapter)
+    state = AggregateState(item, trail_format)
     seen_billing_keys: set[str] = set()
     prepared = self._prepare_rows(
       trail_id=trail_id,
       offset=0,
       payloads=opened.records,
-      adapter=adapter,
+      trail_format=trail_format,
       default_timestamp=started_at,
       state=state,
       seen_billing_keys=seen_billing_keys,
@@ -328,8 +327,8 @@ class DynamoStore(TrailsStore):
       return {'extent': actual, 'appended': 0}
 
     expected_format = formats.stored_format(header, description=f'trail {trail_id} header')
-    adapter = self._backend(header['harness'])
-    state = AggregateState(header, adapter)
+    trail_format = self._trail_format(header['harness'])
+    state = AggregateState(header, trail_format)
     seen_billing_keys: set[str] = set()
     committed = 0
     while committed < len(records):
@@ -339,7 +338,7 @@ class DynamoStore(TrailsStore):
         trail_id=trail_id,
         offset=chunk_offset,
         payloads=chunk,
-        adapter=adapter,
+        trail_format=trail_format,
         default_timestamp=_now_iso(),
         state=state,
         seen_billing_keys=seen_billing_keys,
@@ -656,7 +655,7 @@ class DynamoStore(TrailsStore):
         return False
 
   def get_step(self, trail_id: str, step_id: int) -> dict:
-    header = formats.upgrade_header(self._required_header(trail_id))
+    formats.upgrade_header(self._required_header(trail_id))
     if step_id < 0:
       raise TrailNotFound(f'{trail_id}/{step_id}')
     response = self._dynamo.get_item(
@@ -667,7 +666,7 @@ class DynamoStore(TrailsStore):
     row = _from_ddb_item(response.get('Item'))
     if row is None:
       raise TrailNotFound(f'{trail_id}/{step_id}')
-    return self._resolve_row_body(header['harness'], row)
+    return self._resolve_row_body(row)
 
   def get_steps(
     self,
@@ -694,9 +693,9 @@ class DynamoStore(TrailsStore):
     if page_size < 1 or page_size > 500:
       raise ValueError('limit must be between 1 and 500')
     header = formats.upgrade_header(self._required_header(trail_id))
-    adapter = self._backend(header['harness'])
+    trail_format = self._trail_format(header['harness'])
     page = self._query_rows(header, after=after, limit=page_size)
-    messages = rows.project_messages(adapter, page['steps'], types)
+    messages = rows.project_messages(trail_format, page['steps'], types)
     return {'messages': messages, 'next': page['next'], 'through': page['through']}
 
   def _query_rows(
@@ -722,7 +721,7 @@ class DynamoStore(TrailsStore):
       row for item in response.get('Items', []) if (row := _from_ddb_item(item)) is not None
     ]
     rows = self._executor.map(
-      lambda row: self._resolve_row_body(header['harness'], row),
+      lambda row: self._resolve_row_body(row),
       raw_rows,
     )
     last = response.get('LastEvaluatedKey')
@@ -734,26 +733,22 @@ class DynamoStore(TrailsStore):
       next_cursor = None
     return {'steps': list(rows), 'next': next_cursor, 'through': through}
 
-  def _resolve_row_body(self, harness: str, row: dict) -> dict:
-    resolved = self._resolve_body(dict(row), parse_json=harness != 'claude')
-    return formats.upgrade_row(resolved)
+  def _resolve_row_body(self, row: dict) -> dict:
+    return formats.upgrade_row(self._resolve_body(dict(row)))
 
-  def _resolve_body(self, item: dict, *, parse_json: bool = True) -> dict:
+  def _resolve_body(self, item: dict) -> dict:
     key = item.pop('body_s3', None)
-    encoding = item.pop('body_encoding', None)
     if key is None:
       return item
+    if 'body_encoding' not in item:
+      raise ValueError('spilled trail row is missing body_encoding')
+    encoding = item.pop('body_encoding')
     stored = self._s3.get_object(Bucket=self._bucket, Key=key)
     raw = stored['Body'].read()
-    if encoding == 'text' or (encoding is None and not parse_json):
+    if encoding == 'text':
       item['body'] = raw.decode('utf-8')
     elif encoding == 'json':
       item['body'] = json.loads(raw)
-    elif encoding is None:
-      try:
-        item['body'] = json.loads(raw)
-      except json.JSONDecodeError:
-        item['body'] = raw.decode('utf-8')
     else:
       raise ValueError(f'unsupported body encoding: {encoding}')
     return item
@@ -802,7 +797,7 @@ class DynamoStore(TrailsStore):
         )
         if source_format == model.TRAIL_FORMAT:
           continue
-        resolved = self._resolve_body(dict(stored), parse_json=header['harness'] != 'claude')
+        resolved = self._resolve_body(dict(stored))
         upgraded = formats.upgrade_row(resolved)
         rewritten = dict(stored)
         for key in set(resolved) - set(upgraded):
@@ -907,8 +902,8 @@ class DynamoStore(TrailsStore):
 
   def begin_import(self, header: dict) -> dict:
     with refusing_invalid_requests('imported header'):
-      adapter = self._backend(header['harness'])
-      imported = importing.imported_header(header, adapter)
+      trail_format = self._trail_format(header['harness'])
+      imported = importing.imported_header(header, trail_format)
     trail_id = imported['id']
     importing.require_parents(imported, lambda parent: self._optional_header(parent) is not None)
     existing = self._optional_header(trail_id)
@@ -930,7 +925,7 @@ class DynamoStore(TrailsStore):
         return {'trail_id': trail_id, 'extent': 0, 'created': True}
     importing.verify_same_import(
       trail_id,
-      adapter,
+      trail_format,
       _without_storage_attributes(existing),
       imported,
     )
@@ -947,8 +942,8 @@ class DynamoStore(TrailsStore):
     if offset < 0:
       raise ValueError('offset must be non-negative')
     header = self._required_header(trail_id)
-    adapter = self._backend(header['harness'])
-    importing.validate_rows(trail_id, offset, rows, adapter)
+    trail_format = self._trail_format(header['harness'])
+    importing.validate_rows(trail_id, offset, rows, trail_format)
     pending = importing.import_state(header)
     actual = self._header_extent(header)
     if offset > actual:

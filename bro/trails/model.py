@@ -44,8 +44,8 @@ class BlazeRequest:
   location: Optional[dict[str, Any]] = None
   git: Optional[dict[str, Any]] = None
   lineage: Optional[dict[str, Any]] = None
-  """harness-specific evidence for the trail's lineage, interpreted by the
-  harness adapter's resolver."""
+  """format-specific evidence for the trail's lineage, interpreted by the
+  trail format's resolver."""
 
   def __post_init__(self) -> None:
     for field in ('harness', 'version', 'surface'):
