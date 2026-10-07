@@ -406,6 +406,12 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/shell_prefix_llm_test.py',
   'ride/ride/claude/watch_waiter_llm_test.py',
 ]
+# conformance probes: each launches real sessions on every installed harness under
+# every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like
+# the llm one, runs only when asked for
+CONFORMANCE_PYTEST_FILES = [
+  'local/bro/local/watch_wait_conformance_test.py',
+]
 
 
 def _rosters() -> list[tuple[str, Sequence[str]]]:
@@ -416,6 +422,7 @@ def _rosters() -> list[tuple[str, Sequence[str]]]:
     ('.', [BROKER_E2E_PYTEST_FILE]),
     ('.', WEBVIEW_E2E_PYTEST_FILES),
     ('.', LLM_PYTEST_FILES),
+    ('.', CONFORMANCE_PYTEST_FILES),
     *((project.directory, project.pytest_files) for project in PROJECTS),
     (BENCHMARK, BENCHMARK_E2E_PYTEST_FILES),
   ]
@@ -658,6 +665,11 @@ def llm_stage() -> None:
   run(*pytest_command(sys.executable), *LLM_PYTEST_FILES)
 
 
+def conformance_stage() -> None:
+  step('pytest')
+  run(*pytest_command(sys.executable), *CONFORMANCE_PYTEST_FILES)
+
+
 # the work of a stage that runs everything it covers, which spans any narrowed share of it
 WHOLE = 'whole'
 
@@ -708,6 +720,12 @@ STAGES = [
     host_only=True,
   ),
   Stage('llm', llm_stage, 'pytest over the live-LLM behavior probes', opt_in=True),
+  Stage(
+    'conformance',
+    conformance_stage,
+    'pytest over the harness × recipe conformance probes',
+    opt_in=True,
+  ),
 ]
 
 

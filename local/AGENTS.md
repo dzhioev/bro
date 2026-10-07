@@ -12,7 +12,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 
 ## Components
 
-- `bros/` — this checkout's developer and reviewer persona declarations.
+- `bros/` — this checkout's developer and reviewer persona declarations, and `bro-watch-probe`, the bare bro with a shell the conformance probes launch.
 - `bro/local/prompts.py` — framework-project context shared by those personas.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.
 - `bro/local/gate_display.py` — how the gate reports: plain lines on a pipe, a live table on a terminal.
@@ -28,7 +28,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   `types` (pyright),
   `unit` (the pytest roster, run in parallel),
   `benchmark` and `cdk` (one per project outside the workspace, `benchmark/` and `oops/cdk/`: each syncs the project's own `.venv` and runs pyright and pytest inside it, since the workspace venv cannot import the project at all),
-  the opt-in `llm` (the live-LLM behavior probes, run only when `--only` names the stage, since they spend real tokens),
+  the opt-in `llm` and `conformance` (live-LLM probes, each run only when `--only` names the stage, since they spend real tokens),
   and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag),
   `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
   and `webview_e2e` (the real browser worker route, `browser/bro/webview/e2e_test.py`),
@@ -60,6 +60,11 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   a real bro against the configured provider, asserting on the artifacts it produces.
   They spend real tokens, so the stage lists them and runs only when named, and pytest collects one only as a file named on its command line, never by walking a directory (`conftest.py`);
   the benchmark project holds its graded trials out of directory collection the same way
+- `run-tests --only conformance` — the conformance probes (`*_conformance_test.py`):
+  each holds one behavior of the framework's contract on every installed harness, under every recipe `bro/local/conformance_test_helper.py` lists as supported there, which is what a pass certifies.
+  A probe launches an unattended unboxed `ride solo` as an operator would and reads its verdict off the trail the session records locally;
+  an installed harness with no listed recipe fails collection.
+  The same collection rule as `llm` keeps them out of directory walks
 
 The root `conftest.py` owns test isolation:
 it rebuilds the suite's environment through `bro.base.suite_environment.rebuild_environment` (`bro/base/AGENTS.md`), as does each conftest at the root of a project outside the workspace,

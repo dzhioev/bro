@@ -25,6 +25,7 @@ bro-dev = { workspace = true }
 [project.entry-points.bro]
 bro-dev = "bros.bro_dev:BroDev"
 bro-eyebro = "bros.bro_eyebro:BroEyebro"
+bro-watch-probe = "bros.bro_watch_probe:BroWatchProbe"
 
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
@@ -32,7 +33,7 @@ bro-dev = ["bro", "bros"]
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = ["bro.local", "bros.bro_dev", "bros.bro_eyebro"]
+module-name = ["bro.local", "bros.bro_dev", "bros.bro_eyebro", "bros.bro_watch_probe"]
 # both are namespace packages the framework distribution also ships into; these
 # portions carry no __init__.py of their own so they merge
 namespace = true
