@@ -20,7 +20,8 @@ container: the store `docker cp`'d in, the `env -i` snapshot, the pid handshake
 read back through the party mount, the member lifecycle routed to the first
 session, and the first session's exit tearing a live member down);
 I — spawned and manual credential ownership plus the full boxed → join → unboxed → join → boxed chain through summon control;
-J — native summon-watch wake routes through the real broker, including a child's question and end with no model-started watch;
+J — summon-watch wake routes through the real broker, including a child's question and end with no model-started watch,
+and a summoned native or Claude child that asks its summoner, ends its turn, and wakes on the reply;
 K — a summoned child question, summoner steering and reply, and journal-backed collection;
 L — cancellation of a live child;
 M — a benchmark launch through its registered worker type, host job, and artifact result.
@@ -407,6 +408,9 @@ sys.exit(5)
 # then this execs the runner itself ("$@", the same `do-ride solo|along …`
 # invocation the started-party launcher sends). the fake records its argv/env to
 # the report file, proving the argv was built in-container by the frozen runtime;
+# under RIDE_E2E_QUEST_ROUTE it plays a model moving quests through the session
+# watch: `summoner` summons a child and answers its question, `asker` asks its
+# own summoner and ends its turn until the reply wakes it;
 # under RIDE_E2E_LINGER it waits for the print-mode interrupt, SIGINT (exit 7),
 # so the harness can assert `docker stop` reaches claude through tini → runner.
 _FAKE_CLAUDE = (
@@ -421,8 +425,9 @@ if '--settings' in argv:
   settings = json.loads(argv[argv.index('--settings') + 1])
   report['settings'] = settings
 Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
-if os.environ.get('RIDE_E2E_QUEST_ROUTE') == '1':
-  from bro.quest import check, history, say
+quest_route = os.environ.get('RIDE_E2E_QUEST_ROUTE')
+if quest_route is not None:
+  from bro.quest import ask, check, history, say
   from bro.summon import summon_detached
 
   def emit(**event):
@@ -454,37 +459,45 @@ if os.environ.get('RIDE_E2E_QUEST_ROUTE') == '1':
     assert completed.returncode == 2, completed.stderr
 
   sys.stdin.readline()
-  report['model_actions'] = ['summon']
-  quest_id = summon_detached(
-    'bro',
-    'ask through the session watch',
-    talk=['worker.question'],
-    llm='echo',
-    harness='bro',
-    timeout=120,
-  )
-  turn('summoned')
-  while True:
+  if quest_route == 'summoner':
+    report['model_actions'] = ['summon']
+    quest_id = summon_detached(
+      'bro',
+      'ask through the session watch',
+      talk=['worker.question'],
+      llm='echo',
+      harness='bro',
+      timeout=120,
+    )
+    turn('summoned')
+    while True:
+      deliver()
+      conversation = history(quest_id)
+      if conversation.awaiting:
+        [question] = conversation.awaiting
+        break
+      turn('waiting for the question')
+    report['model_actions'].append('quest_say')
+    say(quest_id, 'approved', reply_to=question.id)
+    turn('answered')
+    while True:
+      deliver()
+      outcome = check(quest_id)
+      if outcome.state == 'completed':
+        break
+      turn('waiting for the end')
+    report['model_actions'].append('quest_check')
+    report['quest_id'] = quest_id
+    report['answer'] = outcome.answer
+    Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+    turn('collected the answer')
+  elif quest_route == 'asker':
+    ask('self', 'approve the change?')
+    turn('asked the summoner')
     deliver()
-    conversation = history(quest_id)
-    if conversation.awaiting:
-      [question] = conversation.awaiting
-      break
-    turn('waiting for the question')
-  report['model_actions'].append('quest_say')
-  say(quest_id, 'approved', reply_to=question.id)
-  turn('answered')
-  while True:
-    deliver()
-    outcome = check(quest_id)
-    if outcome.state == 'completed':
-      break
-    turn('waiting for the end')
-  report['model_actions'].append('quest_check')
-  report['quest_id'] = quest_id
-  report['answer'] = outcome.answer
-  Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
-  turn('collected the answer')
+    turn(json.dumps(report['deliveries']))
+  else:
+    sys.exit(f'unknown quest route {quest_route!r}')
   sys.stdin.read()
   sys.exit(0)
 if os.environ.get('RIDE_E2E_LINGER') == '1':
@@ -1351,7 +1364,7 @@ def test_claude_summoner_receives_a_child_question_and_end_through_its_session_w
     extra_env={
       'RIDE_BRO': 'bro-dev',
       'RIDE_E2E_SECRETS': '["brog"]',
-      'RIDE_E2E_QUEST_ROUTE': '1',
+      'RIDE_E2E_QUEST_ROUTE': 'summoner',
       'RIDE_E2E_TARGETS': '["bro"]',
       'RIDE_E2E_CHILD_COMMAND': json.dumps(_session_broxy_probe(_SESSION_WATCH_QUESTION_CHILD)),
     },
@@ -2406,13 +2419,18 @@ Path('/workspace/.native-child-watch-report').write_text(outcome.answer)
 """
 
 
-def _run_native_watch_route(
+def _child_probe(source: str) -> Callable[[workspace_docker.Launch], workspace_docker.Launch]:
+  """a summoned child's launch running `source` in place of its session."""
+  return lambda launch: replace(launch, command=_session_broxy_probe(source))
+
+
+def _run_watch_route(
   env: IsolatedEnv,
   monkeypatch: pytest.MonkeyPatch,
   *,
   case: str,
   root_source: str,
-  child_source: str,
+  child_launch: Callable[[workspace_docker.Launch], workspace_docker.Launch],
   report_name: str,
 ) -> tuple[int, str]:
   import ride.bro_worker as ride_spawn
@@ -2435,7 +2453,8 @@ def _run_native_watch_route(
 
   def started_party_launch(*arguments, **keywords):
     launch = original_started_party_launch(*arguments, **keywords)
-    return replace(launch, command=_session_broxy_probe(child_source))
+    assert isinstance(launch, workspace_docker.Launch), launch
+    return child_launch(launch)
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   monkeypatch.setenv('HOME', str(env.home))
@@ -2468,12 +2487,12 @@ def _run_native_watch_route(
 def test_native_root_watch_wakes_on_a_detached_child_raise(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-  code, raw_report = _run_native_watch_route(
+  code, raw_report = _run_watch_route(
     isolated_env,
     monkeypatch,
     case='root-watch',
     root_source=_NATIVE_ROOT_WATCH,
-    child_source=_NATIVE_RAISE_CHILD,
+    child_launch=_child_probe(_NATIVE_RAISE_CHILD),
     report_name='.native-root-watch-report',
   )
 
@@ -2487,12 +2506,12 @@ def test_native_root_watch_wakes_on_a_detached_child_raise(
 def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-  code, raw_report = _run_native_watch_route(
+  code, raw_report = _run_watch_route(
     isolated_env,
     monkeypatch,
     case='child-watch',
     root_source=_NATIVE_CHILD_WATCH_ROOT,
-    child_source=_NATIVE_WATCHED_CHILD,
+    child_launch=_child_probe(_NATIVE_WATCHED_CHILD),
     report_name='.native-child-watch-report',
   )
 
@@ -2500,6 +2519,149 @@ def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
   assert code == 0
   assert any('before the watch: summoner says before arm' in text for text in notifications)
   assert any('summoner says after arm' in text for text in notifications)
+  assert isolated_env.live_containers() == []
+
+
+def _asking_child_summoner(harness: str, llm: Optional[str]) -> str:
+  return f"""
+import time
+from pathlib import Path
+
+from bro.quest import check, history, say
+from bro.summon import summon_detached
+
+quest_id = summon_detached(
+  'bro', 'ask the summoner', talk=['worker.question'], llm={llm!r}, harness={harness!r}, timeout=180
+)
+deadline = time.monotonic() + 150
+conversation = history(quest_id)
+while len(conversation.awaiting) == 0:
+  if conversation.ended:
+    raise RuntimeError(f'the child ended without asking: {{conversation}}')
+  remaining = deadline - time.monotonic()
+  if remaining <= 0:
+    raise TimeoutError('the child did not ask')
+  conversation = history(quest_id, wait=True, timeout=remaining)
+[question] = conversation.awaiting
+say(quest_id, 'approved', reply_to=question.id)
+outcome = check(quest_id, wait=True, timeout=max(deadline - time.monotonic(), 1))
+assert outcome.state == 'completed', outcome
+Path('/workspace/.asking-child-report').write_text(outcome.answer)
+"""
+
+
+_NATIVE_ASKING_CHILD = """
+import asyncio
+import json
+from contextlib import contextmanager
+
+from bro.bro import BaseBro
+from bro.llm.llms.echo import LLMSpec as EchoSpec
+from bro.llm.tracker import NullTracker
+from bro.native.llm import LLM
+from bro.native.runner import Runner
+
+class AskingBro(BaseBro):
+  name = 'e2e-asking-child'
+  description = 'asks its summoner and ends its turn'
+  system_prompt = 'wait for the reply'
+  llm_spec = EchoSpec()
+
+class ScriptedLLM(LLM):
+  def __init__(self, inbox, mcp_servers):
+    super().__init__(inbox, mcp_servers)
+    self.question_id = None
+    self.notices = []
+
+  async def send(self, messages, *, request_timeout=None):
+    asked = await self.tools.call(
+      'bro__quest_ask', {'quest_id': 'self', 'text': 'approve the change?'}
+    )
+    assert asked['state'] == 'asked', asked
+    self.question_id = asked['question_id']
+    return 'asked the summoner'
+
+  async def wake(self, *, request_timeout=None):
+    batch = self.inbox.drain()
+    if batch is not None:
+      self.notices.append(batch.text)
+    reply = f'summoner replies approved (to {self.question_id})'
+    if not any(reply in text for text in self.notices):
+      return 'the summoner has not replied yet'
+    return json.dumps(self.notices)
+
+class ScriptedRunner(Runner):
+  @contextmanager
+  def _watch_pump(self):
+    with super()._watch_pump():
+      self.watch_store.start('quest watch')
+      yield
+
+  def _create_llm(self, *, hold):
+    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    return ScriptedLLM(self.inbox, servers)
+
+asyncio.run(ScriptedRunner(AskingBro()).run('go', surface='e2e', tracker=NullTracker()))
+"""
+
+
+def _fake_claude_child(
+  quest_route: str,
+) -> Callable[[workspace_docker.Launch], workspace_docker.Launch]:
+  """a summoned child's launch running its own `do-ride` session over the fake
+  claude, which drives `quest_route`."""
+  install = workspace_paths.runtime_base() / f'e2e-claude-{quest_route}'
+  install.mkdir(parents=True)
+  binary = install / 'claude'
+  binary.write_text(_FAKE_CLAUDE)
+  binary.chmod(0o755)
+  return lambda launch: replace(
+    launch,
+    env={**launch.env, 'RIDE_E2E_QUEST_ROUTE': quest_route},
+    extra_mounts=(*launch.extra_mounts, f'{install}:/opt/claude-code:ro'),
+  )
+
+
+def test_a_summoned_native_child_waits_on_its_own_question_and_wakes_on_the_reply(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  code, answer = _run_watch_route(
+    isolated_env,
+    monkeypatch,
+    case='native-asker',
+    root_source=_asking_child_summoner('bro', 'echo'),
+    child_launch=_child_probe(_NATIVE_ASKING_CHILD),
+    report_name='.asking-child-report',
+  )
+
+  assert code == 0
+  notices = json.loads(answer)
+  assert any('summoner replies approved' in text for text in notices)
+  assert all('turn ended with work still live' not in text for text in notices)
+  assert isolated_env.live_containers() == []
+
+
+def test_a_summoned_claude_child_waits_on_its_own_question_and_wakes_on_the_reply(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  from bro.base import credentials
+
+  host_store = isolated_env.home / '.bro'
+  (host_store / 'creds' / 'claude_code.cred').write_text('e2e')
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
+
+  code, answer = _run_watch_route(
+    isolated_env,
+    monkeypatch,
+    case='claude-asker',
+    root_source=_asking_child_summoner('claude', None),
+    child_launch=_fake_claude_child('asker'),
+    report_name='.asking-child-report',
+  )
+
+  assert code == 0
+  [delivery] = json.loads(answer)
+  assert 'summoner replies approved' in delivery
   assert isolated_env.live_containers() == []
 
 

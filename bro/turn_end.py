@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Protocol
 
-from bro import mission, summon, watches
+from bro import mission, quest, summon, watches
 from bro.broker.environment import BROKER_CHANNEL
 
 
@@ -70,10 +70,7 @@ class LiveWork:
 def _reply_awaited() -> bool:
   with mission.open_client() as client:
     record = mission.query_mission(client, mission.own_mission())
-  return any(
-    entry.get('pending') is True and entry.get('from') == 'owner'
-    for entry in mission._entries(record)
-  )
+  return len(quest.open_questions(record, awaiting='owner')) > 0
 
 
 def _live_work(port: TurnEnd) -> LiveWork:
@@ -91,6 +88,9 @@ def _live_work(port: TurnEnd) -> LiveWork:
 
   has_broker = os.environ.get(BROKER_CHANNEL) is not None
   missions = tuple(mission.live_missions()) if has_broker else ()
+  reply_awaited = session_watch_alive and has_broker and _reply_awaited()
+  # read after every broker state read above, so whatever changed since them
+  # is an event the session watch must publish before a verdict
   journal_head = mission.event_head() if has_broker and session_watch_alive else None
   published_head = (
     session_watch.journal_head() if session_watch is not None and session_watch_alive else None
@@ -110,7 +110,6 @@ def _live_work(port: TurnEnd) -> LiveWork:
     and summon.summoned()
     and any(right in talk for right in ('owner.say', 'owner.question'))
   )
-  reply_awaited = session_watch_alive and has_broker and _reply_awaited()
   return LiveWork(
     missions,
     frozenset(covered),
