@@ -1,10 +1,18 @@
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import cast
 
 import pytest
 
-from bro import mission, turn_end, watches
-from bro.broker.environment import BROKER_CHANNEL
+from bro import mission, quest, summon, turn_end, watches
+from bro.broker import brotocol
+from bro.broker.client import Client
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
+from bro.broker.transport import connect
+from bro.broker.transports.tcp import LOCAL_HOST
+from bro.quest_test_helper import TIMEOUT, SpawnedEndpoint, running_live_broker
 
 
 @dataclass
@@ -73,7 +81,6 @@ def live_facts(monkeypatch):
   monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: False)
   monkeypatch.setattr(turn_end.summon, 'talk', lambda: ())
-  monkeypatch.setattr(turn_end, '_reply_awaited', lambda: False)
   monkeypatch.setattr(turn_end.mission, 'event_head', lambda: 0)
 
 
@@ -82,9 +89,10 @@ def _mission(mission_id: str, worker_type: str = 'bro') -> mission.LiveMission:
   return mission.LiveMission(mission_id, worker_type, label)
 
 
-def _with_missions(monkeypatch, *missions: mission.LiveMission) -> None:
+def _with_broker(monkeypatch, *missions: mission.LiveMission, reply_awaited: bool = False) -> None:
   monkeypatch.setenv(BROKER_CHANNEL, 'unused')
   monkeypatch.setattr(turn_end.mission, 'live_missions', lambda: list(missions))
+  monkeypatch.setattr(turn_end, '_reply_awaited', lambda: reply_awaited)
 
 
 @pytest.mark.parametrize(
@@ -97,8 +105,7 @@ def _with_missions(monkeypatch, *missions: mission.LiveMission) -> None:
   ],
 )
 def test_silent_wait_verdict_precedes_background_work(monkeypatch, store, missions, reply_awaited):
-  _with_missions(monkeypatch, *missions)
-  monkeypatch.setattr(turn_end, '_reply_awaited', lambda: reply_awaited)
+  _with_broker(monkeypatch, *missions, reply_awaited=reply_awaited)
   port = FakePort(store, ('task-1',))
 
   turn_end.settle(port)
@@ -108,7 +115,7 @@ def test_silent_wait_verdict_precedes_background_work(monkeypatch, store, missio
 
 
 def test_settlement_waits_for_the_session_watch_journal_head(monkeypatch):
-  _with_missions(monkeypatch)
+  _with_broker(monkeypatch)
   monkeypatch.setattr(turn_end.mission, 'event_head', lambda: 7)
   watch = FakeWatch(watches.SESSION_WATCH_COMMAND, head=6)
   port = FakePort(FakeStore([watch]))
@@ -120,7 +127,7 @@ def test_settlement_waits_for_the_session_watch_journal_head(monkeypatch):
 
 
 def test_owner_led_background_work_notifies_then_keeps_waiting(monkeypatch):
-  _with_missions(monkeypatch, _mission('WEB-1', 'webview'))
+  _with_broker(monkeypatch, _mission('WEB-1', 'webview'))
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
   monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say',))
   store = FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)])
@@ -145,7 +152,7 @@ def test_owner_led_background_work_notifies_then_keeps_waiting(monkeypatch):
 
 
 def test_uncovered_mission_notifies_once_then_ends(monkeypatch):
-  _with_missions(monkeypatch, _mission('Q1'))
+  _with_broker(monkeypatch, _mission('Q1'))
   port = FakePort(FakeStore())
 
   turn_end.settle(port)
@@ -162,7 +169,7 @@ def test_dead_session_watch_turns_session_traffic_into_notice_then_end(monkeypat
   monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
   monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say',))
-  monkeypatch.setattr(turn_end, '_reply_awaited', lambda: True)
+  _with_broker(monkeypatch, reply_awaited=True)
   store = FakeStore(
     [FakeWatch(watches.SESSION_WATCH_COMMAND, alive=False, last='[watch-run] exited 1')]
   )
@@ -201,3 +208,89 @@ def test_no_live_work_ends_at_once():
 
   assert port.notifications == []
   assert port.ends == 1
+
+
+def _stand_as(monkeypatch, endpoint: SpawnedEndpoint) -> None:
+  monkeypatch.setenv(BROKER_CHANNEL, endpoint.channel.host_endpoint.address(LOCAL_HOST))
+  monkeypatch.setenv(BROKER_MISSION, endpoint.quest)
+  monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(endpoint.talk))
+
+
+@contextlib.asynccontextmanager
+async def _summoned_session(
+  monkeypatch, talk: tuple[str, ...]
+) -> AsyncIterator[tuple[SpawnedEndpoint, SpawnedEndpoint]]:
+  """a live broker holding a summoner and the session it summoned under `talk`;
+  this process stands as the session."""
+  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+  monkeypatch.setattr(turn_end.summon, 'talk', lambda: talk)
+  async with running_live_broker() as (spawner, summoner):
+    _stand_as(monkeypatch, summoner)
+    with Client(connect(summoner.channel.host_endpoint.address(LOCAL_HOST))) as client:
+      request = client.send(quest.LAUNCH, {'target': 'dev', 'prompt': 'work', 'talk': list(talk)})
+      summon._await_acceptance(client, request)
+      session = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
+      _stand_as(monkeypatch, session)
+      yield summoner, session
+
+
+def _chat_past(quest_id: str, sequence: int) -> int:
+  with mission.open_client() as client:
+    record = mission.query_mission(client, quest_id, wait_seconds=TIMEOUT, since=sequence)
+  assert record['chat_seq'] > sequence, record
+  return record['chat_seq']
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_own_question_waits_silently_until_the_summoner_replies(monkeypatch):
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]))
+  async with _summoned_session(monkeypatch, ('worker.question',)) as (summoner, session):
+    asked = await asyncio.to_thread(quest.ask, 'self', 'ship this?')
+    asked_at = await asyncio.to_thread(_chat_past, session.quest, 0)
+
+    await asyncio.to_thread(turn_end.settle, port)
+    assert (port.notifications, port.ends) == ([], 0)
+
+    _stand_as(monkeypatch, summoner)
+    await asyncio.to_thread(quest.say, session.quest, 'yes', reply_to=asked.question_id)
+    _stand_as(monkeypatch, session)
+    await asyncio.to_thread(_chat_past, session.quest, asked_at)
+
+    await asyncio.to_thread(turn_end.settle, port)
+    assert (port.notifications, port.ends) == ([], 1)
+
+
+@pytest.mark.asyncio
+async def test_a_question_the_session_owes_its_summoner_is_no_reply_it_awaits(monkeypatch):
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]))
+  async with _summoned_session(monkeypatch, ('owner.question',)) as (summoner, session):
+    _stand_as(monkeypatch, summoner)
+    await asyncio.to_thread(quest.ask, session.quest, 'which branch?')
+    _stand_as(monkeypatch, session)
+    await asyncio.to_thread(_chat_past, session.quest, 0)
+
+    await asyncio.to_thread(turn_end.settle, port)
+
+  [notice] = port.notifications
+  assert 'the summoner may still send a message' in notice
+  assert port.ends == 0
+
+
+@pytest.mark.asyncio
+async def test_a_reply_landing_after_the_journal_head_read_keeps_the_turn_waiting(monkeypatch):
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]))
+  async with _summoned_session(monkeypatch, ('worker.question',)) as (summoner, session):
+    asked = await asyncio.to_thread(quest.ask, 'self', 'ship this?')
+    asked_at = await asyncio.to_thread(_chat_past, session.quest, 0)
+
+    def head_read_before_the_reply() -> int:
+      _stand_as(monkeypatch, summoner)
+      quest.say(session.quest, 'yes', reply_to=asked.question_id)
+      _stand_as(monkeypatch, session)
+      _chat_past(session.quest, asked_at)
+      return 0
+
+    monkeypatch.setattr(turn_end.mission, 'event_head', head_read_before_the_reply)
+    await asyncio.to_thread(turn_end.settle, port)
+
+  assert (port.notifications, port.ends) == ([], 0)
