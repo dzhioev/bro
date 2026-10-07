@@ -44,6 +44,19 @@ def _wait_for_file(path: Path) -> str:
   return path.read_text()
 
 
+def _wait_for_nonempty_file(path: Path) -> str:
+  deadline = time.monotonic() + 10
+  while True:
+    try:
+      content = path.read_text()
+    except FileNotFoundError:
+      content = ''
+    if content:
+      return content
+    assert time.monotonic() < deadline, f'{path} was not populated'
+    time.sleep(0.01)
+
+
 class TestStore:
   def test_take_tags_complete_lines_and_commits_offsets(self, owner):
     watch = _seed(owner.store, 'printf lines', 'one\ntwo\npartial')
@@ -263,7 +276,7 @@ class TestProducers:
     child_path = tmp_path / 'child'
     command = f'sleep 30 & echo $! > {shlex.quote(str(child_path))}; wait'
     watch = owner.store.start(command)
-    child_process_id = int(_wait_for_file(child_path))
+    child_process_id = int(_wait_for_nonempty_file(child_path))
     identity = watch.producer_identity()
     assert identity is not None
 
@@ -280,7 +293,7 @@ class TestProducers:
     command = f'sleep 30 & echo $! > {shlex.quote(str(child_path))}; wait'
     with watches.Owner.for_session() as watch_owner:
       watch = watch_owner.store.start(command)
-      child_process_id = int(_wait_for_file(child_path))
+      child_process_id = int(_wait_for_nonempty_file(child_path))
       identity = watch.producer_identity()
       assert identity is not None
 
