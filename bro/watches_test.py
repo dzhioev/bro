@@ -289,7 +289,10 @@ class TestProducers:
 
   def test_owner_process_death_escalates_past_a_term_resistant_watch(self, tmp_path):
     with contextlib.closing(Liveness(tmp_path / 'abrupt-liveness')) as liveness:
-      command = liveness.holding("trap '' TERM; exec sleep 30")
+      ready_path = tmp_path / 'term-resistant-ready'
+      command = liveness.holding(
+        f"trap '' TERM; touch {shlex.quote(str(ready_path))}; exec sleep 30"
+      )
       session = tmp_path / 'abrupt-session'
       script = (
         'import os; '
@@ -297,11 +300,21 @@ class TestProducers:
         'from bro import watches; '
         'owner = watches.Owner.for_session(); owner.__enter__(); '
         f'owner.store.start({command!r}); '
-        'print("started", flush=True); os._exit(0)'
+        'print("started", flush=True); os.read(0, 1); os._exit(0)'
       )
-      process = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, text=True)
+      process = subprocess.Popen(
+        [sys.executable, '-c', script],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+      )
+      assert process.stdin is not None
       assert process.stdout is not None
       assert process.stdout.readline() == 'started\n'
+      _wait_for_file(ready_path)
+      with process.stdin:
+        process.stdin.write('x')
+        process.stdin.flush()
       assert process.wait(timeout=10) == 0
       liveness.assert_reaped()
 
