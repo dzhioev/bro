@@ -7,6 +7,7 @@ import pytest
 
 import bro.llm.usage as usage
 from bro.llm.usage import Footer, Usage
+from bro.monitor import encode_project_path
 
 OPUS = 'claude-opus-4-8'
 HAIKU = 'claude-haiku-4-5-20251001'
@@ -234,7 +235,7 @@ class TestSessionTranscripts:
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'config'))
     workspace = tmp_path / 'ws'
     workspace.mkdir()
-    projects = tmp_path / 'config' / 'projects' / str(workspace).replace('/', '-')
+    projects = tmp_path / 'config' / 'projects' / encode_project_path(workspace)
     projects.mkdir(parents=True)
     (projects / 'older.jsonl').touch()
     newest = projects / 'newest.jsonl'

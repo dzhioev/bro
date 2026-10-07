@@ -43,6 +43,21 @@ class TestProjectsDir:
   def test_container_clone_encodes_to_the_mount_point(self):
     assert monitor.encode_project_path(Path('/workspace')) == '-workspace'
 
+  # the expected names below are the directories the pinned Claude Code created
+  # for these paths (`ride/ride/claude/project_dir_llm_test.py` holds the rule live)
+  def test_encodes_every_character_outside_ascii_letters_and_digits(self):
+    assert (
+      monitor.encode_project_path(Path('/tmp/p/home/john_doe/my project'))
+      == '-tmp-p-home-john-doe-my-project'
+    )
+
+  def test_encodes_each_utf16_unit_of_a_character_beyond_the_basic_plane(self):
+    assert monitor.encode_project_path(Path('/tmp/café-\U0001d11e')) == '-tmp-caf----'
+
+  def test_cuts_a_long_name_and_suffixes_the_hash_of_the_whole_path(self):
+    long = Path('/tmp/p') / f'long-{"segment" * 30}'
+    assert monitor.encode_project_path(long) == f'-tmp-p-long-{"segment" * 26}segmen-k5skbv'
+
   def test_projects_dir_sits_under_the_active_config_root(self, tmp_path, monkeypatch):
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'session'))
     assert monitor.claude_projects_dir(Path('/workspace')) == (
