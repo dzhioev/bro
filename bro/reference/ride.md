@@ -1340,8 +1340,9 @@ In boxed isolation the server runs inside the container, so the scoped credentia
 
 A bro's spells (the files its `spells` declaration names, `bro/reference/extending.md`, "Declaring a bro") are canonical `spell::<name>` tools;
 `bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it where it is mounted and to the spell's own tool otherwise.
-A session gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery;
+A Claude session gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery;
 bro spells are not copied into `.claude/skills/` and have no slash-command aliases.
+The bro harness has no native skill loader, so its `Harness.own_tools` contributes `bro::skill`, whose empty result means the requested third-party skill is unavailable.
 
 
 ## Auto-injected system prompt

@@ -1,22 +1,149 @@
+import asyncio
 import json
+import math
 import subprocess
+import time
 from pathlib import Path, PurePath
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional, Protocol, cast
 
+import bro.llm.mcp as llm_mcp
+from bro import spells as spell_store
 from bro.base import log, spawn
+from bro.base.offload import off_loop
+from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, SessionEndReason
+from bro.inbox import Inbox
+from bro.jobs import Job, JobStatus, Registry
 from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
+from bro.shell import admit_command
 from ride.harness import ContainerExtras
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
+  from bro.bro import BaseBro, LiveRun
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
+
+
+class _NativeRun(Protocol):
+  @property
+  def inbox(self) -> Inbox: ...
+
+  @property
+  def registry(self) -> Registry: ...
+
+
+_JOB_WAIT_CAP_SECONDS = 3600.0
+_FOREGROUND_WAIT_SECONDS = 45.0
+
+_JOB_DESCRIPTION = (
+  'start a shell command as one supervised job (`bash -c`, merged stdout and stderr, '
+  'continuously spooled output). the command must match this persona’s shell roster whole and '
+  'exact; unrestricted personas may run any command. `fg` waits for exit and returns tail-kept '
+  'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
+  'result names its id and `poll` continuation. `bg` returns immediately and reports only its '
+  'exit through this run’s notifications. `timeout_seconds` is capped at '
+  f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
+  'lines and the shared byte cap, with skipped/pending markers.'
+)
+
+_POLL_DESCRIPTION = (
+  'read currently unread output from a job without blocking. the default is a head read: oldest '
+  'lines first, advancing only past what it returned and leaving the rest behind a pending '
+  'marker. `tail=true` jumps to the end, keeps the last `limit` lines, and announces the skipped '
+  'middle, which is not delivered later. every result starts with `running` or '
+  '`exited (code N)`. output is bounded by `limit` lines and the shared byte cap.'
+)
+
+_KILL_DESCRIPTION = (
+  'terminate a job’s whole supervised process group with SIGTERM, escalating to SIGKILL after '
+  'the grace period. waits for and consumes the exit it forces, so no later exit notification '
+  'follows; unread output remains available to `poll`, and unread watch output remains eligible '
+  'for notification delivery.'
+)
+
+_JOBS_DESCRIPTION = (
+  'list every job in this service registry with its id, mode, command, running/exited state, '
+  'exit code, and count of unread output lines.'
+)
+
+
+def _bounded_wait(seconds: float, field: str) -> tuple[float, Optional[str]]:
+  if not math.isfinite(seconds) or seconds <= 0:
+    raise ValueError(f'{field} must be a finite positive number')
+  if seconds <= _JOB_WAIT_CAP_SECONDS:
+    return seconds, None
+  return _JOB_WAIT_CAP_SECONDS, f'{field} {seconds:g} clamped to {_JOB_WAIT_CAP_SECONDS:g}'
+
+
+async def _wait_for_foreground_job(
+  job: Job,
+  *,
+  inbox: Inbox,
+  timeout_seconds: float,
+  limit: int,
+) -> str:
+  wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
+  deadline = time.monotonic() + wait_seconds
+  try:
+    with inbox.waiter() as cancelled:
+      await off_loop(inbox.wait, deadline, cancelled)
+  except asyncio.CancelledError:
+    job.become_background()
+    raise
+
+  result, became_background = job.settle_foreground(limit)
+  if became_background:
+    result = f'{result}\n{job.id} continues in bg mode; read on with poll(id={job.id!r})'
+  if clamp_note is not None:
+    result = f'{result}\n[{clamp_note}]'
+  return result
+
+
+def _job_tools(
+  *,
+  live_run: _NativeRun,
+  commands: tuple[str, ...],
+  unrestricted: bool,
+) -> list[llm_mcp.Tool]:
+  def start(command: str, mode: str) -> Job:
+    admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
+    return live_run.registry.start(admitted, mode)  # type: ignore[arg-type]
+
+  async def job(
+    command: str,
+    mode: Literal['fg', 'bg'] = 'fg',
+    timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
+    limit: int = DEFAULT_LIMIT,
+  ) -> str:
+    started = start(command, mode)
+    if mode != 'fg':
+      return f'started {started.id} ({mode})'
+    return await _wait_for_foreground_job(
+      started, inbox=live_run.inbox, timeout_seconds=timeout_seconds, limit=limit
+    )
+
+  def poll(id: str, limit: int = DEFAULT_LIMIT, tail: bool = False) -> str:
+    return live_run.registry.get(id).poll(limit, tail=tail)
+
+  async def kill(id: str) -> str:
+    target = live_run.registry.get(id)
+    return await off_loop(target.kill)
+
+  def jobs() -> list[JobStatus]:
+    return [entry.status() for entry in live_run.registry.values()]
+
+  return [
+    llm_mcp.FunctionTool(job, name='job', description=_JOB_DESCRIPTION),
+    llm_mcp.FunctionTool(poll, name='poll', description=_POLL_DESCRIPTION),
+    llm_mcp.FunctionTool(kill, name='kill', description=_KILL_DESCRIPTION),
+    llm_mcp.FunctionTool(jobs, name='jobs', description=_JOBS_DESCRIPTION),
+  ]
 
 
 def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[str]) -> list[str]:
@@ -48,6 +175,22 @@ class BroHarness(Harness):
 
   def can_end_session(self) -> bool:
     return True
+
+  def own_tools(self, bro: 'BaseBro', live_run: 'LiveRun | None') -> tuple[llm_mcp.Tool, ...]:
+    tools = [spell_store.build_skill_tool()]
+    selection = bro._selected_tools_for(self)
+    if not selection.shell_declared:
+      return tuple(tools)
+    if live_run is None:
+      raise RuntimeError('job tools require a live run')
+    tools.extend(
+      _job_tools(
+        live_run=cast(_NativeRun, live_run),
+        commands=selection.shell_commands,
+        unrestricted=selection.shell_unrestricted,
+      )
+    )
+    return tuple(tools)
 
   async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
     from bro.bro import AnswerDelivered, BroRaised

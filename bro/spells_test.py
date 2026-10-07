@@ -12,8 +12,6 @@ from bro import bro as bro_module, spells as spell_store
 from bro.base.condition import SetVariable
 from bro.bro import BaseBro
 from bro.harness import get_harness, installed_harness_names
-from bro.inbox import Inbox
-from bro.jobs import Registry
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.prompts import get_prompt
@@ -51,8 +49,6 @@ class _NoRun:
 
   trail_id = None
   current_tool_step_id = None
-  inbox = Inbox()
-  registry = Registry(inbox)
 
 
 def _servers(bro: BaseBro) -> list[llm_mcp.MCPServer]:
@@ -269,33 +265,26 @@ class TestSpellServer:
       _servers(bro_class())
 
   @pytest.mark.asyncio
-  async def test_skill_loader_is_a_framework_service_tool(self, fake_packages):
-    bro = fake_packages('_skill_loader_service').bro_class()()
-    assert not hasattr(bro, 'skills')
-    assert not hasattr(bro, 'get_skill_body')
-    assert not hasattr(bro, 'skill_descriptions')
-    assert 'skill' in bro_module._SERVICE_TOOL_NAMES
-    assert 'skill' in {tool.name for tool in await _service_server(bro).list_tools()}
-
-  @pytest.mark.asyncio
-  async def test_skill_loader_is_empty_and_excluded_from_claude_persona(self, fake_packages):
+  async def test_skill_loader_contract_and_prompt(self, fake_packages):
     package = fake_packages('_skill_loader_empty')
     bro = package.bro_class()()
-    native_tools = await _service_server(bro).list_tools()
     persona_tool_names = {
       tool.name for server in _persona_servers(bro) for tool in await server.list_tools()
     }
+    skill = spell_store.build_skill_tool()
 
-    native_skill = next(tool for tool in native_tools if tool.name == 'skill')
+    assert not hasattr(bro, 'skills')
+    assert not hasattr(bro, 'get_skill_body')
+    assert not hasattr(bro, 'skill_descriptions')
     assert 'skill' not in persona_tool_names
     assert '## Skills' in bro.system_prompt
-    assert native_skill.parameters['required'] == ['name']
-    assert await native_skill.call({'name': 'third-party'}) == ''
+    assert skill.parameters['required'] == ['name']
+    assert await skill.call({'name': 'third-party'}) == ''
 
     with pytest.raises(ValueError, match='exactly one'):
-      await native_skill.call({})
+      await skill.call({})
     with pytest.raises(ValueError, match='non-empty'):
-      await native_skill.call({'name': ''})
+      await skill.call({'name': ''})
 
   @pytest.mark.asyncio
   async def test_schema_marks_required_and_optional_strings(self, fake_packages):

@@ -53,11 +53,10 @@ A subpackage with a map of its own is pointed at, not described here.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   `artifact_mcp.py` is the registered `artifact` toolset, reading and grepping reachable text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
-- `jobs.py`, `job_supervisor.py`, and `inbox.py` — process jobs and the per-run notification seam:
-  a supervisor remains the live process-group leader until every command descendant exits, and exits when the owner-liveness handle closes;
-  merged output drains into a memory-bounded temporary spool, head and tail consumers share one cursor, and the exit is consumed once;
-  an inbox wait only observes the set of jobs with news and the framework notices posted to it, while its drain renders and consumes their bounded notification slices.
-- `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
+- `job_supervisor.py` — the shared process-group supervisor behind core's `watch-run` and bro-native's jobs:
+  it remains the live group leader until every command descendant exits, and exits when the owner-liveness handle closes.
+  The native job registry, spool, and inbox keep their public `bro.jobs` and `bro.inbox` paths under `native/`.
+- `shell.py` (`bro-shell-dir`) — admits commands against a declaration's exact shell roster, validates the packaged shell helpers, and prints their installed directory for shell consumers
 - `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
   `WorkerContainer` is the validated, host-neutral container declaration:
   packaged build-context bytes over the runtime image, a command and environment, and container ports mapped to requested-or-available loopback host ports.
@@ -142,8 +141,8 @@ the harness-composed prompt plus the session fragments and the hold text (`bro/p
 
 ### Service tools
 
-Every assembly (`assemble(harness, …)`) receives the engine's registered `Harness` object and appends the `bro` service server;
-`_build_service_server` decides its roster from the surface and the process environment:
+Every assembly (`assemble(harness, …)`) receives the engine's registered `Harness` object and appends the `bro` service server.
+`_build_service_server` decides core's roster from the surface and the process environment, then appends `Harness.own_tools` and renders the combined roster as the `#tools` universe:
 
 - `banner`, always:
   the session facts of `ride banner --llm` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly since an in-process run's environment carries the launcher's;
@@ -160,11 +159,12 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
   it validates the answer and passes the result to `end_session`;
   the bro harness raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
   the Claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
-- `cast` when the bro has spells and its key resolves, and `skill` on the harnesses without a native skill loader (`bro/reference/ride.md`, "Bro spells and skills").
+- `cast` when the bro has spells and its key resolves (`bro/reference/ride.md`, "Bro spells and skills").
+  The bro harness contributes `skill` through its own tools because its model has no native skill loader.
 - `watch` and `unwatch` with a declared `shell` roster on every harness, admitted against the same whole-command roster as a job;
   they start and stop the store's detached producer, while `unwatch` refuses the runtime-owned session watch.
-- the job tools of a declared `shell` roster, on the bro harness alone
-  — `job`, `poll`, `kill`, and `jobs`, over the run's registry and inbox.
+- the bro harness's own tools:
+  `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `shell` roster, plus `skill` on every bro-harness run.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 

@@ -1,12 +1,22 @@
+import asyncio
+import contextlib
+import shlex
+import threading
+import time
 from pathlib import Path
+from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
 import pytest
 
+import bro.mcp as mcp
 import bro.native.harness as bro_harness
 import ride.session as ride_session
-from bro.bro import AnswerDelivered, BroRaised
+from bro.bro import AnswerDelivered, BaseBro, BroRaised
+from bro.inbox import Inbox
+from bro.jobs import Job, Registry
 from bro.llm.llms.openai import LLMSpec
+from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.runtime_bundle import RuntimeBundle
@@ -350,3 +360,195 @@ class TestUnboxedSession:
     ]
     assert launch.env['BRO_INSTALL_KINDS'] == ''
     assert launch.env['RIDE_BASE_SHA'] == 'treehead'
+
+
+class _ShellBro(BaseBro):
+  name = 'job-tools'
+  description = 'd'
+  tools: ClassVar = [mcp.shell(mcp.ANY)]
+
+  def __init__(self):
+    super().__init__(system_prompt='')
+
+
+class _NativeRun:
+  def __init__(self):
+    self.trail_id = None
+    self.current_tool_step_id = None
+    self.inbox = Inbox()
+    self.registry = Registry(self.inbox)
+
+
+async def _service_tools(
+  declaration: BaseBro, run: Optional[_NativeRun] = None
+) -> tuple[MCPServer, dict[str, Tool]]:
+  servers = declaration.assemble(
+    harness=bro_harness.BRO,
+    include_raise=False,
+    live_run=run,
+  )
+  server = next(server for server in servers if server.namespace == 'bro')
+  return server, {tool.name: tool for tool in await server.list_tools()}
+
+
+class TestNativeServiceTools:
+  @pytest.mark.asyncio
+  async def test_harness_owns_skill_alone_without_declared_shell_reach(self):
+    class NoShellBro(BaseBro):
+      name = 'no-shell'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    server, tools = await _service_tools(NoShellBro())
+
+    assert 'skill' in tools
+    assert {'job', 'poll', 'kill', 'jobs'}.isdisjoint(tools)
+    assert server.tool_universe is not None
+    assert 'skill' in server.tool_universe
+    assert 'job' not in server.tool_universe
+
+  @pytest.mark.asyncio
+  async def test_harness_owns_job_tools_for_a_declared_shell(self):
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      assert {'watch', 'unwatch', 'job', 'poll', 'kill', 'jobs', 'skill'} <= set(tools)
+      mode = tools['job'].parameters['properties']['mode']
+      assert set(mode['enum']) == {'fg', 'bg'}
+      assert server.tool_universe is not None
+      assert {'banner', 'watch', 'job', 'skill'} <= set(server.tool_universe)
+
+  @pytest.mark.asyncio
+  async def test_skill_loader_is_empty(self):
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      skill = tools['skill']
+
+      assert skill.parameters['required'] == ['name']
+      assert await skill.call({'name': 'third-party'}) == ''
+      with pytest.raises(ValueError, match='exactly one'):
+        await skill.call({})
+      with pytest.raises(ValueError, match='non-empty'):
+        await skill.call({'name': ''})
+
+  @pytest.mark.asyncio
+  async def test_exact_roster_rejects_appended_shell_syntax(self):
+    class ExactShellBro(BaseBro):
+      name = 'exact-shell'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('printf allowed')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    run = _NativeRun()
+    server, tools = await _service_tools(ExactShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      result = await tools['job'].call({'command': '  printf allowed  ', 'mode': 'fg'})
+      assert result == 'exited (code 0)\nallowed'
+      with pytest.raises(ValueError, match='must match exactly'):
+        await tools['job'].call({'command': 'printf allowed; true', 'mode': 'fg'})
+
+  @pytest.mark.asyncio
+  async def test_foreground_job_interrupted_by_other_news_becomes_background(self, tmp_path):
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    release = tmp_path / 'release-foreground-job'
+    command = (
+      f'printf early; while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.01; done; printf late'
+    )
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      call = asyncio.create_task(
+        tools['job'].call({'command': command, 'mode': 'fg', 'timeout_seconds': 5})
+      )
+      async with asyncio.timeout(5):
+        while len(run.registry.values()) == 0:
+          await asyncio.sleep(0.01)
+        [foreground_job] = run.registry.values()
+        while foreground_job.status().unread_lines == 0:
+          await asyncio.sleep(0.01)
+      run.registry.start('true', 'bg')
+      async with asyncio.timeout(5):
+        while foreground_job.status().mode != 'bg':
+          await asyncio.sleep(0.01)
+
+      result = await call
+      assert isinstance(result, str)
+      assert result.startswith('running\nearly')
+      assert "continues in bg mode; read on with poll(id='job-1')" in result
+      first = run.inbox.drain()
+      assert first is not None and 'job-2' in first.job_ids
+
+      release.touch()
+      assert await asyncio.to_thread(run.inbox.wait, time.monotonic() + 5, threading.Event())
+      second = run.inbox.drain()
+      assert second is not None
+      assert f'[job-1 bg `{command}` exited (code 0)]' in second.text
+      assert 'late' in second.text
+      assert run.inbox.drain() is None
+
+  @pytest.mark.asyncio
+  async def test_foreground_timeout_becomes_background_and_names_its_clamp(self, monkeypatch):
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      monkeypatch.setattr(bro_harness, '_JOB_WAIT_CAP_SECONDS', 0.05)
+      result = await tools['job'].call({'command': 'sleep 0.3', 'mode': 'fg', 'timeout_seconds': 5})
+      assert isinstance(result, str)
+      assert result.startswith('running')
+      assert "continues in bg mode; read on with poll(id='job-1')" in result
+      assert '[timeout_seconds 5 clamped to 0.05]' in result
+      assert run.registry.get('job-1').mode == 'bg'
+
+  @pytest.mark.asyncio
+  async def test_exit_during_foreground_settlement_is_consumed_once(self, monkeypatch, tmp_path):
+    original = Job.settle_foreground
+    release = tmp_path / 'release-settlement'
+
+    def settlement_after_the_exit(job: Job, limit: int) -> tuple[str, bool]:
+      release.touch()
+      assert job.wait_finished(time.monotonic() + 10, threading.Event())
+      return original(job, limit)
+
+    monkeypatch.setattr(Job, 'settle_foreground', settlement_after_the_exit)
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    command = f'while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.01; done; printf done'
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      result = await tools['job'].call({'command': command, 'mode': 'fg', 'timeout_seconds': 0.01})
+      assert result == 'exited (code 0)\ndone'
+      assert run.inbox.drain() is None
+
+  @pytest.mark.asyncio
+  async def test_cancelling_foreground_wait_leaves_a_background_job(self):
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      call = asyncio.create_task(
+        tools['job'].call({'command': 'sleep 30', 'mode': 'fg', 'timeout_seconds': 60})
+      )
+      async with asyncio.timeout(5):
+        while len(run.registry.values()) == 0:
+          await asyncio.sleep(0.01)
+      call.cancel()
+      with pytest.raises(asyncio.CancelledError):
+        await call
+      [job] = run.registry.values()
+      assert job.mode == 'bg'

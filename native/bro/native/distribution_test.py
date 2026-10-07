@@ -22,6 +22,8 @@ _PROJECTS = {
 }
 _NATIVE_DOMAIN = {
   'bro/fork.py',
+  'bro/inbox.py',
+  'bro/jobs.py',
   'bro/launch/call.py',
   'bro/launch/call_tui.py',
   'bro/launch/resume.py',
@@ -230,11 +232,17 @@ def test_core_and_ride_wheels_compose_a_claude_session_without_native(wheels, tm
     capture_output=True,
   )
   probe = (
-    'import sys; '
+    'import asyncio, importlib.util, sys; '
     'from bro.harness import installed_harness_names; '
+    'from bro.registry import create_bro; '
+    'from ride.claude.assembly import persona_servers; '
     'from ride.claude.system_prompt import session_append_prompt; '
     'assert installed_harness_names() == ("claude",); '
     'assert "# Persona: bro" in session_append_prompt("unattended", "bro"); '
+    'servers = persona_servers(create_bro("bro")); '
+    'names = {tool.name for server in servers for tool in asyncio.run(server.list_tools())}; '
+    'assert names.isdisjoint({"job", "poll", "kill", "jobs", "skill"}); '
+    'assert importlib.util.find_spec("bro.jobs") is None; '
     'assert "bro.native.harness" not in sys.modules'
   )
   subprocess.run([str(venv / 'bin' / 'python'), '-c', probe], check=True, capture_output=True)
