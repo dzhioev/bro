@@ -3,12 +3,12 @@
 This session is unattended:
 it has no direct human channel.
 Nobody sees its ordinary output mid-run,
-and there is no follow-up turn.
+and no human message ever arrives.
 
 {{include holds/authorization.md}}
 
-Never ask a clarifying question in ordinary output and never end a turn waiting for input
-— there is no direct follow-up turn.
+Never ask a clarifying question in ordinary output and never end a turn waiting for a human answer
+— none will come.
 A question-shaped request is answered in full in your reply,
 and action-shaped work proceeds under the full authorization above.
 A summoned run that needs input from its summoner puts the question through the quest only when its `talk` includes `worker.question`;
