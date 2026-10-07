@@ -4,7 +4,7 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import log, spawn
-from bro.harness import Harness
+from bro.harness import Harness, SessionEndReason
 from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
@@ -45,6 +45,18 @@ def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[
 
 class BroHarness(Harness):
   name = 'bro'
+
+  def can_end_session(self) -> bool:
+    return True
+
+  async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
+    from bro.bro import AnswerDelivered, BroRaised
+
+    if end_reason == 'ok':
+      raise AnswerDelivered(result)
+    if end_reason == 'raised':
+      raise BroRaised(result)
+    raise ValueError(f'unsupported session end reason {end_reason!r}')
 
   def scope_recipe(self) -> ScopeRecipe:
     return _BRO_RUN_RECIPE

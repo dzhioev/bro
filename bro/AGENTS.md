@@ -79,8 +79,8 @@ A subpackage with a map of its own is pointed at, not described here.
   see `datasources/AGENTS.md`
 - `extra/github/` — the GitHub API client (`api.py`), the GitHub App authentication source (`app.py`), and pull-request reads (`pulls.py`)
 - `harness/` — the framework half of a driving harness and what a consuming harness brings of its own.
-  `__init__.py` holds the `Harness` identity and the `bro.harnesses` registry:
-  installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
+  `__init__.py` holds the `Harness` interface and the `bro.harnesses` registry:
+  installed names come from metadata without imports, one selected object loads lazily with its type and name checked, and terminal service-tool results pass through its session-ending methods.
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
   A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
   `shell(ANY)` leaves an unblocked Claude shell unrestricted.
@@ -150,15 +150,16 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
   the playbook is `bro/prompts/environment.md`.
 - `raise`, at the unattended hold alone
   — `Runner.run()`'s default, `bro run`, summoned children, and the Claude builds when `do-ride` exports `BRO_HOLD=unattended` with `RIDE_RUNNER_PID`:
-  the agent aborts with a reason when the request cannot be fulfilled.
-  On the bro harness it raises `BroRaised(reason)` out of `Runner.run()`;
-  on the claude harness it emits the run's failed result over the broker channel where one exists, then terminates the session through `bro.workspace.session.terminate_session` with `RAISE_EXIT_STATUS` as its status,
-  since no exception can abort the consuming claude session.
+  the agent aborts with a reason when the request cannot be fulfilled, through the selected harness's `end_session`.
+  The bro harness raises `BroRaised(reason)` out of `Runner.run()`;
+  the Claude harness emits the run's failed result over the broker channel where one exists, then terminates the session through `bro.workspace.session.terminate_session` with `RAISE_EXIT_STATUS` as its status,
+  since no exception can abort the consuming Claude session.
   Every other hold mounts no `raise`;
   its hold text tells the agent how to involve the human instead.
-- `answer`, `raise`'s twin for a summoned run's clean end, mounted when the run is summoned (`RIDE_SUMMONED`) with broker intent, and on the claude harness only where `RIDE_RUNNER_PID` makes the session killable:
+- `answer`, `raise`'s twin for a summoned run's clean end, mounted when the run is summoned (`RIDE_SUMMONED`) with broker intent and the selected harness's `can_end_session()` holds:
+  it validates the answer and passes the result to `end_session`;
   the bro harness raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
-  the claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
+  the Claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
 - `cast` when the bro has spells and its key resolves, and `skill` on the harnesses without a native skill loader (`bro/reference/ride.md`, "Bro spells and skills").
 - `watch` and `unwatch` with a declared `shell` roster on every harness, admitted against the same whole-command roster as a job;
   they start and stop the store's detached producer, while `unwatch` refuses the runtime-owned session watch.
