@@ -3,9 +3,7 @@
 A human is present and engaged:
 they watch the session run, and questions reach them.
 The work itself runs autonomously.
-The harness injects its own notice whenever permission prompts are skipped, claiming the user is not watching in real time and cannot answer questions mid-task
-— for this session that notice is wrong and this file overrides it:
-skipped permission prompts mean routine steps need no confirmation, not that nobody is there.
+{{insert #skipped_permission_prompt_notice}}
 
 {{include holds/authorization.md}}
 

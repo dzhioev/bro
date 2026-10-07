@@ -18,18 +18,17 @@ load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
   `get_prompt` enforces "template ↔ kwargs" symmetry
   — passing kwargs to a non-template, or omitting kwargs for a template, raises
 
-Prompt content may carry `bro.base.template` directives (`#harness`/`#creds`, plus session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
-every rendering surface renders its text once with its own facts via `bro.mcp.render_text`
+Prompt content may carry `bro.base.template` directives over the surface facts (`#creds`, the harness's own facts, and session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
+every rendering surface renders its text once with its registered `Harness` object via `bro.mcp.render_text`
 — `BaseBro.__init__` for the bro-native prompt, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
 — so a directive works in `shared/` and bro class prompts alike.
 `FileSource`-served docs are the exception:
 one rendering is read by every harness, so their bodies must be surface-neutral
 — `FileSource.read` supplies no facts and a surface directive raises.
 
-Harness-specific conditioning is expressed with these directives, never as prose that addresses both surfaces and leaves the reader to pick:
-fork the text with `{{iff #harness = bro}}…{{eliff #harness = claude}}…{{end}}`
-— the chain raises when no branch matches, so the fork is self-guarding
-— and each surface reads only its own instruction.
+A prompt describes harness-specific behavior through a capability fact or passage that each harness supplies from `Harness.facts()`.
+Use a condition on the capability when the prompt owns the wording, and `{{insert #name}}` when the harness owns it.
+The open `#harness` fact remains the escape hatch for a distinction no declared fact covers, not the first way to fork a prompt.
 A condition on a tool the harness offers is no harness fork and stays prose:
 the model reads its own tool list, and one harness offers different tools by mode.
 
@@ -66,10 +65,10 @@ Current reference docs:
   every surface calls the `bro::banner` service tool and reads this doc through the `environment` page (`ride banner --llm` stays as the human CLI).
   Tool-served only — not injected
 
-- `tool_names.md` — the tool-name resolution rule, templated on `#harness`;
+- `tool_names.md` — inserts the selected harness's `tool_name_rule` passage;
   one file serves every surface.
-  Managed Claude sessions get the claude rendering (`ns::tool` → `mcp__ns__tool`), injected here;
-  bro-native LLM runs compose the bro rendering (`ns::tool` → `ns__tool`) into `BaseBro.system_prompt`.
+  Managed Claude sessions get the Claude harness's `ns::tool` → `mcp__ns__tool` rule, injected here;
+  bro-native LLM runs compose the bro harness's `ns::tool` → `ns__tool` rule into `BaseBro.system_prompt`.
   Deliberately no `FileSource`
 
 ## Session fragments

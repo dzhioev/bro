@@ -286,6 +286,7 @@ The flow's one mandatory local pass
 — on the folded, rebased tree, which is the tree that ships.
 Run the repo's gate over what the change reaches:
 a selection scoped to the diff against `<base>` where offered, otherwise affected tests (the repo's command and environment flags).
+Give a long-running gate an explicit timeout large enough for the full run.
 
 What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
 The whole gate is the pull request's:

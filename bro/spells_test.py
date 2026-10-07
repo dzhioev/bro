@@ -611,8 +611,8 @@ class TestSpellOptionalSecret:
 class TestSpellToolNames:
   def test_tool_name_prompt_uses_the_ordinary_namespace_rule(self):
     text = get_prompt('tool_names.md')
-    native = mcp.render_text(text, harness='bro')
-    claude = mcp.render_text(text, harness='claude')
+    native = mcp.render_text(text, harness=get_harness('bro'))
+    claude = mcp.render_text(text, harness=get_harness('claude'))
     assert 'replace `::` with `__` and call that wire name directly' in native
     assert 'prepend `mcp__`' in claude
     assert 'spells `at` on the wire' not in native

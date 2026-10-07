@@ -13,7 +13,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 - `bro/native/` — the bro-native engine, the layer above the framework core:
   registered session harness, runner, live LLM contract, provider dispatch, and provider clients.
   `harness.py:BRO` owns native recipe resolution, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
-  Its `Harness.own_tools` contributes `skill` and the shell-gated job tools.
+  Its `Harness.facts` contributes native prompt passages, and `Harness.own_tools` contributes `skill` and the shell-gated job tools.
   It also owns the `bro run|chat …` spawn with exact-recipe continuation and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, trail, and an in-process run's temporary watch store;

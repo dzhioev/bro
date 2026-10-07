@@ -187,8 +187,8 @@ a reviewer judges it apart from the bump, and a wrong one reverts alone.
 Run the repository's formatter, then a persona construction smoke through the project environment
 — `uv run bro show <default bro>` for the `[tool.bro] default`, and `uv run bro list`
 — which resolves entry points and loads spells and declarations against the new framework, so an import or declaration error surfaces before the suite does.
-Then run the repository's own gate (its docs name the command).{{when #harness = bro}}
-Run a long gate through `bro::job` in `fg` mode with an explicit large `timeout_seconds`.{{end}}
+Then run the repository's own gate (its docs name the command).
+Give a long-running gate an explicit timeout large enough for the full run.
 
 Deploy scripts are exercised by none of this;
 step 3 is their gate.

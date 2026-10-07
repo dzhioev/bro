@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from bro.broker.environment import BROKER_TALK
+from bro.harness import get_harness
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
 from bro.summon import LAUNCH_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_launch
 
@@ -53,31 +54,40 @@ class TestHoldFragment:
       ('attended', '# Attended session'),
       ('guided', '# Guided session'),
     ):
-      fragment = hold_fragment(hold, harness='claude')
+      fragment = hold_fragment(hold, harness=get_harness('claude'))
       assert fragment.startswith(heading)
       assert '{{' not in fragment
 
   def test_non_guided_levels_share_the_authorization_block(self):
     for hold in ('unattended', 'detached', 'attended'):
-      fragment = hold_fragment(hold, harness='claude')
+      fragment = hold_fragment(hold, harness=get_harness('claude'))
       assert 'full authorization' in fragment
 
   def test_guided_carries_no_authorization_block(self):
-    fragment = hold_fragment('guided', harness='claude')
+    fragment = hold_fragment('guided', harness=get_harness('claude'))
     assert 'full authorization' not in fragment
 
   def test_interactive_levels_share_the_interaction_policy(self):
     for hold in ('detached', 'attended', 'guided'):
-      fragment = hold_fragment(hold, harness='claude')
+      fragment = hold_fragment(hold, harness=get_harness('claude'))
       assert '# Interaction policy' in fragment
 
   def test_unattended_carries_no_interaction_policy(self):
-    fragment = hold_fragment('unattended', harness='claude')
+    fragment = hold_fragment('unattended', harness=get_harness('claude'))
     assert '# Interaction policy' not in fragment
+
+  @pytest.mark.parametrize('hold', ['detached', 'attended'])
+  def test_skipped_permission_notice_comes_from_the_harness(self, hold):
+    native = hold_fragment(hold, harness=get_harness('bro'))
+    claude = hold_fragment(hold, harness=get_harness('claude'))
+
+    marker = 'claiming the user is not watching in real time'
+    assert marker not in native
+    assert marker in claude
 
   def test_unknown_hold_raises(self):
     with pytest.raises(ValueError, match='unknown hold'):
-      hold_fragment('automatic', harness='claude')
+      hold_fragment('automatic', harness=get_harness('claude'))
 
 
 class TestSessionFragment:
@@ -85,13 +95,13 @@ class TestSessionFragment:
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.delenv(LAUNCH_ENV, raising=False)
     monkeypatch.delenv(PARTY_MEMBER_ENV, raising=False)
-    assert session_fragment('attended', harness='claude') == hold_fragment(
-      'attended', harness='claude'
+    assert session_fragment('attended', harness=get_harness('claude')) == hold_fragment(
+      'attended', harness=get_harness('claude')
     )
 
   def test_a_party_member_is_told_the_tree_is_shared(self, monkeypatch):
     monkeypatch.setenv(PARTY_MEMBER_ENV, 'broker-CH')
-    fragment = session_fragment('unattended', harness='bro')
+    fragment = session_fragment('unattended', harness=get_harness('bro'))
     assert fragment.startswith('# Party member')
     assert 'shares the summoner’s working tree' in fragment
 
@@ -99,19 +109,19 @@ class TestSessionFragment:
   def test_a_summoning_run_uses_the_runtime_owned_watch(self, monkeypatch, harness):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    fragment = session_fragment('attended', harness=harness)
+    fragment = session_fragment('attended', harness=get_harness(harness))
     assert fragment.startswith('# Summoning session')
     assert 'session keeps a quest watch' in fragment
     assert 'end the turn' in fragment
     assert 'watch-next' not in fragment
     assert 'bro::chill' not in fragment
     assert '{{' not in fragment
-    assert fragment.endswith(hold_fragment('attended', harness=harness))
+    assert fragment.endswith(hold_fragment('attended', harness=get_harness(harness)))
 
   @pytest.mark.parametrize('harness', ['bro', 'claude'])
   def test_a_summoned_run_has_one_turn_end_contract(self, monkeypatch, harness):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('unattended', harness=harness, talk=('worker.say',))
+    fragment = session_fragment('unattended', harness=get_harness(harness), talk=('worker.say',))
     assert fragment.count('# One-shot turn end') == 1
     assert 'watch-next' not in fragment
 
@@ -119,29 +129,31 @@ class TestSessionFragment:
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    fragment = session_fragment('attended', harness='claude', talk=('worker.say',))
+    fragment = session_fragment('attended', harness=get_harness('claude'), talk=('worker.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
     assert fragment.count('# One-shot turn end') == 1
 
   def test_a_summoned_run_carries_the_delivery_contract_at_every_hold(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     for hold in ('unattended', 'detached', 'attended', 'guided'):
-      fragment = session_fragment(hold, harness='claude', talk=('worker.say',))
+      fragment = session_fragment(hold, harness=get_harness('claude'), talk=('worker.say',))
       assert fragment.startswith('# Summoned session')
       assert '{{' not in fragment
 
   def test_the_hold_fragment_stays_the_suffix(self, monkeypatch):
     # the resumed-hold swap in `native/bro/fork.py` replaces it there
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('guided', harness='claude', talk=('worker.say',))
-    assert fragment.endswith(hold_fragment('guided', harness='claude'))
+    fragment = session_fragment('guided', harness=get_harness('claude'), talk=('worker.say',))
+    assert fragment.endswith(hold_fragment('guided', harness=get_harness('claude')))
 
   @pytest.mark.parametrize('harness', ['bro', 'claude'])
   def test_a_speaking_summoner_reaches_the_child_through_the_session_watch(
     self, monkeypatch, harness
   ):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('attended', harness=harness, talk=('owner.say', 'worker.say'))
+    fragment = session_fragment(
+      'attended', harness=get_harness(harness), talk=('owner.say', 'worker.say')
+    )
     assert 'session keeps a quest watch' in fragment
     assert 'arrive as notifications' in fragment
 
@@ -149,7 +161,7 @@ class TestSessionFragment:
   def test_a_questioning_child_asks_once_and_waits_on_the_session_watch(self, monkeypatch, harness):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment(
-      'unattended', harness=harness, talk=('worker.say', 'worker.question')
+      'unattended', harness=get_harness(harness), talk=('worker.say', 'worker.question')
     )
     assert 'call `bro::quest_ask` on `self`' in fragment
     assert 'reply arrives through the session watch' in fragment
@@ -157,13 +169,13 @@ class TestSessionFragment:
 
   def test_a_silent_child_is_told_to_raise_instead_of_asking(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
-    fragment = session_fragment('unattended', harness='bro', talk=())
+    fragment = session_fragment('unattended', harness=get_harness('bro'), talk=())
     assert 'quest does not permit' in fragment
 
   def test_a_summoned_contract_requires_the_talk_fact(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     with pytest.raises(ValueError, match='unknown variable #talk'):
-      session_fragment('attended', harness='claude')
+      session_fragment('attended', harness=get_harness('claude'))
 
 
 def test_the_session_texts_cast_no_spell(monkeypatch):
@@ -180,5 +192,5 @@ def test_the_session_texts_cast_no_spell(monkeypatch):
       monkeypatch.delenv(SUMMONED_ENV, raising=False)
     for harness in ('claude', 'bro'):
       for talk in talks:
-        fragment = session_fragment('unattended', harness=harness, talk=talk)
+        fragment = session_fragment('unattended', harness=get_harness(harness), talk=talk)
         assert '[[' not in fragment, (summoning, summoned, harness, talk)
