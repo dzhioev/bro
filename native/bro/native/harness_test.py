@@ -5,6 +5,7 @@ import pytest
 
 import bro.native.harness as bro_harness
 import ride.session as ride_session
+from bro.bro import AnswerDelivered, BroRaised
 from bro.llm.llms.openai import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
@@ -77,6 +78,24 @@ def local_trails(monkeypatch):
 
 def test_prepare_session_has_no_native_state_side_effects():
   bro_harness.BRO.prepare_session(MagicMock())
+
+
+def test_native_harness_can_end_every_session():
+  assert bro_harness.BRO.can_end_session()
+
+
+@pytest.mark.asyncio
+async def test_native_harness_delivers_an_answer_to_its_runner():
+  with pytest.raises(AnswerDelivered) as exception:
+    await bro_harness.BRO.end_session('the verdict', 'ok')
+  assert exception.value.answer == 'the verdict'
+
+
+@pytest.mark.asyncio
+async def test_native_harness_raises_to_its_runner():
+  with pytest.raises(BroRaised) as exception:
+    await bro_harness.BRO.end_session('missing api key', 'raised')
+  assert exception.value.reason == 'missing api key'
 
 
 def test_check_runtime_starts_the_sibling_native_command_without_path(monkeypatch, tmp_path):

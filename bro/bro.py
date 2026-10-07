@@ -30,13 +30,13 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
-from bro.harness import name_of
+from bro.harness import Harness, get_harness, name_of
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
-from bro.run_lifecycle import RunLifecycle, validate_answer
+from bro.run_lifecycle import validate_answer
 from bro.worker_types import type_name as worker_type_name
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
@@ -141,8 +141,7 @@ RAISE_EXIT_STATUS = 1
 
 
 class BroRaised(llm_mcp.ToolControlSignal):
-  """aborts a Bro run: raised by the `raise` service tool, and by the run-start
-  credential gate when required secrets don't resolve."""
+  """Aborts a native Bro run."""
 
   def __init__(self, reason: str):
     super().__init__(reason)
@@ -150,40 +149,11 @@ class BroRaised(llm_mcp.ToolControlSignal):
 
 
 class AnswerDelivered(llm_mcp.ToolControlSignal):
-  """ends a summoned Bro run with its explicit answer: raised by the `answer`
-  service tool's bare flavor; the surface that drives the run turns it into the
-  run's ok result."""
+  """Ends a summoned native Bro run with its explicit answer."""
 
   def __init__(self, answer: str):
     super().__init__(answer)
     self.answer = answer
-
-
-def _raise(reason: str) -> str:
-  raise BroRaised(reason)
-
-
-async def _claude_raise(reason: str) -> str:
-  # no exception can abort the consuming claude session, so record the abort
-  # over the broker channel where one exists, then terminate the session (the
-  # workspace layer owns the mechanics). blocking ops, so off-loop; the finally
-  # keeps the kill unconditional.
-  from bro.workspace.session import terminate_session
-
-  def record_and_kill() -> None:
-    log.warning('raise: %s', reason)
-    try:
-      channel = RunLifecycle.from_env()
-      if channel is not None:
-        channel.completed(reason, 'raised')
-        channel.close()
-    finally:
-      terminate_session(status=RAISE_EXIT_STATUS)
-
-  await off_loop(record_and_kill)
-  # never reaches the agent in practice: ending the session interrupts the turn
-  # this call belongs to, and an interrupted turn's pending results are dropped
-  return 'the abort is recorded and the session is being terminated. Stop working now.'
 
 
 _RAISE_DESCRIPTION = (
@@ -194,47 +164,18 @@ _RAISE_DESCRIPTION = (
   'the context needed to act), or any other blocker prevents completing the '
   'task. Do NOT reply with a clarifying question — there is no follow-up turn; '
   'raise instead. Pass a clear, specific reason — it surfaces to the caller as '
-  'the failure cause.'
-  '{{when #harness = claude}} The call records the abort and terminates the session; '
-  'nothing after it will run, so make the reason self-contained.{{end}}'
+  'the failure cause. The call ends the session; nothing after it will run, so '
+  'make the reason self-contained.'
 )
 
 
-def _raise_tool(harness: mcp.HarnessLike, variables: Variables) -> llm_mcp.Tool:
-  target = _claude_raise if name_of(harness) == 'claude' else _raise
+def _raise_tool(harness: Harness, variables: Variables) -> llm_mcp.Tool:
+  async def raise_session(reason: str) -> str:
+    return await harness.end_session(reason, 'raised')
+
   return llm_mcp.FunctionTool(
-    target, name='raise', description=_RAISE_DESCRIPTION, variables=variables
+    raise_session, name='raise', description=_RAISE_DESCRIPTION, variables=variables
   )
-
-
-def _answer(answer: str) -> str:
-  validate_answer(answer)
-  raise AnswerDelivered(answer)
-
-
-async def _claude_answer(answer: str) -> str:
-  validate_answer(answer)
-  # the claude twin of _claude_raise, for the clean end: no exception can end
-  # the consuming claude session, so send the run's result over the broker channel,
-  # then terminate the session. Unlike raise, an undeliverable answer must not
-  # kill the session — without a channel the summoner would never hear it, so
-  # that errors back to the agent instead.
-  from bro.workspace.session import terminate_session
-
-  def record_and_kill() -> None:
-    channel = RunLifecycle.from_env()
-    if channel is None:
-      raise RuntimeError(
-        'no broker channel: the answer cannot reach the summoner; surface it to the user instead'
-      )
-    log.info('answer delivered to the summoner')
-    channel.completed(answer, 'ok')
-    channel.close()
-    terminate_session(status=0)
-
-  await off_loop(record_and_kill)
-  # never reaches the agent, for the reason `_claude_raise` gives
-  return 'the answer is recorded and the session is being terminated. Stop working now.'
 
 
 _ANSWER_DESCRIPTION = (
@@ -245,15 +186,17 @@ _ANSWER_DESCRIPTION = (
   'reports no answer and surfaces to the summoner as a failure.'
   '{{when #tools contains raise}} An answer means the request was met; a request this run '
   'cannot fulfill, or declines, ends through `raise` with the reason instead.{{end}}'
-  '{{when #harness = claude}} The call records the answer and terminates the session; '
-  'nothing after it will run.{{end}}'
+  ' The call ends the session; nothing after it will run.'
 )
 
 
-def _answer_tool(harness: mcp.HarnessLike, variables: Variables) -> llm_mcp.Tool:
-  target = _claude_answer if name_of(harness) == 'claude' else _answer
+def _answer_tool(harness: Harness, variables: Variables) -> llm_mcp.Tool:
+  async def answer_session(answer: str) -> str:
+    validate_answer(answer)
+    return await harness.end_session(answer, 'ok')
+
   return llm_mcp.FunctionTool(
-    target, name='answer', description=_ANSWER_DESCRIPTION, variables=variables
+    answer_session, name='answer', description=_ANSWER_DESCRIPTION, variables=variables
   )
 
 
@@ -793,21 +736,17 @@ def _build_service_server(
   # `skill` bridges only harnesses without a native loader; `raise` only makes
   # sense non-interactively (a caller to abort to — interactive callers pass
   # include_raise=False); `answer` is the summoned run's delivery surface — it
-  # needs the summoned mark and broker intent, plus a killable session on the
-  # claude harness (the native flavor ends the run by exception); the summon
-  # tools need the same intent. The decided roster then feeds the tools'
+  # needs the summoned mark, broker intent, and a harness able to end this
+  # session; the summon tools need the same intent. The decided roster then feeds the tools'
   # rendering vocabulary: service tools are harness features, the one tool
   # surface that conditions on system facts, so `#harness` is injected next to
   # the `#tools` roster.
   from bro.summon import summoned
 
+  session_harness = harness if isinstance(harness, Harness) else get_harness(harness)
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
   has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
-  has_answer = (
-    has_broker
-    and summoned()
-    and (name_of(harness) == 'bro' or os.environ.get('RIDE_RUNNER_PID') is not None)
-  )
+  has_answer = has_broker and summoned() and session_harness.can_end_session()
   selection = bro._selected_tools_for(harness)
   has_watches = selection.shell_declared
   has_jobs = name_of(harness) == 'bro' and (
@@ -850,9 +789,9 @@ def _build_service_server(
   if name_of(harness) == 'bro':
     tools.append(spell_store.build_skill_tool())
   if include_raise:
-    tools.append(_raise_tool(harness, variables))
+    tools.append(_raise_tool(session_harness, variables))
   if has_answer:
-    tools.append(_answer_tool(harness, variables))
+    tools.append(_answer_tool(session_harness, variables))
   if has_broker:
     tools.append(_summon_tool(variables, live_run))
     tools.append(_quest_check_tool(variables))
