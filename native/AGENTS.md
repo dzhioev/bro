@@ -12,10 +12,14 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 
 - `bro/native/` — the bro-native engine, the layer above the framework core:
   registered session harness, runner, live LLM contract, provider dispatch, and provider clients.
-  `harness.py:BRO` owns native recipe resolution, session preparation and runtime checks, terminal service-tool delivery by raising to the runner, the `bro run|chat …` spawn with exact-recipe continuation, and ride's launch hooks.
+  `harness.py:BRO` owns native recipe resolution, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
+  Its `Harness.own_tools` contributes `skill` and the shell-gated job tools.
+  It also owns the `bro run|chat …` spawn with exact-recipe continuation and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, trail, and an in-process run's temporary watch store;
-  it satisfies `bro.bro.LiveRun` and injects the registered `BRO` object into `BaseBro.assemble` and prompt composition.
+  it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and prompt composition.
+  `bro/jobs.py` and `bro/inbox.py` are native-owned modules under their public namespace paths:
+  jobs supervise process groups through core's `bro.job_supervisor`, spool bounded output, and live in a lifetime-scoped registry, while the inbox wakes the model on job news and framework notices and drains their bounded notification slices.
   OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
   interactive owners call `wake()` when the inbox reports news.
   In a managed session, `do-ride` owns the shared watch store and arms its `quest watch` producer;

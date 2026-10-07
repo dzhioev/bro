@@ -1,7 +1,4 @@
-import asyncio
-import math
 import os
-import time
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -26,17 +23,15 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
-from bro.base.text_window import DEFAULT_LIMIT
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
 from bro.harness import Harness, get_harness, name_of
-from bro.inbox import Inbox
-from bro.jobs import Job, JobStatus, Registry
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
+from bro.shell import admit_command
 from bro.worker_types import type_name as worker_type_name
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
@@ -124,12 +119,6 @@ class LiveRun(Protocol):
 
   @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
-
-  @property
-  def inbox(self) -> Inbox: ...
-
-  @property
-  def registry(self) -> Registry: ...
 
 
 class WatchRun(LiveRun, Protocol):
@@ -533,129 +522,6 @@ def _quest_cancel_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-_JOB_WAIT_CAP_SECONDS = 3600.0
-_FOREGROUND_WAIT_SECONDS = 45.0
-
-_JOB_DESCRIPTION = (
-  'start a shell command as one supervised job (`bash -c`, merged stdout and stderr, '
-  'continuously spooled output). the command must match this persona’s shell roster whole and '
-  'exact; unrestricted personas may run any command. `fg` waits for exit and returns tail-kept '
-  'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
-  'result names its id and `poll` continuation. `bg` returns immediately and reports only its '
-  'exit through this run’s notifications. `timeout_seconds` is capped at '
-  f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
-  'lines and the shared byte '
-  'cap, with skipped/pending markers.'
-)
-
-_POLL_DESCRIPTION = (
-  'read currently unread output from a job without blocking. the default is a head read: oldest '
-  'lines first, advancing only past what it returned and leaving the rest behind a pending '
-  'marker. `tail=true` jumps to the end, keeps the last `limit` lines, and announces the skipped '
-  'middle, which is not delivered later. every result starts with `running` or '
-  '`exited (code N)`. output is bounded by `limit` lines and the shared byte cap.'
-)
-
-_KILL_DESCRIPTION = (
-  'terminate a job’s whole supervised process group with SIGTERM, escalating to SIGKILL after '
-  'the grace period. waits for and consumes the exit it forces, so no later exit notification '
-  'follows; unread output remains available to `poll`, and unread watch output remains eligible '
-  'for notification delivery.'
-)
-
-_JOBS_DESCRIPTION = (
-  'list every job in this service registry with its id, mode, command, running/exited state, '
-  'exit code, and count of unread output lines.'
-)
-
-
-def _bounded_wait(seconds: float, field: str) -> tuple[float, Optional[str]]:
-  if not math.isfinite(seconds) or seconds <= 0:
-    raise ValueError(f'{field} must be a finite positive number')
-  if seconds <= _JOB_WAIT_CAP_SECONDS:
-    return seconds, None
-  return _JOB_WAIT_CAP_SECONDS, f'{field} {seconds:g} clamped to {_JOB_WAIT_CAP_SECONDS:g}'
-
-
-def _admit_shell_command(command: str, *, commands: tuple[str, ...], unrestricted: bool) -> str:
-  normalized = command.strip()
-  if len(normalized) == 0:
-    raise ValueError('command must be non-empty')
-  if unrestricted or normalized in commands:
-    return normalized
-  listing = ', '.join(f'`{allowed}`' for allowed in commands)
-  raise ValueError(
-    f'this persona may run {listing} and nothing else — the command must match exactly, '
-    'with nothing appended'
-  )
-
-
-async def _wait_for_foreground_job(
-  job: Job,
-  *,
-  inbox: Inbox,
-  timeout_seconds: float,
-  limit: int,
-) -> str:
-  wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
-  deadline = time.monotonic() + wait_seconds
-  try:
-    with inbox.waiter() as cancelled:
-      await off_loop(inbox.wait, deadline, cancelled)
-  except asyncio.CancelledError:
-    job.become_background()
-    raise
-
-  result, became_background = job.settle_foreground(limit)
-  if became_background:
-    result = f'{result}\n{job.id} continues in bg mode; read on with poll(id={job.id!r})'
-  if clamp_note is not None:
-    result = f'{result}\n[{clamp_note}]'
-  return result
-
-
-def _job_tools(
-  *,
-  live_run: LiveRun,
-  commands: tuple[str, ...],
-  unrestricted: bool,
-  variables: Variables,
-) -> list[llm_mcp.Tool]:
-  def start(command: str, mode: str) -> Job:
-    admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
-    return live_run.registry.start(admitted, mode)  # type: ignore[arg-type]
-
-  async def job(
-    command: str,
-    mode: Literal['fg', 'bg'] = 'fg',
-    timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
-    limit: int = DEFAULT_LIMIT,
-  ) -> str:
-    started = start(command, mode)
-    if mode != 'fg':
-      return f'started {started.id} ({mode})'
-    return await _wait_for_foreground_job(
-      started, inbox=live_run.inbox, timeout_seconds=timeout_seconds, limit=limit
-    )
-
-  def poll(id: str, limit: int = DEFAULT_LIMIT, tail: bool = False) -> str:
-    return live_run.registry.get(id).poll(limit, tail=tail)
-
-  async def kill(id: str) -> str:
-    target = live_run.registry.get(id)
-    return await off_loop(target.kill)
-
-  def jobs() -> list[JobStatus]:
-    return [entry.status() for entry in live_run.registry.values()]
-
-  return [
-    llm_mcp.FunctionTool(job, name='job', description=_JOB_DESCRIPTION, variables=variables),
-    llm_mcp.FunctionTool(poll, name='poll', description=_POLL_DESCRIPTION, variables=variables),
-    llm_mcp.FunctionTool(kill, name='kill', description=_KILL_DESCRIPTION, variables=variables),
-    llm_mcp.FunctionTool(jobs, name='jobs', description=_JOBS_DESCRIPTION, variables=variables),
-  ]
-
-
 _WATCH_DESCRIPTION = (
   'start an admitted shell command as a detached producer for the rest of this session. the '
   'command must match this persona’s shell roster whole and exact; unrestricted personas may '
@@ -679,12 +545,12 @@ def _watch_tools(
     return watches.session_store() if live_run is None else live_run.watch_store
 
   def watch(command: str) -> str:
-    admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
+    admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
     started = store().start(admitted)
     return f'watching `{started.command}`'
 
   def unwatch(command: str) -> str:
-    admitted = _admit_shell_command(command, commands=commands, unrestricted=unrestricted)
+    admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
     store().stop(admitted)
     return f'stopped watching `{admitted}`'
 
@@ -696,12 +562,11 @@ def _watch_tools(
   ]
 
 
-# the service roster's tool names — the closed `#tools` universe the service
-# descriptions render against
-_SERVICE_TOOL_NAMES = (
+# the core service roster's tool names. Each service server extends this closed
+# `#tools` universe with the selected harness's own tools.
+_CORE_SERVICE_TOOL_NAMES = (
   'banner',
   'cast',
-  'skill',
   'raise',
   'answer',
   'summon',
@@ -714,10 +579,6 @@ _SERVICE_TOOL_NAMES = (
   'quest_cancel',
   'watch',
   'unwatch',
-  'job',
-  'poll',
-  'kill',
-  'jobs',
 )
 
 
@@ -731,13 +592,13 @@ def _build_service_server(
   # built only on the paths that serve a bro, never at construction: deriving the
   # FunctionTool schemas below pulls the mcp/fastmcp stack (~1s), which metadata
   # surfaces (credential scoping, prompt composition, `bro show`) must not pay.
-  # the roster is decided by the caller's surface and local process state:
+  # the core roster is decided by the caller's surface and local process state:
   # `banner` is unconditional; `cast` needs spells and its optional secret;
-  # `skill` bridges only harnesses without a native loader; `raise` only makes
-  # sense non-interactively (a caller to abort to — interactive callers pass
-  # include_raise=False); `answer` is the summoned run's delivery surface — it
-  # needs the summoned mark, broker intent, and a harness able to end this
-  # session; the summon tools need the same intent. The decided roster then feeds the tools'
+  # `raise` only makes sense non-interactively (a caller to abort to — interactive
+  # callers pass include_raise=False); `answer` is the summoned run's delivery
+  # surface — it needs the summoned mark, broker intent, and a harness able to end
+  # this session; the summon tools need the same intent. The harness contributes
+  # the tools it serves itself. The combined roster then feeds the tools'
   # rendering vocabulary: service tools are harness features, the one tool
   # surface that conditions on system facts, so `#harness` is injected next to
   # the `#tools` roster.
@@ -749,14 +610,21 @@ def _build_service_server(
   has_answer = has_broker and summoned() and session_harness.can_end_session()
   selection = bro._selected_tools_for(harness)
   has_watches = selection.shell_declared
-  has_jobs = name_of(harness) == 'bro' and (
-    selection.shell_unrestricted or len(selection.shell_commands) > 0
-  )
+  harness_tools = session_harness.own_tools(bro, live_run)
+  harness_tool_names = tuple(tool.name for tool in harness_tools)
+  duplicate_names = {
+    name
+    for name in harness_tool_names
+    if harness_tool_names.count(name) > 1 or name in _CORE_SERVICE_TOOL_NAMES
+  }
+  if len(duplicate_names) > 0:
+    raise ValueError(
+      f'harness {session_harness.name!r} owns duplicate service tools: {sorted(duplicate_names)}'
+    )
+
   mounted = ['banner']
   if has_cast:
     mounted.append('cast')
-  if name_of(harness) == 'bro':
-    mounted.append('skill')
   if include_raise:
     mounted.append('raise')
   if has_answer:
@@ -776,18 +644,16 @@ def _build_service_server(
     )
   if has_watches:
     mounted.extend(['watch', 'unwatch'])
-  if has_jobs:
-    mounted.extend(['job', 'poll', 'kill', 'jobs'])
+  mounted.extend(harness_tool_names)
+  tool_universe = (*_CORE_SERVICE_TOOL_NAMES, *harness_tool_names)
   variables: Variables = {
     **mcp.surface_variables(harness=harness),
-    'tools': SetVariable(frozenset(mounted), universe=frozenset(_SERVICE_TOOL_NAMES)),
+    'tools': SetVariable(frozenset(mounted), universe=frozenset(tool_universe)),
   }
 
   tools: list[llm_mcp.Tool] = [_banner_tool(bro, live_run, variables)]
   if has_cast:
     tools.append(spell_store.build_cast_tool(bro, harness=harness))
-  if name_of(harness) == 'bro':
-    tools.append(spell_store.build_skill_tool())
   if include_raise:
     tools.append(_raise_tool(session_harness, variables))
   if has_answer:
@@ -810,20 +676,10 @@ def _build_service_server(
         variables=variables,
       )
     )
-  if has_jobs:
-    if live_run is None:
-      raise RuntimeError('job tools require a live run')
-    tools.extend(
-      _job_tools(
-        live_run=live_run,
-        commands=selection.shell_commands,
-        unrestricted=selection.shell_unrestricted,
-        variables=variables,
-      )
-    )
+  tools.extend(harness_tools)
   assert [tool.name for tool in tools] == mounted
   server = llm_mcp.InProcessMCPServer('bro', tools)
-  server.tool_universe = _SERVICE_TOOL_NAMES
+  server.tool_universe = tool_universe
   return server
 
 
