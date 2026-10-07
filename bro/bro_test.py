@@ -1,9 +1,7 @@
 import asyncio
 import contextlib
 import json
-import os
 import shlex
-import signal
 import threading
 import time
 from pathlib import Path
@@ -19,12 +17,12 @@ import bro.workspace.banner as workspace_banner
 from bro import watches
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, when
-from bro.bro import BaseBro, BroRaised, feature
+from bro.bro import BaseBro, feature
 from bro.broker.environment import BROKER_TALK
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManPage, ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.harness import claude
+from bro.harness import Harness, SessionEndReason, claude
 from bro.inbox import Inbox
 from bro.jobs import Job, Registry
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, Tool
@@ -1217,11 +1215,27 @@ async def _find_tool(
   raise AssertionError(f'no {name!r} tool on the service server')
 
 
-async def _find_raise_tool(bro: BaseBro):
-  for tool in await _service_server(bro).list_tools():
+async def _find_raise_tool(bro: BaseBro, harness: mcp.HarnessLike = 'bro'):
+  for tool in await _service_server(bro, harness=harness).list_tools():
     if tool.name == 'raise':
       return tool
   raise AssertionError('raise tool not found on bro service server')
+
+
+class EndingHarness(Harness):
+  name = 'ending'
+
+  def __init__(self, *, available: bool = True):
+    super().__init__()
+    self.available = available
+    self.calls: list[tuple[str, SessionEndReason]] = []
+
+  def can_end_session(self) -> bool:
+    return self.available
+
+  async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
+    self.calls.append((result, end_reason))
+    return 'session ended'
 
 
 class TestRaise:
@@ -1239,107 +1253,46 @@ class TestRaise:
       assert 'raise' not in names
 
   @pytest.mark.asyncio
-  async def test_raise_tool_raises_bro_raised(self):
-    bro = EchoBro()
-    tool = await _find_raise_tool(bro)
-    with pytest.raises(BroRaised) as exception:
-      await tool.call({'reason': 'missing api key'})
-    assert exception.value.reason == 'missing api key'
+  async def test_raise_tool_ends_through_the_harness(self):
+    harness = EndingHarness()
+    tool = await _find_raise_tool(EchoBro(), harness)
 
-
-class TestMCPRaise:
-  """the MCP flavor records the abort and terminates its managed runner."""
-
-  async def _mcp_raise_tool(self):
-    server = bro_module._build_service_server(EchoBro(), include_raise=True, harness='claude')
-    for tool in await server.list_tools():
-      if tool.name == 'raise':
-        return tool
-    raise AssertionError('raise tool not found on the mcp service build')
+    assert await tool.call({'reason': 'missing api key'}) == 'session ended'
+    assert harness.calls == [('missing api key', 'raised')]
 
   @pytest.mark.asyncio
-  async def test_mcp_raise_records_channel_and_kills_the_runner(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
-    channel = MagicMock()
-    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
-    kills: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._mcp_raise_tool()
-    await tool.call({'reason': 'missing api key'})
-    channel.completed.assert_called_once_with('missing api key', 'raised')
-    channel.close.assert_called_once_with()
-    assert kills == [(4242, signal.SIGTERM)]
-
-  @pytest.mark.asyncio
-  async def test_mcp_raise_kills_without_a_channel(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
-    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: None)
-    kills: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._mcp_raise_tool()
-    await tool.call({'reason': 'no tool fits'})
-    assert kills == [(4242, signal.SIGTERM)]
-
-  @pytest.mark.asyncio
-  async def test_mcp_raise_kills_even_when_the_channel_emission_fails(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
-    channel = MagicMock()
-    channel.completed.side_effect = ConnectionError('channel closed')
-    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
-    kills: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._mcp_raise_tool()
-    with pytest.raises(ConnectionError):
-      await tool.call({'reason': 'broker down'})
-    assert kills == [(4242, signal.SIGTERM)]
-
-  @pytest.mark.asyncio
-  async def test_raise_description_forks_on_harness(self):
-    mcp_tool = await self._mcp_raise_tool()
-    native_tool = await _find_raise_tool(EchoBro())
-    assert 'terminates the session' in mcp_tool.description
-    assert 'terminates the session' not in native_tool.description
+  async def test_raise_description_states_the_session_end_for_every_harness(self):
+    for harness in (EndingHarness(), Harness('identity-only')):
+      tool = await _find_raise_tool(EchoBro(), harness)
+      assert 'ends the session' in tool.description
+      assert '{{' not in tool.description
 
 
 class TestAnswer:
-  """the summoned run's delivery tool: mounted only where a summoned child can
-  actually send the terminal, ending the run by exception (bro harness) or by
-  channel emission + session termination (claude harness)."""
-
-  async def _names(self, harness) -> set[str]:
+  async def _names(self, harness: Harness) -> set[str]:
     server = bro_module._build_service_server(EchoBro(), include_raise=False, harness=harness)
     return {tool.name for tool in await server.list_tools()}
 
   @pytest.mark.asyncio
-  async def test_mounted_for_a_summoned_run_with_a_channel(self, monkeypatch):
+  async def test_mounted_exactly_when_the_harness_can_end_a_summoned_run(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    assert 'answer' in await self._names('bro')
+
+    assert 'answer' in await self._names(EndingHarness())
+    assert 'answer' not in await self._names(EndingHarness(available=False))
 
   @pytest.mark.asyncio
   async def test_unmounted_without_the_summoned_mark_or_channel(self, monkeypatch):
+    harness = EndingHarness()
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    assert 'answer' not in await self._names('bro')
+    assert 'answer' not in await self._names(harness)
     monkeypatch.delenv('BROKER_CHANNEL')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    assert 'answer' not in await self._names('bro')
+    assert 'answer' not in await self._names(harness)
 
-  @pytest.mark.asyncio
-  async def test_claude_flavor_needs_a_killable_session(self, monkeypatch):
+  async def _tool(self, harness: EndingHarness, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    assert 'answer' not in await self._names('claude')
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    assert 'answer' in await self._names('claude')
-
-  async def _tool(self, harness, monkeypatch, tmp_path):
-    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    monkeypatch.setenv('RIDE_SUMMONED', '1')
-    monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
     server = bro_module._build_service_server(EchoBro(), include_raise=False, harness=harness)
     for tool in await server.list_tools():
       if tool.name == 'answer':
@@ -1347,53 +1300,23 @@ class TestAnswer:
     raise AssertionError('answer tool not found on the service build')
 
   @pytest.mark.asyncio
-  async def test_native_answer_ends_the_run_with_the_answer(self, monkeypatch, tmp_path):
-    tool = await self._tool('bro', monkeypatch, tmp_path)
-    with pytest.raises(bro_module.AnswerDelivered) as exception:
-      await tool.call({'answer': 'the verdict'})
-    assert exception.value.answer == 'the verdict'
+  async def test_answer_ends_through_the_harness(self, monkeypatch):
+    harness = EndingHarness()
+    tool = await self._tool(harness, monkeypatch)
+
+    assert await tool.call({'answer': 'the verdict'}) == 'session ended'
+    assert harness.calls == [('the verdict', 'ok')]
+    assert 'ends the session' in tool.description
+    assert '{{' not in tool.description
 
   @pytest.mark.asyncio
-  async def test_native_answer_rejects_oversize_output_before_ending(self, monkeypatch, tmp_path):
-    tool = await self._tool('bro', monkeypatch, tmp_path)
+  async def test_answer_rejects_oversize_output_before_ending(self, monkeypatch):
+    harness = EndingHarness()
+    tool = await self._tool(harness, monkeypatch)
+
     with pytest.raises(ValueError, match='answer too large; mint an artifact'):
       await tool.call({'answer': 'x' * ((64 << 10) + 1)})
-
-  @pytest.mark.asyncio
-  async def test_mcp_answer_records_the_terminal_and_kills_the_runner(self, monkeypatch, tmp_path):
-    channel = MagicMock()
-    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
-    kills: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('claude', monkeypatch, tmp_path)
-    await tool.call({'answer': 'the verdict'})
-    channel.completed.assert_called_once_with('the verdict', 'ok')
-    channel.close.assert_called_once_with()
-    assert kills == [(4242, signal.SIGTERM)]
-
-  @pytest.mark.asyncio
-  async def test_mcp_answer_rejects_oversize_output_without_killing(self, monkeypatch, tmp_path):
-    channel = MagicMock()
-    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: channel)
-    kills = []
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('claude', monkeypatch, tmp_path)
-    with pytest.raises(ValueError, match='answer too large; mint an artifact'):
-      await tool.call({'answer': 'x' * ((64 << 10) + 1)})
-    assert kills == []
-    channel.completed.assert_not_called()
-
-  @pytest.mark.asyncio
-  async def test_mcp_answer_without_a_channel_spares_the_session(self, monkeypatch, tmp_path):
-    # unlike raise, an undeliverable answer must not kill the session — the
-    # summoner would never hear it; the agent gets the error instead
-    monkeypatch.setattr('bro.bro.RunLifecycle.from_env', lambda: None)
-    kills: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: kills.append((pid, sig)))
-    tool = await self._tool('claude', monkeypatch, tmp_path)
-    with pytest.raises(RuntimeError, match='cannot reach the summoner'):
-      await tool.call({'answer': 'the verdict'})
-    assert kills == []
+    assert harness.calls == []
 
 
 class TestSessionModePrompts:

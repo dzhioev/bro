@@ -257,6 +257,7 @@ PYTEST_FILES = [
   'ride/ride/flags_test.py',
   'ride/ride/scope_report_test.py',
   'ride/ride/claude/assembly_test.py',
+  'ride/ride/claude/harness_test.py',
   'ride/ride/claude/mcp_test.py',
   'ride/ride/claude/runner_test.py',
   'ride/ride/claude/shell_prefix_test.py',

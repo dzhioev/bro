@@ -4,12 +4,15 @@ import sys
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
-from bro.base import credentials
-from bro.harness import Harness
+from bro.base import credentials, log
+from bro.base.offload import off_loop
+from bro.harness import Harness, SessionEndReason
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV
+from bro.run_lifecycle import RunLifecycle
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
+from bro.workspace.session import terminate_session
 from ride.claude import claude_release
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import (
@@ -42,8 +45,47 @@ def llm_spec(spec: 'SessionSpec | SessionRun') -> LLMSpec:
   return resolved
 
 
+def _complete_and_terminate(result: str) -> None:
+  channel = RunLifecycle.from_env()
+  if channel is None:
+    raise RuntimeError(
+      'no broker channel: the answer cannot reach the summoner; surface it to the user instead'
+    )
+  log.info('answer delivered to the summoner')
+  channel.completed(result, 'ok')
+  channel.close()
+  terminate_session(status=0)
+
+
+def _raise_and_terminate(result: str, status: int) -> None:
+  log.warning('raise: %s', result)
+  try:
+    channel = RunLifecycle.from_env()
+    if channel is not None:
+      channel.completed(result, 'raised')
+      channel.close()
+  finally:
+    terminate_session(status=status)
+
+
 class ClaudeHarness(Harness):
   name = 'claude'
+
+  def can_end_session(self) -> bool:
+    return os.environ.get('RIDE_RUNNER_PID') is not None
+
+  async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
+    from bro.bro import RAISE_EXIT_STATUS
+
+    if not self.can_end_session():
+      raise RuntimeError('claude harness cannot end this session')
+    if end_reason == 'ok':
+      await off_loop(_complete_and_terminate, result)
+      return 'the answer is recorded and the session is being terminated. Stop working now.'
+    if end_reason == 'raised':
+      await off_loop(_raise_and_terminate, result, RAISE_EXIT_STATUS)
+      return 'the abort is recorded and the session is being terminated. Stop working now.'
+    raise ValueError(f'unsupported session end reason {end_reason!r}')
 
   def scope_recipe(self) -> ScopeRecipe:
     return _SCOPE

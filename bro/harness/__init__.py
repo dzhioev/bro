@@ -2,14 +2,16 @@
 
 import importlib.metadata
 import re
-from typing import cast
+from typing import Literal, cast
+
+SessionEndReason = Literal['ok', 'raised']
 
 ENTRY_POINT_GROUP = 'bro.harnesses'
 _NAME = re.compile(r'[a-z][a-z0-9-]*')
 
 
 class Harness:
-  """The framework-visible identity of one driving harness."""
+  """The framework-visible interface of one driving harness."""
 
   name: str
 
@@ -18,6 +20,15 @@ class Harness:
       self.name = harness_name(name)
     else:
       harness_name(self.name)
+
+  def can_end_session(self) -> bool:
+    """Whether this harness can end its current session."""
+    return False
+
+  async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
+    """End the current session with its terminal result."""
+    del result, end_reason
+    raise RuntimeError(f'harness {self.name!r} cannot end this session')
 
 
 def harness_name(value: str) -> str:
