@@ -5,6 +5,7 @@ import pytest
 
 import ride.claude.claude_config as ride_claude_config
 import ride.workspace.docker as workspace_docker
+from bro.monitor import encode_project_path
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -221,5 +222,6 @@ class TestWorkspaceProjectsDir:
 
   def test_worktree_workspace_encodes_its_tree_path(self, tmp_path):
     worktree = Workspace.create('ws', tmp_path / 'project', Isolation.UNBOXED)
-    encoded = str(worktree.tree).replace('/', '-').replace('.', '-')
-    assert ride_claude_config.workspace_projects_dir(worktree) == self._projects(worktree, encoded)
+    assert ride_claude_config.workspace_projects_dir(worktree) == self._projects(
+      worktree, encode_project_path(worktree.tree)
+    )

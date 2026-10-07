@@ -402,6 +402,7 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/input_channels_llm_test.py',
   'ride/ride/claude/interrupt_llm_test.py',
   'ride/ride/claude/mcp_timeout_llm_test.py',
+  'ride/ride/claude/project_dir_llm_test.py',
   'ride/ride/claude/shell_prefix_llm_test.py',
   'ride/ride/claude/watch_waiter_llm_test.py',
 ]
