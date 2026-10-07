@@ -72,8 +72,9 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 ## Rendering surfaces
 
 `bro.mcp.render_text(text, harness=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows.
-`may_summon` is the session's `launch.bro.bros` set as described in `bro/reference/conditions.md`;
-the other facts, `#hold`'s single-purpose supply rule included, are documented there too.
+A registered `Harness` contributes its capability facts and passages through `Harness.facts()`;
+`may_summon` is the session's `launch.bro.bros` set as described in `bro/reference/conditions.md`.
+The other facts, `#hold`'s single-purpose supply rule included, are documented there too.
 `extra` merges a caller-owned vocabulary next to them
 — the bro surfaces pass the owning bro's `#features` — and the renderer resolves `{{include}}` targets through the `prompts` loader.
 Each surface renders its copy once, with its own facts:
@@ -85,7 +86,7 @@ Each surface renders its copy once, with its own facts:
   the bro-native loop uses the bro branch, while a managed Claude session uses the Claude branch
 - tool descriptions and parameter annotations
   — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`;
-  the bro service-tool build additionally injects `#harness`), so no unprocessed directive leaves a server and a standalone server serves final text
+  the bro service-tool build additionally injects the system and harness-contributed facts), so no unprocessed directive leaves a server and a standalone server serves final text
   — see `bro/reference/conditions.md` "Server-domain vocabularies"
 - data-source summaries — `DataSource.rendered_summary()`, the source's vocabulary again, rendered where the prompt composes
 - credential install hooks — `bro.base.credentials.CredentialKind` renders each registry kind's `install` text with `#name` bound to the kind, its own single-variable vocabulary like the server-domain ones
@@ -94,5 +95,5 @@ Each surface renders its copy once, with its own facts:
   `render=False` opts a source out entirely, for a doc whose payload is the directive syntax itself (this reference and `bro/reference/conditions.md`)
 
 Authoring rule for prompt files
-— fork with directives rather than writing dual-surface prose
+— condition on a declared harness capability or insert a harness-supplied passage, keeping `#harness` for a distinction no fact covers rather than writing dual-surface prose
 — lives in `bro/prompts/AGENTS.md`.

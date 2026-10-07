@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
   from collections.abc import Iterable
 
-  from bro.mcp import HarnessLike
+  from bro.harness import Harness
 
 
 class PromptLoader:
@@ -45,7 +45,7 @@ get_prompt = _loader.get_prompt
 def session_fragment(
   hold: str,
   *,
-  harness: Optional['HarnessLike'] = None,
+  harness: 'Harness',
   creds: Optional['Iterable[str]'] = None,
   talk: Optional['Iterable[str]'] = None,
 ) -> str:
@@ -78,7 +78,7 @@ def session_fragment(
 def hold_fragment(
   hold: str,
   *,
-  harness: Optional['HarnessLike'] = None,
+  harness: 'Harness',
   creds: Optional['Iterable[str]'] = None,
 ) -> str:
   """render the hold fragment for `hold` — the one rendering path, so the

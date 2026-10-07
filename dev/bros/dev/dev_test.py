@@ -4,6 +4,7 @@ import bro.mcp as mcp
 from bro import spells as spell_store
 from bro.base.condition import SetVariable
 from bro.dev import references
+from bro.harness import get_harness
 from bro.spells import load_spell
 from bro.summon import LAUNCH_ENV, encode_launch
 from bros.dev import Dev
@@ -72,6 +73,17 @@ def test_development_spells_render_for_every_surface():
               )
             },
           )
+
+
+def test_gate_timeout_guidance_is_harness_neutral():
+  bro = _TrackerDev()
+  marker = 'explicit timeout large enough for the full run'
+
+  for spell_name in ('run-pr', 'bump-bro'):
+    native = bro.get_spell_body(spell_name, harness=get_harness('bro'))
+    claude = bro.get_spell_body(spell_name, harness=get_harness('claude'))
+    assert marker in native
+    assert marker in claude
 
 
 def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):

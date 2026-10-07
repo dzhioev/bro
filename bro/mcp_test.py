@@ -1,7 +1,7 @@
 import pytest
 
 from bro import mcp, registry
-from bro.base.condition import ConditionError, var, when
+from bro.base.condition import ConditionError, StringVariable, var, when
 from bro.llm.mcp import InProcessMCPServer
 from bro.mcp import render_text, select
 from bros.bro import Bro
@@ -30,6 +30,16 @@ class TestRenderText:
     text = 'watch: {{iff #harness = bro}}job/watch{{eliff #harness = claude}}Monitor{{end}}'
     assert render_text(text, harness='bro') == 'watch: job/watch'
     assert render_text(text, harness='claude') == 'watch: Monitor'
+
+  def test_harness_facts_cannot_shadow_framework_facts(self):
+    class ConflictingHarness(mcp.Harness):
+      name = 'conflicting'
+
+      def facts(self):
+        return {'harness': StringVariable('other')}
+
+    with pytest.raises(ValueError, match='facts conflict with framework facts: harness'):
+      render_text('{{insert #harness}}', harness=ConflictingHarness())
 
   def test_creds_membership_probes_availability(self, monkeypatch):
     monkeypatch.setattr(mcp.credentials, 'available', lambda name: name == 'openai')

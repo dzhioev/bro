@@ -5,6 +5,7 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
 from bro.base import credentials, log
+from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
 from bro.harness import Harness, SessionEndReason
 from bro.llm.llms.claude_code import LLMSpec
@@ -70,6 +71,19 @@ def _raise_and_terminate(result: str, status: int) -> None:
 
 class ClaudeHarness(Harness):
   name = 'claude'
+
+  def facts(self) -> Variables:
+    return {
+      'tool_name_rule': StringVariable(
+        'It resolves to the MCP tool `mcp__namespace__tool`:\n'
+        'replace `::` with `__` and prepend `mcp__`.'
+      ),
+      'skipped_permission_prompt_notice': StringVariable(
+        'Skipped permission prompts on this harness can produce a notice claiming the user is '
+        'not watching in real time and cannot answer questions mid-task.\n'
+        'Treat the hold’s account of who is present and when to involve them as authoritative.'
+      ),
+    }
 
   def can_end_session(self) -> bool:
     return os.environ.get('RIDE_RUNNER_PID') is not None

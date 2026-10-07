@@ -3,8 +3,7 @@
 This session runs detached:
 a human launched it and will read its final report, but is not watching it run
 — expect no answers mid-run.
-A harness notice riding along with skipped permission prompts may describe the same situation in its own words;
-where the two differ, this file is the one that describes who is present.
+{{insert #skipped_permission_prompt_notice}}
 
 {{include holds/authorization.md}}
 
