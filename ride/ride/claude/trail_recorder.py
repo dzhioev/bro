@@ -9,7 +9,7 @@ leave a linear conversation linear; only a history copy opens a trail of its own
 
 The daemon decides none of that. It reports what it can see — the segment name,
 its lines' record uuids and digests, and the sibling segment files sharing those
-records — and blazes with that evidence; the store's harness resolver answers
+records — and blazes with that evidence; the Claude trail format's resolver answers
 with the trail recording from here, the ordinal to append from, and the line
 ranges that trail owns, or declines a transcript claude has not finished writing
 (`bro/trails/claude_lineage.py`). The daemon then uploads those ranges and keeps
@@ -41,7 +41,7 @@ from bro.base.args import Parser
 from bro.launch.hold import session_hold
 from bro.monitor import SESSION_DIR_ENV, health, trail_pointer, working_projects_dir
 from bro.summon import summoned_by_from_env
-from bro.trails.backends import CLAUDE_ADAPTER
+from bro.trails.claude_format import CLAUDE_FORMAT
 from bro.trails.model import BlazeRequest, payload_sha256
 from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
@@ -97,7 +97,7 @@ def _projected_messages(records: list[str], offset: int) -> list[dict]:
   projects the rows they become. a recording token holds no read permission, so
   a trail's own writer derives what it needs from what it wrote."""
   return project_messages(
-    CLAUDE_ADAPTER,
+    CLAUDE_FORMAT,
     [{'step_id': offset + index, 'body': record} for index, record in enumerate(records)],
     {'tool_call', 'user_input'},
   )
@@ -134,7 +134,7 @@ def _read_lines_after(path: Path, byte_offset: int) -> tuple[list[str], int]:
 
 
 def _record_uuid(raw: str) -> Optional[str]:
-  entry = CLAUDE_ADAPTER.parse(raw).native['record']
+  entry = CLAUDE_FORMAT.parse(raw).native['record']
   uuid = entry.get('uuid') if isinstance(entry, dict) else None
   return uuid if isinstance(uuid, str) else None
 

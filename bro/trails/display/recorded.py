@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
+from bro.trails import backends
 from bro.trails.display.core import DisplayDataError
 from bro.trails.display.records import (
   AssistantText,
@@ -135,14 +136,7 @@ def _format_pointer(pointer: Any) -> str:
 
 
 def _owner(header: dict[str, Any]) -> str | None:
-  if header.get('harness') == 'claude':
-    location = header.get('location')
-    if not isinstance(location, dict):
-      return None
-    workspace = location.get('workspace')
-    return workspace if isinstance(workspace, str) else None
-  bro = header.get('bro')
-  return bro if isinstance(bro, str) else None
+  return backends.get_format(header['harness']).owner(header)
 
 
 def _model(header: dict[str, Any]) -> str | None:
@@ -153,32 +147,7 @@ def _model(header: dict[str, Any]) -> str | None:
 
 
 def _native_header_fields(header: dict[str, Any]) -> list[tuple[str, Any]]:
-  harness = header['harness']
-  native = header.get('native')
-  if not isinstance(native, dict):
-    raise ValueError('trail native metadata must be an object')
-  fields: list[tuple[str, Any]] = [('llm', native.get('llm', {}))]
-  if harness == 'bro':
-    counts = native.get('step_counts_by_kind')
-    if isinstance(counts, dict):
-      fields.append(('step kinds', {key: value for key, value in counts.items() if value != 0}))
-  elif harness == 'claude':
-    fields.extend(
-      [
-        ('claude-code', native.get('harness_version', '?')),
-        ('lines', header.get('extent', '?')),
-        ('segment', native.get('segment', '?')),
-      ]
-    )
-  else:
-    fields.append(('native', native))
-  if native.get('ride_command') is not None:
-    fields.append(('ride', native['ride_command']))
-  # trails blazed by `cw`, the runtime preceding `ride`, carry the launch
-  # command under its own name
-  elif harness == 'claude' and native.get('cw_command') is not None:
-    fields.append(('cw', native['cw_command']))
-  return fields
+  return backends.get_format(header['harness']).native_header_fields(header)
 
 
 class RecordedAdapter:

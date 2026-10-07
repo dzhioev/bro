@@ -42,16 +42,16 @@ class Operations:
     trails_table: str,
     steps_table: str,
     bucket: str,
-    backend: Callable[[str], Any],
-    required_header: Callable[[str], Any],
-    resolve_row_body: Callable[..., Any],
+    format_for: Callable[[str], backends.TrailFormat],
+    required_header: Callable[[str], dict],
+    resolve_row_body: Callable[[dict], dict],
   ):
     self._dynamo = dynamo
     self._s3 = s3
     self._trails_table = trails_table
     self._steps_table = steps_table
     self._bucket = bucket
-    self._backend = backend
+    self._format_for = format_for
     self._required_header = required_header
     self._resolve_row_body = resolve_row_body
 
@@ -82,9 +82,9 @@ class Operations:
   def seal(self, header: dict, end: Optional[dict]) -> dict:
     """Refold the header from every stored row and record `end`."""
     trail_id = header['id']
-    adapter = self._backend(header['harness'])
-    resolved = [self._resolve_row_body(header['harness'], row) for row in self._all_rows(trail_id)]
-    fields = importing.sealed_fields(header, resolved, adapter, end)
+    trail_format = self._format_for(header['harness'])
+    resolved = [self._resolve_row_body(row) for row in self._all_rows(trail_id)]
+    fields = importing.sealed_fields(header, resolved, trail_format, end)
     try:
       self._write_fold(
         trail_id,
@@ -137,9 +137,9 @@ class Operations:
 
   def _compute(self, header: dict, stored: list[dict]) -> dict:
     header = formats.upgrade_header(header)
-    adapter = self._backend(header['harness'])
-    resolved = [self._resolve_row_body(header['harness'], row) for row in stored]
-    state, replayed = rows.replay(header, resolved, adapter)
+    trail_format = self._format_for(header['harness'])
+    resolved = [self._resolve_row_body(row) for row in stored]
+    state, replayed = rows.replay(header, resolved, trail_format)
     row_differences: list[dict] = []
     billing_counts: dict[str, int] = {}
     for expected_step_id, (row, resolved_row, expected) in enumerate(
@@ -271,7 +271,7 @@ class Operations:
       raise ValueError('delete_count exceeds the trail extent')
     timestamp = dynamo_types.now_iso()
     manifest_key = dynamo_types.relink_manifest_key(trail_id, timestamp)
-    deleted = [self._resolve_row_body(header['harness'], row) for row in stored[:delete_count]]
+    deleted = [self._resolve_row_body(row) for row in stored[:delete_count]]
     manifest = {
       'operation': 'relink',
       'at': timestamp,
@@ -342,7 +342,7 @@ class Operations:
           trail_id=trail_id,
           at=timestamp,
           header=header,
-          steps=[self._resolve_row_body(header['harness'], row) for row in stored],
+          steps=[self._resolve_row_body(row) for row in stored],
         ),
         ensure_ascii=False,
       ).encode('utf-8'),

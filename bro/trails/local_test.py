@@ -1,5 +1,6 @@
 import contextlib
 import hashlib
+import importlib.metadata
 import json
 import stat
 import threading
@@ -79,6 +80,43 @@ def test_records_and_replays_bro_trails(tmp_path):
   assert trail.header.bro == 'dev'
   assert (tmp_path / 'trails' / trail_id / 'header.json').is_file()
   assert (tmp_path / 'trails' / trail_id / 'steps.jsonl').is_file()
+
+
+def test_store_loads_only_the_selected_format(tmp_path, monkeypatch):
+  entries = (
+    importlib.metadata.EntryPoint(
+      'broken', 'missing.trail_format:FORMAT', backends.ENTRY_POINT_GROUP
+    ),
+    importlib.metadata.EntryPoint(
+      'bro', 'bro.trails.bro_format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
+    ),
+  )
+  monkeypatch.setattr(backends, '_entry_points', lambda: entries)
+
+  store = LocalStore(tmp_path)
+  assert store.blaze(_bro_request())['id']
+
+
+def test_import_refuses_a_missing_format_and_a_bro_format_without_a_bro(tmp_path, monkeypatch):
+  source = LocalStore(tmp_path / 'source')
+  trail_id = source.blaze(_bro_request())['id']
+  header = source.get_trail(trail_id)
+  destination = LocalStore(tmp_path / 'destination')
+  monkeypatch.setattr(backends, '_entry_points', lambda: ())
+
+  with pytest.raises(ValueError, match="trail format 'bro' is not installed"):
+    destination.begin_import(header)
+
+  entry = importlib.metadata.EntryPoint(
+    'bro', 'bro.trails.bro_format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
+  )
+  monkeypatch.setattr(backends, '_entry_points', lambda: (entry,))
+  without_bro = dict(header)
+  without_bro.pop('bro')
+  with pytest.raises(ValueError, match='bro is required for the bro trail format'):
+    destination.begin_import(without_bro)
+
+  assert destination.begin_import(header)['created'] is True
 
 
 def test_reads_a_store_without_write_access(tmp_path):

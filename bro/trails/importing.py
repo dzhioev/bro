@@ -16,7 +16,7 @@ _IMPORT_STATE = 'importing'
 _PARENT_POINTERS = (('forked_from', 'forked from'), ('summoned_by', 'summoned by'))
 
 
-def imported_header(header: dict, adapter: backends.Adapter) -> dict:
+def imported_header(header: dict, trail_format: backends.TrailFormat) -> dict:
   """The unsealed header an import creates from a recorded one: every field as
   recorded but the read projections, the fold-owned fields and `end`, with the
   server-derived native fold cleared down to the minted lineage cuts, and the
@@ -61,8 +61,10 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
     location=upgraded.get('location'),
     git=upgraded.get('git'),
   )
-  adapter.validate_create(upgraded_native)
-  recorded_native.update(rows.replayed_native(adapter, upgraded))
+  trail_format.validate_create(upgraded_native)
+  if trail_format.requires_bro and upgraded.get('bro') is None:
+    raise ValueError(f'bro is required for the {trail_format.name} trail format')
+  recorded_native.update(rows.replayed_native(trail_format, upgraded))
   imported = {
     key: value
     for key, value in header.items()
@@ -82,11 +84,11 @@ def imported_header(header: dict, adapter: backends.Adapter) -> dict:
   return imported
 
 
-def import_identity(header: dict, adapter: backends.Adapter) -> dict:
+def import_identity(header: dict, trail_format: backends.TrailFormat) -> dict:
   """What decides whether two recorded headers describe the same trail: the
   imported header in this reader's shape, its format label and import mark
   aside."""
-  identity = imported_header(formats.upgrade_header(header), adapter)
+  identity = imported_header(formats.upgrade_header(header), trail_format)
   del identity['format']
   del identity[_IMPORT_STATE]
   return identity
@@ -126,14 +128,14 @@ def require_parents(
 
 def verify_same_import(
   trail_id: str,
-  adapter: backends.Adapter,
+  trail_format: backends.TrailFormat,
   existing: dict,
   imported: dict,
 ) -> None:
   """Raise unless the trail already stored is the one being imported: the
   same identity, then the same import under way, or a sealed trail with the
   recorded extent and end."""
-  if import_identity(existing, adapter) != import_identity(imported, adapter):
+  if import_identity(existing, trail_format) != import_identity(imported, trail_format):
     raise collision(trail_id, 'header differs')
   announced = imported[_IMPORT_STATE]
   pending = import_state(existing)
@@ -171,11 +173,11 @@ def verify_complete(trail_id: str, pending: dict, stored_extent: int) -> None:
 
 
 def validate_rows(
-  trail_id: str, offset: int, records: list[Any], adapter: backends.Adapter
+  trail_id: str, offset: int, records: list[Any], trail_format: backends.TrailFormat
 ) -> None:
   """Refuse recorded rows an import carries for `trail_id` from `offset` unless
   each names its ordinal, is in a format this reader knows, and parses under
-  the adapter."""
+  the trail format."""
   for step_id, row in enumerate(records, start=offset):
     with refusing_invalid_requests(f'imported row {trail_id}/{step_id}'):
       if not isinstance(row, dict):
@@ -185,7 +187,7 @@ def validate_rows(
       if row.get('step_id') != step_id:
         raise ValueError(f'row carries step {row.get("step_id")!r}')
       rows.row_digest(row)
-      adapter.parse(formats.upgrade_row(row))
+      trail_format.parse(formats.upgrade_row(row))
 
 
 def verify_same_rows(trail_id: str, stored: list[dict], incoming: list[dict]) -> None:
@@ -199,7 +201,7 @@ def verify_same_rows(trail_id: str, stored: list[dict], incoming: list[dict]) ->
 
 
 def sealed_fields(
-  header: dict, stored: list[dict], adapter: backends.Adapter, end: Optional[dict]
+  header: dict, stored: list[dict], trail_format: backends.TrailFormat, end: Optional[dict]
 ) -> dict:
   """The header fields a seal writes: the aggregate refolded from every stored
   row, and the recorded `end`. A subject the header already carries stays, and
@@ -209,7 +211,7 @@ def sealed_fields(
   for step_id, row in enumerate(stored):
     if row.get('step_id') != step_id:
       raise ValueError(f'trail {trail_id} rows are not contiguous at step {step_id}')
-  state, _ = rows.replay(formats.upgrade_header(header), stored, adapter)
+  state, _ = rows.replay(formats.upgrade_header(header), stored, trail_format)
   fields = rows.state_fields(state, len(stored))
   recorded_native = {
     key: value

@@ -1,13 +1,17 @@
-"""Harness adapters for native records, aggregate classification, and projection."""
+"""Trail-format interface and installed format registry."""
 
+import importlib.metadata
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
-from bro.trails import claude_lineage
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import BlazeRequest
+
+ENTRY_POINT_GROUP = 'bro.trail_formats'
+_FORMAT_NAME = re.compile(r'[a-z][a-z0-9-]*')
 
 # the native header fields a store folds from a trail's rows
 SERVER_DERIVED_NATIVE_FIELDS = frozenset({'usage', 'step_counts_by_kind', 'lineage_head'})
@@ -21,25 +25,6 @@ ATTACH_CONTENDED = 'the trail advanced while attaching'
 # index answers a lineage lookup on, so an attaching lifetime restamps its own
 # facts over the header but never the identity that lookup found it by
 _MINTED_NATIVE_FIELDS = frozenset({'segment'})
-
-BRO_STEP_KINDS = frozenset(
-  {
-    'system_prompt',
-    'user_input',
-    'notification',
-    'tool_result',
-    'llm_call',
-    'error',
-  }
-)
-
-# the kinds whose body a reader is entitled to read as text: they project into a
-# message whose content carries no other shape, so a body that is not a string
-# leaves the trail unrenderable rather than merely odd
-BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input', 'notification'})
-
-# the origin claude gives the prompt it writes when a background task finishes
-_CLAUDE_TASK_NOTIFICATION = 'task-notification'
 
 
 @dataclass(frozen=True)
@@ -73,23 +58,89 @@ class HeaderRestamp:
 
 
 @dataclass(frozen=True)
-class Adapter:
+class TrailFormat:
+  name: str
   parse: Callable[[Any], ParsedRecord]
   classify: Callable[[ParsedRecord], Classification]
   project: Callable[[dict], list[dict]]
   open: Callable[[dict], OpenedBody]
   validate_create: Callable[[dict], None]
   emitted_message_types: frozenset[str]
-  # evidence, plus whatever row reads the store offers a resolver, to a verdict
+  requires_bro: bool
+  owner: Callable[[dict], Optional[str]]
+  native_header_fields: Callable[[dict], list[tuple[str, Any]]]
   resolve_lineage: Optional[Callable[[dict, Any], LineageDecision]] = None
 
+  def __post_init__(self) -> None:
+    format_name(self.name)
 
-def resolve_lineage(adapter: Adapter, request: BlazeRequest, index: Any) -> LineageDecision:
-  """The harness verdict for a blaze carrying lineage evidence."""
+
+def format_name(value: str) -> str:
+  """Validate and return a trail-format name."""
+  if not isinstance(value, str) or _FORMAT_NAME.fullmatch(value) is None:
+    raise ValueError(f'invalid trail-format name {value!r}; expected [a-z][a-z0-9-]*')
+  return value
+
+
+def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
+  return tuple(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+
+
+def installed_format_names() -> tuple[str, ...]:
+  """Installed trail-format names, read without importing their implementations."""
+  names: set[str] = set()
+  for entry in _entry_points():
+    format_name(entry.name)
+    if entry.name in names:
+      raise ValueError(f'duplicate trail format {entry.name!r}')
+    names.add(entry.name)
+  return tuple(sorted(names))
+
+
+def _format_not_installed(name: str, installed_names: tuple[str, ...]) -> ValueError:
+  installed = ', '.join(installed_names) or '(none)'
+  return ValueError(f'trail format {name!r} is not installed; installed trail formats: {installed}')
+
+
+def get_format(name: str) -> TrailFormat:
+  """Load one installed trail format lazily."""
+  format_name(name)
+  matches = [entry for entry in _entry_points() if entry.name == name]
+  if len(matches) == 0:
+    raise _format_not_installed(name, installed_format_names())
+  if len(matches) > 1:
+    raise ValueError(f'duplicate trail format {name!r}')
+  loaded = matches[0].load()
+  if not isinstance(loaded, TrailFormat):
+    raise TypeError(f'trail-format entry point {name!r} must load a TrailFormat instance')
+  trail_format = cast(TrailFormat, loaded)
+  if trail_format.name != name:
+    raise ValueError(
+      f'trail-format entry point {name!r} loads a format named {trail_format.name!r}'
+    )
+  return trail_format
+
+
+class FormatRegistry:
+  """A process-local cache over the installed trail-format entry points."""
+
+  def __init__(self):
+    self._formats: dict[str, TrailFormat] = {}
+
+  def get(self, name: str) -> TrailFormat:
+    if name not in self._formats:
+      self._formats[name] = get_format(name)
+    return self._formats[name]
+
+
+def resolve_lineage(
+  trail_format: TrailFormat, request: BlazeRequest, index: Any
+) -> LineageDecision:
+  """The trail format's verdict for a blaze carrying lineage evidence."""
   assert request.lineage is not None
-  if adapter.resolve_lineage is None:
-    raise ValueError(f'the {request.harness} harness does not resolve lineage')
-  return adapter.resolve_lineage(request.lineage, index)
+  if trail_format.resolve_lineage is None:
+    raise ValueError(f'the {request.harness} trail format does not resolve lineage')
+  return trail_format.resolve_lineage(request.lineage, index)
 
 
 def blaze_result(
@@ -147,15 +198,20 @@ def add_numeric_maps(left: dict, right: dict) -> dict:
   return result
 
 
-def _source(record: dict, index: int = 0) -> dict:
+def projected_source(record: dict, index: int = 0) -> dict:
   return {'step_id': record['step_id'], 'index': index}
 
 
-def _event(record: dict, event_type: str, index: int = 0, **fields: Any) -> dict:
-  return {'type': event_type, 'ts': record.get('ts'), 'source': _source(record, index), **fields}
+def projected_event(record: dict, event_type: str, index: int = 0, **fields: Any) -> dict:
+  return {
+    'type': event_type,
+    'ts': record.get('ts'),
+    'source': projected_source(record, index),
+    **fields,
+  }
 
 
-def _parse_json_object(raw: str) -> Optional[dict]:
+def parse_json_object(raw: str) -> Optional[dict]:
   try:
     value = json.loads(raw)
   except json.JSONDecodeError:
@@ -163,421 +219,7 @@ def _parse_json_object(raw: str) -> Optional[dict]:
   return value if isinstance(value, dict) else None
 
 
-def _bro_parse(payload: Any) -> ParsedRecord:
-  if not isinstance(payload, dict):
-    raise ValueError('bro record must be an object')
-  kind = payload.get('kind')
-  if not isinstance(kind, str) or kind not in BRO_STEP_KINDS:
-    raise ValueError(f'bro record kind must be one of {sorted(BRO_STEP_KINDS)}')
-  body = payload.get('body')
-  if kind in BRO_TEXT_BODY_KINDS and not isinstance(body, str):
-    raise ValueError(f'bro {kind} body must be a string')
-  timestamp = payload.get('ts')
-  if timestamp is not None and not isinstance(timestamp, str):
-    raise ValueError('bro record ts must be a string')
-  omitted = {
-    'trail_id',
-    'step_id',
-    'kind',
-    'body',
-    'body_s3',
-    'ts',
-    'usage',
-    'raw',
-    'record',
-    'payload_sha256',
-    'format',
-  }
-  attributes = {key: value for key, value in payload.items() if key not in omitted}
-  return ParsedRecord(
-    kind=kind,
-    body=body,
-    timestamp=timestamp,
-    attributes=attributes,
-    native=dict(payload),
-  )
-
-
-def _bro_classify(record: ParsedRecord) -> Classification:
-  if record.kind == 'user_input':
-    return Classification(turn_delta=1)
-  if record.kind != 'llm_call' or not isinstance(record.body, dict):
-    return Classification()
-  response = record.body.get('response')
-  if not isinstance(response, dict):
-    return Classification()
-  usage = response.get('usage')
-  if not isinstance(usage, dict):
-    return Classification()
-  return Classification(usage_model=str(response.get('model', 'unknown')), usage=usage)
-
-
-def _bro_open(body: dict) -> OpenedBody:
-  unknown = set(body) - {'records'}
-  if len(unknown) > 0:
-    raise ValueError(f'unknown bro body fields: {sorted(unknown)}')
-  records = body.get('records')
-  if not isinstance(records, list):
-    raise ValueError('bro body.records must be a list')
-  return OpenedBody(records=records)
-
-
-def _validate_server_derived(native: dict) -> None:
+def validate_server_derived(native: dict) -> None:
   sent = SERVER_DERIVED_NATIVE_FIELDS & set(native)
   if len(sent) > 0:
     raise ValueError(f'native {", ".join(sorted(sent))} are server-derived')
-
-
-def _bro_validate_create(native: dict) -> None:
-  _validate_server_derived(native)
-  if not isinstance(native.get('llm'), dict):
-    raise ValueError('native.llm is required for the bro harness')
-  if 'ride_command' in native and not isinstance(native['ride_command'], str):
-    raise ValueError('native.ride_command must be a string')
-
-
-def _bro_llm_call_messages(record: dict) -> list[dict]:
-  body = record.get('body')
-  response = body.get('response') if isinstance(body, dict) else None
-  if not isinstance(response, dict):
-    return [_event(record, 'harness_event', raw=record)]
-  usage = record.get('usage')
-  if not isinstance(usage, dict):
-    raw_usage = response.get('usage')
-    usage = raw_usage if isinstance(raw_usage, dict) else {}
-  call_fields: dict[str, Any] = {
-    'model': str(response.get('model', 'unknown')),
-    'usage': usage,
-  }
-  if 'service_tier' in response:
-    call_fields['service_tier'] = response['service_tier']
-  events = [_event(record, 'llm_call', **call_fields)]
-  output = response.get('output')
-  if not isinstance(output, list):
-    return events
-  terminal = not any(
-    isinstance(item, dict) and item.get('type') == 'function_call' for item in output
-  )
-  for index, item in enumerate(output, start=1):
-    if not isinstance(item, dict):
-      events.append(_event(record, 'harness_event', index, raw=item))
-      continue
-    item_type = item.get('type')
-    if item_type == 'reasoning':
-      summary = item.get('summary')
-      if not isinstance(summary, list):
-        events.append(_event(record, 'harness_event', index, raw=item))
-        continue
-      for part in summary:
-        if isinstance(part, dict) and part.get('type') == 'summary_text':
-          text = part.get('text')
-          if isinstance(text, str) and len(text) > 0:
-            events.append(_event(record, 'reasoning', index, content=text))
-    elif item_type == 'message':
-      content = item.get('content')
-      if not isinstance(content, list):
-        events.append(_event(record, 'harness_event', index, raw=item))
-        continue
-      text = ''.join(
-        part.get('text', '')
-        for part in content
-        if isinstance(part, dict)
-        and part.get('type') == 'output_text'
-        and isinstance(part.get('text'), str)
-      )
-      if len(text) > 0:
-        events.append(_event(record, 'assistant', index, content=text, terminal=terminal))
-    elif item_type == 'function_call':
-      raw_arguments = item.get('arguments')
-      try:
-        arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-      except json.JSONDecodeError:
-        arguments = {'_raw_arguments': raw_arguments}
-      events.append(
-        _event(
-          record,
-          'tool_call',
-          index,
-          tool_name=item.get('name'),
-          call_id=item.get('call_id'),
-          arguments=arguments,
-        )
-      )
-    else:
-      events.append(_event(record, 'harness_event', index, raw=item))
-  return events
-
-
-def _bro_project(record: dict) -> list[dict]:
-  kind = record.get('kind')
-  if kind == 'llm_call':
-    return _bro_llm_call_messages(record)
-  if kind in {'system_prompt', 'user_input', 'notification', 'tool_result', 'error'}:
-    fields: dict[str, Any] = {'content': record.get('body')}
-    for key in ('tool_name', 'arguments', 'call_id', 'is_error'):
-      if key in record:
-        fields[key] = record[key]
-    return [_event(record, kind, **fields)]
-  return [_event(record, 'harness_event', raw=record)]
-
-
-def _claude_parse(payload: Any) -> ParsedRecord:
-  raw = payload.get('body') if isinstance(payload, dict) else payload
-  if not isinstance(raw, str):
-    raise ValueError('claude record must be a raw JSONL string')
-  record = _parse_json_object(raw)
-  timestamp = record.get('timestamp') if isinstance(record, dict) else None
-  if timestamp is not None and not isinstance(timestamp, str):
-    timestamp = None
-  kind_value = record.get('type') if isinstance(record, dict) else None
-  kind = kind_value if isinstance(kind_value, str) else None
-  attributes: dict[str, Any] = {}
-  if isinstance(record, dict):
-    for key in ('uuid', 'isSidechain', 'isMeta'):
-      if key in record:
-        attributes[key] = record[key]
-    message = record.get('message')
-    message_id = message.get('id') if isinstance(message, dict) else None
-    if isinstance(message_id, str):
-      attributes['message_id'] = message_id
-  return ParsedRecord(
-    kind=kind,
-    body=raw,
-    timestamp=timestamp,
-    attributes=attributes,
-    native={'raw': raw, 'record': record},
-  )
-
-
-def _claude_tool_results_only(message: dict) -> bool:
-  content = message.get('content')
-  return isinstance(content, list) and all(
-    isinstance(block, dict) and block.get('type') == 'tool_result' for block in content
-  )
-
-
-def _claude_classify(record: ParsedRecord) -> Classification:
-  native = record.native.get('record')
-  if not isinstance(native, dict):
-    return Classification()
-  native_updates: dict[str, Any] = {}
-  version = native.get('version')
-  if isinstance(version, str):
-    native_updates['harness_version'] = version
-  if record.kind == 'ai-title':
-    title = native.get('aiTitle')
-    return Classification(
-      native_updates=native_updates,
-      subject=title if isinstance(title, str) and len(title) > 0 else None,
-    )
-  message = native.get('message')
-  if record.kind == 'user' and isinstance(message, dict):
-    turn_delta = int(native.get('isMeta') is not True and not _claude_tool_results_only(message))
-    return Classification(turn_delta=turn_delta, native_updates=native_updates)
-  if record.kind != 'assistant' or not isinstance(message, dict):
-    return Classification(native_updates=native_updates)
-  usage = message.get('usage')
-  model = str(message.get('model', 'unknown'))
-  if (
-    not isinstance(usage, dict) or model == '<synthetic>' or native.get('isApiErrorMessage') is True
-  ):
-    return Classification(native_updates=native_updates)
-  message_id = message.get('id')
-  return Classification(
-    usage_model=model,
-    usage=usage,
-    billing_key=message_id if isinstance(message_id, str) else None,
-    native_updates=native_updates,
-  )
-
-
-def _claude_open(body: dict) -> OpenedBody:
-  unknown = set(body) - {'records'}
-  if len(unknown) > 0:
-    raise ValueError(f'unknown claude body fields: {sorted(unknown)}')
-  records = body.get('records')
-  if not isinstance(records, list) or not all(isinstance(record, str) for record in records):
-    raise ValueError('claude body.records must be a list of strings')
-  return OpenedBody(records=records)
-
-
-def _claude_validate_create(native: dict) -> None:
-  _validate_server_derived(native)
-  for field, expected_type in (
-    ('llm', dict),
-    ('segment', str),
-    ('ride_command', str),
-    ('harness_version', str),
-  ):
-    if not isinstance(native.get(field), expected_type):
-      raise ValueError(f'native.{field} is required for the claude harness')
-
-
-def _claude_assistant_messages(record: dict, native: dict, message: dict) -> list[dict]:
-  if native.get('isApiErrorMessage') is True:
-    return [_event(record, 'error', content=message.get('content'))]
-  model = str(message.get('model', 'unknown'))
-  raw_usage = message.get('usage')
-  if not isinstance(raw_usage, dict) or model == '<synthetic>':
-    return [_event(record, 'harness_event', raw=native)]
-  events: list[dict] = []
-  contributed_usage = record.get('usage')
-  if isinstance(contributed_usage, dict):
-    events.append(_event(record, 'llm_call', model=model, usage=contributed_usage))
-  content = message.get('content')
-  if not isinstance(content, list):
-    return [*events, _event(record, 'harness_event', 1, raw=native)]
-  for index, block in enumerate(content, start=1):
-    if not isinstance(block, dict):
-      events.append(_event(record, 'harness_event', index, raw=block))
-    elif block.get('type') == 'thinking':
-      events.append(_event(record, 'reasoning', index, content=block.get('thinking')))
-    elif block.get('type') == 'text':
-      events.append(_event(record, 'assistant', index, content=block.get('text')))
-    elif block.get('type') == 'tool_use':
-      events.append(
-        _event(
-          record,
-          'tool_call',
-          index,
-          tool_name=block.get('name'),
-          call_id=block.get('id'),
-          arguments=block.get('input'),
-        )
-      )
-    else:
-      events.append(_event(record, 'harness_event', index, raw=block))
-  return events
-
-
-def _claude_user_messages(record: dict, native: dict, message: dict) -> list[dict]:
-  content = message.get('content')
-  if _claude_tool_results_only(message):
-    assert isinstance(content, list)
-    return [
-      _event(
-        record,
-        'tool_result',
-        index,
-        call_id=block.get('tool_use_id'),
-        content=block.get('content'),
-        is_error=block.get('is_error', False),
-      )
-      for index, block in enumerate(content)
-      if isinstance(block, dict)
-    ]
-  if _claude_origin_kind(native.get('origin')) == _CLAUDE_TASK_NOTIFICATION:
-    return [_event(record, 'notification', content=content, event=_CLAUDE_TASK_NOTIFICATION)]
-  return [
-    _event(
-      record,
-      'user_input',
-      content=content,
-      isMeta=native.get('isMeta', False),
-      isSidechain=native.get('isSidechain', False),
-      # claude writes an interrupt as a user-role notice of its own, so what
-      # separates it from something a human typed is the message it interrupted
-      interrupted='interruptedMessageId' in native,
-    )
-  ]
-
-
-def _claude_origin_kind(origin: Any) -> Optional[str]:
-  kind = origin.get('kind') if isinstance(origin, dict) else None
-  return kind if isinstance(kind, str) else None
-
-
-def _claude_queued_messages(record: dict, native: dict, queued: dict) -> list[dict]:
-  """a prompt claude delivered mid-turn, projected as the `user` record it
-  writes for one that opens a turn."""
-  # claude's own reading: a queued command without an origin that runs in
-  # task-notification mode is a task notification
-  origin_kind = _claude_origin_kind(queued.get('origin'))
-  if origin_kind is None and queued.get('commandMode') == _CLAUDE_TASK_NOTIFICATION:
-    origin_kind = _CLAUDE_TASK_NOTIFICATION
-  if origin_kind == _CLAUDE_TASK_NOTIFICATION:
-    return [
-      _event(record, 'notification', content=queued.get('prompt'), event=_CLAUDE_TASK_NOTIFICATION)
-    ]
-  return [
-    _event(
-      record,
-      'user_input',
-      content=queued.get('prompt'),
-      isMeta=queued.get('isMeta') is True,
-      isSidechain=native.get('isSidechain', False),
-      interrupted=False,
-    )
-  ]
-
-
-def _claude_attachment_messages(record: dict, native: dict, attachment: dict) -> list[dict]:
-  attachment_type = attachment.get('type')
-  if not isinstance(attachment_type, str):
-    return [_event(record, 'harness_event', raw=native)]
-  if attachment_type == 'queued_command':
-    return _claude_queued_messages(record, native, attachment)
-  payload = {key: value for key, value in attachment.items() if key != 'type'}
-  return [_event(record, 'notification', content=payload, event=attachment_type)]
-
-
-def _claude_project(record: dict) -> list[dict]:
-  native = _claude_parse(record).native['record']
-  if not isinstance(native, dict):
-    return [_event(record, 'harness_event', raw=record.get('body'))]
-  message = native.get('message')
-  if native.get('type') == 'assistant' and isinstance(message, dict):
-    return _claude_assistant_messages(record, native, message)
-  if native.get('type') == 'user' and isinstance(message, dict):
-    return _claude_user_messages(record, native, message)
-  attachment = native.get('attachment')
-  if native.get('type') == 'attachment' and isinstance(attachment, dict):
-    return _claude_attachment_messages(record, native, attachment)
-  return [_event(record, 'harness_event', raw=native)]
-
-
-BRO_ADAPTER = Adapter(
-  parse=_bro_parse,
-  classify=_bro_classify,
-  project=_bro_project,
-  open=_bro_open,
-  validate_create=_bro_validate_create,
-  emitted_message_types=frozenset(
-    {
-      'user_input',
-      'notification',
-      'llm_call',
-      'reasoning',
-      'assistant',
-      'tool_call',
-      'tool_result',
-      'system_prompt',
-      'error',
-      'harness_event',
-    }
-  ),
-)
-
-CLAUDE_ADAPTER = Adapter(
-  parse=_claude_parse,
-  classify=_claude_classify,
-  project=_claude_project,
-  open=_claude_open,
-  validate_create=_claude_validate_create,
-  resolve_lineage=claude_lineage.resolve,
-  emitted_message_types=frozenset(
-    {
-      'user_input',
-      'notification',
-      'llm_call',
-      'reasoning',
-      'assistant',
-      'tool_call',
-      'tool_result',
-      'error',
-      'harness_event',
-    }
-  ),
-)
-
-BACKENDS = {'bro': BRO_ADAPTER, 'claude': CLAUDE_ADAPTER}
