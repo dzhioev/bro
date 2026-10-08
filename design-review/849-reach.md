@@ -129,8 +129,17 @@ the tool fold and the persona declarations wait for #754's design and land toget
    and the tools of claude.ai connectors stay disallowed by name (`mcp__claude_ai_*`) as well.
    The test above runs with a project `.mcp.json` in its workspace and holds that none of its tools appear.
    The bro harness serves files with the `dev` toolset, which moves into `bro-native`, and leaves web and delegation unserved, delegation until #863.
-   Every registered persona declares the groups it reaches today, settled by the slice's inventory of the natives each one uses:
-   `terminal` without delegation, which it blocks, and `browser` with none of the four.
+   Every registered persona declares the groups whose natives its Claude trails show it using, plus the groups its bro-harness declaration serves it today,
+   by an inventory of every registered persona's Claude trails since 2026-09-01:
+   - `dev` declares `files()`, `shell(ANY)`, `web()`, and `delegation()`, the last two for bro-dev's `WebFetch`, `WebSearch`, and `Agent` calls, so every dev descendant keeps them;
+     `bro-dev` inherits them.
+   - `eyebro` declares `files()`, `shell(ANY)`, and `web()`, which `bro-eyebro` inherits.
+   - `analyst` and `terminal` declare `files()` and `shell(ANY)`, and `devoops` declares `shell(ANY)`.
+   - `bro`, `lead`, and `browser` declare none of the four.
+     The lead's and the browser's `Bash`, `Monitor`, and `TaskStop` calls in those trails ran the quest-watch commands the fold admitted before landing 1, which the runtime-owned session watch replaced.
+
+   The natives the trails show going off are `AskUserQuestion`, which bro-dev called 57 times and the lead 7, as the interaction policy that puts questions in the turn's text already asks,
+   and `Artifact`, `ScheduleWakeup`, `ExitPlanMode`, `SendFeedback`, and the cron tools, among those #857 lists.
    #870 (read-only and pure tags on tools) can then define the read-only files level by tag rather than by a list each harness keeps.
    `bro/harness/claude.py`'s tool names move into `ride/ride/claude/`.
    With no component conditioned on the harness, a bro has one selection, and the `bro`-harness special case in `_components_for` and `assemble` goes.
@@ -203,6 +212,9 @@ the trails landing deploys the trails server between the two.
 - **Provisioning the LSP server in this landing:**
   sessions lack it today, whatever the mapping;
   settled with the user for #914.
+- **Declaring by reach**, every group a persona does not block today:
+  personas would keep groups their trails never touch, the lead's `web` among them;
+  settled with the user for declaring by use.
 
 ### Landings: the fifth
 
