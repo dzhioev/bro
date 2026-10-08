@@ -334,27 +334,48 @@ class TestRunInteractive:
     assert size.read_text().split() == ['31', '101']
 
 
+class _TranscriptClock:
+  """the clock `interrupt` reads, moving only when it sleeps; a transcript
+  written at each of its first `writes` sleeps, and never after."""
+
+  def __init__(self, transcript: Path, writes: int):
+    self.now = 1_000_000.0
+    self.last_write = self.now
+    self._transcript = transcript
+    self._writes = writes
+    os.utime(transcript, (self.now, self.now))
+
+  def time(self) -> float:
+    return self.now
+
+  def monotonic(self) -> float:
+    return self.now
+
+  def sleep(self, seconds: float) -> None:
+    self.now += seconds
+    if self._writes > 0:
+      self._writes -= 1
+      with self._transcript.open('a') as stream:
+        stream.write('{}\n')
+      os.utime(self._transcript, (self.now, self.now))
+      self.last_write = self.now
+
+
 class TestFlushWait:
   def test_waits_for_the_transcript_to_stop_growing(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(interrupt, '_FLUSH_GRACE_SECONDS', 0.0)
-    monkeypatch.setattr(interrupt, '_FLUSH_SETTLE_SECONDS', 0.1)
     transcripts = tmp_path / 'projects'
     transcripts.mkdir()
     transcript = transcripts / 'session.jsonl'
     transcript.write_text('{}\n')
-    writing_until = time.monotonic() + 0.5
+    # written through more polls than one settle window spans
+    clock = _TranscriptClock(
+      transcript, writes=3 * round(interrupt._FLUSH_SETTLE_SECONDS / interrupt._POLL_SECONDS)
+    )
+    monkeypatch.setattr(interrupt, 'time', clock)
 
-    def _write() -> None:
-      while time.monotonic() < writing_until:
-        with transcript.open('a') as stream:
-          stream.write('{}\n')
-        time.sleep(0.02)  # sleep: subject — a cadence inside the settle window
-
-    writer = threading.Thread(target=_write)
-    writer.start()
     interrupt._await_flush(transcripts)
-    assert time.monotonic() >= writing_until
-    writer.join()
+
+    assert clock.now - clock.last_write >= interrupt._FLUSH_SETTLE_SECONDS
 
   def test_gives_up_on_a_transcript_that_never_settles(self, tmp_path, monkeypatch):
     monkeypatch.setattr(interrupt, '_FLUSH_GRACE_SECONDS', 0.0)
