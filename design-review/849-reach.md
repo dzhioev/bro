@@ -37,12 +37,15 @@ the tool fold and the persona declarations wait for #754's design and land toget
 
 4. **Tool fold, with #754**, landing with the persona declarations.
    The fold produces a harness-neutral reach, and `Harness.serve(reach)` maps it:
-   Claude onto the natives it passes through `--tools` and the shell it narrows behind the command gate, and the bro harness onto its own tools, refusing native names.
+   Claude onto the natives it passes through `--tools` and the shell it narrows behind the command gate, and the bro harness onto its own tools.
+   General code reads two things off what `serve` returns:
+   the server specs the harness mounts for the reach, such as the bro harness's `dev` toolset for `files`, and the groups the harness leaves unserved, which `bro show` lists.
+   Claude's `--tools`, its gates, and its shell pin are the Claude harness's own code, built from the same reach.
    #754's shell syntax and its matcher are general code that the Claude gate, the bro job tool, and `bro::watch` call, and Claude serves `Bash` only where a `shell(...)` entry declares it.
    The persona's files level is an input to the matcher, which admits an output redirect to a file only where files are writable:
    `Harness.serve(reach)` hands it to the gate, and the bro harness reads it beside the roster.
    Under a finite roster, Claude's session shell is bash, since the matcher reads bash grammar, and the gate also denies a `Monitor` call that carries no command, its WebSocket form.
-   #754's pattern syntax and enforcement mechanism are settled in #754's own design, resumed before this slice starts.
+   The roster syntax, the matcher, and where it runs are #754's `## Design`.
 5. **Persona declarations, with #857.**
    A persona declares its reach opt-in on every harness, in the `tools` vocabulary it uses today rather than a syntax of its own:
    the groups are constructors beside `mount` and `cli`, each returning a `ToolLayer` that carries a harness-neutral reach entry, composed with `when` and `iff` as any entry is.
@@ -52,7 +55,7 @@ the tool fold and the persona declarations wait for #754's design and land toget
    and `delegation()`.
    `data_sources` folds into `tools`:
    a data source becomes a `source(...)` entry and a reference page a `man('<topic>')` entry, so a persona declares one list.
-   Every entry has a key:
+   Every entry has a key, its kind with a name, so entries of different kinds never share one, as a toolset namespace and a reference page's topic could:
    a group's name (`files`, `shell`, `web`, `delegation`);
    a mounted toolset's namespace;
    a data source's namespace;
@@ -80,11 +83,27 @@ the tool fold and the persona declarations wait for #754's design and land toget
    `block`, `serve`, `allow_commands`, `claude.block`, and every `when(harness == …)` entry go, since nothing is on until declared.
    The base `bro` persona declares no group, so personas grant what they use rather than revoke what `Bro` grants, and the bare `bro` persona keeps only the loop tools on Claude.
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
-   Claude passes exactly the natives the groups map to through `--tools`, an allowlist, plus the loop tools the slice lists:
-   among them `Skill`, since sessions rely on Claude's own skill loader, and the `LSP` tool the pyright plugin every session enables needs.
-   `ToolSearch` is not what keeps ride's MCP tools reachable, since they load eagerly (`alwaysLoad`);
-   leaving it out only stops Claude deferring its own tools.
-   Everything else is off, including the natives #857 lists, and natives a Claude Code bump adds stay off until mapped.
+   Claude passes exactly the natives the groups map to through `--tools`, an allowlist, plus the loop tools every session gets.
+   On the pinned 2.1.280:
+   - `files(write=False)` maps to `Read`, `Glob`, `Grep`, and `LSP`, which reads the workspace's symbols, definitions, and references for the pyright plugin every session enables;
+     `files()` adds `Write`, `Edit`, and `NotebookEdit`.
+     `Glob` and `Grep` are not in 2.1.280's default set, but serve where named.
+   - `shell(...)` maps to `Bash`, `Monitor`, and `TaskStop`;
+     `Bash` brings Claude's `GetTask`, which delivers a backgrounded command's result.
+   - `web()` maps to `WebFetch` and `WebSearch`, and `delegation()` to `Agent`, `Workflow`, and `TaskStop`.
+   - The loop tools are `Skill`, since sessions rely on Claude's own skill loader, and `ToolSearch`, which `--tools` withholds unless named:
+     it is what reaches the MCP tools that connect after an interactive session's first turn has started (`bro/reference/ride.md`, "Session-local MCP serving").
+   - Where a persona declares no `files`, Claude serves `Read` behind a `PreToolUse` gate that admits only the session's own Claude files:
+     the per-session `CLAUDE_CODE_TMPDIR`, where a backgrounded command writes its output, and the session's folder beside its transcript, whose `tool-results/` holds the whole of a result too large to inline.
+     A persona without `files` thus reads its own output whole and nothing of the workspace.
+
+   `--tools` drops a name the pinned binary does not serve without a word, as it drops `BashOutput`, `KillShell`, and `TaskOutput` on 2.1.280.
+   So a test runs the pinned binary offline with every mapped name and holds each one in its stream-json `init` event,
+   and an `llm` probe holds that a backgrounded command's output and an oversized result land under the read gate's roots;
+   a Claude Code bump that renames a tool or moves those files fails them instead of withdrawing a tool.
+   Everything else is off, including the natives #857 lists, and natives a Claude Code bump adds stay off until mapped:
+   on 2.1.280 that is `AskUserQuestion`, the plan-mode and worktree tools, `ScheduleWakeup`, `PushNotification`, the cron tools, `SendMessage`, `ListAgents`, `RemoteTrigger`, `Artifact`, `DesignSync`, `ReportFindings`, and the task-list tools.
+   The MCP tools of claude.ai connectors stay disallowed by name (`mcp__claude_ai_*`), since `--tools` governs only natives.
    The bro harness serves files with the `dev` toolset, which moves into `bro-native`, and leaves web and delegation unserved, delegation until #863.
    Every registered persona declares the groups it reaches today, settled by the slice's inventory of the natives each one uses:
    `terminal` without delegation, which it blocks, and `browser` with none of the four.
@@ -114,6 +133,11 @@ No landing changes a wire, store, or record format that two separately deployed 
 - The benchmark launcher reads harness names off the manifest of the bundle it builds rather than its own interpreter.
   A bundle built before the registry carries the old manifest format, which the launcher refuses as stale, naming `benchmark bundle` to rebuild it, so a new launcher never reads an old bundle as carrying no harness.
 - A repository that pins the framework adopts each landing through its own bump, which adapts its persona declarations and prompts, and runs the revision it pins until then.
+- Landing 5 changes no contract between separately deployed processes either.
+  `--tools`, the gates' arguments, and the shell pin are built at each launch from the bundle the session runs, so a root started before the install, its children, and a workspace it resumes keep their reach until a fresh root.
+  The matcher's `tree-sitter` pins join `bro`'s `runtime` extra, `bro-ride`, and `bro-native`, never the `trails-server` extra the trails server's image installs, so the server neither changes nor redeploys;
+  the benchmark project relocks for `bro-ride`'s new pins.
+  A repository that pins the framework fails on the removed constructors (`block`, `serve`, `allow_commands`, `claude.block`) until its bump moves its declarations to the reach groups.
 
 Each landing goes live by installing the launcher from master and starting a fresh root;
 the trails landing deploys the trails server between the two.
@@ -122,6 +146,8 @@ the trails landing deploys the trails server between the two.
 
 - Opt-in natives can withhold a tool a persona relied on without naming it, such as LSP or plan mode;
   the persona slice inventories the natives before switching, and `bro show` lists each persona's reach per harness.
+- The native names and the read gate's roots are Claude Code's own and undocumented;
+  the mapping test and the `llm` probe hold them against the pin, and a bump reruns both.
 
 ### Rejected: the reach declarations
 
@@ -133,6 +159,15 @@ the trails landing deploys the trails server between the two.
   the session's permission document and the harness's enforcement are what limit a session.
 - **The tool fold as a landing before the persona declarations:**
   the revision released between them would carry the old declarations over the new fold, a state nobody designed, and no rollout step needs to sit between them.
+- **`LSP` among the loop tools:**
+  it reads the workspace, so a persona without `files`, the browser among them, would read the workspace through it.
+- **Leaving `ToolSearch` out:**
+  `--tools` withholds it unless named, and an interactive session's first turn reaches its late-connecting MCP tools through it.
+- **`Read` only with `files`:**
+  a persona without `files` would see only a preview of an oversized result and none of a backgrounded command's output until it ends, since 2.1.280 serves both as files;
+  settled with the user for the gated `Read`.
+- **`shell(...)` implying `files(write=False)` on Claude:**
+  under a finite roster it would grant the reads the roster withholds.
 
 ### Landings: the fifth
 
@@ -187,20 +222,25 @@ Its inputs are the line, the roster, whether the persona's file reach is writabl
   on the prototype, a generator that nested a sentinel command in these forms found 92 admitted lines that ran it, and none once the word language was cut to the forms above.
 - **Arithmetic and evaluated names are refused.** That means `$(( ))`, `(( ))`, C-style `for`, arrays and array subscripts, and the nameref and integer attributes.
   Bash evaluates text there as an expression or a variable name, so a value such as `a[$(cmd)]` runs `cmd` even from single quotes.
-- **Builtins and keywords.** Every name `compgen -b` and `compgen -k` print for the tested bash is classified:
-  - admitted without an entry, their arguments free:
-    `:`, `true`, `false`, `cd`, `pwd`, `echo`, `exit`, `return`, `break`, `continue`, `shift`, `wait`;
+- **Builtins and keywords.** Every name `compgen -b` and `compgen -k` print for the tested bash is classified, and so is every option a builtin's `help` lists:
+  - admitted without an entry:
+    `:`, `true`, `false`, `cd`, `pwd`, `echo`, `exit`, `return`, `break`, `continue`, and `shift`, their arguments free, and `wait`, whose `-p` binds a name (below);
   - admitted only through an entry, with their evaluating forms refused even then:
     `test` and `[` (a word bash could read as an operator is literal, and never `-v` or `-R`),
-    `printf` (a `-v` name is a literal identifier),
-    `read` and the declaration builtins `export`, `declare`, `typeset`, `local`, `readonly`, `unset` (literal identifiers; no `-n`, `-i`, `-a`, `-A`),
+    `printf`, whose `-v` binds a name,
+    `read`, which binds names and never takes `-a`,
+    the declaration builtins `export`, `declare`, `typeset`, `local`, `readonly`, `unset`, which bind names and never take `-n`, `-i`, `-a`, or `-A`,
     and `kill`, `umask`, `ulimit`, `pushd`, `popd`, `dirs`, `type`;
   - refused, at declaration too:
     every other one, among them those that run text as code (`eval`, `source`, `.`, `exec`, `command`, `builtin`, `trap`, `let`, `mapfile`, `readarray`, `getopts`, `time`, `coproc`),
     those that change how the shell reads what follows (`set`, `shopt`, `alias`, `enable`, `hash`),
     the interactive ones, and the keywords `select`, `function`, and `[[ ]]`;
   - a program name that holds a `/` is a path, never a builtin.
-- **Variables.** A plain assignment or a `for` variable is admitted when its name is not exported in the environment, so `x=$(git merge-base a b); git diff "$x"` works and `PATH=…; git …` does not.
+- **Variables.** Every name a line binds is a literal identifier, admitted only when it is not exported in the environment:
+  a plain assignment, a `for` variable, and a name `read`, `printf -v`, `wait -p`, or a declaration builtin binds.
+  So `x=$(git merge-base a b); git diff "$x"` works, and neither `PATH=…; git …` nor `printf -v PATH …; git …` does.
+  `wait -p` binds a name since bash 5.1:
+  on 5.2.37, `git status & wait -p 'a[$(cmd)]' -n` runs `cmd`, which a `wait` with free arguments would admit.
   Prefix assignments are part of an entry, and the declaration builtins need an entry of their own.
   Reading a variable is free.
 - **Redirects.** Here-documents, here-strings, fd duplication (`2>&1`), and `/dev/null`, `/dev/stdout`, `/dev/stderr` are always admitted.
@@ -233,11 +273,11 @@ Its inputs are the line, the roster, whether the persona's file reach is writabl
 - **Against bash, by corpus.** The lines the spells prescribe, everyday model commands, and every hole found by hand run under the real bash with no programs on `PATH`,
   where `command_not_found_handle` logs each argv bash starts, and with hostile values in the variables the lines read.
   The test fails when bash starts an argv that no simple command the walk admitted could produce.
-- **Against bash, by generation.** An exhaustive generator over a bounded grammar of the admitted constructs (every builtin, keyword, word form, quoting context nested in another, redirect, and here-document)
-  places sentinel commands and single-quoted payloads such as `a[$(sentinel)]` in every position.
+- **Against bash, by generation.** An exhaustive generator over a bounded grammar of the admitted constructs (every builtin with every option its `help` lists, keyword, word form, quoting context nested in another, redirect, and here-document)
+  places sentinel commands and single-quoted payloads such as `a[$(sentinel)]` in every position, an option's argument among them.
   The test fails when the walk admits a line under which bash starts a sentinel.
   It found 92 such lines on the prototype's first walk, and it reruns on every bump of bash, `tree-sitter`, or the grammar.
-- **Classification.** The test fails when `compgen -b` or `compgen -k` prints a name the matcher does not classify.
+- **Classification.** The test fails when `compgen -b` or `compgen -k` prints a name the matcher does not classify, or a builtin's `help` lists an option the matcher does not classify.
 - **Integration.** The gate denies on `Bash` and `Monitor` and passes a match;
   the job tool and `bro::watch` refuse and admit the same lines;
   a finite roster runs Claude's commands in bash.
@@ -278,7 +318,6 @@ Its inputs are the line, the roster, whether the persona's file reach is writabl
 - The corpus and generated tests hold for the bash they run;
   a boxed session runs the runtime image's bash, and an unboxed one the host's, which may be older or newer.
 - The gate costs about 70 ms per call, against about 30 ms for today's exact match, as measured on the prototype.
-- `tree-sitter` 0.26.0 ships no wheel for Intel macOS, where installing builds it from source.
 
 ### Rejected
 
@@ -294,5 +333,7 @@ Its inputs are the line, the roster, whether the persona's file reach is writabl
 - **Enforcement in Claude's shell prefix**: the prefix sees Claude's wrapper (snapshot sourcing, `eval`, cwd tracking) rather than the model's line.
 - **`*` across arguments, or prefix-only entries**: no entry could hold a command to one argument.
 - **A list of builtins argued safe one by one**: the holes sit in bash mechanisms (evaluated names, arithmetic, quoting inside `${…}`), so the matcher refuses the mechanisms, classifies every builtin, and checks both against bash by generation.
+- **Holding only plain assignments and `for` to unexported names**: `printf -v PATH …` and `read PATH` rewrite a roster program's environment as `PATH=…` does;
+  settled with the user for one rule over every name a line binds.
 - **Unwrapping wrappers** (`timeout`, `nice`, `env`) the way Claude Code does:
   more surface for a convenience an entry gives.
