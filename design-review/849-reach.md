@@ -85,7 +85,7 @@ the tool fold and the persona declarations wait for #754's design and land toget
    A harness serves a group with its own strongest tool where it has one and an equivalent elsewhere, and `bro show` lists a group a harness cannot serve as unserved there.
    Claude passes exactly the natives the groups map to through `--tools`, an allowlist, plus the loop tools every session gets.
    On the pinned 2.1.280:
-   - `files(write=False)` maps to `Read`, `Glob`, `Grep`, and `LSP`, which reads the workspace's symbols, definitions, and references for the pyright plugin every session enables;
+   - `files(write=False)` maps to `Read`, `Glob`, `Grep`, and `LSP`, the code intelligence of the pyright plugin every session enables, which reads symbols, definitions, and references across the workspace;
      `files()` adds `Write`, `Edit`, and `NotebookEdit`.
      `Glob` and `Grep` are not in 2.1.280's default set, but serve where named.
    - `shell(...)` maps to `Bash`, `Monitor`, and `TaskStop`;
