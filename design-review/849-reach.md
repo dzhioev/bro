@@ -46,6 +46,10 @@ the tool fold and the persona declarations wait for #754's design and land toget
    `Harness.serve(reach)` hands it to the gate, and the bro harness reads it beside the roster.
    Under a finite roster, Claude's session shell is bash, since the matcher reads bash grammar, and the gate also denies a `Monitor` call that carries no command, its WebSocket form.
    The roster syntax, the matcher, and where it runs are #754's `## Design`.
+   What a harness runs with is what the declaration and ride's own flags produce:
+   `ride solo|along` takes no harness arguments after `--` on either harness, since one appended to Claude's argv could add `--tools`, MCP servers, plugins, settings, or a permission mode
+   (repeated `--tools` lists union on 2.1.280).
+   `bro/reference/ride.md`'s `-- --debug mcp` example goes with them.
 5. **Persona declarations, with #857.**
    A persona declares its reach opt-in on every harness, in the `tools` vocabulary it uses today rather than a syntax of its own:
    the groups are constructors beside `mount` and `cli`, each returning a `ToolLayer` that carries a harness-neutral reach entry, composed with `when` and `iff` as any entry is.
@@ -88,22 +92,39 @@ the tool fold and the persona declarations wait for #754's design and land toget
    - `files(write=False)` maps to `Read`, `Glob`, `Grep`, and `LSP`, the code intelligence of the pyright plugin every session enables, which reads symbols, definitions, and references across the workspace;
      `files()` adds `Write`, `Edit`, and `NotebookEdit`.
      `Glob` and `Grep` are not in 2.1.280's default set, but serve where named.
-   - `shell(...)` maps to `Bash`, `Monitor`, and `TaskStop`;
+     `LSP` fails on first use until sessions get the language server the plugin starts, #914.
+   - `shell(...)` maps to `Bash`, `TaskStop`, and `Monitor`;
      `Bash` brings Claude's `GetTask`, which delivers a backgrounded command's result.
-   - `web()` maps to `WebFetch` and `WebSearch`, and `delegation()` to `Agent`, `Workflow`, and `TaskStop`.
+     2.1.280 withholds `Monitor` while telemetry is off, as the session's settings keep it (`DISABLE_TELEMETRY`);
+     it stays mapped and gated for a version that serves it.
+   - `web()` maps to `WebFetch` and `WebSearch`.
+   - `delegation()` maps to `Agent`, `Workflow`, and `TaskStop`.
+     A delegated agent gets at most the parent's natives, since the allowlist withholds the rest from the whole session:
+     under `--tools Agent,Read`, the `general-purpose` agent, whose definition asks for every tool, had `Agent` and `Read` and no `Bash`.
    - The loop tools are `Skill`, since sessions rely on Claude's own skill loader, and `ToolSearch`, which `--tools` withholds unless named:
      it is what reaches the MCP tools that connect after an interactive session's first turn has started (`bro/reference/ride.md`, "Session-local MCP serving").
-   - Where a persona declares no `files`, Claude serves `Read` behind a `PreToolUse` gate that admits only the session's own Claude files:
-     the per-session `CLAUDE_CODE_TMPDIR`, where a backgrounded command writes its output, and the session's folder beside its transcript, whose `tool-results/` holds the whole of a result too large to inline.
-     A persona without `files` thus reads its own output whole and nothing of the workspace.
+   - Where a persona declares no `files`, Claude serves `Read` behind a `PreToolUse` gate.
+     It admits a path only when the path resolves, symlinks followed, inside one of the calling session's own Claude folders, both named from the hook's input:
+     `claude-<uid>/<project>/<session id>/` under `CLAUDE_CODE_TMPDIR`, where a backgrounded command writes its output,
+     and `<session id>/` beside the transcript, whose `tool-results/` holds the whole of a result too large to inline.
+     Anything else is denied, and so is a path that does not resolve or a hook input the gate cannot read.
+     A persona without `files` thus reads its own output whole and no workspace file through a tool.
+     Claude's own customization, the repository's `CLAUDE.md` and project skills, still loads as in any Claude session, as the repository's instructions rather than reach.
 
    `--tools` drops a name the pinned binary does not serve without a word, as it drops `BashOutput`, `KillShell`, and `TaskOutput` on 2.1.280.
-   So a test runs the pinned binary offline with every mapped name and holds each one in its stream-json `init` event,
-   and an `llm` probe holds that a backgrounded command's output and an oversized result land under the read gate's roots;
-   a Claude Code bump that renames a tool or moves those files fails them instead of withdrawing a tool.
+   So a test runs the pinned binary offline under the session's own settings with each registered persona's mapped names,
+   `ENABLE_TOOL_SEARCH=true` standing in for the first-party API host,
+   and holds its stream-json `init` event against the expected tools, aliases resolved (`Agent` reports as `Task`).
+   `llm` probes hold the rest:
+   a backgrounded command's output and an oversized result land under the read gate's roots, the gate denies a workspace file and a symlink out of those roots,
+   and an `Agent` or `Workflow` child gets no native the parent's allowlist withholds.
+   A Claude Code bump that renames a tool, moves those files, or widens a child fails them instead of changing a persona's reach unseen.
    Everything else is off, including the natives #857 lists, and natives a Claude Code bump adds stay off until mapped:
    on 2.1.280 that is `AskUserQuestion`, the plan-mode and worktree tools, `ScheduleWakeup`, `PushNotification`, the cron tools, `SendMessage`, `ListAgents`, `RemoteTrigger`, `Artifact`, `DesignSync`, `ReportFindings`, and the task-list tools.
-   The MCP tools of claude.ai connectors stay disallowed by name (`mcp__claude_ai_*`), since `--tools` governs only natives.
+   Claude runs with `--strict-mcp-config`, so the persona's own `--mcp-config` is its only MCP source:
+   a repository's `.mcp.json` otherwise loads its servers beside the allowlist, which governs only natives,
+   and the tools of claude.ai connectors stay disallowed by name (`mcp__claude_ai_*`) as well.
+   The test above runs with a project `.mcp.json` in its workspace and holds that none of its tools appear.
    The bro harness serves files with the `dev` toolset, which moves into `bro-native`, and leaves web and delegation unserved, delegation until #863.
    Every registered persona declares the groups it reaches today, settled by the slice's inventory of the natives each one uses:
    `terminal` without delegation, which it blocks, and `browser` with none of the four.
@@ -138,6 +159,9 @@ No landing changes a wire, store, or record format that two separately deployed 
   The matcher's `tree-sitter` pins join `bro`'s `runtime` extra, `bro-ride`, and `bro-native`, never the `trails-server` extra the trails server's image installs, so the server neither changes nor redeploys;
   the benchmark project relocks for `bro-ride`'s new pins.
   A repository that pins the framework fails on the removed constructors (`block`, `serve`, `allow_commands`, `claude.block`) until its bump moves its declarations to the reach groups.
+  A workspace record written before the install carries the session's `arguments`, always empty there, since the record is the resume variant:
+  the new loader drops that field while it is empty and refuses it otherwise, so `ride list` keeps reading those workspaces,
+  and `ride resume` re-executes the recorded bundle before it loads any record (`recorded_runtime_reference`).
 
 Each landing goes live by installing the launcher from master and starting a fresh root;
 the trails landing deploys the trails server between the two.
@@ -168,6 +192,14 @@ the trails landing deploys the trails server between the two.
   settled with the user for the gated `Read`.
 - **`shell(...)` implying `files(write=False)` on Claude:**
   under a finite roster it would grant the reads the roster withholds.
+- **Refusing only the forwarded flags that shape reach:**
+  settled with the user for no forwarded harness arguments at all, so no list of Claude's flags needs keeping current.
+- **Withholding `Skill` from personas without `files`:**
+  `CLAUDE.md` would still load, and only `--bare` skips it, which also drops the hooks a session runs on;
+  settled with the user for naming the customization channels as outside reach.
+- **Provisioning the LSP server in this landing:**
+  sessions lack it today, whatever the mapping;
+  settled with the user for #914.
 
 ### Landings: the fifth
 
@@ -196,6 +228,9 @@ The reference docs say so where they describe `shell(...)`.
   A `*` inside a word matches any text within that one argument, options included (`--since=*`);
   a trailing `...` admits any further arguments, none included.
   An entry with neither admits exactly that command.
+- The entry's own quoting marks what is literal, as bash's does:
+  a quoted `*` matches a star, so `grep -E 'a*b' ...` admits only that pattern, and a quoted `'...'` matches three dots;
+  only an unquoted `*` or a final unquoted `...` is a pattern.
 - Leading `NAME=value` words declare prefix assignments, matched the same way, so `NO_COLOR=1 gh pr list` needs an entry that spells the prefix.
 - Declaration refuses an entry that holds shell operators (an entry names one simple command), a `...` anywhere but last, a program word that is not literal, and a program that the walk admits without an entry or always refuses (below).
 - `ANY` stays unrestricted, and rosters under one key reduce to their union with `ANY` absorbing them, as #849 fixes.
