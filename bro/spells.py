@@ -220,12 +220,9 @@ def _validated_call(
   return spell, arguments
 
 
-async def _interpret(
-  command: str,
-  spells: list[Spell],
-  bro: 'BaseBro',
-  harness: mcp.HarnessLike,
-) -> dict[str, Any] | str:
+async def interpret(command: str, spells: list[Spell]) -> tuple[Spell, dict[str, str]] | str:
+  """the spell a free-form command resolves to among `spells` and the arguments
+  extracted for it, or the interpreter's reason it resolves to none."""
   from bro.llm.mu import JSON, mu
   from bro.prompts import get_prompt
 
@@ -234,14 +231,26 @@ async def _interpret(
     get_prompt('spell_dispatch.prompt'),
     _Interpretation,
     JSON(request),
-    model='gpt-5.6-luna',
+    model='gpt-5.6-terra',
     reasoning_effort='low',
   )
   if interpretation.error is not None:
     if len(interpretation.error.strip()) == 0:
       raise ValueError('spell interpreter returned an empty error')
-    return {'error': interpretation.error}
-  spell, arguments = _validated_call(interpretation, spells)
+    return interpretation.error
+  return _validated_call(interpretation, spells)
+
+
+async def _interpret(
+  command: str,
+  spells: list[Spell],
+  bro: 'BaseBro',
+  harness: mcp.HarnessLike,
+) -> dict[str, Any] | str:
+  resolved = await interpret(command, spells)
+  if isinstance(resolved, str):
+    return {'error': resolved}
+  spell, arguments = resolved
   rendered = _render_spell_call(bro, spell, arguments, harness=harness)
   return f'spell: {_canonical_name(spell)}\n\n{rendered}'
 
