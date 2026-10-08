@@ -33,7 +33,7 @@ class TestRoster:
 
 class TestModelResolution:
   def test_short_name_resolves_within_its_provider(self):
-    assert providers.resolve_model('openai', 'sol') == 'gpt-5.6-sol'
+    assert providers.resolve_model('openai', 'sol') == openai_llm.MODELS['sol']
     assert providers.resolve_model('claude-code', 'fable5') == 'claude-fable-5'
 
   def test_an_unlisted_model_passes_through(self):
@@ -104,21 +104,21 @@ class TestOver:
 
 class TestResolve:
   def test_an_empty_selection_leaves_the_base(self):
-    base = openai_llm.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
+    base = openai_llm.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
     assert providers.resolve(base, providers.LLMSelection()) == base
 
   def test_a_model_alone_keeps_the_bases_other_knobs(self):
-    base = openai_llm.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
+    base = openai_llm.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
     resolved = providers.resolve(base, providers.parse(':terra'))
     assert resolved == openai_llm.LLMSpec(model='gpt-5.6-terra', reasoning_effort='high')
 
   def test_a_provider_selects_its_own_default_recipe(self):
-    base = openai_llm.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
+    base = openai_llm.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
     resolved = providers.resolve(base, providers.parse('openai'))
     assert resolved == openai_llm.LLMSpec()
 
   def test_a_model_of_another_provider_switches_recipes(self):
-    base = openai_llm.LLMSpec(model='gpt-5.6-sol', reasoning_effort='high')
+    base = openai_llm.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
     resolved = providers.resolve(base, providers.parse(':fable5'))
     assert resolved == claude_code.LLMSpec(model='claude-fable-5')
 

@@ -7,7 +7,7 @@ from bros.eyebro import Eyebro
 class BroEyebro(Eyebro):
   name = 'bro-eyebro'
   description = 'bro framework code review: standards, guides, and quality'
-  llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.6-sol', reasoning_effort='xhigh')
+  llm_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='xhigh')
   features = {'github': True}
   data_sources = [
     man('environment'),

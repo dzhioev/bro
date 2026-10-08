@@ -78,7 +78,7 @@ class TestVendorOf:
       ('claude-opus-5', 'anthropic'),
       ('claude-fable-5', 'anthropic'),
       ('claude-haiku-4-5-20251001', 'anthropic'),
-      ('gpt-5.6-sol', 'openai'),
+      ('gpt-6.1-sol', 'openai'),
       ('gpt-5-2025-08-07', 'openai'),
       ('o3-mini', 'openai'),
     ],
