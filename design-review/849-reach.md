@@ -285,8 +285,11 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
 - **Redirects.** brash classifies every redirect form the grammar produces by the open it performs, and refuses any form it does not implement:
   - always admitted: here-documents, here-strings, duplicating or closing a descriptor (`2>&1`, `<&0`, `>&-`), and `/dev/null`, `/dev/stdout`, or `/dev/stderr` as a target;
   - reading a file (`<`, `n<`): admitted from any path, into a command the roster admits;
-  - writing a file (`>`, `>>`, `>|`, `&>`, `&>>`, `>&` onto a file, and each with a descriptor number before it): admitted only where the persona's files reach is writable (`files()`).
+  - writing a file (`>`, `>>`, and `>|`, each with or without a descriptor number before it, and `&>`, `&>>`, and a bare `>&` onto a file, which take none): admitted only where the persona's files reach is writable (`files()`).
 
+  A `>&` or `<&` duplicates or closes when its word is a descriptor number or `-`, and only a bare `>&` with any other word writes a file;
+  one with a descriptor number before it and any other word is refused, as bash refuses it (`2>& out` is an ambiguous redirect).
+  A number before `&>` or `&>>` is the command's argument, as in bash, where `echo 3&> out` writes `3` to `out`.
   The read-write `<>`, which the pinned grammar reads only with a parse error, is refused with it, and so is the `{name}>` fd-variable form.
   brash opens every target itself, after expansion, as a file, so bash's `/dev/tcp/…` and `/dev/udp/…` are ordinary paths there, which no system has.
   A command of redirects alone is not implemented:
