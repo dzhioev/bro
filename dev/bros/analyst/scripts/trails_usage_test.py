@@ -36,7 +36,7 @@ class TestFoldHeaders:
     fold = generate.fold_headers(
       [
         _header('a', 'claude', 'bro-dev', {'claude-opus-5': _ANTHROPIC}),
-        _header('b', 'bro', 'ppp-dev', {'gpt-5.6-sol': _OPENAI}),
+        _header('b', 'bro', 'ppp-dev', {'gpt-6.1-sol': _OPENAI}),
       ]
     )
     assert fold.trails == 2

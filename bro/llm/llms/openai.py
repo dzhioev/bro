@@ -26,8 +26,11 @@ DEFAULT_MODEL = 'gpt-5.6-terra'
 
 # `--model` short names for this provider's models.
 MODELS: dict[str, str] = {
+  'sol': 'gpt-6.1-sol',
+  'luna': 'gpt-6-luna',
+  'astra': 'gpt-6-astra',
   'terra': 'gpt-5.6-terra',
-  'sol': 'gpt-5.6-sol',
+  'luna5.6': 'gpt-5.6-luna',
 }
 
 # how this provider's client failures read in a run's error output
@@ -185,9 +188,205 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 # with this date. Pricing never fetches vendor data at run time.
 PRICE_TABLE = PriceTable(
   source='https://developers.openai.com/api/docs/pricing',
-  as_of=date(2026, 9, 11),
+  as_of=date(2026, 10, 8),
   models=MappingProxyType(
     {
+      'gpt-6.1-sol': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('2.00'),
+                cached_input=Decimal('0.10'),
+                cache_write=Decimal('2.50'),
+                output=Decimal('10.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.20'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('15.00'),
+              ),
+            ),
+            'priority': ContextRates(
+              short=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.20'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('20.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('8.00'),
+                cached_input=Decimal('0.40'),
+                cache_write=Decimal('10.00'),
+                output=Decimal('30.00'),
+              ),
+            ),
+          }
+        ),
+      ),
+      'gpt-6-sol': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('2.00'),
+                cached_input=Decimal('0.20'),
+                cache_write=Decimal('2.50'),
+                output=Decimal('10.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.40'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('15.00'),
+              ),
+            ),
+            'priority': ContextRates(
+              short=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.40'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('20.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('8.00'),
+                cached_input=Decimal('0.80'),
+                cache_write=Decimal('10.00'),
+                output=Decimal('30.00'),
+              ),
+            ),
+          }
+        ),
+      ),
+      'gpt-6-luna': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('0.10'),
+                cached_input=Decimal('0.01'),
+                cache_write=Decimal('0.125'),
+                output=Decimal('0.50'),
+              ),
+              long=TokenRates(
+                input=Decimal('0.20'),
+                cached_input=Decimal('0.02'),
+                cache_write=Decimal('0.25'),
+                output=Decimal('0.75'),
+              ),
+            ),
+            'priority': ContextRates(
+              short=TokenRates(
+                input=Decimal('0.20'),
+                cached_input=Decimal('0.02'),
+                cache_write=Decimal('0.25'),
+                output=Decimal('1.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('0.40'),
+                cached_input=Decimal('0.04'),
+                cache_write=Decimal('0.50'),
+                output=Decimal('1.50'),
+              ),
+            ),
+          }
+        ),
+      ),
+      'gpt-6-astra': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('10.00'),
+                cached_input=Decimal('1.00'),
+                cache_write=Decimal('12.50'),
+                output=Decimal('50.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('20.00'),
+                cached_input=Decimal('2.00'),
+                cache_write=Decimal('25.00'),
+                output=Decimal('75.00'),
+              ),
+            ),
+            'priority': ContextRates(
+              short=TokenRates(
+                input=Decimal('20.00'),
+                cached_input=Decimal('2.00'),
+                cache_write=Decimal('25.00'),
+                output=Decimal('100.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('40.00'),
+                cached_input=Decimal('4.00'),
+                cache_write=Decimal('50.00'),
+                output=Decimal('150.00'),
+              ),
+            ),
+          }
+        ),
+      ),
+      'gpt-5.6-sol': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('4.00'),
+                cached_input=Decimal('0.40'),
+                cache_write=Decimal('5.00'),
+                output=Decimal('20.00'),
+              ),
+              long=TokenRates(
+                input=Decimal('8.00'),
+                cached_input=Decimal('0.80'),
+                cache_write=Decimal('10.00'),
+                output=Decimal('30.00'),
+              ),
+            ),
+          }
+        ),
+      ),
+      'gpt-5.6-luna': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=TokenRates(
+                input=Decimal('0.20'),
+                cached_input=Decimal('0.02'),
+                cache_write=Decimal('0.25'),
+                output=Decimal('1.20'),
+              ),
+              long=TokenRates(
+                input=Decimal('0.40'),
+                cached_input=Decimal('0.04'),
+                cache_write=Decimal('0.50'),
+                output=Decimal('1.80'),
+              ),
+            ),
+            'priority': ContextRates(
+              short=TokenRates(
+                input=Decimal('0.40'),
+                cached_input=Decimal('0.04'),
+                cache_write=Decimal('0.50'),
+                output=Decimal('2.40'),
+              ),
+              long=TokenRates(
+                input=Decimal('0.80'),
+                cached_input=Decimal('0.08'),
+                cache_write=Decimal('1.00'),
+                output=Decimal('3.60'),
+              ),
+            ),
+          }
+        ),
+      ),
       'gpt-5.6-terra': ModelRates(
         long_context_threshold=_LONG_CONTEXT_THRESHOLD,
         service_tiers=MappingProxyType(
@@ -222,7 +421,7 @@ PRICE_TABLE = PriceTable(
             ),
           }
         ),
-      )
+      ),
     }
   ),
 )
