@@ -44,8 +44,8 @@ the tool fold and the persona declarations wait for #754's design and land toget
    #754's roster syntax and brash, the interpreter that runs a finite roster's lines, are general code:
    Claude's command gate rewrites each `Bash` and `Monitor` command into a brash call, and the bro job tool and `bro::watch` start brash where they start `bash -c` today.
    Claude serves `Bash` only where a `shell(...)` entry declares it.
-   The persona's files level is an input to brash, which opens an output redirect only where files are writable:
-   The harness writes it from the reach into the session's brash policy beside the roster when the session starts.
+   The persona's files level is an input to brash, which opens an output redirect only where files are writable;
+   the harness writes it from the reach into the session's brash policy beside the roster when the session starts.
    The gate also denies a `Monitor` call that carries no command, its WebSocket form.
    Claude's own shell needs no pin, since it reads only brash's single-quoted call.
    The roster syntax, brash, and where it runs are #754's `## Design`.
@@ -134,9 +134,10 @@ the tool fold and the persona declarations wait for #754's design and land toget
    - `dev` declares `files()`, `shell(ANY)`, `web()`, and `delegation()`, the last two for bro-dev's `WebFetch`, `WebSearch`, and `Agent` calls, so every dev descendant keeps them;
      `bro-dev` inherits them.
    - `eyebro` declares `files()`, `shell(ANY)`, and `web()`, which `bro-eyebro` inherits.
-   - `analyst` and `terminal` declare `files()` and `shell(ANY)`, and `devoops` declares `shell(ANY)`.
+   - `analyst` and `terminal` declare `files()` and `shell(ANY)`, and `devoops` and `bro-watch-probe`, the conformance probes' bare bro, declare `shell(ANY)`.
    - `bro`, `lead`, and `browser` declare none of the four.
      The lead's and the browser's `Bash`, `Monitor`, and `TaskStop` calls in those trails ran the quest-watch commands the fold admitted before landing 1, which the runtime-owned session watch replaced.
+   - A persona registered on master after this inventory takes its groups by the same rule when the slice lands.
 
    The natives the trails show going off are `AskUserQuestion`, which bro-dev called 57 times and the lead 7, as the interaction policy that puts questions in the turn's text already asks,
    and `Artifact`, `ScheduleWakeup`, `ExitPlanMode`, `SendFeedback`, and the cron tools, among those #857 lists.
@@ -281,11 +282,16 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
   so `x=$(git merge-base a b); git diff "$x"` works and `PATH=…; git …` does not.
   brash looks programs up with its environment's `PATH`.
   Prefix assignments are part of an entry.
-- **Redirects.** Here-documents, here-strings, and fd duplication (`2>&1`) are always admitted.
-  brash opens every other target itself, after expansion, as a file:
-  input from any path, and output (`>`, `>>`, `&>`, `>|`) only where the persona's files reach is writable (`files()`), `/dev/null`, `/dev/stdout`, and `/dev/stderr` aside.
-  bash's `/dev/tcp/…` and `/dev/udp/…` are ordinary paths there, which no system has.
-  The `{name}>` fd-variable form is not implemented.
+- **Redirects.** brash classifies every redirect form the grammar produces by the open it performs, and refuses any form it does not implement:
+  - always admitted: here-documents, here-strings, duplicating or closing a descriptor (`2>&1`, `<&0`, `>&-`), and `/dev/null`, `/dev/stdout`, or `/dev/stderr` as a target;
+  - reading a file (`<`, `n<`): admitted from any path, into a command the roster admits;
+  - writing a file (`>`, `>>`, `>|`, `&>`, `&>>`, `>&` onto a file, and each with a descriptor number before it): admitted only where the persona's files reach is writable (`files()`).
+
+  The read-write `<>`, which the pinned grammar reads only with a parse error, is refused with it, and so is the `{name}>` fd-variable form.
+  brash opens every target itself, after expansion, as a file, so bash's `/dev/tcp/…` and `/dev/udp/…` are ordinary paths there, which no system has.
+  A command of redirects alone is not implemented:
+  bash's `$(< file)` reads a file with no program, which no entry would declare, so `echo "$(< /workspace/secret)"` is refused.
+  The unit tests take each operator under each files level, that case among them.
 - **The refusal.** One message on both harnesses names the refused command or construct, why it was refused, and the roster's entries, and suggests the admitted form where there is one:
   quoting an expansion, `$(…)` for a backtick, an entry to declare.
 
@@ -294,8 +300,9 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
 - **Bro harness.** The job tool and `bro::watch` start a finite roster's line as `brash -c '<line>'` under the job supervisor, where they start `bash -c` today.
   `bro::unwatch` stops the watch whose command it names without admitting it, since stopping never widens reach.
 - **Claude.** The command gate, `ride/ride/claude/watch_guard.py` renamed `command_gate.py`, is the `PreToolUse` hook on `Bash` and `Monitor` wherever the roster is finite.
-  It rewrites the call's command into the runtime's `brash -c '<line>'` through `updatedInput`, which 2.1.280's hook schema carries, so the model writes ordinary lines,
-  and Claude's own shell, bash or zsh, reads only single-quoted arguments, which every version of either reads alike.
+  Through `updatedInput`, which 2.1.280's hook schema carries, it rewrites the call's command into one POSIX-shell argv:
+  the runtime's `brash` by path, `-c`, and the model's line untouched, quoted as `shlex.join` quotes them, with the call's other input fields kept as they are.
+  The model writes ordinary lines, and Claude's own shell, bash or zsh, reads only single-quoted words, which every version of either reads alike, whatever the line holds.
   It denies a `Monitor` call that carries no command, its WebSocket form.
   The gate stays stdlib-only, since brash does the checking.
   The line no longer meets Claude's shell snapshot, whose functions and aliases belong to Claude's shell, not to brash.
@@ -313,7 +320,8 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
 - **By generation.** A generator over brash's grammar nests sentinel commands and single-quoted payloads such as `a[$(sentinel)]` in every construct and quoting context.
   It holds that brash starts no program its roster does not admit, on every path that starts one:
   pipelines, substitutions, process substitutions, background jobs, conditions, and loops.
-- **Integration.** Against the pinned Claude, the gate rewrites `Bash` and `Monitor` calls into brash, a refused command's message reaches the model, and the WebSocket form is denied;
+- **Integration.** Against the pinned Claude, the gate rewrites `Bash` and `Monitor` calls into brash, a refused command's message reaches the model, and the WebSocket form is denied.
+  Lines holding single quotes, newlines, substitutions, and operators round-trip through the rewrite, and Claude's shell starts only brash;
   the job tool and `bro::watch` run lines through brash and refuse the same ones.
 
 ### The contract with #849
