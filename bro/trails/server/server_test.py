@@ -287,12 +287,12 @@ async def test_list_filters_and_rejects_invalid_queries(client):
   )
 
   filtered = await client.get('/v1/trails?harness=claude', headers=_auth())
-  conflicting = await client.get('/v1/trails?harness=claude&bro=dev', headers=_auth())
+  combined = await client.get('/v1/trails?harness=claude&bro=dev', headers=_auth())
   malformed_limit = await client.get('/v1/trails?limit=lots', headers=_auth())
   malformed_step = await client.get('/v1/trails/missing/steps/two', headers=_auth())
 
   assert [trail['harness'] for trail in (await filtered.json())['trails']] == ['claude']
-  assert conflicting.status == 400
+  assert (await combined.json())['trails'] == []
   assert malformed_limit.status == 400
   assert malformed_step.status == 400
 

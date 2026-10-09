@@ -1250,6 +1250,45 @@ def test_list_and_pointer_index_stay_available(components):
   assert [trail['id'] for trail in page['trails']] == [child]
 
 
+def test_list_queries_the_fork_index_and_pages_past_a_page_the_bro_filter_empties(components):
+  store, dynamo, _ = components
+  root = _blaze_bro(store, bro='root')
+  fork = {'trail_id': root, 'step_id': 0, 'index': 2}
+  older = _blaze_bro(store, forked_from=fork)
+  other = _blaze_bro(store, bro='other', forked_from=fork)
+  newer = _blaze_bro(store, forked_from=fork)
+  for second, trail_id in enumerate((older, other, newer)):
+    with dynamo.editing_header(trail_id) as header:
+      header['started_at'] = f'2026-01-01T00:00:0{second}.000000Z'
+  dynamo.queries.clear()
+
+  pages: list[list[str]] = []
+  cursor = None
+  while True:
+    page = store.list_trails(bro='dev', forked_from=root, cursor=cursor, limit=1)
+    pages.append([trail['id'] for trail in page['trails']])
+    cursor = page['next']
+    if cursor is None:
+      break
+
+  assert pages[:3] == [[newer], [], [older]]
+  assert [trail_id for page in pages for trail_id in page] == [newer, older]
+  assert {query['IndexName'] for query in dynamo.queries} == {dynamo_store.FORKED_FROM_INDEX}
+
+
+def test_list_combines_harness_and_bro_on_the_bro_index(components):
+  store, dynamo, _ = components
+  bro_trail = _blaze_bro(store)
+  _blaze_bro(store, bro='other')
+  _blaze_claude(store, bro='dev')
+  dynamo.queries.clear()
+
+  listed = [trail['id'] for trail in store.iter_trails(harness='bro', bro='dev')]
+
+  assert listed == [bro_trail]
+  assert {query['IndexName'] for query in dynamo.queries} == {dynamo_store.BRO_INDEX}
+
+
 def test_sweep_marks_stale_trails_as_inferred_unreported(components):
   store, dynamo, _ = components
   stale = _blaze_bro(store)

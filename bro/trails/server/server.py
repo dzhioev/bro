@@ -508,18 +508,13 @@ async def _handle_relink(request: web.Request) -> web.Response:
 
 @requires(Permission.READ)
 async def _handle_list_trails(request: web.Request) -> web.Response:
-  harness = request.query.get('harness')
-  bro = request.query.get('bro')
-  forked_from = request.query.get('forked_from')
-  if sum(value is not None for value in (harness, bro, forked_from)) > 1:
-    return _error('only one of harness/bro/forked_from may be set', 400)
   store: TrailsStore = request.app['store']
   try:
     result = await _dispatch(
       store.list_trails,
-      harness=harness,
-      bro=bro,
-      forked_from=forked_from,
+      harness=request.query.get('harness'),
+      bro=request.query.get('bro'),
+      forked_from=request.query.get('forked_from'),
       since=request.query.get('since'),
       until=request.query.get('until'),
       cursor=request.query.get('cursor'),

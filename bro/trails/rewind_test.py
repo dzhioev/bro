@@ -111,12 +111,11 @@ class FakeClient:
     selected = []
     for trail in self.trails.values():
       forked_from = filters.get('forked_from')
-      if forked_from is not None:
-        if trail.get('forked_from', {}).get('trail_id') != forked_from:
-          continue
-      elif filters.get('harness') is not None and trail['harness'] != filters['harness']:
+      if forked_from is not None and trail.get('forked_from', {}).get('trail_id') != forked_from:
         continue
-      elif filters.get('bro') is not None and trail.get('bro') != filters['bro']:
+      if filters.get('harness') is not None and trail['harness'] != filters['harness']:
+        continue
+      if filters.get('bro') is not None and trail.get('bro') != filters['bro']:
         continue
       selected.append(trail)
     limit = filters.get('max_items')

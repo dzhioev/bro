@@ -355,6 +355,20 @@ class TestTrailsStoreContract:
       sibling,
     }
 
+  def test_listing_matches_every_selector_given_across_pages(self, trails_store):
+    parent = trails_store.blaze(_bro_request(bro='parent'))['id']
+    fork = {'trail_id': parent, 'step_id': 0}
+    dev_fork = trails_store.blaze(_bro_request(bro='dev', forked_from=fork))['id']
+    trails_store.blaze(_bro_request(bro='other', forked_from=fork))
+    dev = trails_store.blaze(_bro_request(bro='dev'))['id']
+    trails_store.blaze(_claude_request(bro='dev'))
+
+    def listed(**selectors) -> list[str]:
+      return sorted(trail['id'] for trail in trails_store.iter_trails(**selectors, page_size=1))
+
+    assert listed(harness='bro', bro='dev') == sorted([dev_fork, dev])
+    assert listed(bro='dev', forked_from=parent) == [dev_fork]
+
   def test_a_body_field_besides_records_is_refused_for_both_harnesses(self, trails_store):
     body = {'records': [], 'extra': []}
     requests = (_bro_request(body=body), replace(_claude_request(), body=body))

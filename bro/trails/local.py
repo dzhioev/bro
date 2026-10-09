@@ -65,8 +65,6 @@ class LocalStore(TrailsStore):
     cursor: Optional[str] = None,
     limit: Optional[int] = None,
   ) -> dict:
-    if sum(value is not None for value in (harness, bro, forked_from)) > 1:
-      raise ValueError('only one of harness/bro/forked_from may be set')
     page_size = _DEFAULT_PAGE_SIZE if limit is None else limit
     if page_size < 1 or page_size > 100:
       raise ValueError('limit must be between 1 and 100')

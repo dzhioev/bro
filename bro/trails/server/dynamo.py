@@ -1035,23 +1035,26 @@ class DynamoStore(TrailsStore):
     limit: int,
     project: bool,
   ) -> dict:
-    selected = [value is not None for value in (harness, bro, forked_from)]
-    if sum(selected) > 1:
-      raise ValueError('only one of harness/bro/forked_from may be set')
-    if harness is not None:
-      index, partition_name, partition_value = HARNESS_INDEX, 'harness', harness
-    elif bro is not None:
-      index, partition_name, partition_value = BRO_INDEX, 'bro', bro
-    elif forked_from is not None:
-      index, partition_name, partition_value = FORKED_FROM_INDEX, 'forked_from_id', forked_from
-    else:
-      index, partition_name, partition_value = ALL_INDEX, GSI_PK_ATTRIBUTE, GSI_PK_VALUE
+    # most selective first: the first selector given picks the index, the rest filter it
+    selectors = [
+      (index, attribute, value)
+      for index, attribute, value in (
+        (FORKED_FROM_INDEX, 'forked_from_id', forked_from),
+        (BRO_INDEX, 'bro', bro),
+        (HARNESS_INDEX, 'harness', harness),
+      )
+      if value is not None
+    ]
+    if len(selectors) == 0:
+      selectors = [(ALL_INDEX, GSI_PK_ATTRIBUTE, GSI_PK_VALUE)]
+    (index, partition_name, partition_value), *filtered = selectors
     response = self._dynamo.query(
       **_range_query(
         table=self._trails_table,
         index=index,
         partition_name=partition_name,
         partition_value=partition_value,
+        filters={attribute: value for _, attribute, value in filtered},
         since=since,
         until=until,
         limit=limit,
@@ -1150,6 +1153,7 @@ def _range_query(
   index: str,
   partition_name: str,
   partition_value: str,
+  filters: dict[str, str],
   since: Optional[str],
   until: Optional[str],
   limit: int,
@@ -1176,6 +1180,15 @@ def _range_query(
     'ScanIndexForward': False,
     'Limit': limit,
   }
+  if len(filters) > 0:
+    names: dict[str, str] = {}
+    clauses: list[str] = []
+    for position, (attribute, value) in enumerate(filters.items()):
+      names[f'#filter{position}'] = attribute
+      values[f':filter{position}'] = _ddb(value)
+      clauses.append(f'#filter{position} = :filter{position}')
+    kwargs['ExpressionAttributeNames'] = names
+    kwargs['FilterExpression'] = ' AND '.join(clauses)
   if cursor is not None:
     kwargs['ExclusiveStartKey'] = _ddb_item(json.loads(cursor))
   return kwargs
