@@ -14,7 +14,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.8.0
+version: 4.9.0
 ---
 
 {{iff #features contains brog}}
@@ -129,6 +129,7 @@ don't run the gate per checkpoint
 — its one mandatory pass is [[run pr]]'s.
 
 Stop and ask if the approach turns out to need a different direction than the design you put to the user.
+{{when #hold = unattended}}
 
 ### Rescue commits before a raise
 
@@ -136,6 +137,7 @@ Implementing is where the recoverable checkpoints accumulate
 — so if an unresolvable blocker forces a `raise` here:
 
 {{include fragments/rescue_before_raise.md}}
+{{end}}
 
 ## Step 6 — verify
 

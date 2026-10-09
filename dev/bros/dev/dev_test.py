@@ -1,11 +1,7 @@
 from typing import ClassVar
 
-import bro.mcp as mcp
-from bro import spells as spell_store
-from bro.base.condition import SetVariable
 from bro.dev import references
-from bro.harness import get_harness, installed_harness_names
-from bro.spells import load_spell
+from bro.harness import get_harness
 from bro.summon import LAUNCH_ENV, encode_launch
 from bros.dev import Dev
 
@@ -47,29 +43,6 @@ def test_tracker_dev_inherits_shared_and_dev_spells():
   assert 'fix' in bro.spell_paths
   assert '## Spells' in bro.composed_prompt('bro', hold='unattended')
   assert '## Available skills' not in bro.composed_prompt('bro', hold='unattended')
-
-
-def test_development_spells_render_for_every_surface():
-  feature_names = frozenset({'brog'})
-  for path in _TrackerDev().spell_paths.values():
-    spell = load_spell(path.stem, path)
-    for harness in installed_harness_names():
-      for hold in mcp.HOLDS:
-        for enabled in (True, False):
-          for granted in (('eyebro',), ()):
-            mcp.render_text(
-              spell.body,
-              harness=harness,
-              creds=spell_store.credentials.known_names(),
-              may_summon=granted,
-              hold=hold,
-              extra={
-                'features': SetVariable(
-                  lambda name, on=enabled: on,
-                  universe=feature_names,
-                )
-              },
-            )
 
 
 def test_gate_timeout_guidance_is_harness_neutral():

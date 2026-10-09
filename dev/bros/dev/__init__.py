@@ -47,7 +47,8 @@ class Dev(Bro):
     delegation(),
     when(feature('brog'), mount(brog_mcp.toolset)),
     source(references.dev_style),
+    source(references.rebase_conflicts),
     man('extending'),
   ]
-  spells = ('audit.md', 'bump-bro.md', 'fix.md', 'land.md', 'run-pr.md')
+  spells = ('audit.md', 'bump-bro.md', 'fix.md', 'land.md', 'resume-pr.md', 'run-pr.md')
   system_prompt = SYSTEM_PROMPT

@@ -10,11 +10,13 @@ import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro import bro as bro_module, spells as spell_store
 from bro.base.condition import SetVariable
+from bro.base.text_window import window
 from bro.bro import BaseBro
 from bro.harness import get_harness, installed_harness_names
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.prompts import get_prompt
+from bro.registry import create_bro, declared_specs
 from bro.spells import CAST_SECRET, NAMESPACE, load_spell
 from bro.spells_test_helper import SpellPackage, spell_package
 
@@ -152,26 +154,6 @@ class TestSpellStore:
     package = fake_packages('_spell_unknown', {'known': _spell()})
     with pytest.raises(KeyError, match='available: known'):
       package.bro_class()().get_spell_body('missing', harness='bro', hold='unattended')
-
-  def test_checked_in_spells_render_for_every_surface(self):
-    spell_files = sorted((Path(spell_store.__file__).parent.parent / 'bros').glob('*/spells/*.md'))
-    assert len(spell_files) > 0
-    # the closed universe of feature names checked-in spells may condition on;
-    # grow it when a bro declares a new feature
-    feature_names = frozenset({'brog'})
-    for path in spell_files:
-      spell = load_spell(path.stem, path)
-      for name in installed_harness_names():
-        harness = get_harness(name)
-        for hold in mcp.HOLDS:
-          for enabled in (True, False):
-            mcp.render_text(
-              spell.body,
-              harness=harness,
-              creds=spell_store.credentials.known_names(),
-              hold=hold,
-              extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
-            )
 
   def test_spell_body_renders_against_the_bro_features(self, fake_packages, monkeypatch):
     package = fake_packages(
@@ -634,3 +616,40 @@ class TestSpellToolNames:
     assert 'replace `::` with `__` and call that wire name directly' in native
     assert 'prepend `mcp__`' in claude
     assert 'spells `at` on the wire' not in native
+
+
+# room left for each declared parameter's value in a call's `# Arguments`
+# section — a URL, a branch, a short phrase; a spell whose call cannot carry
+# that much fails rather than truncating at cast time
+_ARGUMENT_ROOM = 200
+
+
+@pytest.mark.parametrize('name', sorted(declared_specs()))
+def test_every_spell_call_fits_one_window(name, monkeypatch):
+  # every credential resolves, so `#creds`-gated passages all render and the
+  # widest rendering is the one measured
+  monkeypatch.setattr(spell_store.credentials, 'available', lambda credential: True)
+  bro = create_bro(name)
+  features = bro.vocabulary()['features']
+  assert isinstance(features, SetVariable) and features.universe is not None
+  every_persona = tuple(declared_specs())
+  for spell_name, path in bro.spell_paths.items():
+    spell = load_spell(spell_name, path)
+    arguments = {parameter.name: 'x' * _ARGUMENT_ROOM for parameter in spell.parameters}
+    for harness_name in installed_harness_names():
+      for hold in mcp.HOLDS:
+        for granted in (every_persona, ()):
+          for enabled in (features.universe, frozenset()):
+            body = mcp.render_text(
+              spell.body,
+              harness=get_harness(harness_name),
+              creds=spell_store.credentials.known_names(),
+              may_summon=granted,
+              hold=hold,
+              extra={'features': SetVariable(enabled, universe=features.universe)},
+            ).strip()
+            text = spell_store.call_text(spell, body, arguments)
+            assert window(text, limit=spell_store.WINDOW_LIMIT) == text, (
+              f'spell::{spell_name} of {name} overflows one window on {harness_name} '
+              f'at {hold} ({len(text):,} characters)'
+            )

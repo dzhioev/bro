@@ -1,7 +1,7 @@
 import json
 import re
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, Self
@@ -179,14 +179,21 @@ def _render_spell_call(
   offset: int = 0,
 ) -> str:
   body = bro.get_spell_body(spell.name, harness=harness, hold=hold)
+  return window(call_text(spell, body, arguments), offset=offset, limit=WINDOW_LIMIT)
+
+
+def call_text(spell: Spell, body: str, arguments: Mapping[str, Any]) -> str:
+  """the instructions a call of `spell` returns before windowing: its rendered
+  `body`, then a `# Arguments` section listing the values passed for its
+  declared parameters."""
   passed = [
     f'{parameter.name}: {arguments[parameter.name]}'
     for parameter in spell.parameters
     if parameter.name in arguments
   ]
-  if len(passed) > 0:
-    body = f'{body}\n\n# Arguments\n\n' + '\n'.join(passed)
-  return window(body, offset=offset, limit=WINDOW_LIMIT)
+  if len(passed) == 0:
+    return body
+  return f'{body}\n\n# Arguments\n\n' + '\n'.join(passed)
 
 
 def _validated_call(

@@ -1,8 +1,3 @@
-import bro.mcp as mcp
-from bro import spells as spell_store
-from bro.base.condition import SetVariable
-from bro.harness import installed_harness_names
-from bro.spells import load_spell
 from bros.eyebro import Eyebro
 
 
@@ -31,22 +26,6 @@ def test_github_is_the_reviewers_best_effort_credential():
   bro = Eyebro()
   assert 'github' in bro.optional_secrets(harness='claude')
   assert 'github' not in bro.needed_secrets(harness='claude')
-
-
-def test_review_spells_render_for_every_surface():
-  feature_names = frozenset({'github'})
-  for path in Eyebro().spell_paths.values():
-    spell = load_spell(path.stem, path)
-    for harness in installed_harness_names():
-      for hold in mcp.HOLDS:
-        for enabled in (True, False):
-          mcp.render_text(
-            spell.body,
-            harness=harness,
-            creds=spell_store.credentials.known_names(),
-            hold=hold,
-            extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
-          )
 
 
 def test_review_pr_drives_the_pull_request_only_under_a_github_identity(monkeypatch):

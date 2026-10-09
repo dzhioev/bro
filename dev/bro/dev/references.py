@@ -11,3 +11,13 @@ dev_style = FileSource(
   ),
   path=Path(__file__).resolve().parents[1] / 'prompts' / 'dev' / 'style.md',
 )
+
+rebase_conflicts = FileSource(
+  'rebase-conflicts',
+  summary=(
+    'how to resolve a rebase that stops on a conflict: in-band resolution, '
+    'the escalation bar, and what an unattended session does before it '
+    'raises. Read when a rebase conflicts.'
+  ),
+  path=Path(__file__).resolve().parents[1] / 'prompts' / 'dev' / 'rebase_conflicts.md',
+)
