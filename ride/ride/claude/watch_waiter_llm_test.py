@@ -297,12 +297,12 @@ def test_a_stop_with_a_waiter_pending_ends_the_run_as_stopped(tmp_path: Path, cl
 
 
 def test_a_waiter_that_fails_to_start_fails_the_solo_run(tmp_path: Path, claude: Path) -> None:
-  # a package in the session's cwd shadows ride for the hook's `python -m`, as a
-  # broken install would fail the waiter's import; the live feed would otherwise
-  # hold the session waiting for a wake that never comes
-  _config(tmp_path)
-  shadow = tmp_path / 'ride'
-  shadow.mkdir()
+  # a package on PYTHONPATH shadows ride for the hook's `python -m`, as a broken
+  # install would fail the waiter's import; the live feed would otherwise hold
+  # the session waiting for a wake that never comes
+  config = _config(tmp_path)
+  shadow = tmp_path / 'broken' / 'ride'
+  shadow.mkdir(parents=True)
   (shadow / '__init__.py').write_text('raise ImportError("broken install")\n')
   with watched_session(tmp_path / 'session') as (store, waiters):
     Feed(store, tmp_path / 'lines')
@@ -315,6 +315,7 @@ def test_a_waiter_that_fails_to_start_fails_the_solo_run(tmp_path: Path, claude:
         waiters,
         hooks=watch_waiter_hooks(),
         on_result=lambda reply: None,
+        environment=_environment(config, PYTHONPATH=str(shadow.parent)),
       )
 
 

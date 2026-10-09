@@ -42,6 +42,7 @@ def _dev_persona_namespaces() -> list[str]:
 
 
 def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
+  kwargs.setdefault('resume_session', None)
   kwargs.setdefault('endpoint', _ENDPOINT)
   kwargs.setdefault('brash_policy', None)
   with patch('ride.claude.claude_argv.session_append_prompt', return_value='append text'):
@@ -70,37 +71,49 @@ def _declaring(*layers: ToolLayer) -> BaseBro:
 
 class TestRideSessionLaunch:
   def test_basic_shape(self):
-    launch = _ride_session_launch(_spec(), claude_args=['--foo'])
-    argv = launch.argv
+    argv = _ride_session_launch(_spec()).argv
     assert argv[:2] == ['--model', claude_code.DEFAULT_MODEL]
-    assert '--bare' not in argv
+    assert '--bare' not in argv and '--resume' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
-    assert '--foo' in argv
 
   def test_tools_carry_the_allowlist_the_personas_reach_maps_to(self):
     from bro.registry import create_bro
 
-    argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='dev')).argv
     assert _tools(argv) == list(native_tools.allowlist(create_bro('dev').reach()))
 
-  def test_a_persona_declaring_no_group_keeps_only_the_loop_tools(self, monkeypatch):
+  def test_a_persona_declaring_no_group_keeps_the_loop_tools_and_a_gated_read(self, monkeypatch):
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring())
-    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv
-    assert _tools(argv) == list(native_tools.LOOP)
+    argv = _ride_session_launch(_spec(bro='declaring')).argv
+    assert _tools(argv) == [native_tools.GATED_READ, *native_tools.LOOP]
+    (entry,) = _settings(argv)['hooks']['PreToolUse']
+    assert entry['matcher'] == native_tools.GATED_READ
+    (hook,) = entry['hooks']
+    assert hook['type'] == 'command'
+    assert shlex.split(hook['command']) == module_argv('ride.claude.read_gate')
+
+  @pytest.mark.parametrize('write', [True, False])
+  def test_files_serve_an_ungated_read(self, monkeypatch, write):
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(files(write=write)))
+    argv = _ride_session_launch(_spec(bro='declaring')).argv
+    assert native_tools.GATED_READ in _tools(argv)
+    assert 'PreToolUse' not in _settings(argv)['hooks']
 
   def test_read_only_files_withhold_the_writing_natives(self, monkeypatch):
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(files(write=False)))
-    tools = _tools(_ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv)
+    tools = _tools(_ride_session_launch(_spec(bro='declaring')).argv)
     assert set(native_tools.READ) <= set(tools)
     assert set(native_tools.WRITE).isdisjoint(tools)
 
   def test_a_finite_command_list_runs_bash_and_monitor_through_the_command_gate(
     self, monkeypatch, tmp_path
   ):
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
+    monkeypatch.setattr(
+      'bro.registry.create_bro', lambda name: _declaring(files(), brash('git status'))
+    )
     policy = tmp_path / 'brash-policy.json'
-    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[], brash_policy=policy).argv
+    argv = _ride_session_launch(_spec(bro='declaring'), brash_policy=policy).argv
     assert set(native_tools.SHELL) <= set(_tools(argv))
     hooks = _settings(argv)['hooks']['PreToolUse']
     assert [entry['matcher'] for entry in hooks] == ['Bash', 'Monitor']
@@ -117,10 +130,10 @@ class TestRideSessionLaunch:
     self, monkeypatch, tmp_path
   ):
     with pytest.raises(ValueError, match='brash policy'):
-      _ride_session_launch(_spec(), claude_args=[], brash_policy=tmp_path / 'brash-policy.json')
+      _ride_session_launch(_spec(), brash_policy=tmp_path / 'brash-policy.json')
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
     with pytest.raises(ValueError, match='brash policy'):
-      _ride_session_launch(_spec(bro='declaring'), claude_args=[])
+      _ride_session_launch(_spec(bro='declaring'))
 
   def test_a_summoning_session_without_brash_gets_no_shell(self, monkeypatch):
     from bro.summon import LAUNCH_ENV, encode_launch
@@ -130,18 +143,17 @@ class TestRideSessionLaunch:
       LAUNCH_ENV,
       encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
     )
-    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='declaring')).argv
     assert set(native_tools.SHELL).isdisjoint(_tools(argv))
-    assert 'PreToolUse' not in _settings(argv)['hooks']
+    matchers = [entry['matcher'] for entry in _settings(argv)['hooks']['PreToolUse']]
+    assert matchers == [native_tools.GATED_READ]
 
   def test_an_unrestricted_shell_declares_no_tool_gate(self):
-    assert (
-      'PreToolUse' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['hooks']
-    )
+    assert 'PreToolUse' not in _settings(_ride_session_launch(_spec()).argv)['hooks']
 
   def test_every_session_is_woken_by_the_watch_waiter_at_each_turn_end(self):
     for spec in (_spec(), _spec(solo=True, hold='unattended', prompt='go')):
-      hooks = _settings(_ride_session_launch(spec, claude_args=[]).argv)['hooks']
+      hooks = _settings(_ride_session_launch(spec).argv)['hooks']
       assert 'UserPromptSubmit' not in hooks
       for event in ('Stop', 'StopFailure'):
         (entry,) = hooks[event]
@@ -162,40 +174,37 @@ class TestRideSessionLaunch:
     )
     argv = _ride_session_launch(
       _spec(bro='declaring', solo=True, hold='unattended', prompt='go'),
-      claude_args=[],
       brash_policy=tmp_path / 'brash-policy.json',
     ).argv
 
     hooks = _settings(argv)['hooks']
-    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash', 'Monitor']
+    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash', 'Monitor', 'Read']
     assert 'ride.claude.watch_waiter' in shlex.split(hooks['Stop'][0]['hooks'][0]['command'])
 
   def test_fast_mode_lands_in_settings(self):
-    assert (
-      _settings(_ride_session_launch(_spec(llm='+fast'), claude_args=[]).argv)['fastMode'] is True
-    )
-    assert _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['fastMode'] is False
+    assert _settings(_ride_session_launch(_spec(llm='+fast')).argv)['fastMode'] is True
+    assert _settings(_ride_session_launch(_spec()).argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):
-    status_line = _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['statusLine']
+    status_line = _settings(_ride_session_launch(_spec()).argv)['statusLine']
     assert status_line['type'] == 'command'
     assert status_line['command'] == statusline_command()
 
   def test_effort_injected(self):
-    argv = _ride_session_launch(_spec(llm='::xhigh'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(llm='::xhigh')).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
 
   @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
   def test_non_guided_holds_skip_permissions(self, hold):
-    argv = _ride_session_launch(_spec(hold=hold), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(hold=hold)).argv
     assert '--dangerously-skip-permissions' in argv
 
   def test_guided_hold_keeps_permission_prompts(self):
-    argv = _ride_session_launch(_spec(hold='guided'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(hold='guided')).argv
     assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
-    argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='dev')).argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
     namespaces = _dev_persona_namespaces()
     # the service server's `banner` tool rides the `bro` namespace
@@ -208,18 +217,15 @@ class TestRideSessionLaunch:
       assert entry['alwaysLoad'] is True
 
   def test_the_launch_config_is_the_sessions_only_mcp_source(self):
-    argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
+    argv = _ride_session_launch(_spec(bro='dev')).argv
     assert '--strict-mcp-config' in argv
 
-  def test_claude_args_precede_prompt_tail(self):
-    argv = _ride_session_launch(_spec(prompt='go'), claude_args=['--x']).argv
-    assert argv[-2:] == ['--', 'go']
-    assert argv.index('--mcp-config') < argv.index('--x')
+  def test_a_resume_continues_its_session_before_the_prompt_tail(self):
+    argv = _ride_session_launch(_spec(prompt='go'), resume_session='session-id').argv
+    assert argv[-4:] == ['--resume', 'session-id', '--', 'go']
 
   def test_solo_adds_print_mode_to_the_full_session_composition(self):
-    argv = _ride_session_launch(
-      _spec(solo=True, hold='unattended', prompt='answer'), claude_args=[]
-    ).argv
+    argv = _ride_session_launch(_spec(solo=True, hold='unattended', prompt='answer')).argv
     assert '-p' in argv
     assert '--dangerously-skip-permissions' in argv
     assert '--mcp-config' in argv
@@ -230,17 +236,17 @@ class TestRideSessionLaunch:
 def test_unknown_bro_raises():
   with pytest.raises(KeyError, match='unknown bro'):
     ride_claude_argv.build_claude_launch(
-      _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT, brash_policy=None
+      _spec(bro='does-not-exist'), resume_session=None, endpoint=_ENDPOINT, brash_policy=None
     )
 
 
 def test_the_attribution_opt_out_lands_in_settings():
-  launch = _ride_session_launch(_spec(), claude_args=[])
+  launch = _ride_session_launch(_spec())
   assert _settings(launch.argv)['attribution'] == ride_claude_argv._ATTRIBUTION
 
 
 def test_a_solo_session_streams_its_prompt_over_stdin():
-  launch = _ride_session_launch(_spec(solo=True, hold='unattended', prompt='go'), claude_args=[])
+  launch = _ride_session_launch(_spec(solo=True, hold='unattended', prompt='go'))
 
   assert launch.prompt == 'go'
   assert '--' not in launch.argv and 'go' not in launch.argv
@@ -250,7 +256,7 @@ def test_a_solo_session_streams_its_prompt_over_stdin():
 
 
 def test_an_interactive_session_seeds_its_prompt_through_the_argv():
-  launch = _ride_session_launch(_spec(prompt='hi'), claude_args=[])
+  launch = _ride_session_launch(_spec(prompt='hi'))
 
   assert launch.prompt is None
   assert launch.argv[-2:] == ['--', 'hi'] and '-p' not in launch.argv

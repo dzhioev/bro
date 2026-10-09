@@ -249,6 +249,7 @@ PYTEST_FILES = [
   'ride/ride/pending_launch_test.py',
   'ride/ride/claude/claude_argv_test.py',
   'ride/ride/claude/command_gate_test.py',
+  'ride/ride/claude/read_gate_test.py',
   'ride/ride/claude/competing_hooks_test.py',
   'ride/ride/claude/watch_waiter_test.py',
   'ride/ride/claude/interrupt_test.py',
@@ -408,6 +409,7 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/watch_waiter_llm_test.py',
   'ride/ride/claude/native_tools_llm_test.py',
   'ride/ride/claude/command_gate_llm_test.py',
+  'ride/ride/claude/read_gate_llm_test.py',
 ]
 # conformance probes: each launches real sessions on every installed harness under
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like

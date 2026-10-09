@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import shlex
 import sys
 from pathlib import Path
 from typing import Optional
@@ -160,17 +161,19 @@ def _resolve_repository_argument(value: str) -> Repository:
   return Repository(str(root), root)
 
 
-def _parse_mode(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
-  try:
-    separator = argv.index('--')
-  except ValueError:
-    return parser.parse(argv), []
-  return parser.parse(argv[:separator]), argv[separator + 1 :]
+def _parse_mode(parser: Parser, argv: list[str]) -> dict:
+  if '--' in argv:
+    refused = shlex.join(argv[argv.index('--') :])
+    parser.error(
+      "a session runs with what its bro declares and ride's own flags set, so it takes no "
+      f'harness arguments after `--`; drop `{refused}`'
+    )
+  return parser.parse(argv)
 
 
-def _parse(parser: Parser, argv: list[str]) -> tuple[dict, list[str]]:
+def _parse(parser: Parser, argv: list[str]) -> dict:
   if len(argv) < 2 or argv[1] not in ('solo', 'along'):
-    return parser.parse(argv), []
+    return parser.parse(argv)
   return _parse_mode(parser, argv)
 
 
@@ -195,13 +198,7 @@ def _bootstrap_mode_runtime(parser: Parser, args: dict, launch_argv: list[str]) 
   args['runtime_bundle'] = runtime
 
 
-def _start_mode(
-  parser: Parser,
-  args: dict,
-  harness_arguments: list[str],
-  *,
-  solo: bool,
-) -> int:
+def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   workspace = args.pop('workspace')
   summoned_token = args.pop('summoned', None)
   repo_argument = args.pop('repo')
@@ -302,7 +299,6 @@ def _start_mode(
     bro=bro,
     prompt=prompt,
     subject=prompt,
-    arguments=harness_arguments,
     resolved_llm=resolved_llm.dump(),
     solo=solo,
     resume=False,
@@ -363,16 +359,16 @@ def alias_main(argv: list[str], *, solo: bool) -> int:
     else 'start an interactive session',
   )
   _configure_mode_parser(parser, solo=solo)
-  args, harness_arguments = _parse_mode(parser, argv)
+  args = _parse_mode(parser, argv)
   launch_argv = ['ride', 'solo' if solo else 'along', *argv[1:]]
   _bootstrap_mode_runtime(parser, args, launch_argv)
-  return _start_mode(parser, args, harness_arguments, solo=solo)
+  return _start_mode(parser, args, solo=solo)
 
 
 @reports_runtime_errors
 def main(argv: list[str]) -> Optional[int]:
   parser = build_parser()
-  args, harness_arguments = _parse(parser, argv)
+  args = _parse(parser, argv)
   command = args.pop('cmd')
   if command in ('solo', 'along'):
     _bootstrap_mode_runtime(parser, args, argv)
@@ -383,10 +379,8 @@ def main(argv: list[str]) -> Optional[int]:
         reexec_from_runtime(runtime, argv)
     except (ValueError, RuntimeError) as error:
       parser.error(str(error))
-  if command not in ('solo', 'along') and len(harness_arguments) > 0:
-    parser.error('`--` harness arguments are accepted only by `ride solo` and `ride along`')
   if command in ('solo', 'along'):
-    return _start_mode(parser, args, harness_arguments, solo=command == 'solo')
+    return _start_mode(parser, args, solo=command == 'solo')
   if command == 'list':
     return list_workspaces()
   if command == 'resume':

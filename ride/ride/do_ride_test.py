@@ -24,8 +24,7 @@ def _command(spec) -> list[str]:
 
 
 def _parsed_run(argv: list[str]) -> do_ride.SessionRun:
-  args, arguments = do_ride._parse(argv)
-  _, run = do_ride._session_run(args, arguments)
+  _, run = do_ride._session_run(do_ride._parse(argv))
   return run
 
 
@@ -41,18 +40,17 @@ class TestCommand:
       revoke=['notion'],
       into='feature',
       prompt='do it',
-      arguments=['--foo'],
     )
     assert _command(spec) == [
       'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(spec.repo),
-      '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'do it', '--', '--foo',
+      '--hold', 'attended', '--llm', '::xhigh+fast', '--', 'dev', 'do it',
     ]  # fmt: skip
 
   def test_resume_is_carried(self):
     spec = _spec(resume=True, bro='dev')
     assert _command(spec) == [
       'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--resume',
-      '--repo', str(spec.repo), '--hold', 'attended', 'dev',
+      '--repo', str(spec.repo), '--hold', 'attended', '--', 'dev',
     ]  # fmt: skip
 
   def test_recorded_recipe_crosses_the_launcher_boundary(self, monkeypatch):
@@ -80,8 +78,13 @@ class TestCommand:
     spec = dataclasses.replace(_spec(solo=True, bro='dev', prompt='go'), harness='bro')
     assert _command(spec) == [
       'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro', '--repo', str(spec.repo),
-      '--hold', 'attended', 'dev', 'go',
+      '--hold', 'attended', '--', 'dev', 'go',
     ]  # fmt: skip
+
+  def test_a_prompt_that_reads_as_a_flag_crosses_as_the_prompt(self):
+    spec = dataclasses.replace(_spec(solo=True, bro='dev', prompt='--resume'), harness='bro')
+    run = _parsed_run(_command(spec))
+    assert (run.bro, run.prompt, run.resume) == ('dev', '--resume', False)
 
 
 class TestParser:
@@ -146,25 +149,6 @@ class TestParser:
     )
     assert run.resume
 
-  def test_forwarded_arguments_require_the_separator(self):
-    run = _parsed_run(
-      [
-        'do-ride',
-        'solo',
-        '--workspace',
-        'w',
-        '--harness',
-        'bro',
-        '--hold',
-        'unattended',
-        'dev',
-        'go',
-        '--',
-        '--fork',
-      ]
-    )
-    assert run.arguments == ['--fork']
-
 
 class TestRunSession:
   def _run(
@@ -206,7 +190,6 @@ class TestRunSession:
       resume=False,
       bro='dev',
       prompt=None,
-      arguments=[],
     )
     return do_ride.run_session(harness, run), harness, declaration
 

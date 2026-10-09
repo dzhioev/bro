@@ -148,20 +148,18 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   ]
 
 
-def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[str]) -> list[str]:
-  arguments: list[str] = []
-  if spec.prompt is not None:
-    arguments.append(spec.prompt)
+def _session_options(spec: 'SessionSpec | SessionRun', resume_trail: Optional[str]) -> list[str]:
+  options: list[str] = []
   if spec.llm is not None:
-    arguments.extend(['--llm', spec.llm])
-  arguments.extend(['--hold', spec.hold])
+    options.extend(['--llm', spec.llm])
+  options.extend(['--hold', spec.hold])
   if resume_trail is not None:
     resolved = spec.llm_spec
     if not isinstance(resolved, NativeLLMSpec):
       raise ValueError(
         f'bro harness resume requires a native recipe, not {type(resolved).__name__}'
       )
-    arguments.extend(
+    options.extend(
       [
         '--continue-trail',
         resume_trail,
@@ -169,7 +167,7 @@ def _session_arguments(spec: 'SessionSpec | SessionRun', resume_trail: Optional[
         json.dumps(resolved.dump(), separators=(',', ':')),
       ]
     )
-  return arguments
+  return options
 
 
 class BroHarness(Harness):
@@ -266,9 +264,10 @@ class BroHarness(Harness):
     argv = [
       executable,
       verb,
+      *_session_options(spec, resume_trail),
+      '--',
       spec.bro,
-      *_session_arguments(spec, resume_trail),
-      *spec.arguments,
+      *([] if spec.prompt is None else [spec.prompt]),
     ]
     return run_agent(argv)
 

@@ -129,7 +129,6 @@ def _session(prompt: str) -> SessionRun:
     resume=False,
     bro='bro',
     prompt=prompt,
-    arguments=[],
   )
 
 
