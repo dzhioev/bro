@@ -30,7 +30,7 @@ def test_llm_model_selection_preserves_terminal_compaction():
 
 def test_terminal_declares_an_unrestricted_shell_on_both_harnesses():
   for harness in get_args(mcp.Harness):
-    assert Terminal()._selected_tools_for(harness).shell_unrestricted is True
+    assert Terminal()._selected_tools_for(harness).brash_unrestricted is True
 
 
 def test_terminal_withholds_claudes_own_delegation():

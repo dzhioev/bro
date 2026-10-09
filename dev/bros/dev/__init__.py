@@ -4,7 +4,7 @@ from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources.references import man
 from bro.dev import references
-from bro.mcp import ANY, creds, harness, mount, shell
+from bro.mcp import ANY, brash, creds, harness, mount
 from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro
 from bros.dev import mcp
@@ -44,7 +44,7 @@ class Dev(Bro):
   provisioning = (provision_hooks,)
   tools = [
     when(harness == 'bro', mount(mcp.toolset)),
-    shell(ANY),
+    brash(ANY),
     when(feature('brog'), mount(brog_mcp.toolset)),
   ]
   data_sources = [references.dev_style, man('extending')]

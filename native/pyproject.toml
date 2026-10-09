@@ -18,6 +18,8 @@ dependencies = [
   "rich==15.0.0",
   "textual==8.2.8",
   "trafilatura==2.1.0",
+  "tree-sitter==0.26.0",
+  "tree-sitter-bash==0.25.1",
 ]
 
 [project.scripts]
@@ -42,7 +44,7 @@ bro-ride = ["ride"]
 
 [tool.deptry.per_rule_ignores]
 # Runtime dependencies imported by core modules that the native surfaces execute.
-DEP002 = ["aiohttp", "humanize", "mcp", "rich", "trafilatura"]
+DEP002 = ["aiohttp", "humanize", "mcp", "rich", "trafilatura", "tree-sitter", "tree-sitter-bash"]
 
 [tool.uv.build-backend]
 module-root = ""

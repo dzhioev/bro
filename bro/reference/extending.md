@@ -44,8 +44,15 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 - `tools = [mount(project_tools.mcp.toolset)]` adds a contributing package's full toolset ("Adding a toolset" below)
 - `tools = [mount(project_tools.mcp.toolset, 'search', 'update')]` scopes the mount to specific tools (validated at declaration)
 - `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]` (`from bros.dev import mcp as dev_mcp`, supplied by `bro-dev`) mounts its file and search tools only on the bro harness
-- `tools = [claude.block(*claude.SHELL), shell('git status', 'git diff')]` declares the exact command lines the persona may run on either harness;
-  the block lets the finite roster narrow Claude's shell, while `shell(ANY)` leaves its unblocked shell unrestricted and an empty declaration is invalid
+- `tools = [claude.block(*claude.SHELL), brash('git log ...', 'gh pr view *')]` declares a finite command list the persona may run on either harness.
+  An entry is written like a command and split with shell quoting:
+  each word matches one argument, an unquoted `*` matches any text within its argument, and a final unquoted `...` admits any further arguments, including none.
+  Quoting makes either marker literal, so `grep -E 'a*b' ...` admits only the literal pattern `a*b`.
+  Leading `NAME=value` words are part of the entry.
+  An entry names one simple command with a literal program word;
+  shell operators, expansions, a non-final `...`, brash builtins, and bash builtins brash does not implement are refused at declaration.
+  The block lets the finite command list narrow Claude's shell, while `brash(ANY)` leaves its unblocked shell unrestricted and an empty declaration is invalid.
+  `brash(ANY)` marks the shell unrestricted and therefore runs lines in plain bash rather than through the finite-list interpreter.
 - `tools = [cli('bro list')]` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
   The command is a program name and any subcommands;
   trailing names narrow what the tool exposes (`cli('bro show', 'name')` withholds `--system-prompt`).
@@ -117,6 +124,27 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   each ancestor's declaration contributes, derived classes override parents on name collision, and the concrete `Bro`'s spells reach every bro deriving from it.
   The full description is the tool description;
   keep it useful for tool selection rather than optimizing its first sentence.
+
+### Brash command-list policy
+
+A finite `brash(...)` command list states what a persona is meant to run and catches a model that goes off-script, consistently across harnesses.
+It is policy, not a containment boundary:
+a general-purpose listed program such as `git -c`, `uv run`, `find -exec`, `xargs`, a shell, or an interpreter can run other programs, and brash runs on the host.
+Use a `cli(...)` tool for a command that must be held to one fixed argument shape, and use sandboxing for containment.
+
+Brash runs the declared subset of bash syntax itself and checks every literal program before anything starts, then checks each expanded argv as its command starts.
+Its command language includes pipelines, boolean and sequential lists, background commands, negation, subshells and groups, `if`, `for … in`, `while`, `until`, `case`, comments, assignments, redirects, here-documents, and here-strings.
+Its word forms include command and process substitution, quoting, variables and special parameters, `$'…'`, tilde expansion, splitting, globs, and brace patterns.
+It implements `cd`, `pwd`, `echo`, `exit`, `true`, `false`, `:`, and a plain `wait` as builtins;
+other commands need a list entry, including programs commonly shadowed by bash builtins such as `test`, `[`, `printf`, and `kill`.
+Unsupported syntax and bash builtins are refused rather than passed to a host shell.
+
+A plain assignment and a `for` variable may set only a brash-local name, not a name inherited in the environment;
+prefix assignments on a command are matched as part of its entry and reach that command's environment.
+Input redirects may read any path into an admitted command.
+Output redirects may write files only when the persona's file reach is writable;
+here-documents, here-strings, descriptor duplication and closure, and `/dev/null`, `/dev/stdout`, and `/dev/stderr` are always available.
+
 
 ## Registering a bro
 

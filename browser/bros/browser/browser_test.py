@@ -55,4 +55,4 @@ def test_browser_withholds_claudes_file_shell_delegation_and_web_tools() -> None
 
   assert {*claude.FILES, *claude.SHELL, *claude.DELEGATION, *claude.WEB} <= blocked
   assert Browser().blocked_tool_names('bro') == ()
-  assert Browser()._selected_tools_for('bro').shell_unrestricted is False
+  assert Browser()._selected_tools_for('bro').brash_unrestricted is False

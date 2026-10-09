@@ -12,6 +12,7 @@ from bro.base import log, spawn
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
+from bro.brash import admit_exact
 from bro.harness import Harness, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
@@ -19,7 +20,6 @@ from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
-from bro.shell import admit_command
 from ride.harness import ContainerExtras
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -44,8 +44,9 @@ _FOREGROUND_WAIT_SECONDS = 45.0
 
 _JOB_DESCRIPTION = (
   'start a shell command as one supervised job (`bash -c`, merged stdout and stderr, '
-  'continuously spooled output). the command must match this persona’s shell roster whole and '
-  'exact; unrestricted personas may run any command. `fg` waits for exit and returns tail-kept '
+  'continuously spooled output). the command must match one entry in this persona’s finite command '
+  'list exactly; unrestricted personas may run any command. `fg` waits for exit and returns '
+  'tail-kept '
   'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
   'result names its id and `poll` continuation. `bg` returns immediately and reports only its '
   'exit through this run’s notifications. `timeout_seconds` is capped at '
@@ -113,7 +114,7 @@ def _job_tools(
   unrestricted: bool,
 ) -> list[llm_mcp.Tool]:
   def start(command: str, mode: str) -> Job:
-    admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
+    admitted = admit_exact(command, entries=commands, unrestricted=unrestricted)
     return live_run.registry.start(admitted, mode)  # type: ignore[arg-type]
 
   async def job(
@@ -189,15 +190,15 @@ class BroHarness(Harness):
   def own_tools(self, bro: 'BaseBro', live_run: 'LiveRun | None') -> tuple[llm_mcp.Tool, ...]:
     tools = [spell_store.build_skill_tool()]
     selection = bro._selected_tools_for(self)
-    if not selection.shell_declared:
+    if not selection.brash_declared:
       return tuple(tools)
     if live_run is None:
       raise RuntimeError('job tools require a live run')
     tools.extend(
       _job_tools(
         live_run=cast(_NativeRun, live_run),
-        commands=selection.shell_commands,
-        unrestricted=selection.shell_unrestricted,
+        commands=selection.brash_commands,
+        unrestricted=selection.brash_unrestricted,
       )
     )
     return tuple(tools)
