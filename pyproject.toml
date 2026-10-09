@@ -31,6 +31,8 @@ llm = [
 runtime = [
   "mcp==1.28.1",
   "starlette==1.3.1",
+  "tree-sitter==0.26.0",
+  "tree-sitter-bash==0.25.1",
   "uvicorn==0.49.0",
 ]
 trails-server = [
@@ -73,10 +75,12 @@ bro-local = { workspace = true }
 [project.scripts]
 # bro
 "artifact" = "bro._entrypoints:bro_artifact"
+"brash" = "bro._entrypoints:bro_brash"
 "bro-shell-dir" = "bro._entrypoints:bro_shell"
 "bro.artifact" = "bro._entrypoints:bro_artifact"
 "bro.base.credentials" = "bro._entrypoints:bro_base_credentials"
 "bro.base.time-util" = "bro._entrypoints:bro_base_time_util"
+"bro.brash" = "bro._entrypoints:bro_brash"
 "bro.broker.broxy" = "bro._entrypoints:bro_broker_broxy"
 "bro.broker.cli" = "bro._entrypoints:bro_broker_cli"
 "bro.llm.usage" = "bro._entrypoints:bro_llm_usage"
@@ -104,6 +108,7 @@ bro-local = { workspace = true }
 
 [project.entry-points."bro.session_commands"]
 "artifact" = "bro._entrypoints:bro_artifact"
+"brash" = "bro._entrypoints:bro_brash"
 "broker" = "bro._entrypoints:bro_broker_cli"
 "broxy" = "bro._entrypoints:bro_broker_broxy"
 "credentials" = "bro._entrypoints:bro_base_credentials"

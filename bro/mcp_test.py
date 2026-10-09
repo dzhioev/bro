@@ -212,22 +212,25 @@ class TestToolLayer:
     assert layer.native_tool_commands == (('Monitor', 'watch it'),)
     assert layer.served_native_tool_names == ('TaskStop',)
 
-  def test_shell_declares_exact_commands_or_any(self):
-    assert mcp.shell(' git status ', 'git diff').shell_commands == ('git status', 'git diff')
-    assert mcp.shell(mcp.ANY).shell_commands == (mcp.ANY,)
+  def test_brash_declares_quote_aware_command_patterns_or_any(self):
+    assert mcp.brash(' git log ... ', "grep -E 'a*b' ...").brash_commands == (
+      'git log ...',
+      "grep -E 'a*b' ...",
+    )
+    assert mcp.brash(mcp.ANY).brash_commands == (mcp.ANY,)
 
   @pytest.mark.parametrize(
     ('commands', 'error_type', 'message'),
     [
       ((), ValueError, 'needs at least one command'),
-      (('',), TypeError, 'non-empty command strings'),
+      (('',), ValueError, 'non-empty'),
       ((mcp.ANY, 'git status'), ValueError, 'ANY must be the only'),
-      (('git status', 'git status'), ValueError, 'duplicate shell commands'),
+      (('git status', 'git status'), ValueError, 'duplicate entries'),
     ],
   )
-  def test_shell_rejects_ambiguous_rosters(self, commands, error_type, message):
+  def test_brash_rejects_invalid_command_lists(self, commands, error_type, message):
     with pytest.raises(error_type, match=message):
-      mcp.shell(*commands)
+      mcp.brash(*commands)
 
   def test_mount_selects_from_one_toolset_type(self):
     toolset = mcp.Toolset('layer')

@@ -10,8 +10,8 @@ from bros.lead import Lead
 def test_lead_declares_no_shell():
   for harness in get_args(mcp.Harness):
     selection = Lead()._selected_tools_for(harness)
-    assert selection.shell_unrestricted is False
-    assert selection.shell_commands == ()
+    assert selection.brash_unrestricted is False
+    assert selection.brash_commands == ()
 
 
 def test_coordination_spells_render_for_every_surface():

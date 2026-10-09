@@ -1,5 +1,5 @@
 from bro.base.condition import when
-from bro.mcp import ANY, harness, mount, shell
+from bro.mcp import ANY, brash, harness, mount
 from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro
 from bros.dev import mcp
@@ -48,6 +48,6 @@ class Analyst(Bro):
   # an analysis is committed with whatever produced it, so the footer accounts
   # for the work the commit's content represents
   provisioning = (provision_hooks,)
-  tools = [when(harness == 'bro', mount(mcp.toolset)), shell(ANY)]
+  tools = [when(harness == 'bro', mount(mcp.toolset)), brash(ANY)]
   spells = ('report-usage.md',)
   system_prompt = SYSTEM_PROMPT

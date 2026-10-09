@@ -1,6 +1,6 @@
 from bro.base.condition import when
 from bro.dev import references
-from bro.mcp import ANY, creds, harness, mount, shell
+from bro.mcp import ANY, brash, creds, harness, mount
 from bros.bro import Bro
 from bros.dev import mcp
 
@@ -42,7 +42,7 @@ class Eyebro(Bro):
   name = 'eyebro'
   description = 'code reviewer that holds changes to the standards their repository declares'
   features = {'github': creds.contains('github')}
-  tools = [when(harness == 'bro', mount(mcp.toolset)), shell(ANY)]
+  tools = [when(harness == 'bro', mount(mcp.toolset)), brash(ANY)]
   data_sources = [references.dev_style]
   spells = ('review-diff.md', 'review-pr.md')
   system_prompt = SYSTEM_PROMPT

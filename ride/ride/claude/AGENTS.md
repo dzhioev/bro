@@ -35,7 +35,7 @@ Claude Code's own harness themed with the session's bro.
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
 - `watch_guard.py` and `watch_waiter.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`python -m ride.claude.<module>`);
-  the watch guard applies a folded finite shell roster to both Bash and Monitor calls,
+  the watch guard applies a folded finite brash command list to both Bash and Monitor calls,
   and the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch (`bro/reference/ride.md`, "Claude harness").
 - `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
   the current waiter's registration, the count of rewakes waiters began, the stand-down mark, the stdout mark that attributes a waiter's hook events,

@@ -16,7 +16,7 @@ A subpackage with a map of its own is pointed at, not described here.
   How to declare one: `bro/reference/extending.md`;
   what a run renders, mounts, and counts: "Running a declaration" below.
 - `mcp.py` — declaration vocabulary for persona tool layers and toolset modules:
-  surface facts and rendering, `MCPServerSpec`, `ToolLayer`, `Toolset`, and the `mount` / `block` / `allow_commands` / `serve` / `cli` / `shell` constructors.
+  surface facts and rendering, `MCPServerSpec`, `ToolLayer`, `Toolset`, and the `mount` / `block` / `allow_commands` / `serve` / `cli` / `brash` constructors.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `spells.py` — the spell store:
   validation of the files a bro's `spells` declaration names and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
@@ -56,7 +56,10 @@ A subpackage with a map of its own is pointed at, not described here.
 - `job_supervisor.py` — the shared process-group supervisor behind core's `watch-run` and bro-native's jobs:
   it remains the live group leader until every command descendant exits, and exits when the owner-liveness handle closes.
   The native job registry, spool, and inbox keep their public `bro.jobs` and `bro.inbox` paths under `native/`.
-- `shell.py` (`bro-shell-dir`) — admits commands against a declaration's exact shell roster, validates the packaged shell helpers, and prints their installed directory for shell consumers
+- `brash.py` (`brash`) — the standalone interpreter for a finite command list:
+  quote-aware entry parsing, tree-sitter-bash validation, preflight and expanded-argv admission, the admitted shell language and builtins, word expansion, redirects classified by file reach, and status-126 refusals.
+  It imports no other framework module, so each command-line start pays only for the interpreter.
+- `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
 - `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
   `WorkerContainer` is the validated, host-neutral container declaration:
   packaged build-context bytes over the runtime image, a command and environment, and container ports mapped to requested-or-available loopback host ports.
@@ -82,8 +85,8 @@ A subpackage with a map of its own is pointed at, not described here.
   Installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
   Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
   `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
-  A finite `shell(...)` roster over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
-  `shell(ANY)` leaves an unblocked Claude shell unrestricted.
+  A finite `brash(...)` command list over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
+  `brash(ANY)` leaves an unblocked Claude shell unrestricted.
   The fold admits only what the persona declares.
   `watches.py` separately decides whether `do-ride` arms the runtime-owned session watch, which reaches the model through the harness's delivery port rather than a tool it can call.
   A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
@@ -162,10 +165,10 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
   the Claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
 - `cast` when the bro has spells and its key resolves (`bro/reference/ride.md`, "Bro spells and skills").
   The bro harness contributes `skill` through its own tools because its model has no native skill loader.
-- `watch` and `unwatch` with a declared `shell` roster on every harness, admitted against the same whole-command roster as a job;
-  they start and stop the store's detached producer, while `unwatch` refuses the runtime-owned session watch.
+- `watch` and `unwatch` with a declared `brash` command list on every harness;
+  `watch` follows the job route's command admission, while `unwatch` stops the named producer without admitting the command and refuses the runtime-owned session watch.
 - the bro harness's own tools:
-  `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `shell` roster, plus `skill` on every bro-harness run.
+  `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 

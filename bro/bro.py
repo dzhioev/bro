@@ -23,6 +23,7 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
+from bro.brash import admit_exact
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
 from bro.datasources.man import ManPage, manual
@@ -31,7 +32,6 @@ from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
-from bro.shell import admit_command
 from bro.worker_types import type_name as worker_type_name
 
 DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
@@ -524,8 +524,8 @@ def _quest_cancel_tool(variables: Variables) -> llm_mcp.Tool:
 
 _WATCH_DESCRIPTION = (
   'start an admitted shell command as a detached producer for the rest of this session. the '
-  'command must match this persona’s shell roster whole and exact; unrestricted personas may '
-  'run any command. its bounded output reaches the session through the shared watch store.'
+  'command must match one entry in this persona’s finite command list exactly; unrestricted '
+  'personas may run any command. its bounded output reaches the session through the shared watch store.'
 )
 
 _UNWATCH_DESCRIPTION = (
@@ -545,14 +545,16 @@ def _watch_tools(
     return watches.session_store() if live_run is None else live_run.watch_store
 
   def watch(command: str) -> str:
-    admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
+    admitted = admit_exact(command, entries=commands, unrestricted=unrestricted)
     started = store().start(admitted)
     return f'watching `{started.command}`'
 
   def unwatch(command: str) -> str:
-    admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
-    store().stop(admitted)
-    return f'stopped watching `{admitted}`'
+    normalized = command.strip()
+    if not normalized:
+      raise ValueError('command must be non-empty')
+    store().stop(normalized)
+    return f'stopped watching `{normalized}`'
 
   return [
     llm_mcp.FunctionTool(watch, name='watch', description=_WATCH_DESCRIPTION, variables=variables),
@@ -609,7 +611,7 @@ def _build_service_server(
   has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
   has_answer = has_broker and summoned() and session_harness.can_end_session()
   selection = bro._selected_tools_for(harness)
-  has_watches = selection.shell_declared
+  has_watches = selection.brash_declared
   harness_tools = session_harness.own_tools(bro, live_run)
   harness_tool_names = tuple(tool.name for tool in harness_tools)
   duplicate_names = {
@@ -671,8 +673,8 @@ def _build_service_server(
     tools.extend(
       _watch_tools(
         live_run=cast(Optional[WatchRun], live_run),
-        commands=selection.shell_commands,
-        unrestricted=selection.shell_unrestricted,
+        commands=selection.brash_commands,
+        unrestricted=selection.brash_unrestricted,
         variables=variables,
       )
     )
@@ -725,9 +727,9 @@ class _ToolSelection:
   blocked_tool_names: tuple[str, ...]
   # native tool name -> the commands it may reach, for the harness to enforce
   narrowed_tool_commands: dict[str, tuple[str, ...]]
-  shell_commands: tuple[str, ...]
-  shell_unrestricted: bool
-  shell_declared: bool
+  brash_commands: tuple[str, ...]
+  brash_unrestricted: bool
+  brash_declared: bool
 
 
 def _fold_tool_layers(
@@ -738,8 +740,8 @@ def _fold_tool_layers(
   blocked_names: list[str] = []
   narrowed: dict[str, list[str]] = {}
   handed_back: dict[str, str] = {}
-  declared_shell_commands: list[str] = []
-  shell_unrestricted = False
+  declared_brash_commands: list[str] = []
+  brash_unrestricted = False
   for layer in layers:
     server_specs.extend(layer.server_specs)
     native = (
@@ -758,19 +760,19 @@ def _fold_tool_layers(
       handed_back[name] = 'narrowed to specific commands'
     for name in layer.served_native_tool_names:
       handed_back[name] = 'served whole'
-    for command in layer.shell_commands:
+    for command in layer.brash_commands:
       if command is mcp.ANY:
-        shell_unrestricted = True
+        brash_unrestricted = True
       else:
         assert isinstance(command, str)
-        declared_shell_commands.append(command)
+        declared_brash_commands.append(command)
 
-  shell_commands = list(dict.fromkeys(declared_shell_commands))
-  shell_declared = shell_unrestricted or len(shell_commands) > 0
-  if name_of(harness) == 'claude' and len(shell_commands) > 0 and not shell_unrestricted:
+  brash_commands = list(dict.fromkeys(declared_brash_commands))
+  brash_declared = brash_unrestricted or len(brash_commands) > 0
+  if name_of(harness) == 'claude' and len(brash_commands) > 0 and not brash_unrestricted:
     for name in _CLAUDE_COMMAND_TOOLS:
-      narrowed.setdefault(name, []).extend(shell_commands)
-      handed_back[name] = 'narrowed through the shell roster'
+      narrowed.setdefault(name, []).extend(brash_commands)
+      handed_back[name] = 'narrowed through the brash command list'
     for name in _CLAUDE_COMMAND_CONTROL:
       handed_back[name] = 'served as shell job control'
 
@@ -790,9 +792,9 @@ def _fold_tool_layers(
     narrowed_tool_commands={
       name: tuple(dict.fromkeys(commands)) for name, commands in narrowed.items()
     },
-    shell_commands=tuple(shell_commands),
-    shell_unrestricted=shell_unrestricted,
-    shell_declared=shell_declared,
+    brash_commands=tuple(brash_commands),
+    brash_unrestricted=brash_unrestricted,
+    brash_declared=brash_declared,
   )
 
 

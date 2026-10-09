@@ -106,15 +106,15 @@ class TestRideSessionLaunch:
       'quest watch',
     ]
 
-  def test_shell_roster_gates_bash_and_monitor_and_returns_job_control(self, monkeypatch):
+  def test_brash_list_gates_bash_and_monitor_and_returns_job_control(self, monkeypatch):
     from bro.bro import BaseBro
     from bro.harness import claude
-    from bro.mcp import shell
+    from bro.mcp import brash
 
     class ShellBro(BaseBro):
       name = 'shell'
       description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), shell('git status')]
+      tools: ClassVar = [claude.block(*claude.SHELL), brash('git status')]
 
       def __init__(self):
         super().__init__(system_prompt='')

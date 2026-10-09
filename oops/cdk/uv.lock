@@ -142,6 +142,8 @@ requires-dist = [
     { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "python-ulid", specifier = "==3.1.0" },
     { name = "starlette", marker = "extra == 'runtime'", specifier = "==1.3.1" },
+    { name = "tree-sitter", marker = "extra == 'runtime'", specifier = "==0.26.0" },
+    { name = "tree-sitter-bash", marker = "extra == 'runtime'", specifier = "==0.25.1" },
     { name = "uvicorn", marker = "extra == 'runtime'", specifier = "==0.49.0" },
 ]
 provides-extras = ["aws", "http", "llm", "runtime", "trails-server", "github"]

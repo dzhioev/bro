@@ -2,7 +2,7 @@ import bro.brog.mcp as brog_mcp
 import bro.llm.llms.openai as openai
 from bro.base.condition import when
 from bro.bro import feature
-from bro.mcp import ANY, creds, mount, shell
+from bro.mcp import ANY, brash, creds, mount
 from bro.oops import mcp as operations_mcp
 from bros.bro import Bro
 
@@ -31,7 +31,7 @@ class Devoops(Bro):
   tools = [
     mount(operations_mcp.toolset),
     when(feature('brog'), mount(brog_mcp.toolset)),
-    shell(ANY),
+    brash(ANY),
   ]
   spells = ('deploy.md',)
   system_prompt = SYSTEM_PROMPT
