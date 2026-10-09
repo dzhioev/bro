@@ -1,5 +1,6 @@
 """Harness identity and the installed harness registry."""
 
+import functools
 import importlib.metadata
 import re
 from dataclasses import dataclass
@@ -73,6 +74,7 @@ def name_of(harness: Harness | str) -> str:
   return harness.name if isinstance(harness, Harness) else harness_name(harness)
 
 
+@functools.cache
 def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
   return tuple(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
 
