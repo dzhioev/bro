@@ -1121,7 +1121,7 @@ class TestClaudeSummonLowering:
   def test_unboxed_join_provisions_claude_state_under_the_member_records(
     self, claude_harness, monkeypatch, tmp_path
   ):
-    from bro.monitor import CLAUDE_CONFIG_DIR_ENV
+    from ride.claude.claude_config import CLAUDE_CONFIG_DIR_ENV
     from ride.claude.harness import CLAUDE
 
     workspace = Workspace.ensure(PARENT, None, Isolation.UNBOXED)
@@ -1160,7 +1160,7 @@ class TestClaudeSummonLowering:
   ):
     import json
 
-    from bro.monitor import CLAUDE_CONFIG_DIR_ENV
+    from ride.claude.claude_config import CLAUDE_CONFIG_DIR_ENV
 
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')

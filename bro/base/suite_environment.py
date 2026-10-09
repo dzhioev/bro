@@ -11,12 +11,8 @@ status of the session running the suite. Clearing by namespace rather than by
 name is what keeps the next variable the framework invents from having to be
 discovered the same way.
 
-Three fixed variables carry session state without living in those namespaces and are
-named one by one: `PWD`, which the transcript fallback resolves the working
-directory through while `monkeypatch.chdir` never updates it, so a chdir'd test
-would still read the launching session's transcripts; `MCP_SERVER_BEARER_TOKEN`,
-the session-local MCP server's own credential; and `AI_AGENT`, which claude code
-exports and `usage.claude_version` parses the running harness's version out of.
+One fixed variable carries session state without living in those namespaces and is
+named on its own: `MCP_SERVER_BEARER_TOKEN`, the session-local MCP server's own credential.
 Credential install hooks may export variables in a tool's own namespace;
 the rebuild discovers those declarations from the installed registry and clears them too.
 
@@ -72,9 +68,7 @@ def _credential_install_variables() -> frozenset[str]:
   )
 
 
-SESSION_VARIABLES = frozenset({'AI_AGENT', 'MCP_SERVER_BEARER_TOKEN', 'PWD'}) | (
-  _credential_install_variables()
-)
+SESSION_VARIABLES = frozenset({'MCP_SERVER_BEARER_TOKEN'}) | (_credential_install_variables())
 TIMEZONE = 'Asia/Kolkata'
 
 # The absent exclusive store a suite resolves against.

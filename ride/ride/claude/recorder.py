@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bro.base import log, spawn
-from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_dir
+from bro.monitor import SESSION_DIR_ENV, harness_session_dir
+from ride.claude.claude_config import claude_projects_dir
 
 RECORDER_COMMAND = 'ride.claude.trail-recorder'
 
@@ -68,6 +69,8 @@ def start_session_recorder(
       spawn.console_script(RECORDER_COMMAND),
       '--projects-dir',
       str(projects_dir),
+      '--log-path',
+      str(log_path),
       '--llm',
       json.dumps(llm),
     ]

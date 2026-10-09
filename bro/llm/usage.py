@@ -18,18 +18,21 @@ cached input as a subset of input, so cached tokens land in `cache_read`, the
 uncached remainder in `input`, `cache_write` stays 0, and reasoning tokens stay
 inside `output`.
 
-Two cumulative-usage sources, unified by `current_usage()`:
-
-- the usage file — the env-pointed (`BRO_USAGE_FILE`) JSON snapshot a native bro
-  run's LLM loop publishes after every API call (`publish`). Written atomically
-  (temp + rename) and self-describing (`{"agent": ..., "models": {slug: counts}}`):
-  the reader cannot trust the environment for the agent — an in-process bro run
-  inherits the launcher's `RIDE_BRO`, not its own. The first publish mints the
-  path and exports the pointer, so tool subprocesses spawned afterwards inherit
-  it.
-- the Claude Code session transcript — the session's own segment plus the
-  sidecar transcripts of the subagents it spawned (`session_transcripts`),
-  summed per model across every billed assistant message (`transcript_usage`).
+The cumulative usage of the agent whose work a process carries out is the
+usage file the environment points at (`BRO_USAGE_FILE`), read by
+`current_usage()`: a JSON snapshot of one publisher's per-model totals, written
+atomically (temp + rename) and self-describing
+(`{"agent": ..., "models": {slug: counts}}`), since the reader cannot trust the
+environment for the agent — an in-process bro run inherits the launcher's
+`RIDE_BRO`, not its own. A publisher writes its file before it names it to the
+processes it starts, so a pointer naming no file raises. A publisher running
+apart from the processes that read it names a lock it holds while it keeps the
+file current, and first writes a pending record (`{"pending": true, ...}`) that
+reads as no usage until it has billed some; a snapshot naming a lock nobody
+holds raises. A publisher that can no longer keep its file current replaces it
+with the reason (`{"failed": reason}`), which the reader raises rather than
+crediting a stale snapshot. A native LLM loop publishes after every API call
+into a file of its own process (`publish`).
 
 This module also owns the commit-footer line format (one `>`-quoted line; `'`
 thousands separator so it never collides with the `, ` joining model entries):
@@ -52,34 +55,30 @@ cumulatives lives in `bro.workflow.commit_footer`.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
 import sys
 import tempfile
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from bro.base.args import Parser
-from bro.monitor import claude_config_dir, in_claude_session, working_projects_dir
 
 __cli_name__ = 'usage'
 
 USAGE_FILE_VARIABLE = 'BRO_USAGE_FILE'
-SESSION_ID_VARIABLE = 'CLAUDE_CODE_SESSION_ID'
 
 _THOUSANDS = "'"
 _UP = '↑'
 _DOWN = '↓'
 
-# claude code labels locally-generated assistant turns (interrupts, local errors,
-# injected notices) with this sentinel model — no real API round-trip, so their
-# usage is not billed spend and must not be credited to any commit.
-_SYNTHETIC_MODEL = '<synthetic>'
-
 # the four billed token classes, in footer display order, mapped to their
-# Claude transcript `usage` field names.
+# Anthropic `usage` field names.
 CLASSES = ('input', 'cache_write', 'cache_read', 'output')
 _FIELD_OF = {
   'input': 'input_tokens',
@@ -138,143 +137,112 @@ class Usage:
 # --- the env-pointed usage file ----------------------------------------------
 
 
-def publish(agent: str, per_model: dict[str, Counts]) -> None:
-  """write the full cumulative snapshot to the env-pointed usage file, atomically.
+class UsageUnavailable(RuntimeError):
+  """the usage file holds no usage a reader can credit: its publisher failed,
+  stopped, or never wrote it."""
 
-  When the pointer is absent, mints a per-process temp path and exports it, so
-  tool subprocesses spawned after the first publish inherit the pointer. Each
-  publish replaces the whole file — the file is a snapshot of one writer's
-  totals, and a process runs one publishing LLM loop in practice.
-  """
-  pointer = os.environ.get(USAGE_FILE_VARIABLE)
-  if pointer is None:
-    pointer = str(Path(tempfile.gettempdir()) / f'bro-usage-{os.getpid()}.json')
-    os.environ[USAGE_FILE_VARIABLE] = pointer
-  path = Path(pointer)
-  payload = json.dumps({'agent': agent, 'models': per_model}, indent=2)
+
+def _replace(path: Path, payload: dict) -> None:
   tmp = path.with_name(path.name + '.tmp')
-  tmp.write_text(payload + '\n')
+  tmp.write_text(json.dumps(payload, indent=2) + '\n')
   tmp.replace(path)
 
 
-def read_usage_file(path: Path) -> Usage:
+def write_usage_file(path: Path, current: Usage, *, lock: Optional[Path] = None) -> None:
+  """replace the snapshot at `path` with `current`, atomically. A snapshot naming
+  `lock` is current only while its publisher holds that lock
+  (`holding_publisher_lock`)."""
+  payload: dict = {'agent': current.agent, 'models': current.per_model}
+  if lock is not None:
+    payload['lock'] = str(lock)
+  _replace(path, payload)
+
+
+def write_usage_pending(path: Path, lock: Path) -> None:
+  """replace the file at `path` with a record that its publisher, holding `lock`,
+  has billed no usage yet, atomically."""
+  _replace(path, {'pending': True, 'lock': str(lock)})
+
+
+def write_usage_failure(path: Path, reason: str) -> None:
+  """replace the snapshot at `path` with the reason its publisher stopped keeping
+  it current, atomically."""
+  _replace(path, {'failed': reason})
+
+
+@contextlib.contextmanager
+def holding_publisher_lock(path: Path) -> Generator[Path]:
+  """hold, for the block, the lock the snapshots a publisher writes at `path`
+  name, and yield it: a reader trusts such a snapshot only while it is held, so
+  a publisher that stops — failed, or killed with its process — releases what it
+  published without writing to it."""
+  lock = path.with_name(path.name + '.lock')
+  with lock.open('a') as stream:
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    yield lock
+
+
+def _held(lock: Path) -> bool:
+  try:
+    stream = lock.open('rb')
+  except FileNotFoundError:
+    return False
+  with stream:
+    try:
+      fcntl.flock(stream, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+      return True
+    return False
+
+
+def publish(agent: str, per_model: dict[str, Counts]) -> None:
+  """write the full cumulative snapshot to this process's own usage file and
+  point the environment at it, so the subprocesses it starts afterwards read it.
+
+  The file is the process's own rather than an inherited pointer's: a publisher
+  started under another agent's session would otherwise overwrite that agent's
+  snapshot. Each publish replaces the whole file — the file is a snapshot of
+  one writer's totals, and a process runs one publishing LLM loop in practice.
+  """
+  path = Path(tempfile.gettempdir()) / f'bro-usage-{os.getpid()}.json'
+  write_usage_file(path, Usage(agent=agent, per_model=per_model))
+  os.environ[USAGE_FILE_VARIABLE] = str(path)
+
+
+def read_usage_file(path: Path) -> Optional[Usage]:
+  """the usage the file at `path` holds; None while its publisher has billed none."""
   data = json.loads(path.read_text())
+  if 'failed' in data:
+    raise UsageUnavailable(f'{path}: its usage publisher failed: {data["failed"]}')
+  lock = data.get('lock')
+  if lock is not None and not _held(Path(lock)):
+    raise UsageUnavailable(f'{path}: its usage publisher no longer keeps it current')
+  if data.get('pending') is True:
+    return None
   per_model = {
     model: {c: int(counts.get(c, 0)) for c in CLASSES} for model, counts in data['models'].items()
   }
   return Usage(agent=data['agent'], per_model=per_model)
 
 
-# --- Claude transcript reading ------------------------------------------------
-
-
-def _session_segment() -> Optional[Path]:
-  """the transcript segment of the Claude Code session owning this process.
-
-  Claude names the segment file after the session id it exports, and a subagent
-  inherits its parent's — so the id resolves the session that paid even from a
-  working directory claude keeps no project dir for, such as an agent's own
-  worktree.
-  """
-  if not in_claude_session():
-    return None
-  session_id = os.environ.get(SESSION_ID_VARIABLE)
-  if session_id is not None:
-    segments = sorted((claude_config_dir() / 'projects').glob(f'*/{session_id}.jsonl'))
-    if len(segments) > 0:
-      return segments[0]
-  jsonls = sorted(working_projects_dir().glob('*.jsonl'), key=lambda p: p.stat().st_mtime)
-  if len(jsonls) == 0:
-    return None
-  return jsonls[-1]
-
-
-def session_transcripts() -> list[Path]:
-  """every transcript file the current Claude Code session bills through.
-
-  The segment records only the main thread; the turns of each subagent it
-  spawns land in a sidecar transcript under the segment's companion dir.
-  """
-  segment = _session_segment()
-  if segment is None:
-    return []
-  return [segment, *sorted(segment.with_suffix('').rglob('*.jsonl'))]
-
-
-def transcript_usage(path: Path) -> dict[str, Counts]:
-  """returns {model_slug: per-class totals} summed across every billed assistant message.
-
-  synthetic turns (model `<synthetic>`) are skipped — they carry no real API spend.
-  """
-  totals: dict[str, Counts] = {}
-  with path.open() as f:
-    for line in f:
-      try:
-        entry = json.loads(line)
-      except json.JSONDecodeError:
-        continue
-      msg = entry.get('message')
-      if not isinstance(msg, dict):
-        continue
-      u = msg.get('usage')
-      if not isinstance(u, dict):
-        continue
-      model = msg.get('model')
-      if not isinstance(model, str):
-        model = 'unknown'
-      if model == _SYNTHETIC_MODEL:
-        continue
-      totals[model] = add(totals.get(model, zero()), from_vendor_counts(u))
-  return totals
-
-
-def claude_version() -> str:
-  # claude code exports AI_AGENT like "claude-code_2-1-181_agent"
-  agent = os.environ.get('AI_AGENT')
-  if agent is not None:
-    m = re.match(r'claude-code_(\d+(?:-\d+)*)_', agent)
-    if m is not None:
-      return m.group(1).replace('-', '.')
-  # fall back to a version-looking component of a versioned install path
-  # (e.g. .../versions/2.1.181/claude)
-  execpath = os.environ.get('CLAUDE_CODE_EXECPATH')
-  if execpath is not None:
-    for part in Path(execpath).parts:
-      if re.match(r'^\d+\.\d+', part) is not None:
-        return part
-  return 'unknown'
-
-
-def claude_agent() -> str:
-  return f'Claude Code {claude_version()}'
-
-
-# --- the unified reader --------------------------------------------------------
-
-
 def current_usage() -> Optional[Usage]:
-  """the session's cumulative usage: the env-pointed usage file when the pointer
-  is set (bro runs), else the Claude session's transcripts, else None."""
+  """the cumulative usage the environment's usage file holds; None without a
+  pointer, and while its publisher has billed none. Raises `UsageUnavailable`
+  for a file no publisher wrote or one it no longer keeps current."""
   pointer = os.environ.get(USAGE_FILE_VARIABLE)
-  if pointer is not None:
-    return read_usage_file(Path(pointer))
-  per_model: dict[str, Counts] = {}
-  for transcript in session_transcripts():
-    for model, counts in transcript_usage(transcript).items():
-      per_model[model] = add(per_model.get(model, zero()), counts)
-  if len(per_model) == 0:
+  if pointer is None:
     return None
-  return Usage(agent=claude_agent(), per_model=per_model)
+  path = Path(pointer)
+  if not path.exists():
+    raise UsageUnavailable(f'{path}: no usage publisher has written it')
+  return read_usage_file(path)
 
 
 def agent_session() -> bool:
-  """whether an agent produced this process's work, by the presence of an
-  env-keyed usage source. Deliberately not `current_usage()`, which answers no
-  until the session's first billed turn has landed in a transcript."""
-  return (
-    os.environ.get(USAGE_FILE_VARIABLE) is not None
-    or os.environ.get(SESSION_ID_VARIABLE) is not None
-  )
+  """whether an agent produced this process's work, by the presence of a usage
+  file pointer. Deliberately not `current_usage()`, which answers no while the
+  publisher has billed no usage."""
+  return os.environ.get(USAGE_FILE_VARIABLE) is not None
 
 
 # --- footer formatting + parsing -----------------------------------------------
@@ -416,8 +384,7 @@ def main(argv: list[str]) -> Optional[int]:
   current = current_usage()
   if current is None:
     print(
-      f'error: no usage source found (no {USAGE_FILE_VARIABLE} pointer, '
-      'no Claude Code session transcript)',
+      f'error: no usage published (no {USAGE_FILE_VARIABLE} pointer, or none billed yet)',
       file=sys.stderr,
     )
     return 1

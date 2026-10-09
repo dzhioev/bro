@@ -16,7 +16,7 @@ def human(monkeypatch):
 
 
 def _session(monkeypatch, hold: str) -> None:
-  monkeypatch.setenv(usage.SESSION_ID_VARIABLE, 'co-author-test-session')
+  monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, '/nonexistent/co-author-test-usage.json')
   monkeypatch.setenv(HOLD_VARIABLE, hold)
 
 
@@ -31,7 +31,6 @@ class TestTrailer:
     assert trailer() is None
 
   def test_a_human_shell_credits_nobody(self, human, monkeypatch):
-    monkeypatch.delenv(usage.SESSION_ID_VARIABLE, raising=False)
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
     monkeypatch.setenv(HOLD_VARIABLE, 'attended')
     assert trailer() is None

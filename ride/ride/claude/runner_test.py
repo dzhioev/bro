@@ -14,7 +14,9 @@ import ride.claude.runner as ride_runner
 from bro import brash_policy, watches
 from bro.brash import Policy
 from bro.bro import BaseBro
+from bro.llm import usage
 from bro.llm.llms import claude_code
+from bro.llm.usage import Usage
 from bro.mcp import ANY, brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import RUNTIME_ENV, SUMMONED_ENV
@@ -75,6 +77,14 @@ def _project_hook(tree: Path, matcher: str) -> Path:
 
 def _fake_claude(environment: dict[str, str]) -> Path:
   return Path(environment['PATH'].partition(':')[0]) / 'claude'
+
+
+def _billed_record(*, output: int) -> dict:
+  return {
+    'type': 'assistant',
+    'version': '2.1.300',
+    'message': {'id': 'm1', 'model': 'claude-opus-5', 'usage': {'output_tokens': output}},
+  }
 
 
 class _Harness:
@@ -239,6 +249,40 @@ class TestSessionRun:
       # the launch recipe lands on the trail header as native.llm
       assert h.start_recorder.call_args.kwargs['llm'] == claude_code.LLMSpec().dump()
       assert h.start_recorder.return_value.stop.call_count == 1
+
+  def test_claude_and_its_tool_server_read_usage_from_the_file_the_runner_keeps_current(
+    self, monkeypatch, tmp_path
+  ):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as harness:
+      published: list[Usage] = []
+
+      def _run(binary, argv, environment, transcripts) -> ride_runner.Run:
+        transcript = transcripts / 'session-id.jsonl'
+        transcript.parent.mkdir(parents=True, exist_ok=True)
+        transcript.write_text(json.dumps(_billed_record(output=7)) + '\n')
+        target = Path(environment[usage.USAGE_FILE_VARIABLE])
+        deadline = time.monotonic() + 10
+        while (current := usage.read_usage_file(target)) is None:
+          assert time.monotonic() < deadline, 'the session usage was never published'
+          time.sleep(0.05)
+        published.append(current)
+        return ride_runner.Run(0, stopped=False)
+
+      harness.run_claude.side_effect = _run
+      assert ride_runner.run_session(_spec()) == 0
+      claude_environment = harness.run_claude.call_args.args[2]
+      server_environment = harness.start_server.call_args.args[2]
+      assert (
+        server_environment[usage.USAGE_FILE_VARIABLE]
+        == claude_environment[usage.USAGE_FILE_VARIABLE]
+      )
+      assert published == [
+        Usage(
+          agent='Claude Code 2.1.300',
+          per_model={'claude-opus-5': {'input': 0, 'cache_write': 0, 'cache_read': 0, 'output': 7}},
+        )
+      ]
 
   def test_statusline_projector_runs_for_the_session_and_stops_after(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

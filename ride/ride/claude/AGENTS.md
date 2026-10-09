@@ -14,7 +14,7 @@ Claude Code's own harness themed with the session's bro.
   It contributes the `persona:` resolver through `bro.mcp.targets`, which reads that hold off `BRO_HOLD` and refuses to resolve outside a managed session.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
   pinned absolute binary selection per isolation, the brash policy of a finite command list and the refusal of competing hooks before it,
-  resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
+  resume-id lookup, hold and kill wiring, session MCP server, recorder, usage publisher, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
 - `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a gated tool's call after its gate.
 - `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its in-flight turn reaches the transcript.
   Print mode runs over stream-json as the harness's `bro.turn_end` port, settling each turn end and ended by SIGINT;
@@ -30,8 +30,11 @@ Claude Code's own harness themed with the session's bro.
 - `claude_release.py` — the host-wide standalone-release cache:
   a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, seeding from another checksum-recorded copy, and cleanup.
 - `shell_prefix.py` — the shell claude's Bash commands run in, pinned, and the prefix script through which each of them gets the session's PATH.
-- `claude_config.py` — the `claude/` state dir under a workspace:
-  settings, transcript paths, subject reads, provisioning, and the container mount and env that carry it in.
+- `claude_config.py` — the config root a session names through `CLAUDE_CONFIG_DIR` and the `claude/` state dir under a workspace:
+  settings, the project-dir encoding and transcript paths, subject reads, provisioning, and the container mount and env that carry it in.
+- `transcripts.py` — following a session's transcript files as they grow:
+  the transcripts of the subagents a segment spawned, the complete lines a file holds past an offset, and a `watchfiles` watch that wakes a reader on every transcript write.
+- `usage_publisher.py` — the runner thread keeping the session's usage file (`BRO_USAGE_FILE`) current from its newest segment and that segment's subagents, billing each response once through the Claude trail format's classification.
 - `mcp.py` — session-local HTTP MCP server lifetime and Claude MCP config.
 - `recorder.py` — Claude transcript recorder daemon lifetime;
   `trail_recorder.py` is the daemon itself and the `ride.claude.trail-recorder` console script.

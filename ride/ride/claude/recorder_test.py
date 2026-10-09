@@ -9,9 +9,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from bro.monitor import encode_project_path, health
+from bro.monitor import health
 from bro.trails.local import LocalStore
 from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV, trails_dir
+from ride.claude.claude_config import encode_project_path
 from ride.claude.recorder import (
   _STOP_TIMEOUT,
   RECORDER_COMMAND,
@@ -41,6 +42,7 @@ class TestStart:
     assert argv[argv.index('--llm') + 1] == '{"model": "m"}'
     assert popen.call_args.kwargs['env'] == {'RIDE_WORKSPACE': 'w'}
     assert recorder.log_path == session_dir / 'claude' / 'session-recorder.log'
+    assert argv[argv.index('--log-path') + 1] == str(recorder.log_path)
 
   def test_the_daemon_is_named_by_its_path_in_this_installation(self, tmp_path, monkeypatch):
     _, popen, _, _ = self._start(tmp_path, monkeypatch)

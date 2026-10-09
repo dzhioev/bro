@@ -9,7 +9,7 @@ The bro-native engine and provider clients live in `bro.native`.
 ## Design
 
 - **Empty package hub.** `__init__.py` re-exports nothing, and consumers import submodules directly (`from bro.llm.llm import LLMSpec`).
-  `usage.py` reaches no further than `bro.base` and `bro.monitor`, which lets an environment without an engine read a usage record;
+  `usage.py` reaches no further than `bro.base`, which lets an environment without an engine read a usage record;
   a hub re-export would put unrelated live dependencies on every import of this package.
 - **Recipe boundary.** `llm.py`, `providers.py`, and `llms/` are declaration-side.
   Importing them may resolve and inspect every built-in recipe, but must not import `bro.native`, the OpenAI SDK, or the live MCP layer.
@@ -62,7 +62,7 @@ The bro-native engine and provider clients live in `bro.native`.
   Providers emit reasoning, interim assistant text, background-job notifications, and call-ID-aware tool events;
   runners emit turn boundaries.
   `NullObserver` is the explicit no-op.
-- `usage.py` — shared per-model usage accounting, bro-run publishing and Claude transcript discovery, footer formatting/parsing, and the `usage` CLI.
+- `usage.py` — shared per-model usage accounting, the env-pointed usage file every harness publishes its cumulative usage through, footer formatting/parsing, and the `usage` CLI.
   This module speaks of **vendors**, not providers:
   `vendor_of(slug)` answers who billed a model, while `providers.py` answers which launch recipe runs it.
 - `tracker.py` — the dependency-free `Tracker` ABC, durable sibling of `Observer`, plus `NullTracker`.

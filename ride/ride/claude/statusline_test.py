@@ -62,7 +62,7 @@ def _render(monkeypatch, tmp_path, *, recording=None, quests=None, detached=Fals
     monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
   monkeypatch.setattr(health, 'health_path', lambda: tmp_path / 'health.json')
   if recording is not None:
-    health.write(recording, interval=3)
+    health.write(recording, interval=3, diagnostics='session-recorder.log')
   monkeypatch.setattr(statusline, '_query_missions', lambda: list(quests or []))
   return statusline.render_statusline()
 

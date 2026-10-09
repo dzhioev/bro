@@ -18,9 +18,8 @@ from typing import Any
 from unittest import mock
 
 from bro import mcp
-from bro.monitor import encode_project_path
 from ride.claude.claude_argv import STREAM_JSON_ARGS, gate_hooks, reach_arguments
-from ride.claude.claude_config import _SESSION_SETTINGS_JSON
+from ride.claude.claude_config import _SESSION_SETTINGS_JSON, encode_project_path
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,

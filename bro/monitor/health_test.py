@@ -3,6 +3,8 @@ import json
 
 from bro.monitor import health
 
+LOG = '/session/recorder.log'
+
 
 def _redirect(monkeypatch, tmp_path):
   path = tmp_path / 'health.json'
@@ -21,52 +23,60 @@ def _age_beat(path, seconds: float) -> None:
 class TestHealth:
   def test_a_fresh_beat_is_silent(self, monkeypatch, tmp_path):
     _redirect(monkeypatch, tmp_path)
-    health.write('ok', interval=3)
+    health.write('ok', interval=3, diagnostics=LOG)
     assert health.problem() is None
 
   def test_error_reports_failing(self, monkeypatch, tmp_path):
     _redirect(monkeypatch, tmp_path)
-    health.write('error', 'AccessDeniedException: nope', interval=3)
-    assert health.problem() == health._FAILING
+    health.write('error', 'AccessDeniedException: nope', interval=3, diagnostics=LOG)
+    assert health.problem() == f'FAILING — see {LOG}'
 
   def test_a_later_beat_clears_an_error(self, monkeypatch, tmp_path):
     _redirect(monkeypatch, tmp_path)
-    health.write('error', 'AccessDeniedException: nope', interval=3)
-    health.write('ok', interval=3)
+    health.write('error', 'AccessDeniedException: nope', interval=3, diagnostics=LOG)
+    health.write('ok', interval=3, diagnostics=LOG)
     assert health.problem() is None
 
   def test_a_missed_beat_reports_stopped(self, monkeypatch, tmp_path):
     path = _redirect(monkeypatch, tmp_path)
-    health.write('ok', interval=3)
+    health.write('ok', interval=3, diagnostics=LOG)
     _age_beat(path, health._BEAT_GRACE + 60)
-    assert health.problem() == health._STOPPED
+    assert health.problem() == f'STOPPED — see {LOG}'
 
   def test_a_slow_attempt_stays_within_the_grace(self, monkeypatch, tmp_path):
     path = _redirect(monkeypatch, tmp_path)
-    health.write('ok', interval=3)
+    health.write('ok', interval=3, diagnostics=LOG)
     _age_beat(path, health._BEAT_GRACE - 10)
     assert health.problem() is None
 
   def test_a_missed_beat_keeps_the_recorded_error(self, monkeypatch, tmp_path):
     path = _redirect(monkeypatch, tmp_path)
-    health.write('error', 'AccessDeniedException: nope', interval=3)
+    health.write('error', 'AccessDeniedException: nope', interval=3, diagnostics=LOG)
     _age_beat(path, health._BEAT_GRACE + 60)
-    assert health.problem() == health._FAILING
+    assert health.problem() == f'FAILING — see {LOG}'
 
   def test_a_final_write_never_goes_stale(self, monkeypatch, tmp_path):
     path = _redirect(monkeypatch, tmp_path)
-    health.write('ok', interval=None)
+    health.write('ok', interval=None, diagnostics=LOG)
     _age_beat(path, 100_000)
     assert health.problem() is None
 
+  def test_a_payload_naming_no_diagnostics_still_reports(self, monkeypatch, tmp_path):
+    path = _redirect(monkeypatch, tmp_path)
+    health.write('error', 'AccessDeniedException: nope', interval=3, diagnostics=LOG)
+    data = json.loads(path.read_text())
+    del data['diagnostics']
+    path.write_text(json.dumps(data))
+    assert health.problem() == 'FAILING'
+
   def test_error_is_trimmed(self, monkeypatch, tmp_path):
     path = _redirect(monkeypatch, tmp_path)
-    health.write('error', 'x' * 5000, interval=3)
+    health.write('error', 'x' * 5000, interval=3, diagnostics=LOG)
     assert len(json.loads(path.read_text())['error']) == health._MAX_ERROR
 
   def test_write_is_atomic_no_tmp_left(self, monkeypatch, tmp_path):
     path = _redirect(monkeypatch, tmp_path)
-    health.write('ok', interval=3)
+    health.write('ok', interval=3, diagnostics=LOG)
     assert list(path.parent.iterdir()) == [path]
 
   def test_absent_is_silent(self, monkeypatch, tmp_path):
@@ -94,5 +104,5 @@ class TestOutsideASession:
   def test_a_beat_writes_nothing(self, monkeypatch, tmp_path):
     monkeypatch.delenv('RIDE_SESSION_DIR', raising=False)
     monkeypatch.chdir(tmp_path)
-    health.write('error', 'the recorder could not start', interval=None)
+    health.write('error', 'the recorder could not start', interval=None, diagnostics=LOG)
     assert list(tmp_path.iterdir()) == []
