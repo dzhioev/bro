@@ -28,7 +28,7 @@ Claude Code's own harness themed with the session's bro.
   `native_tools_llm_test.py` holds them against that release (`bro/reference/ride.md`, "The claude argv").
 - `claude_auth.py` — the setup-token environment.
 - `claude_release.py` — the host-wide standalone-release cache:
-  a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, and cleanup.
+  a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, seeding from another checksum-recorded copy, and cleanup.
 - `shell_prefix.py` — the shell claude's Bash commands run in, pinned, and the prefix script through which each of them gets the session's PATH.
 - `claude_config.py` — the `claude/` state dir under a workspace:
   settings, transcript paths, subject reads, provisioning, and the container mount and env that carry it in.

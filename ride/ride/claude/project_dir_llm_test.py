@@ -14,15 +14,9 @@ from bro.monitor import encode_project_path
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
-  pinned_claude,
 )
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
-
-
-@pytest.fixture(scope='module')
-def claude() -> Path:
-  return pinned_claude()
 
 
 @pytest.mark.parametrize(

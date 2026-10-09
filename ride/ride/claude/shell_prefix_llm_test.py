@@ -12,12 +12,9 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pytest
-
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
-  pinned_claude,
 )
 from ride.claude.shell_prefix import apply_shell_prefix
 
@@ -28,11 +25,6 @@ _SLOW_RC = 'sleep 12\n'
 # bash reads it only as a login shell: in the fallback, never in the snapshot's commands
 _PATH_RESETTING_PROFILE = 'PATH=/usr/bin:/bin\n'
 _MISSING = 'NO-WATCH-RUN'
-
-
-@pytest.fixture(scope='module')
-def claude() -> Path:
-  return pinned_claude()
 
 
 def _watch_run() -> str:

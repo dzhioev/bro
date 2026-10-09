@@ -30,29 +30,25 @@ RECIPES: dict[str, tuple[str, ...]] = {
 _SESSION_TIMEOUT_SECONDS = 900
 
 
-def harness_recipes() -> list:
-  """one `(harness, recipe)` parameter per installed harness and supported
-  recipe; an installed harness with no supported recipe fails collection."""
+def harness_matrix() -> pytest.MarkDecorator:
+  """parametrize a probe with one `(harness, recipe)` case per installed harness
+  and supported recipe, `harness` through its session-scoped fixture (the
+  package `conftest.py`); an installed harness with no supported recipe fails
+  collection."""
   installed = installed_harness_names()
   unlisted = sorted(set(installed) - RECIPES.keys())
   if len(unlisted) > 0:
     raise LookupError(
       f'conformance lists no recipe for installed harness(es): {", ".join(unlisted)}'
     )
-  return [
+  cases = [
     pytest.param(harness, recipe, id=f'{harness}-{recipe}')
     for harness in installed
     for recipe in RECIPES[harness]
   ]
-
-
-def data_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
-  """the runtime data root every probe of a pytest run launches under, so the
-  runtime bundle ride freezes and the harness binaries it fetches are paid once
-  per run rather than once per probe."""
-  path = tmp_path_factory.getbasetemp() / 'conformance-data'
-  path.mkdir(exist_ok=True)
-  return path
+  return pytest.mark.parametrize(
+    ('harness', 'recipe'), cases, indirect=['harness'], scope='session'
+  )
 
 
 def run_unattended(

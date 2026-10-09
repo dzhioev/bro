@@ -39,7 +39,6 @@ from ride.claude.live_claude_test_helper import (
   Feed,
   bounded,
   claude_token,
-  pinned_claude,
   watched_session,
 )
 from ride.claude.waiter_state import WaiterState
@@ -56,11 +55,6 @@ _REPLY_WITH_THE_LINE = (
   'When a later message shows watch lines, reply with the line that contains PROBE-LINE, '
   'verbatim, and nothing else.'
 )
-
-
-@pytest.fixture(scope='module')
-def claude() -> Path:
-  return pinned_claude()
 
 
 def _config(root: Path, *, user_hooks: dict | None = None) -> Path:

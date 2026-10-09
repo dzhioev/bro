@@ -24,17 +24,11 @@ from ride.claude.claude_config import _SESSION_SETTINGS_JSON, seed_session_plugi
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
-  pinned_claude,
 )
 
 _SESSION_TIMEOUT_SECONDS = 300
 # `init` reports the delegation spawner under its former name
 _REPORTED_NAMES = {'Agent': 'Task'}
-
-
-@pytest.fixture(scope='module')
-def claude() -> Path:
-  return pinned_claude()
 
 
 def _session(tmp_path: Path, *, token: str | None) -> tuple[Path, dict[str, str]]:

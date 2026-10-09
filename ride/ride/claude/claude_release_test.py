@@ -17,6 +17,7 @@ from ride.claude.claude_release import (
   checksum,
   clean_cached_releases,
   host_platform,
+  seed_binary,
 )
 
 _PLATFORM = 'linux-x64'
@@ -179,6 +180,57 @@ def test_a_download_off_the_release_checksum_is_refused(runtime_root, release_si
 
   with pytest.raises(ValueError, match='release manifest states'):
     cached_binary(_VERSION, _PLATFORM)
+
+  assert [path for path in release.cache_root().rglob('*') if path.is_file()] == []
+
+
+def test_a_seeded_copy_is_reused_offline(runtime_root, monkeypatch, tmp_path):
+  source = _cached_copy(tmp_path / 'source', _VERSION, b'seeded')
+  monkeypatch.setattr(
+    release,
+    '_fetch_json',
+    lambda _url: pytest.fail('a seeded copy must not read the release manifest'),
+  )
+
+  seeded = seed_binary(source, _VERSION, _PLATFORM)
+
+  assert cached_binary(_VERSION, _PLATFORM) == seeded
+  assert seeded.read_bytes() == b'seeded'
+  assert seeded.stat().st_mode & 0o111 != 0
+
+
+def test_seeding_keeps_a_verified_cached_copy(runtime_root, release_site, tmp_path):
+  binary_content, _fetched = release_site
+  cached = cached_binary(_VERSION, _PLATFORM)
+  source = _cached_copy(tmp_path / 'source', _VERSION, b'another build')
+
+  assert seed_binary(source, _VERSION, _PLATFORM) == cached
+  assert cached.read_bytes() == binary_content
+
+
+def test_a_cleanup_during_a_seed_keeps_the_seeded_version(runtime_root, monkeypatch, tmp_path):
+  source = _cached_copy(tmp_path / 'source', _VERSION, b'seeded')
+  copy = release.shutil.copyfile
+  cleanups: list[tuple[int, int]] = []
+
+  def copy_after_a_cleanup(source_path: Path, destination: Path) -> Path:
+    cleanups.append(clean_cached_releases())
+    return copy(source_path, destination)
+
+  monkeypatch.setattr(release.shutil, 'copyfile', copy_after_a_cleanup)
+
+  seeded = seed_binary(source, _VERSION, _PLATFORM)
+
+  assert cleanups == [(0, 1)]
+  assert seeded.read_bytes() == b'seeded'
+
+
+def test_a_source_off_its_checksum_record_is_not_seeded(runtime_root, tmp_path):
+  source = _cached_copy(tmp_path / 'source', _VERSION, b'recorded')
+  source.write_bytes(b'changed')
+
+  with pytest.raises(ValueError, match='checksum record states'):
+    seed_binary(source, _VERSION, _PLATFORM)
 
   assert [path for path in release.cache_root().rglob('*') if path.is_file()] == []
 

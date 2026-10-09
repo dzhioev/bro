@@ -24,7 +24,6 @@ from ride.claude.claude_config import _SESSION_SETTINGS_JSON
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
-  pinned_claude,
 )
 from ride.claude.read_gate import TEMP_ROOT_ENV, session_folders
 
@@ -41,7 +40,8 @@ class _Session:
   session id fixed in advance, so the probe knows the gate's folders before the
   session starts."""
 
-  def __init__(self, root: Path) -> None:
+  def __init__(self, claude: Path, root: Path) -> None:
+    self.claude = claude
     self.id = str(uuid.uuid4())
     self.workspace = root / 'workspace'
     self.workspace.mkdir()
@@ -82,7 +82,7 @@ class _Session:
     message = {'type': 'user', 'message': {'role': 'user', 'content': prompt}}
     completed = subprocess.run(
       [
-        str(pinned_claude()),
+        str(self.claude),
         '--model',
         'haiku',
         '--dangerously-skip-permissions',
@@ -131,9 +131,9 @@ def _inside(path: str, folder: Path) -> bool:
 
 
 def test_a_backgrounded_commands_output_and_an_oversized_result_read_back_through_the_gate(
-  tmp_path: Path,
+  claude: Path, tmp_path: Path
 ) -> None:
-  session = _Session(tmp_path)
+  session = _Session(claude, tmp_path)
   prompt = (
     'Follow these steps in order.\n'
     '1. Run the command `echo background-marker-41c7` with the Bash tool, with '
@@ -154,8 +154,10 @@ def test_a_backgrounded_commands_output_and_an_oversized_result_read_back_throug
   assert any('oversized-marker-8e95' in result for result in oversized), reads
 
 
-def test_the_gate_denies_a_workspace_file_and_links_out_of_its_folders(tmp_path: Path) -> None:
-  session = _Session(tmp_path)
+def test_the_gate_denies_a_workspace_file_and_links_out_of_its_folders(
+  claude: Path, tmp_path: Path
+) -> None:
+  session = _Session(claude, tmp_path)
   links = []
   for folder in (session.background_folder, session.results_folder):
     folder.mkdir(parents=True)
