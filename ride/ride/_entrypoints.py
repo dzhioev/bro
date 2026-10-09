@@ -18,6 +18,10 @@ def ride_claude_command_gate():
   return run_cli('ride.claude.command_gate', sys.argv)
 
 
+def ride_claude_read_gate():
+  return run_cli('ride.claude.read_gate', sys.argv)
+
+
 def ride_claude_statusline():
   return run_cli('ride.claude.statusline', sys.argv)
 

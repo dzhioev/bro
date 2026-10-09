@@ -57,7 +57,6 @@ def _spec(**overrides) -> SessionSpec:
     'bro': 'dev',
     'prompt': 'start here',
     'subject': 'start here',
-    'arguments': [],
   }
   values.update(overrides)
   return SessionSpec(**values)
@@ -146,23 +145,41 @@ class TestNativeArgv:
     assert self._argv(spec, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
-      'dev',
-      'start here',
       '--llm',
       'openai:fable:high+fast',
       '--hold',
       'attended',
+      '--',
+      'dev',
+      'start here',
     ]
 
-  def test_forwarded_arguments_splice_into_the_native_argv(self, monkeypatch):
-    argv = self._argv(_spec(arguments=['--fork']), monkeypatch)
-    assert argv == ['/venv/bin/bro', 'chat', 'dev', 'start here', '--hold', 'attended', '--fork']
+  def test_a_prompt_that_reads_as_a_flag_reaches_bro_run_as_its_input(self, monkeypatch):
+    import bro.run as bro_run
+
+    argv = self._argv(_spec(solo=True, hold='unattended', prompt='--hold=guided'), monkeypatch)
+    runs: list[tuple[str, str]] = []
+
+    class _Runner:
+      def __init__(self, bro) -> None:
+        del bro
+
+      async def run(self, text: str, **options) -> None:
+        runs.append((text, options['hold']))
+
+    monkeypatch.setattr('bro.launch.run.create_bro_for_run', lambda name, selection: MagicMock())
+    monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: None)
+    monkeypatch.setattr('bro.launch.run.Runner', _Runner)
+    monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
+    bro_run.main(argv)
+
+    assert runs == [('--hold=guided', 'unattended')]
 
   def test_resume_carries_the_session_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
     session = self._session_dir(monkeypatch, tmp_path)
     trail_pointer.write(session / trail_pointer.FILENAME, 'trail-1')
     argv = self._argv(_spec(resume=True, prompt=None), monkeypatch)
-    assert argv[:3] == ['/venv/bin/bro', 'chat', 'dev']
+    assert argv[:2] == ['/venv/bin/bro', 'chat'] and argv[-2:] == ['--', 'dev']
     assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
     assert '"type":"openai"' in argv[argv.index('--continue-llm') + 1]
 
@@ -215,7 +232,7 @@ class TestContainerSession:
     launch = captured['launch']
     assert launch.command == [
       'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro',
-      '--hold', 'unattended', 'dev', 'start here',
+      '--hold', 'unattended', '--', 'dev', 'start here',
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
@@ -358,6 +375,7 @@ class TestUnboxedSession:
       str(tmp_path),
       '--hold',
       'attended',
+      '--',
       'dev',
       'start here',
     ]

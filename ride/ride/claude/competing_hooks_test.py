@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from ride.claude.competing_hooks import find
+from ride.claude.native_tools import COMMAND_TOOLS, GATED_READ
 
 
 def _hooks(matcher: str | None = 'Bash', event: str = 'PreToolUse') -> dict:
@@ -52,7 +53,7 @@ class TestSettings:
   @pytest.mark.parametrize('name', ['settings.json', 'settings.local.json'])
   def test_a_project_settings_hook_on_bash_is_found(self, project, config, name):
     path = _write(project / '.claude' / name, json.dumps({'hooks': _hooks()}))
-    assert find(project, config) == [f"{path}: a PreToolUse hook matching 'Bash'"]
+    assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Bash'"]
 
   @pytest.mark.parametrize(
     'matcher', [None, '', '*', 'Monitor', 'Edit|Bash', 'Write, Monitor', 'Ba.*', '^Mon']
@@ -61,26 +62,34 @@ class TestSettings:
     self, project, config, matcher
   ):
     _write(project / '.claude' / 'settings.json', json.dumps({'hooks': _hooks(matcher)}))
-    assert len(find(project, config)) == 1
+    assert len(find(project, config, COMMAND_TOOLS)) == 1
 
   @pytest.mark.parametrize('matcher', ['Edit|Write', 'Bashful', 'mcp__.*', '^Edit$'])
   def test_a_matcher_reaching_neither_tool_is_left_alone(self, project, config, matcher):
     _write(project / '.claude' / 'settings.json', json.dumps({'hooks': _hooks(matcher)}))
-    assert find(project, config) == []
+    assert find(project, config, COMMAND_TOOLS) == []
+
+  def test_the_scan_looks_for_hooks_on_the_tools_it_is_given(self, project, config):
+    path = _write(project / '.claude' / 'settings.json', json.dumps({'hooks': _hooks(GATED_READ)}))
+    assert find(project, config, COMMAND_TOOLS) == []
+    assert find(project, config, (GATED_READ,)) == [f"{path}: a PreToolUse hook matching 'Read'"]
 
   def test_other_events_and_empty_groups_are_left_alone(self, project, config):
     hooks = {**_hooks(event='PostToolUse'), 'PreToolUse': [{'matcher': 'Bash', 'hooks': []}]}
     _write(project / '.claude' / 'settings.json', json.dumps({'hooks': hooks}))
-    assert find(project, config) == []
+    assert find(project, config, COMMAND_TOOLS) == []
 
   def test_settings_turning_every_hook_off_are_found(self, project, config):
     path = _write(project / '.claude' / 'settings.json', json.dumps({'disableAllHooks': True}))
-    assert find(project, config) == [f'{path}: disableAllHooks, which turns the command gate off']
+    for tools in (COMMAND_TOOLS, (GATED_READ,)):
+      assert find(project, config, tools) == [
+        f'{path}: disableAllHooks, which turns every gate off'
+      ]
 
   def test_settings_above_the_working_directory_are_left_alone(self, project, config):
     # Claude reads project settings from its working directory alone
     _write(project.parent / '.claude' / 'settings.json', json.dumps({'hooks': _hooks()}))
-    assert find(project, config) == []
+    assert find(project, config, COMMAND_TOOLS) == []
 
 
 class TestComponents:
@@ -98,15 +107,15 @@ class TestComponents:
     self, project, config, relative
   ):
     path = _component(project.parent / relative, _hooks())
-    assert find(project, config) == [f"{path}: a PreToolUse hook matching 'Bash'"]
+    assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Bash'"]
 
   def test_a_component_in_the_sessions_claude_folder_is_found(self, project, config):
     path = _component(config / 'skills' / 'probe' / 'SKILL.md', _hooks('Monitor'))
-    assert find(project, config) == [f"{path}: a PreToolUse hook matching 'Monitor'"]
+    assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Monitor'"]
 
   def test_a_skills_supporting_file_is_not_a_skill(self, project, config):
     _component(project / '.claude' / 'skills' / 'probe' / 'reference.md', _hooks())
-    assert find(project, config) == []
+    assert find(project, config, COMMAND_TOOLS) == []
 
   def test_a_value_claude_reads_as_a_quoted_string_parses(self, project, config):
     path = _component(
@@ -114,7 +123,7 @@ class TestComponents:
       _hooks(),
       extra='description: Use when: the user asks [for] it',
     )
-    assert find(project, config) == [f"{path}: a PreToolUse hook matching 'Bash'"]
+    assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Bash'"]
 
 
 class TestPlugins:
@@ -126,7 +135,7 @@ class TestPlugins:
       project / '.claude' / 'settings.json', json.dumps({'enabledPlugins': {'probe@market': True}})
     )
 
-    assert find(project, config) == [
+    assert find(project, config, COMMAND_TOOLS) == [
       f"{hooks_file}: a PreToolUse hook matching 'Bash'",
       f'{skill}: a PreToolUse hook matching every tool',
     ]
@@ -137,10 +146,14 @@ class TestPlugins:
     listed = _write(root / 'extra-hooks.json', json.dumps({'hooks': _hooks('Monitor')}))
     _write(manifest, json.dumps({'name': 'probe', 'hooks': ['./extra-hooks.json']}))
     _write(config / 'settings.json', json.dumps({'enabledPlugins': {'probe@market': True}}))
-    assert find(project, config) == [f"{listed}: a PreToolUse hook matching 'Monitor'"]
+    assert find(project, config, COMMAND_TOOLS) == [
+      f"{listed}: a PreToolUse hook matching 'Monitor'"
+    ]
 
     _write(manifest, json.dumps({'name': 'probe', 'hooks': _hooks()}))
-    assert find(project, config) == [f"{manifest}: a PreToolUse hook matching 'Bash'"]
+    assert find(project, config, COMMAND_TOOLS) == [
+      f"{manifest}: a PreToolUse hook matching 'Bash'"
+    ]
 
   def test_a_plugin_local_settings_disable_is_left_alone(self, tmp_path, project, config):
     root = _plugin(config, tmp_path / 'plugin')
@@ -151,12 +164,12 @@ class TestPlugins:
       project / '.claude' / 'settings.local.json',
       json.dumps({'enabledPlugins': {'probe@market': False}}),
     )
-    assert find(project, config) == []
+    assert find(project, config, COMMAND_TOOLS) == []
 
   def test_an_installed_plugin_no_settings_enable_is_left_alone(self, tmp_path, project, config):
     root = _plugin(config, tmp_path / 'plugin')
     _write(root / 'hooks' / 'hooks.json', json.dumps({'hooks': _hooks()}))
-    assert find(project, config) == []
+    assert find(project, config, COMMAND_TOOLS) == []
 
 
 class TestUnreadable:
@@ -172,13 +185,13 @@ class TestUnreadable:
   )
   def test_a_candidate_the_scan_cannot_read_is_found(self, project, config, relative, text):
     path = _write(project.parent / relative, text)
-    (finding,) = find(project, config)
+    (finding,) = find(project, config, COMMAND_TOOLS)
     assert finding.startswith(f'{path}: cannot be read')
 
   def test_an_unreadable_installed_plugin_record_is_found(self, project, config):
     record = _write(config / 'plugins' / 'installed_plugins.json', 'not json')
     _write(config / 'settings.json', json.dumps({'enabledPlugins': {'probe@market': True}}))
-    (finding,) = find(project, config)
+    (finding,) = find(project, config, COMMAND_TOOLS)
     assert finding.startswith(f'{record}: cannot be read')
 
 
@@ -187,4 +200,4 @@ def test_a_session_configured_as_ride_configures_it_has_nothing_to_report(projec
   root = _plugin(config, config / 'plugins' / 'cache' / 'pyright', key='pyright-lsp@official')
   _write(root / 'README.md', '# pyright\n')
   _write(config / 'settings.json', json.dumps({'enabledPlugins': {'pyright-lsp@official': True}}))
-  assert find(project, config) == []
+  assert find(project, config, (*COMMAND_TOOLS, GATED_READ)) == []

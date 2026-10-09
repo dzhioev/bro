@@ -132,11 +132,6 @@ class TestSolo:
       ride_cli.main(['ride', 'solo', '--workspace', 'shared', '--keep', 'dev', 'do it'])
     assert 'pinned workspaces are always kept' in capsys.readouterr().err
 
-  def test_forwards_arguments_only_after_the_separator(self):
-    with patch('ride.cli.start_session', return_value=0) as start:
-      ride_cli.main(['ride', 'solo', 'dev', 'hello', '--', '--debug', 'mcp'])
-    assert start.call_args.args[0].arguments == ['--debug', 'mcp']
-
   def test_no_trails_stays_an_outer_launch_setting(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'solo', '--harness', 'bro', '--no-trails', 'dev', 'hello']) == 0
@@ -600,21 +595,6 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--workspace', 'shared', '--drop', 'dev'])
     assert 'pinned workspaces are always kept' in capsys.readouterr().err
 
-  def test_forwards_arguments_only_after_the_separator(self):
-    with patch('ride.cli.start_session', return_value=0) as start:
-      ride_cli.main(['ride', 'along', 'dev', 'hello', '--', '--debug', 'mcp'])
-    assert start.call_args.args[0].arguments == ['--debug', 'mcp']
-
-  def test_forwarded_arguments_reach_the_bro_harness_too(self):
-    with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', '--harness', 'bro', 'dev', '--', '--fork']) == 0
-    spec = start.call_args.args[0]
-    assert spec.arguments == ['--fork']
-    assert _session_command(spec) == [
-      'do-ride', 'along', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
-      '--hold', 'attended', 'dev', '--', '--fork',
-    ]  # fmt: skip
-
   def test_incompatible_provider_names_the_harness_remedy(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
@@ -633,7 +613,7 @@ class TestAlong:
     assert spec.harness == 'bro'
     assert _session_command(spec) == [
       'do-ride', 'along', '--workspace', 'ride-dev-12345678', '--harness', 'bro',
-      '--hold', 'attended', 'dev',
+      '--hold', 'attended', '--', 'dev',
     ]  # fmt: skip
 
   def test_attached_launch_passes_project_depth_to_host_resolution(self, monkeypatch):
@@ -712,6 +692,27 @@ class TestLifecycle:
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'solo', '--in-place', 'dev', 'prompt'])
     assert 'unrecognized arguments' in capsys.readouterr().err
+
+  @pytest.mark.parametrize(
+    'launch',
+    [
+      lambda tail: ride_cli.main(['ride', 'solo', '--runtime-bundle', '/runtime', 'dev', *tail]),
+      lambda tail: ride_cli.main(['ride', 'along', '--runtime-bundle', '/runtime', 'dev', *tail]),
+      lambda tail: ride_cli.alias_main(
+        ['ask', '--runtime-bundle', '/runtime', 'dev', *tail], solo=True
+      ),
+    ],
+    ids=['solo', 'along', 'alias'],
+  )
+  def test_a_session_launch_refuses_harness_arguments_before_any_workspace(self, capsys, launch):
+    with (
+      patch.object(ride_cli, 'reexec_from_runtime') as reexec,
+      patch.object(ride_cli, 'start_session') as start,
+      pytest.raises(SystemExit),
+    ):
+      launch(['hello', '--', '--debug', 'mcp'])
+    assert 'no harness arguments after `--`; drop `-- --debug mcp`' in capsys.readouterr().err
+    assert reexec.call_count == 0 and start.call_count == 0
 
   def test_resume_dispatches_scope_overrides(self):
     with patch('ride.cli.resume_session', return_value=0) as resume:

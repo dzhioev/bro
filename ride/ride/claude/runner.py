@@ -25,7 +25,7 @@ from bro.monitor import (
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
 from bro.workspace.paths import ISOLATION_ENV
-from ride.claude import claude_release
+from ride.claude import claude_release, native_tools
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
@@ -199,26 +199,27 @@ def _run_claude_summoned_interactive(
 
 
 class _CompetingHooks(RuntimeError):
-  """a session's own Claude configuration could take a call around the command gate."""
+  """a session's own Claude configuration could take a call around a tool's gate."""
 
 
 def _session_brash_policy(bro: str, tree: Path) -> Optional[Path]:
   """write the session's brash policy where `bro`'s command list is finite, and
   return it; None where the bro runs no line in brash. Raises `_CompetingHooks`
   first where the session's own Claude configuration could take a call around
-  the command gate."""
+  the gate of a tool the bro is served behind one."""
   from bro.registry import create_bro
 
   reach = create_bro(bro).reach()
+  gated = native_tools.gated(reach)
+  if len(gated) > 0:
+    competing = find_competing_hooks(tree, claude_config_dir(), gated)
+    if len(competing) > 0:
+      raise _CompetingHooks(
+        f"{bro} is served {', '.join(gated)} behind ride's gates, and this session's "
+        'Claude configuration could take a call around them:\n  ' + '\n  '.join(competing)
+      )
   if not brash_policy.finite(reach):
     return None
-  competing = find_competing_hooks(tree, claude_config_dir())
-  if len(competing) > 0:
-    raise _CompetingHooks(
-      f"{bro}'s finite command list runs each Bash and Monitor line in brash, and this "
-      "session's Claude configuration could take a call around that gate:\n  "
-      + '\n  '.join(competing)
-    )
   state = _claude_state_dir()
   state.mkdir(parents=True, exist_ok=True)
   return brash_policy.write(state, reach)
@@ -238,14 +239,14 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     return 1
 
   transcripts = claude_projects_dir(tree)
-  claude_args = list(spec.arguments)
+  resume_session: Optional[str] = None
   if spec.resume:
     latest = latest_jsonl(transcripts)
     if latest is None:
       log.error('no claude session found in %s', transcripts)
       return 1
     log.info('resuming session %s', latest.stem)
-    claude_args = ['--resume', latest.stem, *claude_args]
+    resume_session = latest.stem
 
   with contextlib.ExitStack() as teardown:
     waiters = WaiterState.for_session()
@@ -267,7 +268,7 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     teardown.callback(server.stop)
 
     launch = build_claude_launch(
-      spec, claude_args=claude_args, endpoint=server.endpoint, brash_policy=policy
+      spec, resume_session=resume_session, endpoint=server.endpoint, brash_policy=policy
     )
     if os.environ.get('TRAILS_DISABLED') is None:
       try:

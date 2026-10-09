@@ -15,7 +15,7 @@ from bro import brash_policy, watches
 from bro.brash import Policy
 from bro.bro import BaseBro
 from bro.llm.llms import claude_code
-from bro.mcp import brash
+from bro.mcp import ANY, brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import RUNTIME_ENV, SUMMONED_ENV
 from ride.claude.claude_argv import ClaudeLaunch
@@ -36,6 +36,23 @@ class _ListedBro(BaseBro):
 
   def __init__(self):
     super().__init__(system_prompt='')
+
+
+class _FilelessBro(BaseBro):
+  name = 'fileless'
+  description = 'd'
+  tools: ClassVar = [brash(ANY)]
+
+  def __init__(self):
+    super().__init__(system_prompt='')
+
+
+def _project_hook(tree: Path, matcher: str) -> Path:
+  settings = tree / '.claude' / 'settings.json'
+  settings.parent.mkdir()
+  group = {'matcher': matcher, 'hooks': [{'type': 'command'}]}
+  settings.write_text(json.dumps({'hooks': {'PreToolUse': [group]}}))
+  return settings
 
 
 def _fake_claude(environment: dict[str, str]) -> Path:
@@ -141,7 +158,7 @@ class TestSessionRun:
       assert ride_runner.run_session(_spec(resume=True)) == 1
       assert h.run_claude.call_count == 0
 
-  def test_resume_prepends_latest_session_id(self, monkeypatch, tmp_path):
+  def test_resume_continues_the_latest_session(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
       h.projects_dir.mkdir()
@@ -149,8 +166,8 @@ class TestSessionRun:
       old.write_text('{}')
       os.utime(old, (1, 1))
       (h.projects_dir / 'newer.jsonl').write_text('{}')
-      assert ride_runner.run_session(_spec(resume=True, arguments=['--foo'])) == 0
-      assert h.build.call_args.kwargs['claude_args'] == ['--resume', 'newer', '--foo']
+      assert ride_runner.run_session(_spec(resume=True)) == 0
+      assert h.build.call_args.kwargs['resume_session'] == 'newer'
 
   def test_the_waiter_starts_afresh_and_is_stood_down_once_claude_exits(
     self, monkeypatch, tmp_path
@@ -286,14 +303,30 @@ class TestSessionRun:
   ):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _ListedBro())
-    settings = tmp_path / '.claude' / 'settings.json'
-    settings.parent.mkdir()
-    settings.write_text(json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'type': 'command'}]}]}}))
+    settings = _project_hook(tmp_path, '*')
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 1
       assert h.start_server.call_count == 0
       assert h.run_claude.call_count == 0
     assert f'{settings}: a PreToolUse hook matching every tool' in caplog.text
+
+  def test_a_hook_on_read_refuses_a_session_without_files(self, monkeypatch, tmp_path, caplog):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _FilelessBro())
+    settings = _project_hook(tmp_path, 'Read')
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_session(_spec()) == 1
+      assert h.run_claude.call_count == 0
+    assert f"{settings}: a PreToolUse hook matching 'Read'" in caplog.text
+
+  def test_a_session_served_nothing_behind_a_gate_ignores_its_own_hooks(
+    self, monkeypatch, tmp_path
+  ):
+    monkeypatch.chdir(tmp_path)
+    _project_hook(tmp_path, '*')
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_session(_spec(bro='dev')) == 0
+      assert h.run_claude.call_count == 1
 
   def test_server_start_failure_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
