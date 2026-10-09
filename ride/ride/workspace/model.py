@@ -8,6 +8,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import ClassVar, Optional
 
+from bro.monitor import workspace_session_dir
 from bro.workspace.paths import runtime_base, workspace_dir, workspace_tree, workspaces_dir
 from ride.repository import Repository, as_repository, is_git_url, open_repository
 from ride.workspace.docker import project_image_tag, runtime_image_tag
@@ -63,20 +64,10 @@ class AttachmentMismatch(ValueError):
   """a launch named a different attachment than the workspace records."""
 
 
-def _last_active(tree: Path) -> Optional[float]:
-  if not tree.is_dir():
-    return None
-  result = subprocess.run(
-    ['find', str(tree), '-not', '-path', '*/.git/*', '-type', 'f', '-printf', '%T@\n'],
-    capture_output=True,
-    text=True,
-  )
-  if result.returncode != 0 or len(result.stdout.strip()) == 0:
-    return None
-  return max(float(line) for line in result.stdout.splitlines() if len(line) > 0)
-
-
 KILLED = 'killed'
+# the session's last-activity mark among its session records, touched by the
+# session runner and its harness as the session works
+ACTIVITY_FILENAME = 'activity'
 
 
 def _cleanup_image(repository: Optional[Repository]) -> Optional[str]:
@@ -332,7 +323,11 @@ class Workspace(ABC):
     return self._recorded_exit_clean()
 
   def last_active(self) -> Optional[float]:
-    return _last_active(self.tree)
+    """when the workspace's session last marked activity, or None if none ever did."""
+    try:
+      return (workspace_session_dir(self.path) / ACTIVITY_FILENAME).stat().st_mtime
+    except FileNotFoundError:
+      return None
 
   @classmethod
   def open(cls, name: str) -> 'Workspace':

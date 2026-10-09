@@ -1,6 +1,7 @@
 """Resume machinery for reopening a recorded call conversation."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 from bro.fork import fork, latest_fork_point
@@ -43,6 +44,7 @@ def resume(
   llm_spec: NativeLLMSpec,
   at: Optional[int] = None,
   hold: Optional[str] = None,
+  activity_file: Optional[Path] = None,
 ) -> ResumedCall:
   """Continue a recorded call at an explicit or latest consistent fork point."""
   if trail_ref == RESUME_LATEST:
@@ -66,5 +68,6 @@ def resume(
     surface=_CALL_ENTRY_POINT,
     hold=hold,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
+    activity_file=activity_file,
   )
   return ResumedCall(runner=runner, history=history, trail_id=trail_id)

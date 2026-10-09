@@ -40,7 +40,6 @@ from ride.workspace.build_context import claude_code_version
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
-  from ride.session import SessionSpec
 
 
 _CONTAINER_CLAUDE = Path('/opt/claude-code/claude')
@@ -225,7 +224,7 @@ def _session_brash_policy(bro: str, tree: Path) -> Optional[Path]:
   return brash_policy.write(state, reach)
 
 
-def run_session(spec: 'SessionSpec | SessionRun') -> int:
+def run_session(spec: 'SessionRun') -> int:
   tree = Path.cwd()
   try:
     binary = _claude_binary()
@@ -268,7 +267,11 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     teardown.callback(server.stop)
 
     launch = build_claude_launch(
-      spec, resume_session=resume_session, endpoint=server.endpoint, brash_policy=policy
+      spec,
+      resume_session=resume_session,
+      endpoint=server.endpoint,
+      brash_policy=policy,
+      activity_file=spec.activity_file,
     )
     if os.environ.get('TRAILS_DISABLED') is None:
       try:

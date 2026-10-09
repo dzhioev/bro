@@ -562,7 +562,9 @@ def _patch_native_openai_create(stub_responses):
   captured_kwargs: list[dict] = []
   created: list[openai_module.OpenAI] = []
 
-  def _create(spec, inbox, mcp_servers=None, observer=None, tracker=None, agent=None):
+  def _create(
+    spec, inbox, mcp_servers=None, observer=None, tracker=None, agent=None, activity_file=None
+  ):
     gpt = openai_module.OpenAI(
       api_key='dummy',
       inbox=inbox,
@@ -573,6 +575,7 @@ def _patch_native_openai_create(stub_responses):
       observer=observer,
       tracker=tracker,
       agent=agent,
+      activity_file=activity_file,
     )
     gpt._openai_tools = []
     _install_responses(gpt, stub_responses, captured_kwargs)

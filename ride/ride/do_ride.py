@@ -25,6 +25,7 @@ from bro.workspace.session import clear_requested_exit_status, requested_exit_st
 from ride.errors import reports_runtime_errors
 from ride.identity import bro_git_identity_env
 from ride.repository import recorded_origin_url
+from ride.workspace.model import ACTIVITY_FILENAME
 
 if TYPE_CHECKING:
   from ride.harness import SessionHarness
@@ -58,6 +59,7 @@ class SessionRun:
   resume: bool
   bro: str
   prompt: Optional[str]
+  activity_file: Path
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -151,6 +153,7 @@ def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:
     bro=bro,
     llm=llm,
     resolved_llm=_resolved_llm(harness, llm, bro),
+    activity_file=_session_state() / ACTIVITY_FILENAME,
     **args,
   )
   return harness, run
@@ -173,11 +176,16 @@ def _process_start_time(process_id: int) -> str:
   return f'ps:{value}'
 
 
-@contextlib.contextmanager
-def _process_record() -> Generator[None]:
+def _session_state() -> Path:
   state = session_dir()
   if state is None:
     raise RuntimeError(f'{SESSION_DIR_ENV} is unset: do-ride requires a session state directory')
+  return state
+
+
+@contextlib.contextmanager
+def _process_record() -> Generator[None]:
+  state = _session_state()
   state.mkdir(parents=True, exist_ok=True)
   process_id = os.getpid()
   content = json.dumps({'pid': process_id, 'start_time': _process_start_time(process_id)})
@@ -223,6 +231,15 @@ def _install_credential_hooks() -> None:
       os.environ,
     )
   )
+
+
+@contextlib.contextmanager
+def _activity_marked(activity_file: Path) -> Generator[None]:
+  activity_file.touch()
+  try:
+    yield
+  finally:
+    activity_file.touch()
 
 
 @contextlib.contextmanager
@@ -273,7 +290,12 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
   clear_requested_exit_status()
   _install_credential_hooks()
   harness.prepare_session(run)
-  with _process_record(), session_broxy(), watches.Owner.for_session() as watch_owner:
+  with (
+    _process_record(),
+    _activity_marked(run.activity_file),
+    session_broxy(),
+    watches.Owner.for_session() as watch_owner,
+  ):
     if watches.session_watch_admitted():
       watch_owner.store.start(watches.SESSION_WATCH_COMMAND)
     code = harness.run_session(run)

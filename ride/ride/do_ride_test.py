@@ -8,9 +8,11 @@ import pytest
 import bro.workspace.session as workspace_session
 import ride.do_ride as do_ride
 from bro import watches
+from bro.monitor import workspace_session_dir
 from ride.harness import get_harness
 from ride.session_test import _spec
 from ride.workspace.metadata import Isolation
+from ride.workspace.model import Workspace
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +23,11 @@ def isolated_environ():
 
 def _command(spec) -> list[str]:
   return do_ride.command(spec)
+
+
+@pytest.fixture(autouse=True)
+def _session_dir(monkeypatch, tmp_path):
+  monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
 
 
 def _parsed_run(argv: list[str]) -> do_ride.SessionRun:
@@ -89,8 +96,7 @@ class TestCommand:
 
 class TestParser:
   @pytest.mark.parametrize('harness_name', ['claude', 'bro'])
-  def test_runs_the_named_harness(self, harness_name, monkeypatch, tmp_path):
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+  def test_runs_the_named_harness(self, harness_name):
     with patch('ride.do_ride.run_session', return_value=0) as run:
       assert (
         do_ride.main(
@@ -162,7 +168,6 @@ class TestRunSession:
     harness_effect=None,
   ):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
     if party_member:
       monkeypatch.setenv('RIDE_PARTY_MEMBER', 'broker-CH')
     else:
@@ -190,6 +195,7 @@ class TestRunSession:
       resume=False,
       bro='dev',
       prompt=None,
+      activity_file=tmp_path / 'session' / 'activity',
     )
     return do_ride.run_session(harness, run), harness, declaration
 
@@ -231,6 +237,26 @@ class TestRunSession:
     assert seen[0]['pid'] == os.getpid()
     assert seen[0]['start_time'].startswith(('linux-ticks:', 'ps:'))
     assert not process_path.exists()
+
+  def test_the_session_is_marked_active_at_its_start_and_its_end(self, monkeypatch, tmp_path):
+    activity_file = tmp_path / 'session' / 'activity'
+
+    def age_the_start_mark(_run):
+      os.utime(activity_file, (1000.0, 1000.0))
+      return 0
+
+    self._run(monkeypatch, tmp_path, harness_effect=age_the_start_mark)
+    assert activity_file.stat().st_mtime > 1000.0
+
+  def test_the_harness_marks_where_the_host_reads(self, tmp_path):
+    workspace = Workspace.create('w', None, Isolation.UNBOXED)
+    with patch.dict(os.environ, {'RIDE_SESSION_DIR': str(workspace_session_dir(workspace.path))}):
+      run = _parsed_run(
+        ['do-ride', 'along', '--workspace', 'w', '--harness', 'bro', '--hold', 'attended', 'dev']
+      )
+    run.activity_file.parent.mkdir(parents=True)
+    run.activity_file.touch()
+    assert workspace.last_active() is not None
 
   def test_arms_the_admitted_session_watch_before_the_harness(self, monkeypatch, tmp_path):
     monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)

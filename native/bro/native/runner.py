@@ -84,8 +84,9 @@ class Runner:
   toolset mounts report against this run.
   """
 
-  def __init__(self, bro: BaseBro):
+  def __init__(self, bro: BaseBro, *, activity_file: Optional[Path] = None):
     self.bro = bro
+    self.activity_file = activity_file
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
     self._watch_owner: Optional[watches.Owner] = None
@@ -472,4 +473,5 @@ class Runner:
       # usage file must be self-describing — an in-process run's RIDE_BRO is the
       # launcher's, not this bro's).
       agent=self.bro.agent,
+      activity_file=self.activity_file,
     )

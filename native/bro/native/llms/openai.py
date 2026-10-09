@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import bro.llm.usage as usage
 from bro.base import credentials, log
-from bro.base.offload import off_loop
 from bro.inbox import Inbox, NotificationBatch
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.llms.openai import (
@@ -26,7 +26,7 @@ from bro.llm.observer import (
 )
 from bro.llm.openai_content import image_file_to_content, text_to_content
 from bro.llm.openai_retry import retry_openai
-from bro.llm.tracker import StepKind, ToolStepSource, Tracker
+from bro.llm.tracker import ToolStepSource, Tracker
 from bro.native.llm import LLM
 
 if TYPE_CHECKING:
@@ -49,6 +49,7 @@ def create(
   observer: Optional[Observer] = None,
   tracker: Optional[Tracker] = None,
   agent: Optional[str] = None,
+  activity_file: Optional[Path] = None,
 ) -> LLM:
   if not isinstance(spec, _OpenAISpec):
     raise TypeError(
@@ -66,6 +67,7 @@ def create(
     observer=observer,
     tracker=tracker,
     agent=agent,
+    activity_file=activity_file,
   )
 
 
@@ -175,10 +177,18 @@ class OpenAI(LLM):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
+    activity_file: Optional[Path] = None,
   ):
     from openai import AsyncOpenAI
 
-    super().__init__(inbox, mcp_servers, observer=observer, tracker=tracker, agent=agent)
+    super().__init__(
+      inbox,
+      mcp_servers,
+      observer=observer,
+      tracker=tracker,
+      agent=agent,
+      activity_file=activity_file,
+    )
     self.model = model
     # async is what makes a roundtrip interruptible: a cancelled await closes
     # the request, where the sync client pins the loop until the reply lands.
@@ -214,9 +224,6 @@ class OpenAI(LLM):
     tools = await self.tools.resolve()
     self._openai_tools = tools_to_openai_format(tools)
     return self._openai_tools
-
-  async def _track_step(self, kind: StepKind, body: object, **extras: object) -> Optional[int]:
-    return await off_loop(self.tracker.step, kind, body, **extras)
 
   def _emit_response_steps(
     self,

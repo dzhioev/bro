@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Optional
 
 from bro.inbox import Inbox
@@ -16,12 +17,20 @@ def create(
   observer: Optional[Observer] = None,
   tracker: Optional[Tracker] = None,
   agent: Optional[str] = None,
+  activity_file: Optional[Path] = None,
 ) -> LLM:
   if not isinstance(spec, _EchoSpec):
     raise TypeError(
       f'expected {_EchoSpec.__module__}.LLMSpec, got {type(spec).__module__}.{type(spec).__name__}'
     )
-  return Echo(inbox, mcp_servers=mcp_servers, observer=observer, tracker=tracker, agent=agent)
+  return Echo(
+    inbox,
+    mcp_servers=mcp_servers,
+    observer=observer,
+    tracker=tracker,
+    agent=agent,
+    activity_file=activity_file,
+  )
 
 
 class Echo(LLM):

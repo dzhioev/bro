@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import bro.base.args as base_args
@@ -65,6 +66,9 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('input', help='input to send to the bro')
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
+  parser.add_argument(
+    '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
+  )
 
   args = parser.parse(argv)
   try:
@@ -81,7 +85,8 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     observer = _ask_observer(bro.name)
     hold = args['hold'] if args['hold'] is not None else 'unattended'
     try:
-      asyncio.run(Runner(bro).run(args['input'], observer=observer, surface='ask', hold=hold))
+      runner = Runner(bro, activity_file=args['activity_file'])
+      asyncio.run(runner.run(args['input'], observer=observer, surface='ask', hold=hold))
     except BroRaised:
       return RAISE_EXIT_STATUS
     except KeyboardInterrupt:

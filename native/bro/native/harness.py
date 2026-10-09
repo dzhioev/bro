@@ -148,11 +148,11 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   ]
 
 
-def _session_options(spec: 'SessionSpec | SessionRun', resume_trail: Optional[str]) -> list[str]:
+def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[str]:
   options: list[str] = []
   if spec.llm is not None:
     options.extend(['--llm', spec.llm])
-  options.extend(['--hold', spec.hold])
+  options.extend(['--hold', spec.hold, '--activity-file', str(spec.activity_file)])
   if resume_trail is not None:
     resolved = spec.llm_spec
     if not isinstance(resolved, NativeLLMSpec):
@@ -245,7 +245,7 @@ class BroHarness(Harness):
   def check_runtime(self) -> None:
     subprocess.run([spawn.console_script('bro'), '--help'], check=True)
 
-  def run_session(self, spec: 'SessionSpec | SessionRun') -> int:
+  def run_session(self, spec: 'SessionRun') -> int:
     from ride.do_ride import run_agent
 
     try:

@@ -117,7 +117,7 @@ def _environment(config: Path, session: Path) -> dict[str, str]:
   return environment
 
 
-def _session(prompt: str) -> SessionRun:
+def _session(prompt: str, activity_file: Path) -> SessionRun:
   return SessionRun(
     name='mcp-timeout-probe',
     repo=None,
@@ -129,6 +129,7 @@ def _session(prompt: str) -> SessionRun:
     resume=False,
     bro='bro',
     prompt=prompt,
+    activity_file=activity_file,
   )
 
 
@@ -180,7 +181,7 @@ def test_silent_http_mcp_call_survives_the_native_idle_cut(tmp_path: Path, capfd
       watches.Owner.for_session(),
       bounded(_SESSION_TIMEOUT_SECONDS),
     ):
-      code = runner.run_session(_session(prompt))
+      code = runner.run_session(_session(prompt, session / 'activity'))
 
   assert code == 0
   assert _RESULT in capfd.readouterr().out
