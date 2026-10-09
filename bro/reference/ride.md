@@ -67,7 +67,7 @@ the launcher's own `--log` never reaches the session.
 
 - `ride resume <workspace>` relaunches the recorded session recipe, with optional `--cred`, `--grant`, and `--revoke` adjustments.
   Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
-- `ride list` lists every workspace, its attachment, and its activity state.
+- `ride list` lists every workspace, its activity state, when its session last marked activity, its attachment, and its subject.
   Live badges are `[o]` boxed and `.o.` unboxed;
   idle badges are `[-]` boxed and `.-.` unboxed.
 - `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, and unlocked runtime bundles;

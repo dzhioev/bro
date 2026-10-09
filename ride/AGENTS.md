@@ -26,6 +26,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
   its own parser and argv builder, the session environment and pid/start-time record, credential hooks, persona provisioning, the session broxy, and the owned watch store and session watch;
   plus the selected harness's preparation and SIGTERM-forwarded agent spawn.
+  It touches the session's activity file at start and end, and hands its path to the harness on `SessionRun` to touch as the session works;
+  `ride list` reads its age off that file.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — per-surface launch scoping:
   the generic `ScopeRecipe`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, `launch`-section computation, and the launch preflight,

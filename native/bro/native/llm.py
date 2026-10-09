@@ -3,14 +3,16 @@
 import asyncio
 import dataclasses
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Optional
 
 import bro.base.args as base_args
+from bro.base.offload import off_loop
 from bro.inbox import Inbox
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer, ToolRegistry
 from bro.llm.observer import NullObserver, Observer
-from bro.llm.tracker import NullTracker, Tracker
+from bro.llm.tracker import NullTracker, StepKind, Tracker
 
 
 class LLM(ABC):
@@ -21,18 +23,26 @@ class LLM(ABC):
     observer: Optional[Observer] = None,
     tracker: Optional[Tracker] = None,
     agent: Optional[str] = None,
+    activity_file: Optional[Path] = None,
   ):
     self.inbox = inbox
     self.tools = ToolRegistry(mcp_servers if mcp_servers is not None else [])
     self.observer: Observer = observer if observer is not None else NullObserver()
     self.tracker: Tracker = tracker if tracker is not None else NullTracker()
     self.agent = agent
+    self.activity_file = activity_file
 
   @abstractmethod
   async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
 
   async def wake(self, *, request_timeout: Optional[float] = None) -> str:
     raise NotImplementedError
+
+  async def _track_step(self, kind: StepKind, body: object, **extras: object) -> Optional[int]:
+    """record one step of the loop, touching the activity mark when one was given."""
+    if self.activity_file is not None:
+      self.activity_file.touch()
+    return await off_loop(self.tracker.step, kind, body, **extras)
 
   def cumulative_usage(self) -> Optional[dict[str, dict[str, int]]]:
     """per-model counts in the four billed token classes (`bro.llm.usage.CLASSES`),

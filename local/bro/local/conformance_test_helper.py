@@ -10,6 +10,7 @@ trail locally, and the probe reads its verdict off that trail."""
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 from unittest import mock
 
 import pytest
@@ -55,11 +56,20 @@ def data_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def run_unattended(
-  *, harness: str, recipe: str, bro: str, prompt: str, tree: Path, data: Path
+  *,
+  harness: str,
+  recipe: str,
+  bro: str,
+  prompt: str,
+  tree: Path,
+  data: Path,
+  workspace: Optional[str] = None,
 ) -> list[dict]:
   """run `prompt` as an unattended unboxed session of `bro` on `harness` under
   `recipe`, in the existing directory `tree` with runtime data root `data`, and
-  return the messages of the trail it recorded."""
+  return the messages of the trail it recorded. `workspace` names the session's
+  workspace, which keeps it past the session; an unnamed one is dropped after a
+  clean exit."""
   environment = {**os.environ, 'XDG_DATA_HOME': str(data), 'BRO_STORE': str(configs.STORE_DIR)}
   with mock.patch.dict(os.environ, {'XDG_DATA_HOME': str(data)}):
     trails = LocalStore(ride_trails_dir())
@@ -67,6 +77,7 @@ def run_unattended(
   launch = [
     console_script('ride'),
     'solo',
+    *(['--workspace', workspace] if workspace is not None else []),
     '--unboxed',
     '--tree',
     str(tree),

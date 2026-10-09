@@ -9,6 +9,7 @@ import threading
 from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, TextIO
 
 import bro.base.args as base_args
@@ -282,6 +283,9 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
   parser.add_argument('--continue-llm', default=None, help=base_args.SUPPRESS)
   parser.add_argument(
+    '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
+  )
+  parser.add_argument(
     '--at',
     type=int,
     default=None,
@@ -343,7 +347,11 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
         fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
       with default_store() as client:
         try:
-          fork_arguments = {'llm_spec': fork_spec, 'at': args['at']}
+          fork_arguments = {
+            'llm_spec': fork_spec,
+            'at': args['at'],
+            'activity_file': args['activity_file'],
+          }
           if continuing:
             fork_arguments['hold'] = hold
           forked = resume(client, args['bro'], trail_ref, **fork_arguments)
@@ -355,7 +363,9 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       log.info('forked trail %s (%d prior display records)', forked.trail_id, len(history))
     else:
       log.verbose('creating bro %s', args['bro'])
-      runner = Runner(create_bro_for_run(args['bro'], selection))
+      runner = Runner(
+        create_bro_for_run(args['bro'], selection), activity_file=args['activity_file']
+      )
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 

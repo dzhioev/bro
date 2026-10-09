@@ -96,6 +96,17 @@ def watch_waiter_hooks() -> dict:
   return {event: [{'hooks': [waiter]}] for event in WAITER_EVENTS}
 
 
+ACTIVITY_EVENTS = ('UserPromptSubmit', 'PostToolUse', 'Stop')
+
+
+def activity_hooks(activity_file: Path) -> dict:
+  """the `hooks` settings block touching the session's activity mark as it works."""
+  # a bare `touch` rather than a `_settings_command`: it runs after every tool
+  # call, where an interpreter start would slow the session down
+  touch = {'type': 'command', 'command': shlex.join(['touch', str(activity_file)])}
+  return {event: [{'hooks': [touch]}] for event in ACTIVITY_EVENTS}
+
+
 @dataclass(frozen=True)
 class ClaudeLaunch:
   """a built claude invocation: the argv, everything after the `claude` program
@@ -131,6 +142,7 @@ def build_claude_launch(
   resume_session: Optional[str],
   endpoint: MCPEndpoint,
   brash_policy: Optional[Path],
+  activity_file: Path,
 ) -> ClaudeLaunch:
   """build the claude argv for a session.
 
@@ -140,7 +152,8 @@ def build_claude_launch(
   lifecycle); every session mounts its bro's claude-harness namespaces from it.
   `brash_policy` is the policy file the caller wrote for the bro's finite command
   list, which the command gate runs each line under; None where the bro declares
-  no shell or an unrestricted one.
+  no shell or an unrestricted one. `activity_file` is the session's activity mark
+  its hooks touch.
   """
   from bro.registry import create_bro
 
@@ -164,7 +177,10 @@ def build_claude_launch(
   reach = bro.reach()
   if finite(reach) != (brash_policy is not None):
     raise ValueError(f'{spec.bro} needs a brash policy exactly where its command list is finite')
-  settings['hooks'] = {**watch_waiter_hooks(), **gate_hooks(reach, brash_policy)}
+  hooks = {**watch_waiter_hooks(), **gate_hooks(reach, brash_policy)}
+  for event, entries in activity_hooks(activity_file).items():
+    hooks.setdefault(event, []).extend(entries)
+  settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   argv += [
     *reach_arguments(reach),

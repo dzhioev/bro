@@ -5,6 +5,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
@@ -457,7 +458,7 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
     )
   ]
 
-  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None):
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, activity_file=None):
     captured['trail_ref'] = trail_ref
     captured['llm_spec'] = llm_spec
     captured['at'] = at
@@ -484,7 +485,7 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
 
   captured: dict = {}
 
-  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None):
+  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, activity_file=None):
     captured['trail_ref'] = trail_ref
     return ResumedCall(runner=_MockRunner(), history=[], trail_id='old-trail')
 
@@ -1111,8 +1112,12 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   resumed_runner = _MockRunner()
   recorded_spec = llm_llms_openai.LLMSpec(model='gpt-5', reasoning_effort='low')
 
-  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided'):
-    captured.update(trail_ref=trail_ref, llm_spec=llm_spec, at=at, hold=hold)
+  def fake_resume(
+    client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided', activity_file=None
+  ):
+    captured.update(
+      trail_ref=trail_ref, llm_spec=llm_spec, at=at, hold=hold, activity_file=activity_file
+    )
     return ResumedCall(runner=resumed_runner, history=[], trail_id=trail_ref)
 
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
@@ -1134,6 +1139,8 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
       json.dumps(recorded_spec.dump()),
       '--hold',
       'attended',
+      '--activity-file',
+      '/session/activity',
     ],
     program=['bro', 'chat'],
   )
@@ -1141,6 +1148,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   assert captured['trail_ref'] == 'workspace-trail'
   assert captured['llm_spec'] == recorded_spec
   assert captured['hold'] == 'attended'
+  assert captured['activity_file'] == Path('/session/activity')
   assert captured['runner'] is resumed_runner
   assert captured['initial'] is None
   assert captured['history'] == []

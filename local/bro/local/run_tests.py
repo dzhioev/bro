@@ -165,6 +165,7 @@ PYTEST_FILES = [
   'bro/artifact_mcp_test.py',
   'bro/run_lifecycle_test.py',
   'native/bro/fork_test.py',
+  'native/bro/native/llm_test.py',
   'native/bro/native/llms/openai_test.py',
   'native/bro/native/runner_test.py',
   'native/bro/native/dev_mcp_test.py',
@@ -415,6 +416,7 @@ LLM_PYTEST_FILES = [
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like
 # the llm one, runs only when asked for
 CONFORMANCE_PYTEST_FILES = [
+  'local/bro/local/session_activity_conformance_test.py',
   'local/bro/local/watch_wait_conformance_test.py',
 ]
 

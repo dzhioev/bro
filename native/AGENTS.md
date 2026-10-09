@@ -67,7 +67,8 @@ the file carries the agent identity itself because an in-process run's `RIDE_BRO
 ### Recording
 
 Each `Runner.run()` or first `.send()` opens a trail through a `bro.llm.tracker.Tracker` and emits the opening `system_prompt` step;
-the same tracker is plumbed into the LLM so provider implementations record the replayable native stream.
+the same tracker is plumbed into the LLM so provider implementations record the replayable native stream,
+each step through the base `LLM._track_step`, which also touches the activity file a managed session hands the `bro` command (`--activity-file`).
 The runner's context-managed lifetime ends that trail once with clean → `ok`, `BroRaised` → `raised`, and other exceptions → `error`;
 `run()` supplies its own lifetime, while interactive owners keep one around the conversation.
 `run()`, `send()`, and `bro.fork.fork()` require the caller to name the driving `surface`.

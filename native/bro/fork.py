@@ -26,6 +26,7 @@ model wouldn't have used the prior model's thinking anyway.
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Optional, cast
 
 import bro.native.llms.openai as native_openai
@@ -182,6 +183,7 @@ def fork(
   surface: str,
   hold: Optional[str] = None,
   fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
+  activity_file: Optional[Path] = None,
 ) -> Runner:
   """spin up a fresh runner preseeded with the forked_from trail's prefix up to
   `up_to_step_id`. call `.send(next_message)` on the returned runner to continue
@@ -251,7 +253,7 @@ def fork(
   bro._system_prompt_override = effective_system_prompt
   effective_hold = hold if hold is not None else 'guided'
 
-  runner = Runner(bro)
+  runner = Runner(bro, activity_file=activity_file)
   runner._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else runner._make_tracker())
   )

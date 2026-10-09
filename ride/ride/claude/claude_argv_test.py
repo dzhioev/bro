@@ -1,5 +1,7 @@
 import json
 import shlex
+import subprocess
+from pathlib import Path
 from typing import ClassVar
 from unittest.mock import patch
 
@@ -17,6 +19,7 @@ from ride.claude.statusline import statusline_command
 from ride.session_test import _spec as _session_spec
 
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
+_ACTIVITY_FILE = Path('/session/activity')
 
 
 def _spec(**kwargs):
@@ -45,6 +48,7 @@ def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
   kwargs.setdefault('resume_session', None)
   kwargs.setdefault('endpoint', _ENDPOINT)
   kwargs.setdefault('brash_policy', None)
+  kwargs.setdefault('activity_file', _ACTIVITY_FILE)
   with patch('ride.claude.claude_argv.session_append_prompt', return_value='append text'):
     return ride_claude_argv.build_claude_launch(spec, **kwargs)
 
@@ -154,15 +158,27 @@ class TestRideSessionLaunch:
   def test_every_session_is_woken_by_the_watch_waiter_at_each_turn_end(self):
     for spec in (_spec(), _spec(solo=True, hold='unattended', prompt='go')):
       hooks = _settings(_ride_session_launch(spec).argv)['hooks']
-      assert 'UserPromptSubmit' not in hooks
       for event in ('Stop', 'StopFailure'):
-        (entry,) = hooks[event]
+        (entry,) = [entry for entry in hooks[event] if entry['hooks'][0].get('asyncRewake')]
         (hook,) = entry['hooks']
         assert 'matcher' not in entry
         assert hook['asyncRewake'] is True
         # the waiter's one argument is the bound claude ends it at
         expected = [*module_argv('ride.claude.watch_waiter'), str(hook['timeout'])]
         assert shlex.split(hook['command'])[-len(expected) :] == expected
+
+  def test_every_turn_and_tool_call_touches_the_activity_file(self, tmp_path):
+    for event in ride_claude_argv.ACTIVITY_EVENTS:
+      activity_file = tmp_path / event
+      argv = _ride_session_launch(_spec(), activity_file=activity_file).argv
+      (command,) = [
+        hook['command']
+        for entry in _settings(argv)['hooks'][event]
+        for hook in entry['hooks']
+        if hook.get('asyncRewake') is None
+      ]
+      subprocess.run(['sh', '-c', command], check=True)
+      assert activity_file.is_file()
 
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch, tmp_path):
     from bro.summon import LAUNCH_ENV, encode_launch
@@ -236,7 +252,11 @@ class TestRideSessionLaunch:
 def test_unknown_bro_raises():
   with pytest.raises(KeyError, match='unknown bro'):
     ride_claude_argv.build_claude_launch(
-      _spec(bro='does-not-exist'), resume_session=None, endpoint=_ENDPOINT, brash_policy=None
+      _spec(bro='does-not-exist'),
+      resume_session=None,
+      endpoint=_ENDPOINT,
+      brash_policy=None,
+      activity_file=_ACTIVITY_FILE,
     )
 
 

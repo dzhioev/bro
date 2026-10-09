@@ -1,5 +1,6 @@
 import importlib
 from collections.abc import Callable
+from pathlib import Path
 from typing import Optional, cast
 
 from bro.inbox import Inbox
@@ -22,6 +23,7 @@ Factory = Callable[
     Optional[Observer],
     Optional[Tracker],
     Optional[str],
+    Optional[Path],
   ],
   LLM,
 ]
@@ -34,9 +36,10 @@ def create(
   observer: Optional[Observer] = None,
   tracker: Optional[Tracker] = None,
   agent: Optional[str] = None,
+  activity_file: Optional[Path] = None,
 ) -> LLM:
   module_name = _NATIVE_PROVIDER_MODULES.get(spec.TYPE)
   if module_name is None:
     raise ValueError(f'native provider {spec.TYPE!r} has no client')
   factory = cast(Factory, importlib.import_module(module_name).create)
-  return factory(spec, inbox, mcp_servers, observer, tracker, agent)
+  return factory(spec, inbox, mcp_servers, observer, tracker, agent, activity_file)

@@ -22,6 +22,7 @@ from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.native import dev_mcp
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
+from ride.do_ride import SessionRun
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -60,6 +61,26 @@ def _spec(**overrides) -> SessionSpec:
   }
   values.update(overrides)
   return SessionSpec(**values)
+
+
+_ACTIVITY_FILE = Path('/session/activity')
+
+
+def _run(**overrides) -> SessionRun:
+  spec = _spec(**overrides)
+  return SessionRun(
+    name=spec.name,
+    repo=spec.repo,
+    harness=spec.harness,
+    hold=spec.hold,
+    llm=spec.llm,
+    resolved_llm=spec.resolved_llm,
+    solo=spec.solo,
+    resume=spec.resume,
+    bro=spec.bro,
+    prompt=spec.prompt,
+    activity_file=_ACTIVITY_FILE,
+  )
 
 
 def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
@@ -141,14 +162,16 @@ class TestNativeArgv:
     return session
 
   def test_chat_composes_the_native_argv(self, monkeypatch):
-    spec = _spec(llm='openai:fable:high+fast')
-    assert self._argv(spec, monkeypatch) == [
+    run = _run(llm='openai:fable:high+fast')
+    assert self._argv(run, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
       '--llm',
       'openai:fable:high+fast',
       '--hold',
       'attended',
+      '--activity-file',
+      str(_ACTIVITY_FILE),
       '--',
       'dev',
       'start here',
@@ -157,12 +180,12 @@ class TestNativeArgv:
   def test_a_prompt_that_reads_as_a_flag_reaches_bro_run_as_its_input(self, monkeypatch):
     import bro.run as bro_run
 
-    argv = self._argv(_spec(solo=True, hold='unattended', prompt='--hold=guided'), monkeypatch)
+    argv = self._argv(_run(solo=True, hold='unattended', prompt='--hold=guided'), monkeypatch)
     runs: list[tuple[str, str]] = []
 
     class _Runner:
-      def __init__(self, bro) -> None:
-        del bro
+      def __init__(self, bro, *, activity_file) -> None:
+        del bro, activity_file
 
       async def run(self, text: str, **options) -> None:
         runs.append((text, options['hold']))
@@ -178,7 +201,7 @@ class TestNativeArgv:
   def test_resume_carries_the_session_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
     session = self._session_dir(monkeypatch, tmp_path)
     trail_pointer.write(session / trail_pointer.FILENAME, 'trail-1')
-    argv = self._argv(_spec(resume=True, prompt=None), monkeypatch)
+    argv = self._argv(_run(resume=True, prompt=None), monkeypatch)
     assert argv[:2] == ['/venv/bin/bro', 'chat'] and argv[-2:] == ['--', 'dev']
     assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
     assert '"type":"openai"' in argv[argv.index('--continue-llm') + 1]
@@ -186,7 +209,7 @@ class TestNativeArgv:
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
-    assert bro_harness.BRO.run_session(_spec(resume=True)) == 1
+    assert bro_harness.BRO.run_session(_run(resume=True)) == 1
     assert 'no bro harness trail recorded' in caplog.text
 
   def test_missing_native_distribution_fails_before_spawn(self, monkeypatch, caplog):
@@ -198,7 +221,7 @@ class TestNativeArgv:
     )
     monkeypatch.setattr('ride.do_ride.run_agent', run_agent)
 
-    assert bro_harness.BRO.run_session(_spec()) == 1
+    assert bro_harness.BRO.run_session(_run()) == 1
     assert 'native missing' in caplog.text
     run_agent.assert_not_called()
 

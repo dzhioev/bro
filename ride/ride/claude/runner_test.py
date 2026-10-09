@@ -24,9 +24,27 @@ from ride.claude.interrupt import StreamedRun
 from ride.claude.mcp import MCPEndpoint
 from ride.claude.shell_prefix import SHELL_PREFIX_ENV
 from ride.claude.waiter_state import WaiterState
-from ride.session_test import _spec
+from ride.do_ride import SessionRun
+from ride.session_test import _spec as _session_spec
 
 _PINNED_CLAUDE = Path('/pinned/claude')
+
+
+def _spec(**kwargs) -> SessionRun:
+  spec = _session_spec(**kwargs)
+  return SessionRun(
+    name=spec.name,
+    repo=spec.repo,
+    harness=spec.harness,
+    hold=spec.hold,
+    llm=spec.llm,
+    resolved_llm=spec.resolved_llm,
+    solo=spec.solo,
+    resume=spec.resume,
+    bro=spec.bro,
+    prompt=spec.prompt,
+    activity_file=Path('/session/activity'),
+  )
 
 
 class _ListedBro(BaseBro):
