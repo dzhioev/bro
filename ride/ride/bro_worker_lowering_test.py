@@ -223,6 +223,7 @@ class TestSummonLowering:
           '/proj',
           '--hold',
           'unattended',
+          '--',
           'dev',
           'deploy the thing',
         ],  # fmt: skip
@@ -280,7 +281,7 @@ class TestSummonLowering:
       hold='attended',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert lowered.launch.command[-4:] == ['--hold', 'attended', 'dev', 'deploy the thing']
+    assert lowered.launch.command[-5:] == ['--hold', 'attended', '--', 'dev', 'deploy the thing']
 
   def test_the_llm_recipe_rides_the_childs_do_ride_argv(self, lowering_harness):
     launch = ride.bro_worker.SummonLaunchSpec(
@@ -295,8 +296,8 @@ class TestSummonLowering:
       llm='openai:sol:high+fast',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert lowered.launch.command[-6:] == [
-      '--hold', 'unattended', '--llm', 'openai:sol:high+fast', 'dev', 'deploy the thing',
+    assert lowered.launch.command[-7:] == [
+      '--hold', 'unattended', '--llm', 'openai:sol:high+fast', '--', 'dev', 'deploy the thing',
     ]  # fmt: skip
 
   def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
@@ -399,7 +400,6 @@ class TestSummonLowering:
         bro='dev',
         prompt='deploy the thing',
         subject='deploy the thing',
-        arguments=[],
         repo='/proj',
       ).resume_variant()
     )
@@ -672,7 +672,7 @@ class TestSummonLowering:
     assert member.member == 'broker-CH'
     assert member.command == [
       'do-ride', 'solo', '--workspace', PARENT, '--harness', 'bro',
-      '--hold', 'unattended', 'dev', 'work beside me',
+      '--hold', 'unattended', '--', 'dev', 'work beside me',
     ]  # fmt: skip
     assert member.secrets == {'aws', 'trails'}
     assert member.optional_secrets == {'openai'}
@@ -902,7 +902,7 @@ raise SystemExit(3)
     assert isinstance(lowered, workspace_spawn.DockerLaunchSpec)
     assert lowered.launch.command == [
       'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'bro', '--repo', '/proj',
-      '--hold', 'unattended', 'dev', 'p',
+      '--hold', 'unattended', '--', 'dev', 'p',
     ]  # fmt: skip
     assert lowered.launch.name == 'broker-CH'
     assert lowered_channel is channel
@@ -1189,7 +1189,7 @@ class TestClaudeSummonLowering:
     lowered = _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.command == [
       'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'claude', '--repo', '/proj',
-      '--hold', 'unattended', 'dev', 'deploy the thing',
+      '--hold', 'unattended', '--', 'dev', 'deploy the thing',
     ]  # fmt: skip
     assert lowered.launch.env == {
       'CLAUDE_CONFIG_DIR': '/home/ride/.claude',

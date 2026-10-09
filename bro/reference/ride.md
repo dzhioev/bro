@@ -46,14 +46,8 @@ a URL attachment fetches its managed mirror and bases on the fresh `origin/HEAD`
 `--into REF` selects another branch, tag, or commit, requires `--repo`, and affects only workspace creation.
 Uncommitted host changes never transfer.
 
-The prompt occupies a positional slot on both mode verbs.
-Arguments for the harness program therefore follow an explicit separator
-— they reach the claude binary on the claude harness and the native `bro run|chat` argv on the bro harness:
-
-```console
-ride solo dev 'inspect the launch path' -- --debug mcp
-ride along dev 'continue the inspection' -- --debug mcp
-```
+A session runs with what its bro declares and ride's own flags set:
+neither mode verb forwards arguments to the harness program, on either harness, and a launch carrying a `--` tail fails before any workspace exists.
 
 Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
 `--cred KIND+INSTANCE` picks the stored instance a held credential kind reads and never adds the kind.
@@ -1266,9 +1260,10 @@ removing a bundle also removes its unused runtime volume, while Docker keeps an 
 
 ## The session executable
 
-`do-ride solo|along --workspace NAME --harness H [--resume] [--repo R] --hold HOLD [--llm L] <harness flags> <bro> [prompt] [-- args]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
+`do-ride solo|along --workspace NAME --harness H [--resume] [--repo R] --hold HOLD [--llm L] [--] <bro> [prompt]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
 It has its own parser:
 there is no `--in-place`, no outer machinery flags or combination refusals, and `--resume` is an ordinary session flag.
+The launcher puts the bro and the prompt past `--`, so a prompt that reads as a flag stays the prompt, and the bro harness hands them to `bro run|chat` the same way.
 Unboxed isolation runs it from the snapshot venv and boxed isolation from the mounted runtime volume;
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
@@ -1282,7 +1277,7 @@ While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the execut
 Harness-specific preparation lives in `SessionHarness.prepare_session`, followed by `run_session`, so the neutral executable compares no harness names.
 
 The Claude harness's runner (`ride/ride/claude/runner.py`) then, in order:
-under a finite command list, refuses a session whose own Claude configuration could take a call around the command gate, and writes the session's brash policy (both in "The claude argv" below);
+refuses a session whose own Claude configuration could take a call around the gate of a tool it is served behind one, and under a finite command list writes the session's brash policy (both in "The claude argv" below);
 resolves a resume's Claude session id from its cwd's projects dir;
 starts the session-local MCP server and surfaces bro spells (both below);
 builds the Claude argv (below);
@@ -1297,7 +1292,7 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 ### The claude argv
 
 The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks),
-the forwarded claude args, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
+a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below,
 `--strict-mcp-config`, so that config is the session's only MCP source and a repository's `.mcp.json` loads nothing,
@@ -1307,13 +1302,20 @@ and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP in
 `ride/ride/claude/native_tools.py` names them per group on the pinned release.
 Every other native is off, a tool a Claude Code release adds included, until it is mapped.
 `files` brings `LSP`, the code intelligence of the pyright plugin every session enables, beside Claude's file tools.
+Without `files` a persona gets `Read` alone, behind a `PreToolUse` hook (`ride.claude.read_gate`) holding it to the two folders where Claude Code keeps what it hands the session back as files:
+`claude-<uid>/<project>/<session id>/` under the runner's `CLAUDE_CODE_TMPDIR`, where a backgrounded command writes its output,
+and the `<session id>/` folder beside the transcript, whose `tool-results/` holds the whole of a result too large to inline.
+The gate names both from its hook input, with the transcript's folder as the project, and admits only an absolute path that resolves, symlinks followed, inside one of them;
+it denies every other path, and blocks the call when it cannot read its input.
+Such a persona thus reads its own output whole and no workspace file through a tool, while the repository's `CLAUDE.md` and project skills still load as its instructions.
+`ride/ride/claude/read_gate_llm_test.py` holds both folders and the denials against the pinned release.
 `brash(...)` brings `Monitor`, which the pinned release withholds while telemetry is off, as the session's settings keep it.
 Under a finite command list a `PreToolUse` hook on `Bash` and `Monitor` (`ride.claude.command_gate`) rewrites each call's command through `updatedInput` into one argv:
 the runtime's `brash` by path with the session's brash policy, `-c`, and the model's line untouched, quoted so that Claude's shell reads only single-quoted words.
 It keeps the call's other fields, decides no permission, so a `guided` session still prompts, and denies a call that carries no command, `Monitor`'s WebSocket form.
 The runner writes the policy from the bro's reach into the session's `claude/` state dir and names it to the session-local MCP server, whose `bro::watch` starts lines under it.
-Before it writes the policy, the runner refuses to start a session whose own Claude configuration could take a call around the gate, naming each place (`ride.claude.competing_hooks`):
-a `PreToolUse` hook matching `Bash` or `Monitor`, as Claude's matcher reads it,
+Before it starts anything, the runner refuses to start a session whose own Claude configuration could take a call around either gate, naming each place (`ride.claude.competing_hooks`):
+a `PreToolUse` hook matching a tool the session is served behind a gate, as Claude's matcher reads it,
 in the working directory's project or local settings,
 in the frontmatter of a skill, command, or agent in the session's Claude folder or in a `.claude` folder at, above, or below the working directory,
 or in an installed plugin the settings enable;

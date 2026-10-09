@@ -3,9 +3,9 @@
 Every session runs Claude Code with the natives its bro's reach maps to, the
 ride-injected append prompt, and its bro's session-local MCP namespaces mounted
 as its only MCP servers. Model, the merged `--settings` (fastMode + statusLine +
-attribution + hooks), `--effort`, the forwarded claude args, and prompt seeding
-are handled once, identically wherever the session runs. Model, effort and fast
-mode come off the session's claude-code `LLMSpec` (`SessionRun.llm_spec`).
+attribution + hooks), `--effort`, a resume, and prompt seeding are handled once,
+identically wherever the session runs. Model, effort and fast mode come off the
+session's claude-code `LLMSpec` (`SessionRun.llm_spec`).
 """
 
 import contextlib
@@ -44,16 +44,22 @@ def _settings_command(module: str, *args: str) -> str:
   return shlex.join([*spawn.module_argv(module), *args])
 
 
-def _command_gate_hooks(brash_policy: Path) -> dict:
-  """the `hooks` settings block running each command tool's line in brash under
-  `brash_policy`."""
-  gate = _settings_command(
-    'ride.claude.command_gate', spawn.console_script('brash'), str(brash_policy)
-  )
+def gate_hooks(reach: Reach, brash_policy: Optional[Path]) -> dict:
+  """the `hooks` settings block gating the natives `reach` is served: each command
+  tool's line run in brash under `brash_policy`, the policy of a finite command
+  list, and `Read` held to the session's own Claude folders."""
+  commands = {native_tools.GATED_READ: _settings_command('ride.claude.read_gate')}
+  if brash_policy is not None:
+    command_gate = _settings_command(
+      'ride.claude.command_gate', spawn.console_script('brash'), str(brash_policy)
+    )
+    commands.update(dict.fromkeys(native_tools.COMMAND_TOOLS, command_gate))
+  gated = native_tools.gated(reach)
+  if len(gated) == 0:
+    return {}
   return {
     'PreToolUse': [
-      {'matcher': tool, 'hooks': [{'type': 'command', 'command': gate}]}
-      for tool in native_tools.COMMAND_TOOLS
+      {'matcher': tool, 'hooks': [{'type': 'command', 'command': commands[tool]}]} for tool in gated
     ]
   }
 
@@ -122,19 +128,19 @@ _ATTRIBUTION = {'commit': '', 'pr': '', 'sessionUrl': False}
 def build_claude_launch(
   spec: 'SessionSpec | SessionRun',
   *,
-  claude_args: list[str],
+  resume_session: Optional[str],
   endpoint: MCPEndpoint,
   brash_policy: Optional[Path],
 ) -> ClaudeLaunch:
   """build the claude argv for a session.
 
-  `claude_args` is the forwarded tail (the user's extra args, plus any resolved
-  `--resume <id>` — resolution is the caller's, since it differs per launch
-  layer). `endpoint` is the session-local MCP server's (the caller owns the
-  server lifecycle); every session mounts its bro's claude-harness namespaces
-  from it. `brash_policy` is the policy file the caller wrote for the bro's
-  finite command list, which the command gate runs each line under; None where
-  the bro declares no shell or an unrestricted one.
+  `resume_session` is the id of the Claude session a resume continues, which the
+  caller resolves from the workspace's transcripts; None for a fresh session.
+  `endpoint` is the session-local MCP server's (the caller owns the server
+  lifecycle); every session mounts its bro's claude-harness namespaces from it.
+  `brash_policy` is the policy file the caller wrote for the bro's finite command
+  list, which the command gate runs each line under; None where the bro declares
+  no shell or an unrestricted one.
   """
   from bro.registry import create_bro
 
@@ -158,10 +164,7 @@ def build_claude_launch(
   reach = bro.reach()
   if finite(reach) != (brash_policy is not None):
     raise ValueError(f'{spec.bro} needs a brash policy exactly where its command list is finite')
-  hooks = watch_waiter_hooks()
-  if brash_policy is not None:
-    hooks.update(_command_gate_hooks(brash_policy))
-  settings['hooks'] = hooks
+  settings['hooks'] = {**watch_waiter_hooks(), **gate_hooks(reach, brash_policy)}
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   argv += [
     *reach_arguments(reach),
@@ -178,7 +181,8 @@ def build_claude_launch(
     argv += ['--effort', llm.effort]
   if spec.solo:
     argv += STREAM_JSON_ARGS
-  argv += claude_args
+  if resume_session is not None:
+    argv += ['--resume', resume_session]
   if spec.solo:
     return ClaudeLaunch(argv=argv, prompt=spec.prompt)
   if spec.prompt is not None:

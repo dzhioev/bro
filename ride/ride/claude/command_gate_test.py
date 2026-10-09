@@ -6,7 +6,8 @@ import sys
 import pytest
 
 import ride.claude.command_gate as command_gate
-from ride.claude.claude_argv import _command_gate_hooks
+from bro import mcp
+from ride.claude.claude_argv import gate_hooks
 
 _LINES = [
   'git status',
@@ -87,7 +88,8 @@ def test_the_settings_command_runs_the_runtimes_gate_whatever_its_directory_hold
   for package in (tmp_path / 'ride', shadow):
     (package / '__init__.py').write_text('')
   (shadow / 'command_gate.py').write_text('raise SystemExit("the checkout gate ran")\n')
-  (entry, _) = _command_gate_hooks(tmp_path / 'brash-policy.json')['PreToolUse']
+  reach = mcp.Reach(files=mcp.Files(), brash=mcp.Brash(commands=('git status',)))
+  (entry, _) = gate_hooks(reach, tmp_path / 'brash-policy.json')['PreToolUse']
   (hook,) = entry['hooks']
 
   gate = subprocess.run(
