@@ -208,6 +208,7 @@ PYTEST_FILES = [
   'bro/trails/server/dynamo_test.py',
   'bro/show_test.py',
   'bro/brash_test.py',
+  'bro/brash_policy_test.py',
   'bro/shell_test.py',
   'oops/bro/oops/assets_test.py',
   'oops/bro/oops/config_test.py',
@@ -247,7 +248,8 @@ PYTEST_FILES = [
   'ride/ride/artifacts_test.py',
   'ride/ride/pending_launch_test.py',
   'ride/ride/claude/claude_argv_test.py',
-  'ride/ride/claude/watch_guard_test.py',
+  'ride/ride/claude/command_gate_test.py',
+  'ride/ride/claude/competing_hooks_test.py',
   'ride/ride/claude/watch_waiter_test.py',
   'ride/ride/claude/interrupt_test.py',
   'ride/ride/claude/claude_config_test.py',
@@ -405,6 +407,7 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/shell_prefix_llm_test.py',
   'ride/ride/claude/watch_waiter_llm_test.py',
   'ride/ride/claude/native_tools_llm_test.py',
+  'ride/ride/claude/command_gate_llm_test.py',
 ]
 # conformance probes: each launches real sessions on every installed harness under
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like

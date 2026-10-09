@@ -1,12 +1,12 @@
 import json
 import shlex
-import sys
 from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
+from bro.base.spawn import console_script, module_argv
 from bro.bro import BaseBro
 from bro.llm.llms import claude_code
 from bro.mcp import ToolLayer, brash, files
@@ -43,6 +43,7 @@ def _dev_persona_namespaces() -> list[str]:
 
 def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
   kwargs.setdefault('endpoint', _ENDPOINT)
+  kwargs.setdefault('brash_policy', None)
   with patch('ride.claude.claude_argv.session_append_prompt', return_value='append text'):
     return ride_claude_argv.build_claude_launch(spec, **kwargs)
 
@@ -94,9 +95,12 @@ class TestRideSessionLaunch:
     assert set(native_tools.READ) <= set(tools)
     assert set(native_tools.WRITE).isdisjoint(tools)
 
-  def test_a_finite_command_list_gates_bash_and_monitor(self, monkeypatch):
+  def test_a_finite_command_list_runs_bash_and_monitor_through_the_command_gate(
+    self, monkeypatch, tmp_path
+  ):
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
-    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv
+    policy = tmp_path / 'brash-policy.json'
+    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[], brash_policy=policy).argv
     assert set(native_tools.SHELL) <= set(_tools(argv))
     hooks = _settings(argv)['hooks']['PreToolUse']
     assert [entry['matcher'] for entry in hooks] == ['Bash', 'Monitor']
@@ -104,12 +108,19 @@ class TestRideSessionLaunch:
       (hook,) = entry['hooks']
       assert hook['type'] == 'command'
       assert shlex.split(hook['command']) == [
-        sys.executable,
-        '-m',
-        'ride.claude.watch_guard',
-        entry['matcher'],
-        'git status',
+        *module_argv('ride.claude.command_gate'),
+        console_script('brash'),
+        str(policy),
       ]
+
+  def test_a_brash_policy_goes_with_a_finite_command_list_and_nothing_else(
+    self, monkeypatch, tmp_path
+  ):
+    with pytest.raises(ValueError, match='brash policy'):
+      _ride_session_launch(_spec(), claude_args=[], brash_policy=tmp_path / 'brash-policy.json')
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
+    with pytest.raises(ValueError, match='brash policy'):
+      _ride_session_launch(_spec(bro='declaring'), claude_args=[])
 
   def test_a_summoning_session_without_brash_gets_no_shell(self, monkeypatch):
     from bro.summon import LAUNCH_ENV, encode_launch
@@ -138,14 +149,10 @@ class TestRideSessionLaunch:
         assert 'matcher' not in entry
         assert hook['asyncRewake'] is True
         # the waiter's one argument is the bound claude ends it at
-        assert shlex.split(hook['command'])[-4:] == [
-          sys.executable,
-          '-m',
-          'ride.claude.watch_waiter',
-          str(hook['timeout']),
-        ]
+        expected = [*module_argv('ride.claude.watch_waiter'), str(hook['timeout'])]
+        assert shlex.split(hook['command'])[-len(expected) :] == expected
 
-  def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch):
+  def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch, tmp_path):
     from bro.summon import LAUNCH_ENV, encode_launch
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
@@ -154,7 +161,9 @@ class TestRideSessionLaunch:
       encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
     )
     argv = _ride_session_launch(
-      _spec(bro='declaring', solo=True, hold='unattended', prompt='go'), claude_args=[]
+      _spec(bro='declaring', solo=True, hold='unattended', prompt='go'),
+      claude_args=[],
+      brash_policy=tmp_path / 'brash-policy.json',
     ).argv
 
     hooks = _settings(argv)['hooks']
@@ -221,7 +230,7 @@ class TestRideSessionLaunch:
 def test_unknown_bro_raises():
   with pytest.raises(KeyError, match='unknown bro'):
     ride_claude_argv.build_claude_launch(
-      _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT
+      _spec(bro='does-not-exist'), claude_args=[], endpoint=_ENDPOINT, brash_policy=None
     )
 
 

@@ -12,6 +12,8 @@ import pytest
 import bro.mcp as mcp
 import bro.native.harness as bro_harness
 import ride.session as ride_session
+from bro import brash_policy
+from bro.brash import REFUSED_STATUS
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.inbox import Inbox
 from bro.jobs import Job, Registry
@@ -409,11 +411,12 @@ class _ShellBro(BaseBro):
 
 
 class _NativeRun:
-  def __init__(self):
+  def __init__(self, brash_policy: Optional[Path] = None):
     self.trail_id = None
     self.current_tool_step_id = None
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
+    self.brash_policy = brash_policy
 
 
 async def _service_tools(
@@ -476,24 +479,31 @@ class TestNativeServiceTools:
         await skill.call({'name': ''})
 
   @pytest.mark.asyncio
-  async def test_exact_command_list_rejects_appended_shell_syntax(self):
-    class ExactBrashBro(BaseBro):
-      name = 'exact-brash'
+  async def test_a_finite_command_list_runs_job_lines_in_brash(self, tmp_path):
+    class ListedBro(BaseBro):
+      name = 'listed-brash'
       description = 'd'
-      tools: ClassVar = [mcp.brash('printf allowed')]
+      tools: ClassVar = [mcp.brash('printf ...')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    run = _NativeRun()
-    server, tools = await _service_tools(ExactBrashBro(), run)
+    declaration = ListedBro()
+    run = _NativeRun(brash_policy.write(tmp_path, declaration.reach()))
+    server, tools = await _service_tools(declaration, run)
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      result = await tools['job'].call({'command': '  printf allowed  ', 'mode': 'fg'})
-      assert result == 'exited (code 0)\nallowed'
-      with pytest.raises(ValueError, match='match one declared entry exactly'):
-        await tools['job'].call({'command': 'printf allowed; true', 'mode': 'fg'})
+      listed = await tools['job'].call({'command': 'printf one | printf two', 'mode': 'fg'})
+      assert listed == 'exited (code 0)\ntwo'
+      # an escaped trailing space is part of the line's last word
+      untouched = await tools['job'].call({'command': "printf '<%s>' x\\ ", 'mode': 'fg'})
+      assert untouched == 'exited (code 0)\n<x >'
+      refused = await tools['job'].call({'command': 'printf one; cat /dev/null', 'mode': 'fg'})
+      assert isinstance(refused, str)
+      status, output = refused.split('\n', 1)
+      assert status == f'exited (code {REFUSED_STATUS})'
+      assert output.startswith("brash: refused 'cat'")
 
   @pytest.mark.asyncio
   async def test_foreground_job_interrupted_by_other_news_becomes_background(self, tmp_path):

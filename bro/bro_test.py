@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import time
 from pathlib import Path
 from typing import ClassVar, Optional
 from unittest.mock import MagicMock
@@ -11,9 +12,10 @@ import bro.bro as bro_module
 import bro.llm.llms.echo as llm_llms_echo
 import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
-from bro import watches
+from bro import brash_policy, watches
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, var, when
+from bro.brash import REFUSED_STATUS
 from bro.bro import BaseBro, feature
 from bro.broker.environment import BROKER_TALK
 from bro.datasources.file import FileSource
@@ -23,6 +25,7 @@ from bro.harness import Harness, Service, SessionEndReason
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
+from bro.monitor import SESSION_DIR_ENV
 from bro.summon import LAUNCH_ENV, SUMMONED_ENV, encode_launch
 
 
@@ -41,6 +44,7 @@ class StubRun:
     self.trail_id = trail_id
     self.current_tool_step_id = tool_step
     self.watch_store: watches.Store = MagicMock(spec=watches.Store)
+    self.brash_policy: Optional[Path] = None
 
 
 def _native_servers(
@@ -1756,36 +1760,105 @@ class TestShellRoster:
     assert EchoBro().reach().brash is None
 
 
+def _exited_batch(store: watches.Store, command: str) -> list[str]:
+  """the lines `command`'s watch left once its producer exited."""
+  watch = watches.Watch(command, store.directory, watches.slug(command))
+  deadline = time.monotonic() + 10
+  while watch.producer_alive():
+    assert time.monotonic() < deadline, f'`{command}` did not exit'
+    time.sleep(0.01)
+  batch = store.take()
+  assert batch is not None
+  return batch.splitlines()
+
+
+class _ListedBro(BaseBro):
+  name = 'listed-watch-brash'
+  description = 'd'
+  tools: ClassVar = [mcp.brash('printf ...')]
+
+  def __init__(self):
+    super().__init__(system_prompt='')
+
+
+class _UnrestrictedBro(BaseBro):
+  name = 'unrestricted-watch-brash'
+  description = 'd'
+  tools: ClassVar = [mcp.brash(mcp.ANY)]
+
+  def __init__(self):
+    super().__init__(system_prompt='')
+
+
 class TestWatchServiceTools:
   @pytest.mark.asyncio
-  async def test_watch_tools_apply_the_exact_brash_list_on_every_harness(self):
-    class ExactBrashBro(BaseBro):
-      name = 'exact-watch-brash'
-      description = 'd'
-      tools: ClassVar = [mcp.brash('printf allowed')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
+  async def test_a_finite_command_list_runs_watch_lines_in_brash(self, tmp_path):
+    declaration = _ListedBro()
     with watches.Owner.temporary() as owner:
       run = StubRun()
       run.watch_store = owner.store
-      for harness in (Harness('alternate'), 'claude'):
-        server = _service_server(ExactBrashBro(), run=run, harness=harness)
-        with contextlib.closing(server):
-          tools = {tool.name: tool for tool in await server.list_tools()}
-          assert await tools['watch'].call({'command': ' printf allowed '}) == (
-            'watching `printf allowed`'
-          )
-          with pytest.raises(ValueError, match='match one declared entry exactly'):
-            await tools['watch'].call({'command': 'printf allowed; true'})
-          assert await tools['unwatch'].call({'command': 'printf allowed'}) == (
-            'stopped watching `printf allowed`'
-          )
-          owner.store.start('sleep 60')
-          assert await tools['unwatch'].call({'command': ' sleep 60 '}) == (
-            'stopped watching `sleep 60`'
-          )
+      run.brash_policy = brash_policy.write(tmp_path, declaration.reach())
+      server = _service_server(declaration, run=run)
+      with contextlib.closing(server):
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        # an escaped trailing space is part of the line's last word
+        listed = "printf '<%s>\\n' x\\ "
+        assert await tools['watch'].call({'command': listed}) == f'watching `{listed}`'
+        assert _exited_batch(owner.store, listed) == [
+          f'[{listed}] <x >',
+          f'[{listed}] [watch-run] exited 0',
+        ]
+        refused = 'printf listed; cat /dev/null'
+        await tools['watch'].call({'command': refused})
+        refusal, exit_line = _exited_batch(owner.store, refused)
+        assert refusal.startswith(f"[{refused}] brash: refused 'cat'")
+        assert exit_line == f'[{refused}] [watch-run] exited {REFUSED_STATUS}'
+
+  @pytest.mark.asyncio
+  async def test_a_session_without_a_live_run_watches_under_its_published_policy(
+    self, monkeypatch, tmp_path
+  ):
+    declaration = _ListedBro()
+    monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path / 'session'))
+    policy = brash_policy.write(tmp_path, declaration.reach())
+    monkeypatch.setenv(brash_policy.POLICY_ENV, str(policy))
+    with watches.Owner.for_session() as owner:
+      server = bro_module._build_service_server(
+        declaration, include_raise=False, harness='claude', live_run=None
+      )
+      with contextlib.closing(server):
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        await tools['watch'].call({'command': 'cat /dev/null'})
+        refusal, _ = _exited_batch(owner.store, 'cat /dev/null')
+        assert refusal.startswith("[cat /dev/null] brash: refused 'cat'")
+
+  @pytest.mark.asyncio
+  async def test_an_unrestricted_shell_runs_watch_lines_in_bash(self):
+    with watches.Owner.temporary() as owner:
+      run = StubRun()
+      run.watch_store = owner.store
+      server = _service_server(_UnrestrictedBro(), run=run)
+      with contextlib.closing(server):
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        await tools['watch'].call({'command': 'echo $((1 + 1))'})
+        assert _exited_batch(owner.store, 'echo $((1 + 1))') == [
+          '[echo $((1 + 1))] 2',
+          '[echo $((1 + 1))] [watch-run] exited 0',
+        ]
+
+  @pytest.mark.asyncio
+  async def test_unwatch_stops_a_watch_whose_command_the_list_does_not_admit(self):
+    with watches.Owner.temporary() as owner:
+      run = StubRun()
+      run.watch_store = owner.store
+      server = _service_server(_ListedBro(), run=run)
+      with contextlib.closing(server):
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        watch = owner.store.start('sleep 60')
+        assert await tools['unwatch'].call({'command': 'sleep 60'}) == (
+          'stopped watching `sleep 60`'
+        )
+        assert not watch.producer_alive()
 
   @pytest.mark.asyncio
   async def test_unwatch_refuses_the_runtime_owned_session_watch(self):
@@ -1811,7 +1884,7 @@ class TestWatchServiceTools:
     class QuietShellBro(BaseBro):
       name = 'quiet-watch-shell'
       description = 'd'
-      tools: ClassVar = [mcp.shell('printf allowed')]
+      tools: ClassVar = [mcp.brash('printf allowed')]
 
       def __init__(self):
         super().__init__(system_prompt='')

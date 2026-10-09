@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
-from bro import spells as spell_store, summon, watches
+from bro import brash_policy, spells as spell_store, summon, watches
 from bro.base import credentials, log
 from bro.base.condition import (
   Condition,
@@ -22,7 +22,6 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
-from bro.brash import admit_exact
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
 from bro.datasources.file import FileSource
@@ -124,6 +123,9 @@ class LiveRun(Protocol):
 class WatchRun(LiveRun, Protocol):
   @property
   def watch_store(self) -> watches.Store: ...
+
+  @property
+  def brash_policy(self) -> Optional[Path]: ...
 
 
 RAISE_EXIT_STATUS = 1
@@ -541,40 +543,41 @@ def _quest_cancel_tool(variables: Variables) -> llm_mcp.Tool:
 
 
 _WATCH_DESCRIPTION = (
-  'start an admitted shell command as a detached producer for the rest of this session. the '
-  'command must match one entry in this persona’s finite command list exactly; unrestricted '
-  'personas may run any command. its bounded output reaches the session through the shared watch store. a '
-  'line the command marks quiet arrives with the next line that wakes the session, unless '
-  '`wake_on_quiet` makes quiet lines wake it too.'
+  'start a shell command line as a detached producer for the rest of this session. under this '
+  'persona’s finite command list the line runs in brash, which starts only the commands the list '
+  'admits and stops at the first it refuses, exiting 126 with the refusal among the watch’s lines; '
+  'unrestricted personas run it in `bash -c`. its bounded output reaches the session through the '
+  'shared watch store. a line the command marks quiet arrives with the next line that wakes the '
+  'session, unless `wake_on_quiet` makes quiet lines wake it too.'
 )
 
 _UNWATCH_DESCRIPTION = (
-  'stop the admitted command’s watch and its whole process group. the runtime-owned session '
-  'watch cannot be stopped through this tool.'
+  'stop the watch of the command line it names and its whole process group. the runtime-owned '
+  'session watch cannot be stopped through this tool.'
 )
 
 
 def _watch_tools(
   *,
   live_run: Optional[WatchRun],
-  commands: tuple[str, ...],
   unrestricted: bool,
   variables: Variables,
 ) -> list[llm_mcp.Tool]:
   def store() -> watches.Store:
     return watches.session_store() if live_run is None else live_run.watch_store
 
+  def policy() -> Optional[Path]:
+    if unrestricted:
+      return None
+    return brash_policy.published() if live_run is None else live_run.brash_policy
+
   def watch(command: str, wake_on_quiet: bool = False) -> str:
-    admitted = admit_exact(command, entries=commands, unrestricted=unrestricted)
-    started = store().start(admitted, wake_on_quiet=wake_on_quiet)
+    started = store().start(command, policy(), wake_on_quiet=wake_on_quiet)
     return f'watching `{started.command}`'
 
   def unwatch(command: str) -> str:
-    normalized = command.strip()
-    if not normalized:
-      raise ValueError('command must be non-empty')
-    store().stop(normalized)
-    return f'stopped watching `{normalized}`'
+    store().stop(command)
+    return f'stopped watching `{command}`'
 
   return [
     llm_mcp.FunctionTool(watch, name='watch', description=_WATCH_DESCRIPTION, variables=variables),
@@ -698,7 +701,6 @@ def _build_service_server(
     tools.extend(
       _watch_tools(
         live_run=cast(Optional[WatchRun], live_run),
-        commands=brash.commands,
         unrestricted=brash.unrestricted,
         variables=variables,
       )

@@ -11,6 +11,7 @@ import pytest
 
 from bro.base.liveness_test_helper import Liveness
 from bro.base.text_window import BYTE_LIMIT
+from bro.brash import REFUSED_STATUS, Policy
 from bro.jobs import Job, Registry
 
 
@@ -80,6 +81,53 @@ def test_poll_tail_returns_finished_output():
   assert 'one\ntwo' in out
   # cursor jumped to the spool end: the next incremental poll is a bare state line
   assert job.poll(100) == 'exited (code 3)'
+
+
+@pytest.mark.parametrize(
+  ('line', 'expected'),
+  [
+    ('printf listed', 'exited (code 0)\nlisted'),
+    ('printf listed; cat /dev/null', f"exited (code {REFUSED_STATUS})\nbrash: refused 'cat'"),
+  ],
+)
+def test_a_job_under_a_brash_policy_runs_its_line_in_brash(tmp_path, line, expected):
+  policy = tmp_path / 'brash-policy.json'
+  Policy(entries=('printf ...',), writable=False).write(policy)
+  registry = Registry()
+  job = registry.start(line, policy=policy)
+  _wait_finished(job)
+  assert job.poll(100).startswith(expected)
+  registry.close()
+
+
+def test_a_job_runs_the_runtimes_supervisor_whatever_its_directory_holds(tmp_path, monkeypatch):
+  # a session works in an operated checkout that may carry another version of bro
+  (tmp_path / 'bro').mkdir()
+  (tmp_path / 'bro' / 'job_supervisor.py').write_text('raise SystemExit("the checkout ran")\n')
+  monkeypatch.chdir(tmp_path)
+
+  job = Job('job-1', 'echo supervised')
+  _wait_finished(job)
+
+  assert job.poll(100) == 'exited (code 0)\nsupervised'
+
+
+@pytest.mark.parametrize(
+  ('line', 'expected'),
+  [
+    ("printf '<%s>' x\\ ", 'exited (code 0)\n<x >'),
+    ('  printf "<%s>" padded  ', 'exited (code 0)\n<padded>'),
+  ],
+)
+def test_a_job_runs_its_line_untouched(tmp_path, line, expected):
+  policy = tmp_path / 'brash-policy.json'
+  Policy(entries=('printf ...',), writable=False).write(policy)
+  registry = Registry()
+  job = registry.start(line, policy=policy)
+  _wait_finished(job)
+  assert job.command == line
+  assert job.poll(100) == expected
+  registry.close()
 
 
 def test_poll_head_paginates_oldest_first_with_pending_marker():
@@ -192,6 +240,8 @@ def test_supervisor_keeps_the_group_when_the_readiness_reader_dies(tmp_path):
         'bro.job_supervisor',
         str(ready_write_fd),
         str(owner_read_fd),
+        'bash',
+        '-c',
         liveness.holding('sleep 30'),
       ],
       pass_fds=(ready_write_fd, owner_read_fd),

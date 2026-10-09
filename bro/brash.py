@@ -158,6 +158,11 @@ class Policy:
     entries = validate_entries(commands)
     return cls(entries=entries, writable=files == 'write')
 
+  def write(self, path: Path) -> None:
+    path.write_text(
+      json.dumps({'commands': list(self.entries), 'files': 'write' if self.writable else 'read'})
+    )
+
 
 def _scan_entry(entry: str) -> list[list[tuple[str, bool, bool]]]:
   words: list[list[tuple[str, bool, bool]]] = []
@@ -1567,19 +1572,6 @@ class Interpreter:
     return re.sub(
       r'\\([$`"\\\n])', lambda match: '' if match.group(1) == '\n' else match.group(1), value
     )
-
-
-def admit_exact(command: str, *, entries: Sequence[str], unrestricted: bool) -> str:
-  normalized = command.strip()
-  if not normalized:
-    raise ValueError('command must be non-empty')
-  if unrestricted or normalized in entries:
-    return normalized
-  listing = ', '.join(f'`{entry}`' for entry in entries)
-  raise ValueError(
-    f'this persona may run {listing} and nothing else — the command must match one declared '
-    'entry exactly, with nothing appended'
-  )
 
 
 def run(

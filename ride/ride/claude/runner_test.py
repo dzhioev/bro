@@ -1,16 +1,21 @@
+import json
 import os
 import signal
 import subprocess
 import time
 from collections.abc import Generator
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import ride.claude.runner as ride_runner
-from bro import watches
+from bro import brash_policy, watches
+from bro.brash import Policy
+from bro.bro import BaseBro
 from bro.llm.llms import claude_code
+from bro.mcp import brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import RUNTIME_ENV, SUMMONED_ENV
 from ride.claude.claude_argv import ClaudeLaunch
@@ -22,6 +27,15 @@ from ride.claude.waiter_state import WaiterState
 from ride.session_test import _spec
 
 _PINNED_CLAUDE = Path('/pinned/claude')
+
+
+class _ListedBro(BaseBro):
+  name = 'listed'
+  description = 'd'
+  tools: ClassVar = [brash('git status')]
+
+  def __init__(self):
+    super().__init__(system_prompt='')
 
 
 def _fake_claude(environment: dict[str, str]) -> Path:
@@ -248,6 +262,38 @@ class TestSessionRun:
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
       assert h.start_server.call_args[0][0] == 'persona:bro-dev'
+
+  def test_a_finite_command_list_runs_under_the_sessions_brash_policy(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _ListedBro())
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_session(_spec()) == 0
+      policy = h.build.call_args.kwargs['brash_policy']
+      assert policy.parent == h.session_dir / 'claude'
+      assert Policy.read(policy) == Policy(entries=('git status',), writable=False)
+      assert h.start_server.call_args.args[2][brash_policy.POLICY_ENV] == str(policy)
+
+  def test_an_unrestricted_shell_publishes_no_brash_policy(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env[brash_policy.POLICY_ENV] = str(tmp_path / 'inherited.json')
+      assert ride_runner.run_session(_spec(bro='dev')) == 0
+      assert h.build.call_args.kwargs['brash_policy'] is None
+      assert brash_policy.POLICY_ENV not in h.start_server.call_args.args[2]
+
+  def test_a_competing_hook_refuses_the_session_before_anything_starts(
+    self, monkeypatch, tmp_path, caplog
+  ):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _ListedBro())
+    settings = tmp_path / '.claude' / 'settings.json'
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({'hooks': {'PreToolUse': [{'hooks': [{'type': 'command'}]}]}}))
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_session(_spec()) == 1
+      assert h.start_server.call_count == 0
+      assert h.run_claude.call_count == 0
+    assert f'{settings}: a PreToolUse hook matching every tool' in caplog.text
 
   def test_server_start_failure_returns_1(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
