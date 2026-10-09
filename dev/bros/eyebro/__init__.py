@@ -1,8 +1,6 @@
-from bro.base.condition import when
 from bro.dev import references
-from bro.mcp import ANY, brash, creds, harness, mount
+from bro.mcp import ANY, brash, creds, files, source, web
 from bros.bro import Bro
-from bros.dev import mcp
 
 SYSTEM_PROMPT = """\
 You are a code reviewer. You judge changes against the standards that bind
@@ -42,7 +40,6 @@ class Eyebro(Bro):
   name = 'eyebro'
   description = 'code reviewer that holds changes to the standards their repository declares'
   features = {'github': creds.contains('github')}
-  tools = [when(harness == 'bro', mount(mcp.toolset)), brash(ANY)]
-  data_sources = [references.dev_style]
+  tools = [files(), brash(ANY), web(), source(references.dev_style)]
   spells = ('review-diff.md', 'review-pr.md')
   system_prompt = SYSTEM_PROMPT

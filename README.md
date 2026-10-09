@@ -49,13 +49,10 @@ import bro.brog.mcp as brog_mcp
 from acme import issues
 from bro.base.condition import when
 from bro.bro import feature
-from bro.datasources.references import man
 from bro.datasources.web_search import WebSearch
-from bro.harness import claude
 from bro.llm.llms import openai
-from bro.mcp import cli, creds, harness, mount
+from bro.mcp import cli, creds, files, man, mount, source
 from bros.bro import Bro
-from bros.dev import mcp as dev_mcp
 
 SYSTEM_PROMPT = """\
 You triage the issues of this repository: read a report against the code,
@@ -82,12 +79,12 @@ class Triage(Bro):
   tools = [
     mount(issues.toolset),
     when(feature('brog'), mount(brog_mcp.toolset, 'create_task', 'add_comment')),
-    when(harness == 'bro', mount(dev_mcp.toolset, 'read_file', 'grep')),
-    claude.block(*claude.SHELL, *claude.DELEGATION),
+    files(write=False),
     cli('bro show', 'name'),
     cli('rewind show', 'trail_id'),
+    source(WebSearch()),
+    man('environment'),
   ]
-  data_sources = [WebSearch(), man('environment')]
   spells = ('triage.md',)
   system_prompt = SYSTEM_PROMPT
 ```
@@ -164,13 +161,13 @@ Read the class line by line and nothing is left to configure elsewhere:
 
 - `mount(issues.toolset)` mounts the project's own toolset, and `mount(brog_mcp.toolset, 'create_task', 'add_comment')` two tools of another, the subset validated at import.
 - `when(feature('brog'), …)` makes the tracker appear wherever a tracker credential resolves, and the prompt's `{{when #features contains brog}}` paragraph appears with it.
-- `when(harness == 'bro', …)` gives the bro file reading only where the harness brings no file tools of its own.
-- `claude.block(*claude.SHELL, *claude.DELEGATION)` withholds Claude's shell and subagents:
-  triage holds no shell, and delegation goes through summons, inside the boundary.
+- `files(write=False)` lets it read and search the code and change none of it, through whatever file tools the harness serves the group with.
+  Nothing it does not declare reaches it:
+  triage holds no shell and no subagents, so delegation goes through summons, inside the boundary.
 - `cli('bro show', 'name')` and `cli('rewind show', 'trail_id')` are the two commands it may run, each served as a tool:
   the card of a bro it is about to hand work to, and the run the analyst names.
   How a command becomes a tool is below.
-- `data_sources` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
+- `source(WebSearch())` and `man('environment')` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
 - `llm_spec` is the model it runs on by default;
   any launch may name another.
 - `may_summon = ('analyst',)` is whom it may summon on its own authority:
@@ -236,8 +233,6 @@ $ bro show triage
   - `label_issue` — add a label to an issue
   - `close_duplicate` — close an issue as a duplicate of another
 - `brog` — 2 tools
-  …
-- `dev` — 2 tools
   …
 - `cli` — 2 tools
   - `bro_show` — print an info card for a bro
@@ -427,7 +422,7 @@ the container's network is unrestricted, and `--unboxed` runs as the launching u
 - **Artifacts.**
   Peers pass files by content-addressed reference, and reach follows the launch tree.
 - **One conditioning model.**
-  `when(harness == 'bro', …)` in code and `{{when #harness = bro}}` in text evaluate the same facts and fail fast on a typo.
+  `when(feature('brog'), …)` in code and `{{when #features contains brog}}` in text evaluate the same facts and fail fast on a typo.
 
 ## Status
 

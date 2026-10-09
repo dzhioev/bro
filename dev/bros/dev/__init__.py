@@ -2,12 +2,10 @@ import bro.brog.mcp as brog_mcp
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
-from bro.datasources.references import man
 from bro.dev import references
-from bro.mcp import ANY, brash, creds, harness, mount
+from bro.mcp import ANY, brash, creds, delegation, files, man, mount, source, web
 from bro.workflow.commit_footer import provision_hooks
 from bros.bro import Bro
-from bros.dev import mcp
 
 SYSTEM_PROMPT = """\
 You are a software developer with tools to read, search, and edit files and run
@@ -42,10 +40,13 @@ class Dev(Bro):
   # the dev family attributes token spend to its commits
   provisioning = (provision_hooks,)
   tools = [
-    when(harness == 'bro', mount(mcp.toolset)),
+    files(),
     brash(ANY),
+    web(),
+    delegation(),
     when(feature('brog'), mount(brog_mcp.toolset)),
+    source(references.dev_style),
+    man('extending'),
   ]
-  data_sources = [references.dev_style, man('extending')]
   spells = ('audit.md', 'bump-bro.md', 'fix.md', 'land.md', 'run-pr.md')
   system_prompt = SYSTEM_PROMPT

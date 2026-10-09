@@ -18,6 +18,7 @@ from bro.jobs import Job, Registry
 from bro.llm.llms.openai import LLMSpec
 from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
+from bro.native import dev_mcp
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
@@ -360,6 +361,42 @@ class TestUnboxedSession:
     ]
     assert launch.env['BRO_INSTALL_KINDS'] == ''
     assert launch.env['RIDE_BASE_SHA'] == 'treehead'
+
+
+def _declaring(*layers: mcp.ToolLayer) -> BaseBro:
+  class Declaring(BaseBro):
+    name = 'declaring'
+    description = 'd'
+    tools: ClassVar = list(layers)
+
+    def __init__(self):
+      super().__init__(system_prompt='')
+
+  return Declaring()
+
+
+class TestServe:
+  @pytest.mark.asyncio
+  async def test_files_mount_the_dev_toolset(self):
+    servers = _declaring(mcp.files()).assemble(harness=bro_harness.BRO, include_raise=False)
+    [dev] = [server for server in servers if server.namespace == dev_mcp.toolset.namespace]
+    assert {tool.name for tool in await dev.list_tools()} == set(dev_mcp.toolset.tool_names)
+
+  @pytest.mark.asyncio
+  async def test_read_only_files_mount_only_its_read_only_part(self):
+    servers = _declaring(mcp.files(write=False)).assemble(
+      harness=bro_harness.BRO, include_raise=False
+    )
+    [dev] = [server for server in servers if server.namespace == dev_mcp.toolset.namespace]
+    assert {tool.name for tool in await dev.list_tools()} == set(dev_mcp.READ_ONLY)
+
+  def test_no_files_mount_no_file_tools(self):
+    servers = _declaring().assemble(harness=bro_harness.BRO, include_raise=False)
+    assert dev_mcp.toolset.namespace not in {server.namespace for server in servers}
+
+  def test_web_and_delegation_are_left_unserved(self):
+    reach = _declaring(mcp.files(), mcp.brash(mcp.ANY), mcp.web(), mcp.delegation()).reach()
+    assert bro_harness.BRO.serve(reach).unserved == ('web', 'delegation')
 
 
 class _ShellBro(BaseBro):

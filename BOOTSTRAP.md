@@ -321,7 +321,7 @@ Create the selected module with this shape, adapting names, project text, and co
 
 ```python
 import bro.llm.llms.openai as llm_llms_openai
-from bro.datasources.references import man
+from bro.mcp import man
 from bros.dev import Dev
 
 PROJECT_PROMPT = """\
@@ -342,7 +342,7 @@ class MyDev(Dev):
   )
   features = {'brog': True}
   extra_secrets = ('github',)
-  data_sources = [
+  tools = [
     man('environment'),
     man('template'),
     man('conditions'),
@@ -619,7 +619,7 @@ For every candidate bro, produce a conceptual draft covering:
 - its name, one responsibility, triggering scenarios, and explicit non-goals;
 - its skills and spells, including which behavior belongs in durable instructions rather than ad hoc chat;
 - its system-prompt contribution and the project facts it must know;
-- its toolsets, data sources, host commands, and any harness-native tools it narrows or blocks;
+- its tool groups (`files`, `brash`, `web`, `delegation`), toolsets, data sources, and host commands;
 - its required and optional credentials, instance-isolation needs, and install hooks;
 - its harness and LLM recipe, expected cost/latency trade-offs, and any bros it may summon;
 - a concrete acceptance check.

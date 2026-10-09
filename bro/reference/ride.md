@@ -147,7 +147,7 @@ The session watch reaches the model through the selected harness's delivery port
 
 ## Claude harness
 
-A Claude session retains Claude Code's built-ins, skills, and base prompt while adding the selected bro's persona, spells, filtered MCP namespaces, and blocked-tool declarations.
+A Claude session runs Claude Code with the natives the selected bro's tool groups map to, Claude's own skills and base prompt, and the bro's persona, spells, and MCP namespaces.
 It requires the `claude_code` setup token.
 Every managed session runs the version pinned in `ride/ride/setup/container/claude-code-version` by absolute path:
 the runtime image's install in boxed isolation, and a verified standalone release in unboxed isolation.
@@ -193,6 +193,9 @@ The bro harness drives the selected bro's native LLM loop:
 its runner spawns `bro run|chat …` in the workspace and waits, forwarding SIGTERM to it.
 Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
+
+The bro harness serves the `files` group with its own file and search tools under the `dev` namespace, only their read-only part for `files(write=False)`, and `brash(...)` with its job tools.
+It leaves `web` and `delegation` unserved, which `bro show` marks.
 
 The native runner pumps each bounded batch from the session's watch store into the LLM inbox, taking the next only after the model drains the last.
 A managed session's runtime-owned `quest watch` therefore reaches the model without a watch-mode job;
@@ -1281,7 +1284,20 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks),
 the forwarded claude args, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
-the `--mcp-config` mounting the persona's namespaces from the session-local server below, and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
+the `--mcp-config` mounting the persona's namespaces from the session-local server below,
+`--strict-mcp-config`, so that config is the session's only MCP source and a repository's `.mcp.json` loads nothing,
+and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
+
+`--tools` passes exactly the Claude natives the persona's tool groups map to, an allowlist, plus the loop tools every session gets;
+`ride/ride/claude/native_tools.py` names them per group on the pinned release.
+Every other native is off, a tool a Claude Code release adds included, until it is mapped.
+`files` brings `LSP`, the code intelligence of the pyright plugin every session enables, beside Claude's file tools.
+`brash(...)` brings `Monitor`, which the pinned release withholds while telemetry is off, as the session's settings keep it;
+under a finite command list a `PreToolUse` hook (`ride.claude.watch_guard`) gates `Bash` and `Monitor`, admitting a call whose command matches one entry exactly.
+`delegation()` brings Claude's own agents, and a delegated agent gets at most the session's natives, since the allowlist withholds the rest from the whole session.
+`--tools` drops a name the pinned release does not serve without a word,
+so `ride/ride/claude/native_tools_llm_test.py` holds each registered persona's mapped natives against the pinned release's `init` event and a delegated agent's tools against the allowlist;
+a Claude Code bump reruns it.
 
 The statusLine is ride's, not the operated project's.
 The runner starts one session-local projector process from its frozen runtime;
@@ -1313,11 +1329,9 @@ Its output lands in a `ride-mcp-*` temp dir alongside the port file.
 `bro-ride` contributes the `persona:` target prefix through `bro.mcp.targets`;
 the core `mcp-server` discovers the matching resolver without knowing the target.
 `ride.claude.assembly` resolves `persona:<name>` through `persona_servers()`
-— `BaseBro.assemble(harness=CLAUDE, ...)`, with the registered object injected by the Claude engine, yielding only the additions that hold on that harness plus the `spell` and bro service servers;
-an entry gated `harness == 'bro'`, like the dev toolset, never mounts, since Claude's built-ins cover it.
+— `BaseBro.assemble(harness=CLAUDE, ...)`, with the registered object injected by the Claude engine, yielding the bro's declared servers and data sources plus the `spell` and bro service servers;
+Claude serves the tool groups with its own natives, so the harness mounts no server of its own for them.
 `bro::cast` joins the service server when the bro has spells and OpenAI resolves.
-Selected `block(...)` layers join `--disallowed-tools`, removing the named Claude-native tools;
-selecting a block for the `bro` harness is a declaration error.
 Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters.
 The assembly also mounts the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
 in its terminate-the-session flavor (semantics in `bro/AGENTS.md`, "Service tools");

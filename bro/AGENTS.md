@@ -15,8 +15,9 @@ A subpackage with a map of its own is pointed at, not described here.
   the engine that runs one is `native/bro/native/runner.py`.
   How to declare one: `bro/reference/extending.md`;
   what a run renders, mounts, and counts: "Running a declaration" below.
-- `mcp.py` — declaration vocabulary for persona tool layers and toolset modules:
-  surface facts and rendering, `MCPServerSpec`, `ToolLayer`, `Toolset`, and the `mount` / `block` / `allow_commands` / `serve` / `cli` / `brash` constructors.
+- `mcp.py` — declaration vocabulary for persona tool reach and toolset modules:
+  surface facts and rendering, `MCPServerSpec`, `ToolLayer` and the keyed reach entries it carries, the harness-neutral `Reach` they fold to, and `Toolset`;
+  and the `files` / `brash` / `web` / `delegation` group constructors beside `mount` / `cli` / `source` / `man` / `revoke`.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `spells.py` — the spell store:
   validation of the files a bro's `spells` declaration names and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
@@ -84,12 +85,10 @@ A subpackage with a map of its own is pointed at, not described here.
   `__init__.py` holds the `Harness` interface and the `bro.harnesses` registry:
   Installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
   Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
-  `claude.py` holds Claude Code's tool names in capability groups (`FILES`, `SHELL`, `DELEGATION`, `WEB`) plus `claude.block(*names)`, conditioned on the Claude harness.
-  A finite `brash(...)` command list over a blocked shell hands back `Bash` and `Monitor` behind the command gate plus their job controls;
-  `brash(ANY)` leaves an unblocked Claude shell unrestricted.
-  The fold admits only what the persona declares.
-  `watches.py` separately decides whether `do-ride` arms the runtime-owned session watch, which reaches the model through the harness's delivery port rather than a tool it can call.
-  A persona names another product's tool surface when it withholds or narrows one, so the names live here rather than in each persona that forgoes them
+  `Harness.serve(reach)` returns a `Service`:
+  the server specs the harness mounts for the reach's tool groups, and the groups it leaves unserved, which `bro show` marks.
+  The tools a harness serves a group with on its own, Claude's natives or the bro harness's job tools, are its own code, built from the same reach.
+  `watches.py` separately decides whether `do-ride` arms the runtime-owned session watch, which reaches the model through the harness's delivery port rather than a tool it can call
 - `launch/` + `native/bro/launch/` — core owns cross-harness launch primitives;
   `bro-native` owns the in-process `run` / `chat` launchers, chat UIs, and fork-resume flow.
   The directories are portions of the shared `bro.launch` namespace;
@@ -129,6 +128,11 @@ A subpackage with a map of its own is pointed at, not described here.
 
 How to declare a bro is `bro/reference/extending.md`;
 this section is what `BaseBro` renders, mounts, and counts when one runs.
+
+### Tool reach
+
+`BaseBro.reach()` folds the class's `tools` into one harness-neutral `Reach` (`bro/reference/extending.md`, "Declaring a bro").
+A harness mounts, for a bro, the servers its `serve` returns for that reach ahead of the reach's own servers and data sources, built once per harness on the bro instance and released by `close()`.
 
 ### Prompt composition
 
@@ -179,8 +183,10 @@ Later transitions arrive through the runtime-owned session watch.
 ### Credential manifest
 
 `bro.needed_secrets(harness)` is the bro's component credential manifest:
-the union of each declared MCP server spec's and data source's `needed_secrets` over the components whose conditions hold on that harness (matching what `ride.claude.assembly.persona_servers()` mounts for `claude`),
-the MRO-collected `extra_secrets`, and the credentials of its pinned-on features.
+the union of `needed_secrets` over the components that harness mounts for the bro,
+which are the servers it serves the bro's tool groups with and the bro's own declared servers and data sources (matching what `ride.claude.assembly.persona_servers()` mounts for `claude`);
+the MRO-collected `extra_secrets`;
+and the credentials of its pinned-on features.
 It excludes the LLM key (`llm_spec.needed_secrets()`):
 surfaces that run the bro as an LLM process add it, while a claude-code session authenticates on its own.
 `missing_secrets()` is the manifest plus the LLM key, checked against the process's store;

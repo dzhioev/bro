@@ -401,7 +401,9 @@ class TestLifetime:
         closed.append(self.namespace)
 
     class _Holder(Declared):
-      tools: ClassVar = [_server_layer(MCPServerSpec(build=lambda: _ClosingServer('holder', [])))]
+      tools: ClassVar = [
+        _server_layer(MCPServerSpec(namespace='holder', build=lambda: _ClosingServer('holder', [])))
+      ]
 
     runner = StubRunner(bro=_Holder())
     with runner:
@@ -415,7 +417,9 @@ class TestLifetime:
         raise RuntimeError('teardown exploded')
 
     class _Holder(Declared):
-      tools: ClassVar = [_server_layer(MCPServerSpec(build=lambda: _BrokenServer('broken', [])))]
+      tools: ClassVar = [
+        _server_layer(MCPServerSpec(namespace='broken', build=lambda: _BrokenServer('broken', [])))
+      ]
 
     runner = StubRunner(bro=_Holder())
     with runner:

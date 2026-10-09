@@ -13,13 +13,14 @@ from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
 from bro.brash import admit_exact
-from bro.harness import Harness, SessionEndReason
+from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
 from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
+from bro.native import dev_mcp
 from ride.harness import ContainerExtras
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -27,6 +28,7 @@ from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.bro import BaseBro, LiveRun
+  from bro.mcp import Reach
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
@@ -187,18 +189,26 @@ class BroHarness(Harness):
   def can_end_session(self) -> bool:
     return True
 
+  def serve(self, reach: 'Reach') -> Service:
+    server_specs = ()
+    if reach.files is not None:
+      tool_names = () if reach.files.write else dev_mcp.READ_ONLY
+      server_specs = (dev_mcp.toolset.manifest(*tool_names),)
+    unserved = tuple(group.key.name for group in (reach.web, reach.delegation) if group is not None)
+    return Service(server_specs=server_specs, unserved=unserved)
+
   def own_tools(self, bro: 'BaseBro', live_run: 'LiveRun | None') -> tuple[llm_mcp.Tool, ...]:
     tools = [spell_store.build_skill_tool()]
-    selection = bro._selected_tools_for(self)
-    if not selection.brash_declared:
+    brash = bro.reach().brash
+    if brash is None:
       return tuple(tools)
     if live_run is None:
       raise RuntimeError('job tools require a live run')
     tools.extend(
       _job_tools(
         live_run=cast(_NativeRun, live_run),
-        commands=selection.brash_commands,
-        unrestricted=selection.brash_unrestricted,
+        commands=brash.commands,
+        unrestricted=brash.unrestricted,
       )
     )
     return tuple(tools)

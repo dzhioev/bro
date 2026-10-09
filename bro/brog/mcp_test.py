@@ -8,7 +8,6 @@ from bro.base import credentials
 from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT
 from bro.brog.mcp import toolset
 from bro.brog.model import Comment, Project, Task
-from bro.mcp import mount
 
 # tools are built once against a shared mock System (schema derivation is not
 # free); the autouse fixture resets the mock between tests.
@@ -42,10 +41,10 @@ def _task(**overrides) -> Task:
 
 class TestRoster:
   def test_static_secrets(self):
-    assert mount(toolset).server_specs[0].needed_secrets == toolset.secrets
+    assert toolset.manifest().needed_secrets == toolset.secrets
 
   def test_scoped_subset_keeps_the_static_secrets(self):
-    assert mount(toolset, 'get_task', 'read_task').server_specs[0].needed_secrets == toolset.secrets
+    assert toolset.manifest('get_task', 'read_task').needed_secrets == toolset.secrets
 
   def test_build(self, monkeypatch):
     monkeypatch.setattr(

@@ -1,15 +1,14 @@
 """ready-made sources over the repo's canonical reference docs.
 
-Each doc is declared once as a `FileSource`. A bro lists it in `data_sources`
-either directly, for a dedicated `read` tool of its own, or as `man('<topic>')`,
-joining the manual the bro's declared pages fold into. The instances are
-stateless, so sharing them across bros is fine.
+Each doc is declared once as a `FileSource`. A bro lists it in `tools` either
+as `source(<doc>)`, for a dedicated `read` tool of its own, or as
+`man('<topic>')`, joining the manual the bro's declared pages fold into. The
+instances are stateless, so sharing them across bros is fine.
 """
 
 from bro import prompts, reference
 from bro.base.name_map import NameMap
 from bro.datasources.file import FileSource
-from bro.datasources.man import ManPage
 
 environment = FileSource(
   'environment',
@@ -79,7 +78,6 @@ _PAGES = NameMap(
 )
 
 
-def man(topic: str) -> ManPage:
-  """declare `topic` into the manual of the bro whose `data_sources` this entry
-  joins. An unknown topic raises here, at declaration."""
-  return ManPage(_PAGES.resolve(topic))
+def page(topic: str) -> FileSource:
+  """the roster's page for `topic`; an unknown topic raises with the roster listed."""
+  return _PAGES.resolve(topic)

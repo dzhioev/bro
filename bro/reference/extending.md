@@ -38,22 +38,32 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 
 - `system_prompt = "..."` — class-level.
   When you `class B(A)` and both declare `system_prompt`, `__init__` concatenates A's then B's (MRO base-to-derived) so subclasses only declare their *additions*.
-- `data_sources = [YourSource()]` for read-only data connectors
-- `data_sources = [man('conditions'), man('ride')]` (`from bro.datasources.references import man`) declares reference pages one topic at a time;
-  every page the class hierarchy declares folds into the bro's single `man` source
-- `tools = [mount(project_tools.mcp.toolset)]` adds a contributing package's full toolset ("Adding a toolset" below)
-- `tools = [mount(project_tools.mcp.toolset, 'search', 'update')]` scopes the mount to specific tools (validated at declaration)
-- `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]` (`from bros.dev import mcp as dev_mcp`, supplied by `bro-dev`) mounts its file and search tools only on the bro harness
-- `tools = [claude.block(*claude.SHELL), brash('git log ...', 'gh pr view *')]` declares a finite command list the persona may run on either harness.
+- `tools = [...]` is the bro's whole tool reach, one list imported from `bro.mcp`:
+  nothing reaches the bro until an entry declares it.
+  - `files()` reaches the workspace's files, reading, searching, and modifying them, and `files(write=False)` only reads and searches them.
+  - `brash('git log ...', 'gh pr view *')` declares the command list the persona may run through the harness shell, and `brash(ANY)` an unrestricted shell (below).
+  - `web()` fetches and searches web content.
+  - `delegation()` starts work in the harness's own agents, outside the framework's summons and so outside their isolation, credential scoping, and recording.
+  - `mount(project_tools.mcp.toolset)` adds a contributing package's full toolset ("Adding a toolset" below), and `mount(project_tools.mcp.toolset, 'search', 'update')` scopes the mount to specific tools, validated at declaration.
+  - `cli('bro list')` serves one installed CLI command as a generated tool (below).
+  - `source(YourSource())` mounts a read-only data connector, whose summary joins the composed prompt ("Adding a data source" below).
+  - `man('conditions')` declares one reference page into the bro's single `man` source;
+    every page the class hierarchy declares folds into it.
+  - `ToolLayer(server_specs=(spec,))` mounts a raw `MCPServerSpec`.
+  - `revoke(delegation())`, `revoke(mount(brog_mcp.toolset))`, or `revoke(cli('bro list'))` withholds what the wrapped entries declare, whatever their level or subset.
+
+  `files`, `brash`, `web`, and `delegation` are the tool groups.
+  They are harness-neutral:
+  each harness serves a group with its own tools, and `bro show` marks a group a harness leaves unserved (`bro/reference/ride.md`, "Bro harness" and "The claude argv").
+- `brash('git log ...', 'gh pr view *')` declares a finite command list.
   An entry is written like a command and split with shell quoting:
   each word matches one argument, an unquoted `*` matches any text within its argument, and a final unquoted `...` admits any further arguments, including none.
   Quoting makes either marker literal, so `grep -E 'a*b' ...` admits only the literal pattern `a*b`.
   Leading `NAME=value` words are part of the entry.
   An entry names one simple command with a literal program word;
   shell operators, expansions, a non-final `...`, brash builtins, and bash builtins brash does not implement are refused at declaration.
-  The block lets the finite command list narrow Claude's shell, while `brash(ANY)` leaves its unblocked shell unrestricted and an empty declaration is invalid.
-  `brash(ANY)` marks the shell unrestricted and therefore runs lines in plain bash rather than through the finite-list interpreter.
-- `tools = [cli('bro list')]` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
+  `brash(ANY)` marks the shell unrestricted and therefore runs lines in plain bash rather than through the finite-list interpreter, and an empty declaration is invalid.
+- `cli('bro list')` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
   The command is a program name and any subcommands;
   trailing names narrow what the tool exposes (`cli('bro show', 'name')` withholds `--system-prompt`).
   Every generated tool also takes `output_offset` / `output_limit`, a window over the command's output, and `timeout_seconds`, after which the command is killed,
@@ -63,24 +73,31 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   — not an installed CLI, a dispatcher rather than a leaf, an argument shape that cannot be described
   — fails there.
   Credentials the command reads are the declaring bro's `extra_secrets`.
-- `tools = [when(harness == 'claude', block('Read', 'Write'))]` removes harness-native tools.
-  One block may group several related names;
-  it must be gated away from `harness == 'bro'`, whose native loop exposes only the declared tools, or construction raises.
-  `tools = [when(harness == 'claude', allow_commands('Monitor', 'journalctl -f'))]` hands one of those tools back narrowed to the commands it names, and `serve('TaskStop')` hands one back whole where there is no command line to narrow on;
-  either way the tool must be blocked too, since handing back bounds nothing a bro does not otherwise withhold.
-  Import `block`, `allow_commands`, `serve`, `harness`, and `mount` from `bro.mcp`.
-- `tools` and `data_sources` are walked along the MRO and concatenated, so a `ReviewDev(Dev)` subclass declares only its additional components and retains Dev's declarations.
-- An entry in either list may be gated on surface facts with `when(...)` (`from bro.base.condition import when`;
+- Every `tools` entry has a key, its kind with a name, so entries of different kinds never share one:
+  a group's name, a mounted toolset's namespace, a data source's namespace, a reference page's topic, a `cli` entry's generated tool name, and the namespace a raw spec serves.
+  A layer carrying several entries, a raw `ToolLayer` or a `|` of layers, contributes each under its own key.
+- `tools` resolve per key along the MRO.
+  Conditions select first, so an entry whose `when` or `iff` condition does not hold is omitted before keys resolve.
+  Then the first class in the MRO that declares a key decides it, and that class's entries for the key reduce by kind:
+  files levels to the wider, command lists to their union with `ANY` absorbing them, mounts of one toolset to the union of their tool subsets, and identical entries to one.
+  Any other pair under one key fails construction rather than letting list order decide:
+  a `revoke` beside a grant, two different sources or raw specs, or two `cli` entries for one tool exposing different arguments.
+  A subclass therefore declares only what it adds, narrows, or withholds:
+  `files(write=False)` under an inherited `files()` narrows it, and a shorter `brash(...)` list narrows an inherited one;
+  an unmet `when(feature('x'), files(write=False))` leaves the base's `files()` in force;
+  and a descendant may grant again what an ancestor revoked.
+- An entry may be gated on the bro's `#creds` and `#features` with `when(...)` (`from bro.base.condition import when`;
   `when` also accepts a plain bool for a genuinely static predicate), or choose among alternatives with `iff(c1, a1, c2, a2[, e])`, which raises when nothing matches and no else item is given.
-  Conditions evaluate at assembly, so an unmatched declaration is never applied
-  — see `bro/reference/conditions.md`.
+  A declaration cannot condition on the harness:
+  every harness serves the one reach a bro's entries fold to.
+  See `bro/reference/conditions.md`.
   Declarations skip the `ClassVar` annotation, since BaseBro's class-level declarations carry the types;
   a ruff configuration selecting RUF012 ignores it for persona modules.
 - `llm_spec = openai.LLMSpec(...)` (or any other bro-native provider's `LLMSpec`) overrides the recipe the bro-native engine runs the bro under;
   a Claude Code session runs under the recipe its own launch names.
   Per-instance overrides go through `YourBro.create(spec)`.
 - `extra_secrets = ('github',)` declares credentials no component expresses (a bro's environment needs).
-  MRO-walked and unioned like `tools`;
+  MRO-walked and unioned;
   folded into `bro.needed_secrets()`, which the host hydrates into the scoped container store.
   Most secrets come from the declared MCP servers / data sources / `llm_spec` and need no entry here
   — see `bro/AGENTS.md`, "Credential manifest".
@@ -120,7 +137,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   — in a spell, a prompt, or a doc
   — marks it `[[…]]`, hyphens as spaces and the phrasing fitted to the sentence (`hand off to [[run pr]]`, `blocks [[land]] later`);
   canonical `spell::<name>` stays for the mechanism and for component inventories.
-  Spells follow the same MRO walk as `system_prompt` and `tools`:
+  Spells are MRO-walked:
   each ancestor's declaration contributes, derived classes override parents on name collision, and the concrete `Bro`'s spells reach every bro deriving from it.
   The full description is the tool description;
   keep it useful for tool selection rather than optimizing its first sentence.
@@ -152,7 +169,7 @@ Register the class under the distribution's `bro` entry-point group, `your-name 
 There is no auto-discovery:
 the entry is what makes `create_bro('your-name')` resolve wherever the distribution is installed, and its key must equal the class's `name`, which the registry validates when it lazily imports the module.
 Two installed distributions claiming one name fail the registry rather than letting import order decide.
-Package-relative spells and MRO-collected `tools` / `data_sources` declarations work across distributions.
+Package-relative spells and MRO-resolved `tools` declarations work across distributions.
 Project launch defaults (`[tool.bro] default`, image repository) are documented in `bro/reference/ride.md`, "Per-project defaults".
 
 ## Adding a data source
@@ -169,7 +186,7 @@ When an upstream HTTP/network failure makes the source temporarily unusable, rai
 — the agent loop turns it into a tool result the model can route around.
 If the source reads a credential through the store, declare it with `needed_secrets = ('catalog',)` (or `optional_secrets` for one it degrades without),
 so the host hydrates it into any bro that uses the source (`bro/AGENTS.md`, "Credential manifest").
-Bind to a Bro by declaring `data_sources = [YourSource()]` on its class.
+Bind it to a bro by declaring `source(YourSource())` in the bro's `tools`.
 
 ## Adding a toolset
 
@@ -206,5 +223,5 @@ def lookup(product_id: str, context: Context[Catalog]) -> str:
 - A description may carry `{{…}}` directives over `#tools`, the build's selected roster (`bro/reference/conditions.md`, "Server-domain vocabularies").
 - `mount(toolset)` and `mount(toolset, 'lookup')` are the declaration-side entries ("Declaring a bro" above);
   a `bro.toolsets` entry named after the namespace (`catalog = "acme.catalog:toolset"`) additionally lets `mcp-server catalog` serve the toolset standalone.
-- `MCPServerSpec.of(ServerClass, *ctor_args)` is the manifest escape hatch for a server class of another shape;
+- `MCPServerSpec.of('<namespace>', ServerClass, *ctor_args)` is the manifest escape hatch for a server class of another shape, naming the namespace the built server serves;
   wrap it in `ToolLayer(server_specs=(spec,))` to mount it.
