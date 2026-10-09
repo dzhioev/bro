@@ -79,13 +79,6 @@ class TestSettings:
     _write(project / '.claude' / 'settings.json', json.dumps({'hooks': hooks}))
     assert find(project, config, COMMAND_TOOLS) == []
 
-  def test_settings_turning_every_hook_off_are_found(self, project, config):
-    path = _write(project / '.claude' / 'settings.json', json.dumps({'disableAllHooks': True}))
-    for tools in (COMMAND_TOOLS, (GATED_READ,)):
-      assert find(project, config, tools) == [
-        f'{path}: disableAllHooks, which turns every gate off'
-      ]
-
   def test_settings_above_the_working_directory_are_left_alone(self, project, config):
     # Claude reads project settings from its working directory alone
     _write(project.parent / '.claude' / 'settings.json', json.dumps({'hooks': _hooks()}))

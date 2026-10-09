@@ -267,6 +267,11 @@ def test_the_attribution_opt_out_lands_in_settings():
   assert _settings(launch.argv)['attribution'] == ride_claude_argv._ATTRIBUTION
 
 
+def test_hooks_stay_on_over_a_repositorys_own_switch():
+  settings = _settings(_ride_session_launch(_spec()).argv)
+  assert ride_claude_argv.HOOKS_ON.items() <= settings.items()
+
+
 def test_a_solo_session_streams_its_prompt_over_stdin():
   launch = _ride_session_launch(_spec(solo=True, hold='unattended', prompt='go'))
 

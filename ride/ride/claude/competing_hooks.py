@@ -2,8 +2,8 @@
 
 Claude applies the `updatedInput` of every `PreToolUse` hook a call matches, and
 the last rewrite wins, so another hook on a gated tool could rewrite a call
-after its gate; a `disableAllHooks` setting turns every gate off.
-`find` lists both wherever the pinned Claude Code loads them for a session:
+after its gate.
+`find` lists them wherever the pinned Claude Code loads them for a session:
 the project's settings and local settings in its working directory;
 the frontmatter of the skills, commands, and agents in the session's Claude
 folder, in the `.claude` folder of the working directory and of each directory
@@ -94,13 +94,6 @@ def _enabled_plugins(settings: dict[str, Any]) -> dict[str, Any]:
   return enabled
 
 
-def _settings_findings(settings: dict[str, Any], tools: tuple[str, ...]) -> list[str]:
-  found = _gate_hooks(settings.get('hooks', {}), tools)
-  if settings.get('disableAllHooks') is True:
-    found.append('disableAllHooks, which turns every gate off')
-  return found
-
-
 def _quote_plain_fields(text: str) -> str:
   lines = []
   for line in text.split('\n'):
@@ -189,7 +182,7 @@ def _installed_roots(path: Path, keys: list[str]) -> list[Path]:
 def _settings(path: Path, tools: tuple[str, ...]) -> tuple[list[str], dict[str, Any]]:
   """a project settings file's findings, and the plugins it enables or disables."""
   settings = _json_object(path)
-  return _settings_findings(settings, tools), _enabled_plugins(settings)
+  return _gate_hooks(settings.get('hooks', {}), tools), _enabled_plugins(settings)
 
 
 def _hooks_file(path: Path, tools: tuple[str, ...]) -> list[str]:
@@ -246,8 +239,7 @@ class _Scan:
 def find(project: Path, config: Path, tools: tuple[str, ...]) -> list[str]:
   """each place the Claude configuration of a session working in `project`, with
   `config` as its Claude folder, carries a hook that could rewrite a call of one
-  of `tools` after its gate, or turns every gate off, as one line naming the file
-  and what it carries."""
+  of `tools` after its gate, as one line naming the file and what it carries."""
   scan = _Scan(tools)
   user_settings = config / 'settings.json'
   enabled = scan.read(user_settings, partial(_settings, user_settings, tools), ([], {}))[1]
