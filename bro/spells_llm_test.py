@@ -2,7 +2,8 @@
 action no roster spell is named after or lists as a trigger resolves to an
 error, however well the objects it mentions fit another spell's arguments,
 while a listed trigger still resolves to its spell with the argument extracted
-— without the words that selected it, however long or command-like the rest.
+— without the words that selected it or the words that frame it, however long
+or command-like the rest.
 """
 
 import asyncio
