@@ -10,7 +10,7 @@ A summon succeeds only when the target is in the summoner's `launch.bro.bros` se
 — the session reads those members from the banner's `may_summon` row, fixed at launch
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.24.0
+version: 1.25.0
 ---
 
 # Ask
@@ -74,7 +74,7 @@ Widen it only for conversation the request needs:
 
 - `owner.say` lets this session steer the child with unsolicited messages;
 - `owner.question` lets this session ask the child and await its reply;
-- `worker.say` lets the child send progress before its final answer;
+- `worker.say` lets the child send informative progress, which reaches this session with the child's next question or its end unless `bro::quest_watch` follows it live;
 - `worker.question` lets the child stop for an answer from this session.
 
 A reply follows a question right in the other direction, so do not add a say right merely to permit replies.
@@ -87,7 +87,7 @@ The call is asynchronous by construction:
 keep working while the session watch carries chat and lifecycle transitions.
 Do not poll a running child and never summon it again to recover a result.
 Whenever nothing else remains, end the turn;
-the watch wakes the run on the next transition.
+the watch wakes the run on the next transition that needs this session.
 
 When a child asks a question, answer it with `bro::quest_say`, setting `reply_to` to the question id.
 To ask the child, call `bro::quest_ask`.

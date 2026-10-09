@@ -36,6 +36,7 @@ PRODUCER_COMMAND_ENV = 'BRO_WATCH_COMMAND'
 PRODUCER_JOURNAL_HEAD_ENV = 'BRO_WATCH_JOURNAL_HEAD'
 PRODUCER_JOURNAL_WAKE_ENV = 'BRO_WATCH_JOURNAL_WAKE'
 SESSION_WATCH_COMMAND = 'quest watch'
+_QUIET_MARK = b'\x1f'
 _PENDING_MARKER = '[...pending watch lines...]'
 _COMMAND_SUFFIX = '.command'
 _LOG_SUFFIX = '.log'
@@ -43,6 +44,7 @@ _OFFSET_SUFFIX = '.offset'
 _PID_SUFFIX = '.pid'
 _JOURNAL_HEAD_SUFFIX = '.journal-head'
 _JOURNAL_WAKE_SUFFIX = '.journal-wake'
+_WAKE_ON_QUIET_SUFFIX = '.wake-on-quiet'
 _TURN_FILENAME = '.turn'
 _NOTIFIED_FILENAME = '.notified'
 _LOCK_FILENAME = '.lock'
@@ -67,6 +69,12 @@ _LINE_BREAK_ESCAPES = {
 
 class WatchError(Exception):
   """A watch cannot be declared, found, or controlled."""
+
+
+def quiet(line: str) -> str:
+  """Mark one output line quiet: it never wakes a session on its own and is
+  delivered, unmarked, in the first batch a waking line brings."""
+  return f'{_QUIET_MARK.decode()}{line}'
 
 
 def _signal_journal_change(path: Path) -> None:
@@ -160,6 +168,7 @@ class Cursor:
   offset: int = 0
   line_size: Optional[int] = None
   line_remaining: Optional[int] = None
+  quiet: bool = False
 
   @classmethod
   def read(cls, path: Path) -> Self:
@@ -171,7 +180,10 @@ class Cursor:
       raise WatchError(f'{path} carries a malformed watch offset')
     line_size = value.get('line_size')
     line_remaining = value.get('line_remaining')
+    quiet = value.get('quiet', False)
     if (line_size is None) != (line_remaining is None):
+      raise WatchError(f'{path} carries a malformed watch offset')
+    if not isinstance(quiet, bool) or (quiet and line_size is None):
       raise WatchError(f'{path} carries a malformed watch offset')
     if line_size is not None and (
       not isinstance(line_size, int)
@@ -180,7 +192,7 @@ class Cursor:
       or line_remaining <= 0
     ):
       raise WatchError(f'{path} carries a malformed watch offset')
-    return cls(value['offset'], line_size, line_remaining)
+    return cls(value['offset'], line_size, line_remaining, quiet)
 
   def write(self, path: Path) -> None:
     staging = path.with_name(f'{path.name}.{os.getpid()}.tmp')
@@ -188,6 +200,8 @@ class Cursor:
     if self.line_size is not None:
       assert self.line_remaining is not None
       value.update(line_size=self.line_size, line_remaining=self.line_remaining)
+      if self.quiet:
+        value['quiet'] = True
     staging.write_text(json.dumps(value))
     os.replace(staging, path)
 
@@ -197,6 +211,8 @@ class Line:
   data: bytes
   size: int
   remaining: int
+  start: int
+  quiet: bool
 
 
 @dataclass(frozen=True)
@@ -228,6 +244,13 @@ class Watch:
   @property
   def journal_wake_file(self) -> Path:
     return self.directory / f'{self.slug}{_JOURNAL_WAKE_SUFFIX}'
+
+  @property
+  def wake_on_quiet_file(self) -> Path:
+    return self.directory / f'{self.slug}{_WAKE_ON_QUIET_SUFFIX}'
+
+  def wakes_on_quiet(self) -> bool:
+    return self.wake_on_quiet_file.exists()
 
   def producer_identity(self) -> Optional[ProcessIdentity]:
     return ProcessIdentity.read(self.pid_file)
@@ -275,7 +298,7 @@ class Watch:
     _previous, separator, line = data.rpartition(b'\n')
     if start > 0 and len(separator) == 0:
       return None
-    return line.decode(errors='replace')
+    return line.removeprefix(_QUIET_MARK).decode(errors='replace')
 
   def clear(self) -> None:
     for path in (
@@ -285,6 +308,7 @@ class Watch:
       self.pid_file,
       self.journal_head_file,
       self.journal_wake_file,
+      self.wake_on_quiet_file,
     ):
       path.unlink(missing_ok=True)
 
@@ -320,13 +344,22 @@ class Store:
     with self._locked():
       return self._declared_locked()
 
-  def has_pending_lines(self) -> bool:
-    """Whether any declared watch has a complete line past its committed cursor."""
+  def has_waking_lines(self) -> bool:
+    """Whether any declared watch has a complete line past its committed cursor
+    that wakes the session."""
     with self._locked():
-      return any(
-        self._has_complete_line(watch, Cursor.read(watch.offset_file))
-        for watch in self._declared_locked()
-      )
+      return self._has_waking_line_locked(self._declared_locked())
+
+  def set_wake_on_quiet(self, command: str, wake: bool) -> None:
+    """Set whether the watch's quiet lines wake the session like any other line."""
+    watch = self._watch(command)
+    with self._locked():
+      if not watch.command_file.exists():
+        raise WatchError(f'no watch runs `{watch.command}` in this session')
+      if wake:
+        watch.wake_on_quiet_file.touch()
+      else:
+        watch.wake_on_quiet_file.unlink(missing_ok=True)
 
   def mark_notified(self, live_set: frozenset[str]) -> bool:
     """Record a live set and return whether this is its first notice."""
@@ -384,13 +417,15 @@ class Store:
         if wake_fd in ready:
           os.read(wake_fd, 1)
 
-  def start(self, command: str) -> Watch:
+  def start(self, command: str, *, wake_on_quiet: bool = False) -> Watch:
     watch = self._watch(command)
     with self._locked():
       if watch.producer_alive():
         raise WatchError(f'`{watch.command}` already runs in this session')
       watch.clear()
       watch.command_file.write_text(f'{watch.command}\n')
+      if wake_on_quiet:
+        watch.wake_on_quiet_file.touch()
       os.mkfifo(watch.journal_wake_file)
       ready_read_fd, ready_write_fd = os.pipe()
       environment = {
@@ -520,7 +555,7 @@ class Store:
             raise WatchError(f'`{watch.command}` log was truncated behind its committed offset')
           if cursor.line_remaining == read_size and log_file.read(1) != b'\n':
             raise WatchError(f'`{watch.command}` log changed behind its committed offset')
-          return Line(data, cursor.line_size, cursor.line_remaining)
+          return Line(data, cursor.line_size, cursor.line_remaining, cursor.offset, cursor.quiet)
 
         retained = bytearray()
         size = 0
@@ -535,7 +570,12 @@ class Store:
             keep = min(len(content), BYTE_LIMIT + 4 - len(retained))
             retained.extend(content[:keep])
           if newline >= 0:
-            return Line(bytes(retained), size, size)
+            if retained.startswith(_QUIET_MARK):
+              mark_size = len(_QUIET_MARK)
+              data = bytes(retained[mark_size:])
+              remaining = size - mark_size
+              return Line(data, remaining, remaining, cursor.offset + mark_size, True)
+            return Line(bytes(retained), size, size, cursor.offset, False)
     except FileNotFoundError:
       return None
 
@@ -598,6 +638,41 @@ class Store:
     return cls._read_line(watch, cursor) is not None
 
   @classmethod
+  def _has_waking_line(cls, watch: Watch, cursor: Cursor) -> bool:
+    if watch.wakes_on_quiet():
+      return cls._has_complete_line(watch, cursor)
+    start = cursor.offset
+    if cursor.line_remaining is not None:
+      if not cursor.quiet:
+        return True
+      start += cursor.line_remaining + 1
+    try:
+      with watch.log.open('rb') as log_file:
+        log_file.seek(start)
+        line_quiet: Optional[bool] = None
+        while True:
+          chunk = log_file.read(_READ_CHUNK_BYTES)
+          if len(chunk) == 0:
+            return False
+          position = 0
+          while position < len(chunk):
+            if line_quiet is None:
+              line_quiet = chunk.startswith(_QUIET_MARK, position)
+            newline = chunk.find(b'\n', position)
+            if newline < 0:
+              break
+            if not line_quiet:
+              return True
+            line_quiet = None
+            position = newline + 1
+    except FileNotFoundError:
+      return False
+
+  @classmethod
+  def _has_waking_line_locked(cls, declared: list[Watch]) -> bool:
+    return any(cls._has_waking_line(watch, Cursor.read(watch.offset_file)) for watch in declared)
+
+  @classmethod
   def _pending_after(
     cls,
     ordered: list[Watch],
@@ -613,7 +688,8 @@ class Store:
     )
 
   def take(self) -> Optional[str]:
-    """Commit and return the next bounded, fair batch, or None when no complete line waits."""
+    """Commit and return the next bounded, fair batch, or None while no complete
+    line that wakes the session waits."""
     marker_bytes = len(f'{_PENDING_MARKER}\n'.encode())
     byte_budget = BYTE_LIMIT - marker_bytes
     line_budget = DEFAULT_LIMIT - 1
@@ -624,6 +700,8 @@ class Store:
 
     with self._locked():
       ordered = self._ordered_locked()
+      if not self._has_waking_line_locked(ordered):
+        return None
       for watch_index, watch in enumerate(ordered):
         cursor = Cursor.read(watch.offset_file)
         while True:
@@ -661,13 +739,9 @@ class Store:
 
           remaining = line.remaining - content_consumed
           if remaining == 0:
-            next_cursor = Cursor(cursor.offset + content_consumed + 1)
+            next_cursor = Cursor(line.start + content_consumed + 1)
           else:
-            next_cursor = Cursor(
-              cursor.offset + content_consumed,
-              cursor.line_size if continuing else line.size,
-              remaining,
-            )
+            next_cursor = Cursor(line.start + content_consumed, line.size, remaining, line.quiet)
           rendered = f'{fixed}{text}\n'
           pieces.append(rendered)
           used_bytes += len(rendered.encode())
@@ -684,7 +758,8 @@ class Store:
 
       if cut_watch is not None:
         (self.directory / _TURN_FILENAME).write_text(f'{cut_watch.slug}\n')
-        pieces.append(f'{_PENDING_MARKER}\n')
+        if self._has_waking_line_locked(ordered):
+          pieces.append(f'{_PENDING_MARKER}\n')
 
     if len(pieces) == 0:
       return None

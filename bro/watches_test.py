@@ -73,13 +73,71 @@ class TestStore:
   def test_pending_observation_does_not_commit_and_the_last_line_is_complete(self, owner):
     watch = _seed(owner.store, 'producer', 'complete\npartial')
 
-    assert owner.store.has_pending_lines()
+    assert owner.store.has_waking_lines()
     assert watch.saved_offset() == 0
     assert watch.last_complete_line() == 'complete'
 
     assert owner.store.take() == '[producer] complete'
-    assert not owner.store.has_pending_lines()
+    assert not owner.store.has_waking_lines()
     assert watch.last_complete_line() == 'complete'
+
+  def test_quiet_lines_wait_for_a_waking_line_and_arrive_unmarked_in_order(self, owner):
+    watch = _seed(owner.store, 'producer', f'{watches.quiet("first")}\n{watches.quiet("second")}\n')
+
+    assert not owner.store.has_waking_lines()
+    assert owner.store.take() is None
+    assert watch.saved_offset() == 0
+    assert watch.last_complete_line() == 'second'
+
+    with watch.log.open('a') as log_file:
+      log_file.write('third\n')
+    assert owner.store.has_waking_lines()
+    assert owner.store.take() == '[producer] first\n[producer] second\n[producer] third'
+    assert not owner.store.has_waking_lines()
+
+  def test_a_waking_line_carries_the_quiet_lines_of_every_watch(self, owner):
+    _seed(owner.store, 'a', f'{watches.quiet("quiet")}\n')
+    _seed(owner.store, 'b', 'wake\n')
+
+    batch = owner.store.take()
+
+    assert batch is not None
+    assert sorted(batch.splitlines()) == ['[a] quiet', '[b] wake']
+
+  def test_a_quiet_line_cut_across_batches_stays_quiet(self, owner):
+    content = 'q' * (BYTE_LIMIT + 500)
+    size_marker = f'[line: {(len(content) / 1_000):.1f} KB] '
+    watch = _seed(owner.store, 'wide', f'wake\n{watches.quiet(content)}\n')
+
+    first = owner.store.take()
+    assert first is not None and first.startswith('[wide] wake\n')
+    assert '[...pending watch lines...]' not in first
+    assert owner.store.take() is None
+
+    with watch.log.open('a') as log_file:
+      log_file.write('later\n')
+    second = owner.store.take()
+    assert second is not None and second.endswith('\n[wide] later')
+    delivered = ''.join(
+      line.removeprefix('[wide] ').removeprefix(size_marker)
+      for batch in (first, second)
+      for line in batch.splitlines()
+      if line not in ('[wide] wake', '[wide] later')
+    )
+    assert delivered == content
+
+  def test_a_watch_set_to_wake_on_quiet_lines_wakes_on_them(self, owner):
+    _seed(owner.store, 'producer', f'{watches.quiet("quiet")}\n')
+
+    owner.store.set_wake_on_quiet('producer', True)
+    assert owner.store.has_waking_lines()
+    owner.store.set_wake_on_quiet('producer', False)
+    assert owner.store.take() is None
+    owner.store.set_wake_on_quiet('producer', True)
+    assert owner.store.take() == '[producer] quiet'
+
+    with pytest.raises(watches.WatchError, match='no watch runs'):
+      owner.store.set_wake_on_quiet('absent', True)
 
   def test_stream_head_and_notice_memory_are_session_state(self, owner, monkeypatch):
     watch = owner.store.start('sleep 30')
@@ -252,6 +310,7 @@ class TestProducers:
       watch.pid_file,
       watch.journal_head_file,
       watch.journal_wake_file,
+      watch.wake_on_quiet_file,
     ):
       assert len(path.name.encode()) <= 255
     assert watch.command_file.read_text().rstrip() == command
@@ -271,6 +330,30 @@ class TestProducers:
     assert f'[{command}] two' in batch
     assert f'[{command}] [watch-run] exited 0' in batch
     assert not watch.producer_alive()
+
+  def test_an_exit_after_an_unterminated_quiet_line_still_wakes(self, owner):
+    command = 'printf "\\037quiet"; exit 7'
+    watch = owner.store.start(command)
+
+    deadline = time.monotonic() + 10
+    while watch.producer_alive():
+      assert time.monotonic() < deadline, 'watch producer did not exit'
+      time.sleep(0.01)
+
+    assert owner.store.take() == f'[{command}] quiet\n[{command}] [watch-run] exited 7'
+
+  def test_a_producer_started_to_wake_on_quiet_lines_wakes_on_them(self, owner):
+    command = 'printf "\\037quiet\\n"; sleep 30'
+    watch = owner.store.start(command, wake_on_quiet=True)
+
+    deadline = time.monotonic() + 10
+    while (batch := owner.store.take()) is None:
+      assert time.monotonic() < deadline, 'the quiet line never woke the store'
+      time.sleep(0.01)
+    owner.store.stop(command)
+
+    assert batch == f'[{command}] quiet'
+    assert not watch.wake_on_quiet_file.exists()
 
   def test_stopping_a_watch_ends_its_whole_process_group(self, owner, tmp_path):
     child_path = tmp_path / 'child'

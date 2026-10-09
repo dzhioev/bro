@@ -22,7 +22,7 @@ MAX_FRAME_BYTES = 512 * 1024
 MAX_IDENTIFIER_BYTES = 4096
 
 OUTCOMES = frozenset({'ok', 'denied', 'failed'})
-_MARK_TRANSITIONS = frozenset({'accepted', 'listening', 'started', 'trail'})
+MARK_TRANSITIONS = frozenset({'accepted', 'listening', 'started', 'trail'})
 
 type End = Literal['owner', 'worker']
 type TalkRight = Literal[
@@ -297,9 +297,9 @@ def _validate(type_: Any, id_: Any, request_id: Any, reply_to: Any, payload: Any
     _validate_optional_identifier('message reply_to', reply_to)
   if type_ == Tag.MARK:
     transition = payload.get('transition')
-    if not isinstance(transition, str) or transition not in _MARK_TRANSITIONS:
+    if not isinstance(transition, str) or transition not in MARK_TRANSITIONS:
       raise ProtocolError(
-        f"a mark payload needs 'transition' of {', '.join(sorted(_MARK_TRANSITIONS))}"
+        f"a mark payload needs 'transition' of {', '.join(sorted(MARK_TRANSITIONS))}"
       )
     if transition == 'trail':
       trail_id = payload.get('trail_id')

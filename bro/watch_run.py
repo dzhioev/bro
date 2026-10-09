@@ -25,6 +25,14 @@ def _required_environment(name: str) -> str:
   return value
 
 
+def _ends_mid_line(path: Path) -> bool:
+  with path.open('rb') as log_file:
+    if log_file.seek(0, os.SEEK_END) == 0:
+      return False
+    log_file.seek(-1, os.SEEK_END)
+    return log_file.read(1) != b'\n'
+
+
 def _produce() -> int:
   ready_fd = int(_required_environment(watches.PRODUCER_READY_FD_ENV))
   owner_path = Path(_required_environment(watches.PRODUCER_OWNER_PATH_ENV))
@@ -50,7 +58,8 @@ def _produce() -> int:
     with watch.log.open('ab', buffering=0) as log_file:
 
       def record_exit(code: int) -> None:
-        log_file.write(f'[watch-run] exited {code}\n'.encode())
+        line_break = '\n' if _ends_mid_line(watch.log) else ''
+        log_file.write(f'{line_break}[watch-run] exited {code}\n'.encode())
         clear_identity()
 
       return job_supervisor.supervise(

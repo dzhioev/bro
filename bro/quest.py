@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
-from bro import mission as mission_client
+from bro import mission as mission_client, watches
 from bro.base import log
 
 if TYPE_CHECKING:
@@ -586,10 +586,6 @@ def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
   other_end = sender == ('owner' if is_own_quest else 'worker')
   if transition == 'message' and not other_end:
     return None
-  if transition == 'listening':
-    if is_own_quest:
-      return None
-    return _single_line(f'summon listening ({_quest_clause(event, own)})')
   if transition not in ('message', 'refused'):
     return None
   actor = 'summoner' if is_own_quest else 'summon'
@@ -631,22 +627,38 @@ def _event_line(event: dict[str, Any], own: str) -> str:
   return _single_line(f'{head} ({_quest_clause(event, own)})')
 
 
+def _quiet(event: dict[str, Any]) -> bool:
+  from bro.broker.brotocol import MARK_TRANSITIONS
+
+  transition = event.get('transition')
+  is_say = event.get('id') is None and event.get('reply_to') is None
+  return transition in MARK_TRANSITIONS or (
+    transition == 'message' and event.get('from') == 'worker' and is_say
+  )
+
+
 def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
-  """Yield the bro-quest view of the shared ordered mission stream."""
+  """Yield the bro-quest view of the shared ordered mission stream, a summon's
+  service marks and a child's says as quiet lines."""
   own = own_quest()
   for item in mission_client.watch_stream(BRO, wait_seconds, include_own=True, strict_parent=True):
     if isinstance(item, mission_client.WatchGap):
       yield _single_line(f'quest watch gap: {item.reason}; re-armed at {item.head}')
       continue
     event = item.event
+    transition = event.get('transition')
     chat_line = _chat_event_line(event, own)
     if chat_line is not None:
       line = chat_line
-    elif event.get('transition') in ('message', 'refused', 'listening'):
+    elif transition in ('message', 'refused') or (
+      transition == 'listening' and event.get('mission') == own
+    ):
       continue
     else:
       line = _event_line(event, own)
-    yield _single_line(f'before the watch: {line}') if item.replayed else line
+    if item.replayed:
+      line = _single_line(f'before the watch: {line}')
+    yield watches.quiet(line) if _quiet(event) else line
 
 
 # --- CLI ------------------------------------------------------------------------

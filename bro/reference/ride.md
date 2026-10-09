@@ -135,12 +135,18 @@ A job carries the same backstop from the process that started it.
 
 `take()` is the store's single reader.
 Under an exclusive lock it commits complete output past each watch's offset and returns at most the shared 100-line and 30 KB bounds, with every line tagged by command.
-A cut batch ends in a pending marker and the next batch starts after the watch that was cut, so a busy producer cannot exclude another.
+A cut batch ends in a pending marker when a line that wakes the session remains, and the next batch starts after the watch that was cut, so a busy producer cannot exclude another.
 A line wider than the byte bound is delivered in successive pieces, with its first piece naming the whole line size.
 
-Where a persona declares shell reach, both harnesses mount `bro::watch(command)` and `bro::unwatch(command)`.
+A producer marks a line quiet by opening it with the ASCII unit separator (0x1F), which `take()` strips.
+A quiet line never wakes the session on its own:
+`take()` returns nothing while only quiet lines wait, and a batch that a waking line brings carries them in order, so both harnesses deliver them beside the next waking line.
+Only waking lines hold a one-shot turn end open, and a run that ends drops the quiet lines still waiting.
+A watch set to wake on quiet lines treats its every line as waking.
+
+Where a persona declares shell reach, both harnesses mount `bro::watch(command, wake_on_quiet)` and `bro::unwatch(command)`.
 The command must match the persona's shell roster exactly, as `bro::job` requires;
-`unwatch` refuses the runtime-owned session watch.
+`wake_on_quiet` sets the watch to wake on its quiet lines, and `unwatch` refuses the runtime-owned session watch.
 `do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
 Each joined party member has its own session directory and therefore its own store.
 The session watch reaches the model through the selected harness's delivery port without adding commands to the persona's tool reach.
@@ -199,7 +205,7 @@ A managed session's runtime-owned `quest watch` therefore reaches the model with
 an in-process run uses the same path for each `bro::watch` it starts in its temporary store.
 Watch lines enter the model after tool results or wake an idle turn.
 
-At each one-shot turn end, the runner applies the shared end-of-turn rule over covered and uncovered missions, live model watches, pending watch lines, running jobs, and live session traffic.
+At each one-shot turn end, the runner applies the shared end-of-turn rule over covered and uncovered missions, live model watches, pending waking watch lines, running jobs, and live session traffic.
 A notice reaches the LLM through the inbox as a user-role item recorded in a `notification` step.
 An end returns the last reply, while a wait idles on the inbox until job or watch news wakes the next turn.
 Ending the run still closes every job and orphans every in-flight mission, while a delivered `answer` or a `raise` ends it at once.
@@ -1055,7 +1061,9 @@ underneath it are two client surfaces over the same request, each split into the
   `quest watch` first takes the current `events {}` head, then replays retained own-quest messages and open questions whose journal sequence is no newer than that head, marked `before the watch`.
   It then long-polls ordered bro-quest lifecycle and chat events after the head, so chat committed between the head and replay queries arrives once through the stream.
   On a child quest it names the target and quest;
-  on the session's own quest it renders the other end as `summoner` and never echoes the session's own says.
+  on the session's own quest it renders the other end as `summoner` and never echoes the session's own says or its own `listening` mark.
+  A child quest's service marks (`accepted`, `started`, `trail`, `listening`) and the child's says are quiet lines;
+  questions, replies, refusals, ends, denials, gap notices, and the summoner's says to the session wake it.
   An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
   `quest cancel <id> [--timeout <seconds>]` ends a bro quest this session owns and waits for it to end;
   it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
@@ -1068,7 +1076,8 @@ underneath it are two client surfaces over the same request, each split into the
   `rewind show <trail-id>` peeks mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
 - Every harness mounts the same service tools:
-  `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns.
+  `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns,
+  and `bro::quest_watch(wake_on_quiet)` where the session may summon, setting its runtime-owned quest watch to wake on its quiet lines or not.
   They are mounted beside the blocking CLIs in a Claude session.
   The summon tool's `passes` list is the CLI's repeatable `--pass` field.
   `summon` returns the accepted state after host acceptance;

@@ -35,15 +35,15 @@ class FakeWatch:
 @dataclass
 class FakeStore:
   watches: list[FakeWatch] = field(default_factory=list)
-  pending: bool = False
+  waking: bool = False
   notified: set[frozenset[str]] = field(default_factory=set)
   waited_for: list[int] = field(default_factory=list)
 
   def declared(self) -> list[FakeWatch]:
     return self.watches
 
-  def has_pending_lines(self) -> bool:
-    return self.pending
+  def has_waking_lines(self) -> bool:
+    return self.waking
 
   def mark_notified(self, live_set: frozenset[str]) -> bool:
     if live_set in self.notified:
@@ -100,7 +100,7 @@ def _with_broker(monkeypatch, *missions: mission.LiveMission, reply_awaited: boo
   [
     (FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]), (_mission('Q1'),), False),
     (FakeStore([FakeWatch('tail -f log')]), (), False),
-    (FakeStore(pending=True), (), False),
+    (FakeStore(waking=True), (), False),
     (FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]), (), True),
   ],
 )
@@ -188,7 +188,7 @@ def test_undelivered_exit_line_precedes_dead_watch_notice(monkeypatch):
   monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
   store = FakeStore(
     [FakeWatch(watches.SESSION_WATCH_COMMAND, alive=False, last='[watch-run] exited 1')],
-    pending=True,
+    waking=True,
   )
   port = FakePort(store)
 
@@ -196,7 +196,7 @@ def test_undelivered_exit_line_precedes_dead_watch_notice(monkeypatch):
   assert port.notifications == []
   assert port.ends == 0
 
-  store.pending = False
+  store.waking = False
   turn_end.settle(port)
   assert len(port.notifications) == 1
 

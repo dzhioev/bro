@@ -17,7 +17,9 @@ Answer one with `bro::quest_say` on `self`, passing its id as `reply_to`.
 {{else}}{{end}}
 
 {{when #talk contains worker.say}}
-Use `bro::quest_say` on `self` for a concise progress report whose value depends on reaching the summoner before the final answer.
+Use `bro::quest_say` on `self` only for a concise progress report that informs the summoner:
+it reaches the summoner with this run's next question or its result, unless the summoner follows it live.
+Anything the summoner must act on belongs in a question, where the quest permits one, or in the answer.
 Routine progress stays in the work's durable surfaces instead.
 {{end}}
 

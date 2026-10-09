@@ -279,6 +279,13 @@ _QUEST_CANCEL_DESCRIPTION = (
 )
 
 
+_QUEST_WATCH_DESCRIPTION = (
+  "set whether the session's quest watch wakes this session on its quiet lines or holds them "
+  'until the next line that does wake it, which is the default. use it to follow a child live; '
+  'returns the setting now in force.'
+)
+
+
 _QUEST_LIST_DESCRIPTION = (
   "list this session's caller-visible retained summon journal records, live first. "
   'each record carries its quest id, args, talk, pending questions, lifecycle state, '
@@ -510,6 +517,17 @@ def _quest_list_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
+def _quest_watch_tool(live_run: Optional[WatchRun], variables: Variables) -> llm_mcp.Tool:
+  def quest_watch(wake_on_quiet: bool) -> dict[str, Any]:
+    store = watches.session_store() if live_run is None else live_run.watch_store
+    store.set_wake_on_quiet(watches.SESSION_WATCH_COMMAND, wake_on_quiet)
+    return {'wake_on_quiet': wake_on_quiet}
+
+  return llm_mcp.FunctionTool(
+    quest_watch, name='quest_watch', description=_QUEST_WATCH_DESCRIPTION, variables=variables
+  )
+
+
 def _quest_cancel_tool(variables: Variables) -> llm_mcp.Tool:
   from bro import quest as quest_client
 
@@ -525,7 +543,9 @@ def _quest_cancel_tool(variables: Variables) -> llm_mcp.Tool:
 _WATCH_DESCRIPTION = (
   'start an admitted shell command as a detached producer for the rest of this session. the '
   'command must match this persona’s shell roster whole and exact; unrestricted personas may '
-  'run any command. its bounded output reaches the session through the shared watch store.'
+  'run any command. its bounded output reaches the session through the shared watch store. a '
+  'line the command marks quiet arrives with the next line that wakes the session, unless '
+  '`wake_on_quiet` makes quiet lines wake it too.'
 )
 
 _UNWATCH_DESCRIPTION = (
@@ -544,9 +564,9 @@ def _watch_tools(
   def store() -> watches.Store:
     return watches.session_store() if live_run is None else live_run.watch_store
 
-  def watch(command: str) -> str:
+  def watch(command: str, wake_on_quiet: bool = False) -> str:
     admitted = admit_command(command, commands=commands, unrestricted=unrestricted)
-    started = store().start(admitted)
+    started = store().start(admitted, wake_on_quiet=wake_on_quiet)
     return f'watching `{started.command}`'
 
   def unwatch(command: str) -> str:
@@ -577,6 +597,7 @@ _CORE_SERVICE_TOOL_NAMES = (
   'quest_share',
   'quest_list',
   'quest_cancel',
+  'quest_watch',
   'watch',
   'unwatch',
 )
@@ -608,6 +629,7 @@ def _build_service_server(
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
   has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
   has_answer = has_broker and summoned() and session_harness.can_end_session()
+  has_quest_watch = has_broker and len(summon.effective_may_summon()) > 0
   selection = bro._selected_tools_for(harness)
   has_watches = selection.shell_declared
   harness_tools = session_harness.own_tools(bro, live_run)
@@ -642,6 +664,8 @@ def _build_service_server(
         'quest_cancel',
       ]
     )
+  if has_quest_watch:
+    mounted.append('quest_watch')
   if has_watches:
     mounted.extend(['watch', 'unwatch'])
   mounted.extend(harness_tool_names)
@@ -667,6 +691,8 @@ def _build_service_server(
     tools.append(_quest_share_tool(variables))
     tools.append(_quest_list_tool(variables))
     tools.append(_quest_cancel_tool(variables))
+  if has_quest_watch:
+    tools.append(_quest_watch_tool(cast(Optional[WatchRun], live_run), variables))
   if has_watches:
     tools.extend(
       _watch_tools(
