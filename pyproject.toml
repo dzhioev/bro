@@ -12,7 +12,6 @@ requires-python = ">=3.12"
 # what declaring and inspecting a persona costs — every surface that *runs* one is
 # pinned by the extra that owns it, including the ones bro imports lazily (mcp, boto3)
 dependencies = [
-  "icecream==2.2.0",
   "pydantic==2.13.4",
   "python-dateutil==2.9.0.post0",
   "python-ulid==3.1.0",

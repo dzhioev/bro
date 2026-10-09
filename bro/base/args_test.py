@@ -208,7 +208,6 @@ class TestRunCli:
     args = parser.parse(['script.py', '--allow-env'])
     assert 'log' not in args
     assert 'verbose' not in args
-    assert 'ic' not in args
     assert 'info' not in args
     assert 'print_env' not in args
     assert 'allow_env' not in args
@@ -479,13 +478,12 @@ class TestPrintEnv:
       parser.parse_args(['--print-env'])
     assert exception_info.value.code == 0
 
-  def test_print_env_includes_verbose_and_ic(self, capsys):
+  def test_print_env_includes_verbose(self, capsys):
     parser = Parser()
     with pytest.raises(SystemExit):
       parser.parse_args(['--print-env'])
     env_names = {r['ENV_NAME'] for r in _parse_env_table(capsys.readouterr().out)}
     assert 'VERBOSE' in env_names
-    assert 'IC' in env_names
     assert 'ALLOW_ENV' not in env_names
     assert 'PRINT_ENV' not in env_names
 
@@ -640,10 +638,9 @@ class TestReconstruct:
     parser = Parser()
     parser.add_argument('--flag', action='store_true')
     args = parser.parse(['cmd', '--flag'])
-    # global flags like --verbose, --ic are not in the output
+    # global flags like --verbose are not in the output
     result = parser.reconstruct(args)
     assert '--verbose' not in result
-    assert '--ic' not in result
     assert '--allow-env' not in result
     assert '--flag' in result
 
@@ -734,36 +731,21 @@ class TestDispatch:
 
 class TestStdlibOnlyImport:
   # cwd is the repo root (run_tests invokes pytest there), so `import
-  # bro.base.args` resolves in these subprocesses.
-  def test_imports_and_parses_without_icecream(self):
-    # bro.base.args must import and parse in a stdlib-only environment (no venv);
-    # simulate icecream's absence in a fresh subprocess.
+  # bro.base.args` resolves in this subprocess.
+  def test_imports_and_parses_with_stdlib_only(self):
+    # bro.base.args must import and parse in a stdlib-only environment (no venv)
     import subprocess
 
     code = (
-      "import sys; sys.modules['icecream'] = None; "
+      'import sys; preloaded = set(sys.modules); '
       'import bro.base.args; '
-      "namespace = bro.base.args.Parser().parse(['prog']); "
-      "assert 'ic' not in namespace; "
-      "print('ok')"
-    )
-    result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == 'ok'
-
-  def test_parsing_does_not_import_icecream(self):
-    # every CLI in the repository builds a parser, and icecream costs more to
-    # import than the whole of argparse — only --ic may pay for it
-    import subprocess
-
-    code = (
-      'import sys, bro.base.args; '
       "bro.base.args.Parser().parse(['prog']); "
-      "assert 'icecream' not in sys.modules; print('ok')"
+      "loaded = {name.partition('.')[0] for name in set(sys.modules) - preloaded}; "
+      "print(sorted(loaded - sys.stdlib_module_names - {'bro'}))"
     )
     result = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == 'ok'
+    assert result.stdout.strip() == '[]'
 
 
 class TestLogFlag:

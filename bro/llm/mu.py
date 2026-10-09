@@ -7,7 +7,6 @@ from datetime import datetime
 from json import JSONEncoder
 from typing import Any, Optional
 
-from icecream import ic
 from openai import pydantic_function_tool
 from openai.types.responses import Response, ResponseInputParam, ResponseTextConfigParam
 from openai.types.responses.response_input_content_param import ResponseInputContentParam
@@ -146,8 +145,7 @@ def _completed_text(response: Response) -> str:
       raise TruncatedResponse(f'response truncated at the output-token limit ({tokens})')
     raise IncompleteResponse(f'response incomplete, reason {reason} ({tokens})')
   if len(response.output_text) == 0:
-    response_str = ic.format(response)
-    raise RuntimeError(f'no output text in response: {response_str}')
+    raise RuntimeError(f'no output text in response: {response!r}')
   return response.output_text
 
 

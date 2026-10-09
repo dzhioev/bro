@@ -3,9 +3,7 @@
 
 bro.base.args must stay importable in a stdlib-only environment (no venv): some
 consumers run outside it — e.g. bro.workflow.commit_footer via the commit
-git hooks. So it imports no third-party package, at module load or otherwise,
-until a flag asks for one: icecream costs more to import than the whole of
-argparse, and every CLI in the repository builds a parser.
+git hooks. So it imports no third-party package.
 """
 
 import argparse
@@ -42,34 +40,6 @@ def moment_parser(arg: str) -> 'Moment':
 
 def list_parser(arg: str) -> list[str]:
   return [item.strip() for item in arg.split(',')]
-
-
-def trigger(function: Callable) -> type[argparse.Action]:
-  class TriggerAction(argparse.Action):
-    def __init__(self, option_strings, dest, **kwargs):
-      kwargs.setdefault('nargs', 0)
-      super().__init__(option_strings, dest, **kwargs)
-
-    def __call__(self, parser, namespace, values, option_string=None):
-      del parser, namespace, values, option_string
-      function()
-
-  return TriggerAction
-
-
-def enable_ic() -> None:
-  from icecream import ic
-
-  ic.enable()
-
-
-def _disable_ic() -> None:
-  """silence ic output, the default the --ic flag lifts. Only where something
-  already imported icecream — nothing can have called `ic()` otherwise, and
-  importing it here would charge every CLI start for a debug aid nobody used."""
-  icecream = sys.modules.get('icecream')
-  if icecream is not None:
-    icecream.ic.disable()
 
 
 _N = TypeVar('_N')
@@ -189,7 +159,6 @@ class Parser(argparse.ArgumentParser):
       dest='log',
       help='shorthand for --log verbose',
     )
-    self._add_global_argument('--ic', action=trigger(enable_ic), help='enable ic output')
 
   def _move_to_global(self, action: argparse.Action) -> None:
     for group in self._action_groups:
@@ -384,7 +353,6 @@ class Parser(argparse.ArgumentParser):
   def parse_args(  # type: ignore[override]
     self, args: Iterable[str], namespace: Optional[_N] = None
   ) -> _N | argparse.Namespace:
-    _disable_ic()
     argv_list = list(args)
     self._last_argv = argv_list
     # sharing the `log` dest keeps --verbose a pure alias, but it also means
@@ -405,7 +373,6 @@ class Parser(argparse.ArgumentParser):
       self._print_env_table(parsed, argv_list)
       sys.exit(0)
     self._check_exclusive_groups(parsed)
-    delattr(parsed, 'ic')
     delattr(parsed, 'log')
     delattr(parsed, 'print_env')
     delattr(parsed, 'allow_env')
@@ -415,7 +382,7 @@ class Parser(argparse.ArgumentParser):
     """Reconstruct canonical argv from a parsed namespace.
 
     Iterates over the parser's actions and builds the command line from the
-    namespace values. Global flags (--log, --verbose, --ic, --allow-env,
+    namespace values. Global flags (--log, --verbose, --allow-env,
     --print-env) and help are always excluded. Flags appear in definition order; positionals
     follow.
     """
