@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.4.0
+version: 5.5.0
 ---
 
 # land
@@ -58,11 +58,8 @@ A reviewer that ran and did not approve blocks the merge whatever `reviewDecisio
 — stop and ask where questions reach the user, `raise` when unattended.
 A reviewer that never ran at all (no grant, or a summon denied at launch) leaves the merge to the gate below.{{end}}
 
-A merge no human approved waits for one where questions reach the user:
-where the base asks for no review (`reviewDecision` is `null`), report the PR ready to merge
-— with the reviewer's verdict and the checks
-— and run `land-pr` once they say to land it.
-A review the base requires is that approval already, and so is the user's own ask to land this open PR.
+A merge waits for the repo owner's approval where questions reach the user:
+[[run pr]]'s APPROVED handler collects it with the PR watcher still running, and the user's own ask to land this open PR is that approval already.
 
 ```bash
 land-pr
