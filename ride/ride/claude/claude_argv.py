@@ -3,9 +3,9 @@
 Every session runs Claude Code with the natives its bro's reach maps to, the
 ride-injected append prompt, and its bro's session-local MCP namespaces mounted
 as its only MCP servers. Model, the merged `--settings` (fastMode + statusLine +
-attribution + hooks), `--effort`, a resume, and prompt seeding are handled once,
-identically wherever the session runs. Model, effort and fast mode come off the
-session's claude-code `LLMSpec` (`SessionRun.llm_spec`).
+attribution + hooks, kept on), `--effort`, a resume, and prompt seeding are
+handled once, identically wherever the session runs. Model, effort and fast mode
+come off the session's claude-code `LLMSpec` (`SessionRun.llm_spec`).
 """
 
 import contextlib
@@ -135,6 +135,10 @@ STREAM_JSON_ARGS = (
 # for the commit trailer and the pull-request line.
 _ATTRIBUTION = {'commit': '', 'pr': '', 'sessionUrl': False}
 
+# `--settings` outranks a repository's project and local settings, either of which
+# may switch every hook off
+HOOKS_ON = {'disableAllHooks': False}
+
 
 def build_claude_launch(
   spec: 'SessionSpec | SessionRun',
@@ -166,6 +170,7 @@ def build_claude_launch(
       'refreshInterval': REFRESH_SECONDS,
     },
     'attribution': _ATTRIBUTION,
+    **HOOKS_ON,
   }
   argv = ['--model', llm.model]
   bro = create_bro(spec.bro)

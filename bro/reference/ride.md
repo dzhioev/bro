@@ -1291,7 +1291,7 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 
 ### The claude argv
 
-The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks),
+The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks, kept on over a repository's `disableAllHooks`),
 a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below,
@@ -1319,7 +1319,6 @@ a `PreToolUse` hook matching a tool the session is served behind a gate, as Clau
 in the working directory's project or local settings,
 in the frontmatter of a skill, command, or agent in the session's Claude folder or in a `.claude` folder at, above, or below the working directory,
 or in an installed plugin the settings enable;
-`disableAllHooks` in project or local settings;
 or a candidate it cannot read or parse.
 Managed settings stay outside the check (`bro/reference/extending.md`, "Brash command-list policy").
 `ride/ride/claude/command_gate_llm_test.py` holds the rewrite, those places, and the managed override against the pinned release.

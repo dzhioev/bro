@@ -162,8 +162,7 @@ Claude's own guard against that is a permission prompt, which ride skips under e
 even Claude's auto mode let a benign-looking skill write through when probed.
 The command list catches a model that goes off-script, not one working to get around it.
 A session with a finite command list refuses to start while its project or local settings, the skills, commands, and agents Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`,
-which could rewrite their calls after the gate,
-or while its project or local settings turn hooks off.
+which could rewrite their calls after the gate.
 Managed settings are your organization's policy, which outranks a persona's:
 a managed policy that allows only managed hooks turns the gate off by design, while a managed hook's own rewrite runs before the gate, which runs what it wrote in brash.
 

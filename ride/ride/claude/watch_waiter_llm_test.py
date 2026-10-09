@@ -5,9 +5,10 @@ The waiter rests on `asyncRewake` hooks, whose `rewakeSummary` and
 from `StopFailure` as well as `Stop`; the runner rests on the stream's hook
 events and on Claude holding a session's end for a pending async hook.
 None of it is documented, so each route is held here: an idle wake in print
-mode and in the TUI, a delivery inside a running turn, a waiter after a turn
-that ends in an API error, a waiter that fails to start, and an end and a
-stop that a pending waiter holds up neither of.
+mode and in the TUI, a wake in a repository whose settings switch every hook
+off, a delivery inside a running turn, a waiter after a turn that ends in an
+API error, a waiter that fails to start, and an end and a stop that a pending
+waiter holds up neither of.
 """
 
 import contextlib
@@ -32,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from bro import watches
-from ride.claude.claude_argv import STREAM_JSON_ARGS, watch_waiter_hooks
+from ride.claude.claude_argv import HOOKS_ON, STREAM_JSON_ARGS, watch_waiter_hooks
 from ride.claude.interrupt import StreamedRun, run_streaming
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
@@ -108,7 +109,7 @@ def _stream(
     'haiku',
     '--dangerously-skip-permissions',
     '--settings',
-    json.dumps({'hooks': hooks}, separators=(',', ':')),
+    json.dumps({**HOOKS_ON, 'hooks': hooks}, separators=(',', ':')),
     *STREAM_JSON_ARGS,
   ]
   env = environment if environment is not None else _environment(root / 'config')
@@ -190,6 +191,27 @@ def test_an_idle_session_wakes_with_its_lines_under_the_waiters_labels(
   assert f'<summary>{hook["rewakeSummary"]}</summary>' in wake
   assert f'{hook["rewakeMessage"]} \n' in wake
   assert 'Stop hook' not in wake
+
+
+def test_a_repository_switching_every_hook_off_still_wakes_the_session(
+  tmp_path: Path, claude: Path
+) -> None:
+  _config(tmp_path)
+  (tmp_path / '.claude').mkdir()
+  (tmp_path / '.claude' / 'settings.json').write_text(json.dumps({'disableAllHooks': True}))
+  with watched_session(tmp_path / 'session') as (store, waiters):
+    run = _stream(
+      claude,
+      tmp_path,
+      f'Reply with the single word READY and end your turn. {_REPLY_WITH_THE_LINE}',
+      store,
+      waiters,
+      hooks=watch_waiter_hooks(),
+      on_result=_Replies(Feed(store, tmp_path / 'lines')),
+    )
+
+  assert run.code == 0 and not run.stopped, run
+  assert len(run.results) == 2 and _LINE in run.results[1], run
 
 
 def test_a_line_arriving_mid_turn_is_delivered_within_that_turn(
@@ -480,7 +502,7 @@ def test_an_idle_tui_wakes_with_its_lines(tmp_path: Path, claude: Path) -> None:
     'haiku',
     '--dangerously-skip-permissions',
     '--settings',
-    json.dumps({'hooks': watch_waiter_hooks()}, separators=(',', ':')),
+    json.dumps({**HOOKS_ON, 'hooks': watch_waiter_hooks()}, separators=(',', ':')),
     f'Reply with the single word READY and end your turn. {_REPLY_WITH_THE_LINE}',
   ]
   with watched_session(tmp_path / 'session') as (store, waiters):

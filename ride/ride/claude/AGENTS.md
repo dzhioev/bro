@@ -15,7 +15,7 @@ Claude Code's own harness themed with the session's bro.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
   pinned absolute binary selection per isolation, the brash policy of a finite command list and the refusal of competing hooks before it,
   resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
-- `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a gated tool's call after its gate or turn every gate off.
+- `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a gated tool's call after its gate.
 - `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its in-flight turn reaches the transcript.
   Print mode runs over stream-json as the harness's `bro.turn_end` port, settling each turn end and ended by SIGINT;
   a TUI runs on a runner-owned pty that proxies the session's terminal, ended by the interrupt keypress.
