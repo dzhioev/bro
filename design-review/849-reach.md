@@ -239,11 +239,12 @@ A command that must be held to exact arguments is served as a `cli(...)` tool, a
 The reference docs say so where they describe `brash(...)`, and state what a finite command list leaves open on Claude:
 
 > Under a finite command list, brash checks the commands the model runs through `Bash` and `Monitor` on Claude and through its jobs and watches on the bro harness.
-> What the session's Claude configuration runs is not checked: hooks from your or the repository's settings, plugins, and a skill's inline `!cmd` lines, which Claude runs without consulting any `PreToolUse` hook.
+> What the session's Claude configuration runs is not checked: hooks from your, the repository's, or your organization's managed settings, plugins, and a skill's inline `!cmd` lines, which Claude runs without consulting any `PreToolUse` hook.
 > So a model that can write files can get around its command list: it writes a skill whose `!cmd` runs what it likes, and the skill takes effect from the next session.
 > Claude's own guard against that is a permission prompt, which ride skips under every hold but `guided`; even Claude's auto mode let a benign-looking skill write through when probed.
 > The command list catches a model that goes off-script, not one working to get around it.
-> A session with a finite command list refuses to start while its settings, the skills Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`, which could rewrite their calls after the gate.
+> A session with a finite command list refuses to start while its project or local settings, the skills Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`, which could rewrite their calls after the gate.
+> Managed settings are your organization's policy, which outranks a persona's: a managed hook that rewrites those calls overrides the gate by design.
 
 Each claim there was probed live on 2.1.280:
 a model limited to `Write` and `Skill` wrote such a skill with no prompt, the next session loaded it, and its `!cmd` ran beside a `PreToolUse` hook on `Bash` that denied everything and never saw it;
@@ -323,6 +324,10 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
   The line no longer meets Claude's shell snapshot, whose functions and aliases belong to Claude's shell, not to brash.
   Before Claude starts, the runner refuses a session with a finite command list whose project or local settings, skills Claude would load, or enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`, naming where it found it,
   since Claude applies every matching hook's `updatedInput` and the last rewrite wins.
+  A matcher matches as Claude reads it, so an empty matcher, `*`, a name, an alternation, or a pattern that takes either tool counts,
+  and a candidate file the runner cannot read or parse refuses the session too.
+  Managed settings, the machine's policy file and the server-managed tier, stay outside the check:
+  they are the organization's policy, which outranks a persona's, and Claude applies them in every mode, so the Scope section names them in the hole instead.
 - **`ANY`.** brash does not run:
   Claude serves `Bash` ungated, and the job tool and `bro::watch` start `bash -c`.
 - **`cd`** inside a line moves brash for the rest of that line only.
@@ -338,7 +343,9 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
   It holds that brash starts no program its command list does not admit, on every path that starts one:
   pipelines, substitutions, process substitutions, background jobs, conditions, and loops.
 - **Integration.** Against the pinned Claude, the gate rewrites `Bash` and `Monitor` calls into brash, a refused command's message reaches the model, and the WebSocket form is denied.
-  Lines holding single quotes, newlines, substitutions, and operators round-trip through the rewrite, and Claude's shell starts only brash;
+  Lines holding single quotes, newlines, substitutions, and operators round-trip through the rewrite, and Claude's shell starts only brash.
+  The runner's refusal is exercised over a hook in project settings, in local settings, in a skill, and in a plugin, each matcher form among them, and over an unreadable candidate;
+  a managed hook's rewrite is shown to win over the gate, as the Scope section states;
   the job tool and `bro::watch` run lines through brash and refuse the same ones.
 
 ### The contract with #849
