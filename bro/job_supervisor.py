@@ -1,4 +1,4 @@
-"""Process-group leader that reaps every descendant of one shell command."""
+"""Process-group leader that reaps every descendant of one command."""
 
 import contextlib
 import ctypes
@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from types import FrameType
 from typing import IO, Optional
 
@@ -69,14 +69,14 @@ def _watch_owner(owner_fd: int) -> None:
 
 
 def supervise(
-  command: str,
+  argv: Sequence[str],
   ready_fd: int,
   owner_fd: int,
   *,
   output: Optional[IO[bytes]] = None,
   finished: Optional[Callable[[int], None]] = None,
 ) -> int:
-  """Run one shell until it and every descendant exit, or the owner handle closes."""
+  """Run `argv` until it and every descendant exit, or the owner handle closes."""
   subreaper = _become_subreaper()
   termination_signal: Optional[int] = None
 
@@ -86,8 +86,8 @@ def supervise(
     termination_signal = signal_number
 
   signal.signal(signal.SIGTERM, terminate)
-  shell = subprocess.Popen(
-    ['bash', '-c', command],
+  process = subprocess.Popen(
+    argv,
     stdout=output,
     stderr=subprocess.STDOUT if output is not None else None,
   )
@@ -95,12 +95,12 @@ def supervise(
   with os.fdopen(ready_fd, 'wb', buffering=0) as ready:
     with contextlib.suppress(BrokenPipeError):
       ready.write(b'1')
-  shell_status = shell.wait()
+  status = process.wait()
   _wait_for_descendants(subreaper)
   exit_signal = termination_signal
-  if exit_signal is None and shell_status < 0:
-    exit_signal = -shell_status
-  result = -exit_signal if exit_signal is not None else shell_status
+  if exit_signal is None and status < 0:
+    exit_signal = -status
+  result = -exit_signal if exit_signal is not None else status
   if finished is not None:
     finished(result)
   if exit_signal is not None:
@@ -108,19 +108,13 @@ def supervise(
       signal.signal(exit_signal, signal.SIG_DFL)
     os.kill(os.getpid(), exit_signal)
     raise RuntimeError('termination signal did not end the supervisor')
-  return shell_status
+  return status
 
 
 def _run() -> int:
-  if len(sys.argv) == 4:
-    return supervise(sys.argv[3], int(sys.argv[1]), int(sys.argv[2]))
-  if len(sys.argv) == 3:
-    owner_read_fd, owner_write_fd = os.pipe()
-    try:
-      return supervise(sys.argv[2], int(sys.argv[1]), owner_read_fd)
-    finally:
-      os.close(owner_write_fd)
-  raise ValueError('usage: python -m bro.job_supervisor READY_FD [OWNER_FD] COMMAND')
+  if len(sys.argv) < 4:
+    raise ValueError('usage: python -m bro.job_supervisor READY_FD OWNER_FD ARGV...')
+  return supervise(sys.argv[3:], int(sys.argv[1]), int(sys.argv[2]))
 
 
 if __name__ == '__main__':

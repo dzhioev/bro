@@ -11,6 +11,7 @@ import pytest
 from bro import watches
 from bro.base.liveness_test_helper import Liveness
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT
+from bro.brash import REFUSED_STATUS, Policy
 from bro.monitor import SESSION_DIR_ENV
 
 
@@ -23,7 +24,7 @@ def owner(monkeypatch, tmp_path):
 
 def _seed(store: watches.Store, command: str, content: str) -> watches.Watch:
   watch = watches.Watch(command, store.directory, watches.slug(command))
-  watch.command_file.write_text(f'{command}\n')
+  watch.command_file.write_text(command)
   watch.log.write_text(content)
   return watch
 
@@ -163,7 +164,7 @@ class TestStore:
 
   def test_invalid_utf8_expansion_stays_bounded_and_advances(self, owner):
     watch = watches.Watch('binary', owner.store.directory, watches.slug('binary'))
-    watch.command_file.write_text('binary\n')
+    watch.command_file.write_text('binary')
     watch.log.write_bytes(b'\xff' * BYTE_LIMIT + b'\n')
 
     batches = []
@@ -179,7 +180,7 @@ class TestStore:
 
   def test_a_replacement_does_not_commit_the_next_buffered_lead_byte(self, owner):
     watch = watches.Watch('binary', owner.store.directory, watches.slug('binary'))
-    watch.command_file.write_text('binary\n')
+    watch.command_file.write_text('binary')
     watch.log.write_bytes(b'\xc2\xc2\n')
 
     assert owner.store.take() == '[binary] ��'
@@ -254,7 +255,7 @@ class TestProducers:
       watch.journal_wake_file,
     ):
       assert len(path.name.encode()) <= 255
-    assert watch.command_file.read_text().rstrip() == command
+    assert watch.command_file.read_text() == command
 
   def test_watch_run_detaches_and_keeps_output_and_exit(self, owner):
     command = 'printf "one\\ntwo\\n"'
@@ -271,6 +272,54 @@ class TestProducers:
     assert f'[{command}] two' in batch
     assert f'[{command}] [watch-run] exited 0' in batch
     assert not watch.producer_alive()
+
+  def test_a_watch_under_a_brash_policy_runs_its_line_in_brash(self, owner, tmp_path):
+    policy = tmp_path / 'brash-policy.json'
+    Policy(entries=('printf ...',), writable=False).write(policy)
+    command = 'printf "listed\\n"; cat /dev/null'
+    watch = owner.store.start(command, policy)
+
+    deadline = time.monotonic() + 10
+    while watch.producer_alive():
+      assert time.monotonic() < deadline, 'watch producer did not exit'
+      time.sleep(0.01)
+    batch = owner.store.take()
+
+    assert batch is not None
+    refusal, exit_line = batch.splitlines()
+    assert refusal.startswith(f"[{command}] brash: refused 'cat'")
+    assert exit_line == f'[{command}] [watch-run] exited {REFUSED_STATUS}'
+
+  def test_a_watch_runs_and_keeps_its_line_untouched(self, owner, tmp_path):
+    policy = tmp_path / 'brash-policy.json'
+    Policy(entries=('printf ...',), writable=False).write(policy)
+    command = "printf '<%s>\\n' x\\ "
+    watch = owner.store.start(command, policy)
+
+    deadline = time.monotonic() + 10
+    while watch.producer_alive():
+      assert time.monotonic() < deadline, 'watch producer did not exit'
+      time.sleep(0.01)
+
+    assert [declared.command for declared in owner.store.declared()] == [command]
+    assert owner.store.take() == f'[{command}] <x >\n[{command}] [watch-run] exited 0'
+
+  def test_a_watch_runs_the_runtimes_producer_whatever_its_directory_holds(
+    self, owner, tmp_path, monkeypatch
+  ):
+    # a session works in an operated checkout that may carry another version of bro
+    checkout = tmp_path / 'checkout'
+    (checkout / 'bro').mkdir(parents=True)
+    (checkout / 'bro' / 'watch_run.py').write_text('raise SystemExit("the checkout ran")\n')
+    monkeypatch.chdir(checkout)
+
+    watch = owner.store.start('echo produced')
+    deadline = time.monotonic() + 10
+    while watch.producer_alive():
+      assert time.monotonic() < deadline, 'watch producer did not exit'
+      time.sleep(0.01)
+
+    assert owner.store.take() == '[echo produced] produced\n[echo produced] [watch-run] exited 0'
 
   def test_stopping_a_watch_ends_its_whole_process_group(self, owner, tmp_path):
     child_path = tmp_path / 'child'

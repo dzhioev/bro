@@ -14,16 +14,16 @@ def ride_call():
   return run_cli('ride.call', sys.argv)
 
 
+def ride_claude_command_gate():
+  return run_cli('ride.claude.command_gate', sys.argv)
+
+
 def ride_claude_statusline():
   return run_cli('ride.claude.statusline', sys.argv)
 
 
 def ride_claude_trail_recorder():
   return run_cli('ride.claude.trail_recorder', sys.argv)
-
-
-def ride_claude_watch_guard():
-  return run_cli('ride.claude.watch_guard', sys.argv)
 
 
 def ride_claude_watch_waiter():

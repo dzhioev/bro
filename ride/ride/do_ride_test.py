@@ -292,7 +292,7 @@ class TestRunSession:
     watch_directory = tmp_path / 'session' / watches.WATCH_DIRNAME
     watch_directory.mkdir(parents=True)
     stale = watches.Watch('old command', watch_directory, watches.slug('old command'))
-    stale.command_file.write_text('old command\n')
+    stale.command_file.write_text('old command')
     stale.log.write_text('uncommitted\n[watch-run] exited 0\n')
 
     def capture(_run):

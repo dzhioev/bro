@@ -13,7 +13,6 @@ import shlex
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -22,6 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Self
 
+from bro.base import spawn
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, format_size
 from bro.monitor import SESSION_DIR_ENV, session_dir
 
@@ -33,6 +33,7 @@ PRODUCER_OWNER_PATH_ENV = 'BRO_WATCH_OWNER_PATH'
 PRODUCER_DIRECTORY_ENV = 'BRO_WATCH_DIRECTORY'
 PRODUCER_SLUG_ENV = 'BRO_WATCH_SLUG'
 PRODUCER_COMMAND_ENV = 'BRO_WATCH_COMMAND'
+PRODUCER_POLICY_ENV = 'BRO_WATCH_BRASH_POLICY'
 PRODUCER_JOURNAL_HEAD_ENV = 'BRO_WATCH_JOURNAL_HEAD'
 PRODUCER_JOURNAL_WAKE_ENV = 'BRO_WATCH_JOURNAL_WAKE'
 SESSION_WATCH_COMMAND = 'quest watch'
@@ -81,16 +82,15 @@ def _signal_journal_change(path: Path) -> None:
       wake.write(b'1')
 
 
-def _normalized(command: str) -> str:
-  value = command.strip()
-  if len(value) == 0:
+def _nonblank(command: str) -> str:
+  if len(command.strip()) == 0:
     raise WatchError('a watch needs a non-empty command')
-  return value
+  return command
 
 
 def slug(command: str | list[str]) -> str:
   """Return a readable, collision-resistant file stem for one command."""
-  value = shlex.join(command) if isinstance(command, list) else _normalized(command)
+  value = shlex.join(command) if isinstance(command, list) else _nonblank(command)
   readable = re.sub(r'[^A-Za-z0-9._-]+', '-', value).strip('-')[:80] or 'watch'
   digest = hashlib.sha256(value.encode()).hexdigest()[:12]
   return f'{readable}-{digest}'
@@ -304,8 +304,7 @@ class Store:
       yield
 
   def _watch(self, command: str) -> Watch:
-    normalized = _normalized(command)
-    return Watch(normalized, self.directory, slug(normalized))
+    return Watch(_nonblank(command), self.directory, slug(command))
 
   def _declared_locked(self) -> list[Watch]:
     if not self.directory.is_dir():
@@ -313,7 +312,7 @@ class Store:
     result = []
     for command_file in sorted(self.directory.glob(f'*{_COMMAND_SUFFIX}')):
       stem = command_file.name[: -len(_COMMAND_SUFFIX)]
-      result.append(Watch(command_file.read_text().rstrip('\n'), self.directory, stem))
+      result.append(Watch(command_file.read_text(), self.directory, stem))
     return result
 
   def declared(self) -> list[Watch]:
@@ -384,13 +383,15 @@ class Store:
         if wake_fd in ready:
           os.read(wake_fd, 1)
 
-  def start(self, command: str) -> Watch:
+  def start(self, command: str, policy: Optional[Path] = None) -> Watch:
+    """start `command` as a producer: in brash under `policy`, or in bash where
+    there is none."""
     watch = self._watch(command)
     with self._locked():
       if watch.producer_alive():
         raise WatchError(f'`{watch.command}` already runs in this session')
       watch.clear()
-      watch.command_file.write_text(f'{watch.command}\n')
+      watch.command_file.write_text(watch.command)
       os.mkfifo(watch.journal_wake_file)
       ready_read_fd, ready_write_fd = os.pipe()
       environment = {
@@ -404,6 +405,10 @@ class Store:
         PRODUCER_JOURNAL_HEAD_ENV: str(watch.journal_head_file),
         PRODUCER_JOURNAL_WAKE_ENV: str(watch.journal_wake_file),
       }
+      if policy is None:
+        environment.pop(PRODUCER_POLICY_ENV, None)
+      else:
+        environment[PRODUCER_POLICY_ENV] = str(policy)
       process: Optional[subprocess.Popen] = None
       try:
         with (
@@ -411,7 +416,7 @@ class Store:
           os.fdopen(ready_write_fd, 'wb') as ready_writer,
         ):
           process = subprocess.Popen(
-            [sys.executable, '-m', 'bro.watch_run'],
+            spawn.module_argv('bro.watch_run'),
             env=environment,
             pass_fds=(ready_write_fd,),
             stdin=subprocess.DEVNULL,

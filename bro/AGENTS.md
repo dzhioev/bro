@@ -45,7 +45,7 @@ A subpackage with a map of its own is pointed at, not described here.
   `take()` commits fair, bounded batches under one exclusive lock;
   each line names its command, and a cut batch carries a pending marker.
   The store also reports whether complete lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed.
-  `watch-run` executes each shell command under `job_supervisor`, detached from its starter but held by an owner-liveness handle.
+  `watch-run` executes each command line under `job_supervisor`, in brash under the policy its starter names or else in bash, detached from its starter but held by an owner-liveness handle.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
 - `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered lines, harness background work, and live session traffic.
   Settlement blocks on the store's journal signal until the session watch has emitted through the snapshot it reads.
@@ -57,6 +57,9 @@ A subpackage with a map of its own is pointed at, not described here.
 - `job_supervisor.py` — the shared process-group supervisor behind core's `watch-run` and bro-native's jobs:
   it remains the live group leader until every command descendant exits, and exits when the owner-liveness handle closes.
   The native job registry, spool, and inbox keep their public `bro.jobs` and `bro.inbox` paths under `native/`.
+- `brash_policy.py` — a session's brash policy file, written from a reach's finite command list and files level, and the argv a line starts as:
+  brash under a policy, bash under `brash(ANY)`.
+  A harness that runs lines in another process names the file there in `BRO_BRASH_POLICY`.
 - `brash.py` (`brash`) — the standalone interpreter for a finite command list:
   quote-aware entry parsing, tree-sitter-bash validation, preflight and expanded-argv admission, the admitted shell language and builtins, word expansion, redirects classified by file reach, and status-126 refusals.
   It imports no other framework module, so each command-line start pays only for the interpreter.
@@ -170,7 +173,8 @@ Every assembly (`assemble(harness, …)`) receives the engine's registered `Harn
 - `cast` when the bro has spells and its key resolves (`bro/reference/ride.md`, "Bro spells and skills").
   The bro harness contributes `skill` through its own tools because its model has no native skill loader.
 - `watch` and `unwatch` with a declared `brash` command list on every harness;
-  `watch` follows the job route's command admission, while `unwatch` stops the named producer without admitting the command and refuses the runtime-owned session watch.
+  `watch` starts its line in brash under the live run's policy, or the published one where the process runs none, or in bash under `brash(ANY)`;
+  `unwatch` stops the named producer without checking the command list and refuses the runtime-owned session watch.
 - the bro harness's own tools:
   `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),

@@ -11,11 +11,17 @@ import os
 import threading
 from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
-from bro import watches
+from bro import brash_policy, watches
 from bro.base import log
-from bro.monitor import SESSION_DIR_ENV, claude_projects_dir, harness_session_dir, trail_pointer
+from bro.monitor import (
+  SESSION_DIR_ENV,
+  claude_config_dir,
+  claude_projects_dir,
+  harness_session_dir,
+  trail_pointer,
+)
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
 from bro.workspace.paths import ISOLATION_ENV
@@ -23,6 +29,7 @@ from ride.claude import claude_release
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import latest_jsonl
+from ride.claude.competing_hooks import find as find_competing_hooks
 from ride.claude.interrupt import Run, StreamedRun, run_interactive, run_streaming
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
@@ -191,12 +198,43 @@ def _run_claude_summoned_interactive(
     return _run_claude(binary, argv, env, transcripts).code
 
 
+class _CompetingHooks(RuntimeError):
+  """a session's own Claude configuration could take a call around the command gate."""
+
+
+def _session_brash_policy(bro: str, tree: Path) -> Optional[Path]:
+  """write the session's brash policy where `bro`'s command list is finite, and
+  return it; None where the bro runs no line in brash. Raises `_CompetingHooks`
+  first where the session's own Claude configuration could take a call around
+  the command gate."""
+  from bro.registry import create_bro
+
+  reach = create_bro(bro).reach()
+  if not brash_policy.finite(reach):
+    return None
+  competing = find_competing_hooks(tree, claude_config_dir())
+  if len(competing) > 0:
+    raise _CompetingHooks(
+      f"{bro}'s finite command list runs each Bash and Monitor line in brash, and this "
+      "session's Claude configuration could take a call around that gate:\n  "
+      + '\n  '.join(competing)
+    )
+  state = _claude_state_dir()
+  state.mkdir(parents=True, exist_ok=True)
+  return brash_policy.write(state, reach)
+
+
 def run_session(spec: 'SessionSpec | SessionRun') -> int:
   tree = Path.cwd()
   try:
     binary = _claude_binary()
   except (OSError, RuntimeError, ValueError) as error:
     log.error('cannot prepare pinned Claude Code: %s', error)
+    return 1
+  try:
+    policy = _session_brash_policy(spec.bro, tree)
+  except _CompetingHooks as error:
+    log.error('refusing to start: %s', error)
     return 1
 
   transcripts = claude_projects_dir(tree)
@@ -216,14 +254,21 @@ def run_session(spec: 'SessionSpec | SessionRun') -> int:
     # session-local MCP serving: OS-assigned port published via a port file,
     # per-session bearer token. the server imports from the session runtime
     # selected by PATH — the snapshot on host, the runtime volume in a container.
+    server_env = {
+      name: value for name, value in os.environ.items() if name != brash_policy.POLICY_ENV
+    }
+    if policy is not None:
+      server_env[brash_policy.POLICY_ENV] = str(policy)
     try:
-      server = start_session_mcp_server(f'persona:{spec.bro}', tree, os.environ)
+      server = start_session_mcp_server(f'persona:{spec.bro}', tree, server_env)
     except RuntimeError as error:
       log.error('%s', error)
       return 1
     teardown.callback(server.stop)
 
-    launch = build_claude_launch(spec, claude_args=claude_args, endpoint=server.endpoint)
+    launch = build_claude_launch(
+      spec, claude_args=claude_args, endpoint=server.endpoint, brash_policy=policy
+    )
     if os.environ.get('TRAILS_DISABLED') is None:
       try:
         recorder = start_session_recorder(tree, os.environ, llm=spec.llm_spec.dump())

@@ -17,7 +17,8 @@ DELEGATION = ('Agent', 'Workflow', 'TaskStop')
 # Claude's own skill loader, and the search that reaches the MCP tools
 # connecting after an interactive session's first turn has started
 LOOP = ('Skill', 'ToolSearch')
-# the shell tools that run a command line, gated under a finite command list
+# the shell tools that run a command line, which run it in brash under a finite
+# command list
 COMMAND_TOOLS = ('Bash', 'Monitor')
 
 
@@ -36,11 +37,3 @@ def allowlist(reach: Reach) -> tuple[str, ...]:
     names.extend(DELEGATION)
   names.extend(LOOP)
   return tuple(dict.fromkeys(names))
-
-
-def command_gate(reach: Reach) -> dict[str, tuple[str, ...]]:
-  """each command tool and the commands a finite command list holds it to; empty
-  where the reach declares no shell or an unrestricted one."""
-  if reach.brash is None or reach.brash.unrestricted:
-    return {}
-  return dict.fromkeys(COMMAND_TOOLS, reach.brash.commands)

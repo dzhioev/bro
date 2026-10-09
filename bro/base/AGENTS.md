@@ -76,7 +76,8 @@ run those with `--help` for flags.
   `format_result` is the shape a finished child takes as agent-tool output
   — exit code, then a `text_window` window over the captured streams.
   Used by every agent shell-out.
-  `console_script` resolves a console script beside the running interpreter, for machinery a process spawns beside itself rather than looks up on the PATH it was launched with.
+  `console_script` resolves a console script beside the running interpreter, for machinery a process spawns beside itself rather than looks up on the PATH it was launched with;
+  `module_argv` runs such machinery as a module of that interpreter's own environment, never of a checkout in the working directory.
 - `liveness_test_helper.py` — `Liveness`, a FIFO a spawned process holds for as long as it lives:
   a test asserting that something was reaped blocks on its EOF instead of polling a pid the kernel is free to recycle underneath it.
 - `suite_environment.py` — `rebuild_environment()`, which leaves a test process holding none of the session it started in:
