@@ -1,4 +1,5 @@
 import io
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -6,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from bro.dev.packaging_policy import TEST_MODULE_NAMES, TEST_MODULE_SUFFIXES
 from bro.local import gate_display, green_trees, run_tests
 
 CLEAN_TREE = green_trees.clean_tree
@@ -59,6 +61,18 @@ def test_a_command_reads_the_display_color_decision_from_its_environment(monkeyp
   run_tests.run(sys.executable, '-c', probe)
 
   assert stream.getvalue() == 'None 1\n1 None\n'
+
+
+@pytest.mark.parametrize('directory', ['', 'package/nested/'])
+def test_deptry_skips_every_test_module_the_packaging_policy_names(directory):
+  test_modules = [
+    *(f'{directory}{name}.py' for name in TEST_MODULE_NAMES),
+    *(f'{directory}subject{suffix}.py' for suffix in TEST_MODULE_SUFFIXES),
+  ]
+  shipped = [f'{directory}subject.py', f'{directory}sub{TEST_MODULE_NAMES[0]}.py']
+
+  assert [path for path in test_modules if not re.match(run_tests.TEST_MODULE_PATTERN, path)] == []
+  assert [path for path in shipped if re.match(run_tests.TEST_MODULE_PATTERN, path)] == []
 
 
 def test_the_commands_deaf_to_the_environment_are_told_the_color_decision_by_flag(
