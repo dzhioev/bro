@@ -114,7 +114,7 @@ class TestWait:
     assert future.result(timeout=10) == REWAKE_STATUS
     assert out.getvalue() == '\n[printf lines] hello\n'
     assert state.rewakes() == 1
-    assert not owner.store.has_pending_lines()
+    assert not owner.store.has_waking_lines()
 
   def test_a_superseded_waiter_stands_aside(self, state):
     future, out = _polling(state)
@@ -160,7 +160,7 @@ class TestWait:
 
     assert future.result(timeout=10) == 0
     assert out.getvalue() == ''
-    assert owner.store.has_pending_lines()
+    assert owner.store.has_waking_lines()
 
   def test_a_waiter_wakes_the_session_short_of_its_bound(self, owner, state):
     future, out = _waiting(state, owner.store, bound=60)

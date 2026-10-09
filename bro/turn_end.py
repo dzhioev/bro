@@ -32,7 +32,7 @@ class LiveWork:
   missions: tuple[mission.LiveMission, ...]
   covered_mission_ids: frozenset[str]
   model_watches: tuple[str, ...]
-  pending_lines: bool
+  waking_lines: bool
   background_work: tuple[str, ...]
   summoner_can_speak: bool
   reply_awaited: bool
@@ -56,8 +56,8 @@ class LiveWork:
       *(f'watch:{command}' for command in self.model_watches),
       *(f'background:{item}' for item in self.background_work),
     ]
-    if self.pending_lines:
-      values.append('pending-lines')
+    if self.waking_lines:
+      values.append('waking-lines')
     if self.summoner_can_speak:
       values.append('summoner-can-speak')
     if self.reply_awaited:
@@ -114,7 +114,7 @@ def _live_work(port: TurnEnd) -> LiveWork:
     missions,
     frozenset(covered),
     model_watches,
-    store.has_pending_lines(),
+    store.has_waking_lines(),
     port.background_work(),
     summoner_can_speak,
     reply_awaited,
@@ -161,7 +161,7 @@ def settle(port: TurnEnd) -> None:
   if (
     len(work.covered_missions) > 0
     or len(work.model_watches) > 0
-    or work.pending_lines
+    or work.waking_lines
     or work.reply_awaited
   ):
     return

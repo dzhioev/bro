@@ -1782,3 +1782,53 @@ class TestWatchServiceTools:
         tools = {tool.name: tool for tool in await server.list_tools()}
         with pytest.raises(watches.WatchError, match='owned by the runtime'):
           await tools['unwatch'].call({'command': watches.SESSION_WATCH_COMMAND})
+
+  @pytest.mark.asyncio
+  async def test_watch_starts_a_watch_that_wakes_on_quiet_lines(self):
+    class QuietShellBro(BaseBro):
+      name = 'quiet-watch-shell'
+      description = 'd'
+      tools: ClassVar = [mcp.shell('printf allowed')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with watches.Owner.temporary() as owner:
+      run = StubRun()
+      run.watch_store = owner.store
+      server = _service_server(QuietShellBro(), run=run, harness=Harness('alternate'))
+      with contextlib.closing(server):
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        await tools['watch'].call({'command': 'printf allowed', 'wake_on_quiet': True})
+        (started,) = owner.store.declared()
+        assert started.wakes_on_quiet()
+
+  @pytest.mark.asyncio
+  async def test_quest_watch_mounts_only_where_the_session_may_summon(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    assert 'quest_watch' not in await _collect_tool_names([_service_server(EchoBro())])
+
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    assert 'quest_watch' in await _collect_tool_names([_service_server(EchoBro())])
+
+  @pytest.mark.asyncio
+  async def test_quest_watch_sets_the_session_watch_to_wake_on_quiet_lines(self, monkeypatch):
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    with watches.Owner.temporary() as owner:
+      session_watch = watches.Watch(
+        watches.SESSION_WATCH_COMMAND,
+        owner.store.directory,
+        watches.slug(watches.SESSION_WATCH_COMMAND),
+      )
+      session_watch.command_file.write_text(f'{watches.SESSION_WATCH_COMMAND}\n')
+      session_watch.log.write_text(f'{watches.quiet("summon started (quest Q1 to reviewer)")}\n')
+      run = StubRun()
+      run.watch_store = owner.store
+      server = _service_server(EchoBro(), run=run)
+      with contextlib.closing(server):
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        assert await tools['quest_watch'].call({'wake_on_quiet': True}) == {'wake_on_quiet': True}
+        assert owner.store.has_waking_lines()
+        assert await tools['quest_watch'].call({'wake_on_quiet': False}) == {'wake_on_quiet': False}
+        assert not owner.store.has_waking_lines()

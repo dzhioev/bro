@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from bro import mission, quest, summon
+from bro import mission, quest, summon, watches
 from bro.artifact import SHARE
 from bro.broker import brotocol
 from bro.broker.client import Client
@@ -1411,6 +1411,56 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
     assert await refusal_line == (
       'summon refused quest talk lacks owner.say: blocked (quest S4 to dev)'
     )
+    watch.close()
+
+
+@pytest.mark.asyncio
+async def test_watch_quiets_service_marks_and_a_childs_says(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
+    watch = quest.watch(wait_seconds=0.05)
+    lines = asyncio.create_task(asyncio.to_thread(lambda: [next(watch) for _ in range(7)]))
+    channel, arm = await next_message(server)
+    await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
+    await _reply_empty_watch_replay(server)
+    channel, poll = await next_message(server)
+    child = {
+      'kind': 'launch',
+      'type': 'bro',
+      'mission': 'S1',
+      'parent': 'ROOT',
+      'args': {'target': 'dev'},
+    }
+    message = {**child, 'transition': 'message', 'from': 'worker'}
+    await reply(
+      server,
+      channel,
+      poll,
+      outcome='ok',
+      value={
+        'head': 8,
+        'events': [
+          {**child, 'seq': 1, 'transition': 'accepted'},
+          {**child, 'seq': 2, 'transition': 'started'},
+          {**child, 'seq': 3, 'transition': 'trail', 'trail_id': 'T9'},
+          {**child, 'seq': 4, 'transition': 'listening'},
+          {**child, 'mission': 'ROOT', 'parent': 'PARENT', 'seq': 5, 'transition': 'listening'},
+          {**message, 'seq': 6, 'head': {'text': 'halfway'}},
+          {**message, 'seq': 7, 'id': 'Q1', 'head': {'text': 'approve?'}},
+          {**child, 'seq': 8, 'transition': 'ended', 'outcome': 'ok'},
+        ],
+      },
+    )
+
+    assert await lines == [
+      watches.quiet('summon accepted (quest S1 to dev)'),
+      watches.quiet('summon started (quest S1 to dev)'),
+      watches.quiet('summon trail T9 (quest S1 to dev)'),
+      watches.quiet('summon listening (quest S1 to dev)'),
+      watches.quiet('summon says halfway (quest S1 to dev)'),
+      'summon asks approve? (quest S1 to dev, question Q1)',
+      'summon ended ok (quest S1 to dev)',
+    ]
     watch.close()
 
 

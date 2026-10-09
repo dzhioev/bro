@@ -43,10 +43,11 @@ A subpackage with a map of its own is pointed at, not described here.
 - `watches.py` and `watch_run.py` (`watch-run`) — one session-local watch store and its producer.
   `take()` commits fair, bounded batches under one exclusive lock;
   each line names its command, and a cut batch carries a pending marker.
-  The store also reports whether complete lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed.
+  A producer's quiet line waits for the next waking line unless its watch is set to wake on quiet lines (`bro/reference/ride.md`, "Session watches").
+  The store also reports whether waking lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed.
   `watch-run` executes each shell command under `job_supervisor`, detached from its starter but held by an owner-liveness handle.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
-- `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered lines, harness background work, and live session traffic.
+- `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered waking lines, harness background work, and live session traffic.
   Settlement blocks on the store's journal signal until the session watch has emitted through the snapshot it reads.
   A distinct live set receives at most one shared notice;
   a second end with uncovered work ends the run, while covered work and work with a wake route keep it waiting.
