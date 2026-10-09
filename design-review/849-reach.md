@@ -236,7 +236,18 @@ It is not a boundary against a model, or hostile data, trying to get past it:
 a roster that names a general-purpose program (`git -c …`, `uv run`, `find -exec`, `xargs`, `env`, a shell, an interpreter) admits whatever that program runs, and brash runs on the host without containment.
 Containment is #816's sandbox.
 A command that must be held to exact arguments is served as a `cli(...)` tool, a fixed argv with no shell, which #493 extends to external commands.
-The reference docs say so where they describe `shell(...)`.
+The reference docs say so where they describe `shell(...)`, and state what a finite roster leaves open on Claude:
+
+> Under a finite roster, brash checks the commands the model runs through `Bash` and `Monitor` on Claude and through its jobs and watches on the bro harness.
+> What the session's Claude configuration runs is not checked: hooks from your or the repository's settings, plugins, and a skill's inline `!cmd` lines, which Claude runs without consulting any `PreToolUse` hook.
+> So a model that can write files can get around its roster: it writes a skill whose `!cmd` runs what it likes, and the skill takes effect from the next session.
+> Claude's own guard against that is a permission prompt, which ride skips under every hold but `guided`; even Claude's auto mode let a benign-looking skill write through when probed.
+> The roster catches a model that goes off-script, not one working to get around it.
+> A finite-roster session refuses to start while its settings, the skills Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`, which could rewrite their calls after the gate.
+
+Each claim there was probed live on 2.1.280:
+a model limited to `Write` and `Skill` wrote such a skill with no prompt, the next session loaded it, and its `!cmd` ran beside a `PreToolUse` hook on `Bash` that denied everything and never saw it;
+with `Bash` withheld, the same `!cmd` was refused, since Claude checks it against `Bash`'s permission rules.
 
 ### Roster syntax
 
@@ -309,6 +320,8 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
   It denies a `Monitor` call that carries no command, its WebSocket form.
   The gate stays stdlib-only, since brash does the checking.
   The line no longer meets Claude's shell snapshot, whose functions and aliases belong to Claude's shell, not to brash.
+  Before Claude starts, the runner refuses a finite-roster session whose project or local settings, skills Claude would load, or enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`, naming where it found it,
+  since Claude applies every matching hook's `updatedInput` and the last rewrite wins.
 - **`ANY`.** brash does not run:
   Claude serves `Bash` ungated, and the job tool and `bro::watch` start `bash -c`.
 - **`cd`** inside a line moves brash for the rest of that line only.
@@ -388,3 +401,9 @@ about 65 ms in a container, the parse included, against 22 ms for Python alone.
   no entry could hold a command to one argument.
 - **Unwrapping wrappers** (`timeout`, `nice`, `env`) the way Claude Code does:
   more surface for a convenience an entry gives.
+- **Only ride's own Claude configuration under a finite roster** (`--setting-sources user`, `Skill` withheld, skills' inline shell off):
+  it closes the configuration channels, but drops the repository's `CLAUDE.md` and skills too, which 2.1.280 stops loading under that flag, and the user's own `!cmd` skills;
+  settled with the user for stating the hole instead.
+- **Claude's auto permission mode instead of skipped prompts**:
+  it exists only on the Claude 5 models, so a `haiku` recipe falls back to the default mode, where an unattended run is denied every write;
+  its classifier let a benign-looking skill write through, and every action waits on that classifier, which blocks when unavailable.
