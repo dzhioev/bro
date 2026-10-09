@@ -8,7 +8,7 @@ import bro.artifact_mcp as artifact_mcp
 from bro.artifact import ArtifactError
 from bro.base.text_window import BYTE_LIMIT
 
-REF = f'sha256:{"a" * 64}'
+REF = f'sha256:{"a" * 64}/notes.txt'
 
 
 def _serve(monkeypatch, path: Path) -> None:

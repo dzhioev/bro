@@ -206,7 +206,7 @@ def _temporary_reply(content: bytes) -> Iterator[Path]:
 
 def _mint_text(text: str) -> str:
   with _temporary_reply(text.encode()) as path:
-    return mint_artifact(path.name).ref
+    return mint_artifact(path.name, name='reply.txt').ref
 
 
 def _head(text: str, maximum_bytes: int) -> str:

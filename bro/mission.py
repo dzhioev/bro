@@ -605,11 +605,11 @@ def share(
   validate: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> None:
   """Share one reachable artifact ref with a live mission this session owns."""
-  from bro.artifact import DEFAULT_TIMEOUT, SHARE, is_ref
+  from bro.artifact import DEFAULT_TIMEOUT, REF_FORM, SHARE, is_ref
 
   resolved = resolve(mission_id)
   if not is_ref(ref):
-    raise ValueError('artifact ref must be sha256: followed by 64 lowercase hex digits')
+    raise ValueError(f'artifact ref must be {REF_FORM}: {ref!r}')
   wait_seconds = DEFAULT_TIMEOUT if timeout is None else timeout
   if not math.isfinite(wait_seconds) or wait_seconds <= 0:
     raise ValueError('timeout must be a finite positive number')
@@ -1205,6 +1205,8 @@ def _watch(worker_type: Optional[str]) -> int:
 
 
 def main(argv: list[str]) -> Optional[int]:
+  from bro.artifact import REF_FORM
+
   parser = base_args.Parser(
     prog='mission',
     description='read, talk to, share artifacts with, watch, list, and end owned missions',
@@ -1258,7 +1260,7 @@ def main(argv: list[str]) -> Optional[int]:
 
   share_parser = verbs.add_parser('share', help='hand a reachable artifact ref to a live mission')
   share_parser.add_argument('mission_id', metavar='<mission-id>', help='owned mission id')
-  share_parser.add_argument('ref', metavar='<ref>', help='artifact ref (sha256:<64 hex digits>)')
+  share_parser.add_argument('ref', metavar='<ref>', help=f'artifact ref ({REF_FORM})')
   share_parser.add_argument(
     '--timeout', type=float, metavar='SECONDS', help="seconds to wait for the host's answer"
   )

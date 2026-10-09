@@ -12,8 +12,8 @@ from bro.llm.mcp import Context
 from bro.webview import mcp
 from bro.webview.cli import OpenedWebview, WebviewError
 
-REF = f'sha256:{"1" * 64}'
-OTHER_REF = f'sha256:{"2" * 64}'
+REF = f'sha256:{"1" * 64}/upload.txt'
+OTHER_REF = f'sha256:{"2" * 64}/other.txt'
 
 
 def _context() -> Context[mcp.Webviews]:
@@ -83,10 +83,10 @@ def test_command_mints_and_cuts_a_large_inline_reply(monkeypatch, tmp_path) -> N
   )
   minted: list[bytes] = []
 
-  def mint(path: str):
+  def mint(path: str, name: str):
     content = Path(path).read_bytes()
     minted.append(content)
-    return SimpleNamespace(ref=f'sha256:{hashlib.sha256(content).hexdigest()}')
+    return SimpleNamespace(ref=f'sha256:{hashlib.sha256(content).hexdigest()}/{name}')
 
   monkeypatch.setattr(mcp, 'mint_artifact', mint)
 
@@ -111,7 +111,7 @@ def test_command_reads_a_spilled_reply_head_without_minting(monkeypatch, tmp_pat
       {'spilled': 'text', 'ref': REF, 'bytes': spilled.stat().st_size, 'files': []}
     ),
   )
-  monkeypatch.setattr(mcp, 'mint_artifact', lambda _path: pytest.fail('spill must be reused'))
+  monkeypatch.setattr(mcp, 'mint_artifact', lambda _path, name: pytest.fail('spill must be reused'))
 
   rendered = mcp.command(context, 'webview-1', 'browser_snapshot')
 

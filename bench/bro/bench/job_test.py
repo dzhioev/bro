@@ -19,7 +19,7 @@ from bro.worker_types import Host, LaunchDenied, LaunchRequest, PeerDescription,
 TIMEOUT = 5.0
 CONFIG = 'benchmark/bro/benchmark/job.yaml'
 ROOT = 'root-peer'
-REF = 'sha256:' + 'a' * 64
+REF = 'sha256:' + 'a' * 64 + '/run'
 
 
 @pytest.fixture
@@ -320,10 +320,10 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
             'parent': 'ROOT',
             'args': {'config': CONFIG},
             'state': 'ended',
-            'result': {'outcome': 'ok', 'value': {'ref': 'sha256:' + 'a' * 64}},
+            'result': {'outcome': 'ok', 'value': {'ref': REF}},
           }
         },
       ),
     )
     assert await completed == 0
-    assert ('sha256:' + 'a' * 64) in capsys.readouterr().out
+    assert REF in capsys.readouterr().out

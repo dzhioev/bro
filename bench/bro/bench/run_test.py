@@ -39,7 +39,7 @@ TRIAL_RESULT = {
 
 TRIAL = 'adaptive-rejection-sampler__q8e2woY'
 TRAIL = '01m0tqvd37-br85bbm9-7hpya8cq'
-ARTIFACT_REF = 'sha256:' + 'a' * 64
+ARTIFACT_REF = 'sha256:' + 'a' * 64 + '/run'
 RUN = ['benchmark-run', '--agents', 'one', '--settings', 'quick', '--keep-bundle']
 
 

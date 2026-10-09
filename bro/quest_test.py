@@ -24,7 +24,7 @@ from bro.quest_test_helper import (
   running_server,
 )
 
-REF = f'sha256:{"a" * 64}'
+REF = f'sha256:{"a" * 64}/report.md'
 
 
 async def _reply_empty_watch_replay(server) -> None:

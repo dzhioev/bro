@@ -7,12 +7,25 @@ import bro.artifact as artifact
 from bro.broker import brotocol
 
 
-def _ref_of(content: bytes) -> str:
+def _digest_of(content: bytes) -> str:
   return f'sha256:{hashlib.sha256(content).hexdigest()}'
 
 
+DIGEST = f'sha256:{"0" * 64}'
+
+
 class TestRefGrammar:
-  @pytest.mark.parametrize('value', [f'sha256:{"0" * 64}', f'sha256:{"9af" * 21}c'])
+  @pytest.mark.parametrize(
+    'value',
+    [
+      f'{DIGEST}/report.md',
+      f'sha256:{"9af" * 21}c/run',
+      f'{DIGEST}/My Report (final).pdf',
+      f'{DIGEST}/.hidden',
+      f'{DIGEST}/отчёт.txt',
+      f'{DIGEST}/{"n" * 255}',
+    ],
+  )
   def test_well_formed_refs(self, value):
     assert artifact.is_ref(value)
 
@@ -22,24 +35,65 @@ class TestRefGrammar:
       None,
       42,
       '',
-      'sha256:',
-      f'sha256:{"0" * 63}',
-      f'sha256:{"0" * 65}',
-      f'sha256:{"G" * 64}',
-      f'sha256:{"A" * 64}',  # hex must be lowercase, matching hexdigest output
-      f'md5:{"0" * 64}',
-      f' sha256:{"0" * 64}',
+      DIGEST,
+      f'{DIGEST}/',
+      f'{DIGEST}/.',
+      f'{DIGEST}/..',
+      f'{DIGEST}/dir/file',
+      f'{DIGEST}/line\nbreak',
+      f'{DIGEST}/{"n" * 256}',
+      f'{DIGEST}/{"ё" * 128}',  # 256 UTF-8 bytes
+      'sha256:/name',
+      f'sha256:{"0" * 63}/name',
+      f'sha256:{"0" * 65}/name',
+      f'sha256:{"G" * 64}/name',
+      f'sha256:{"A" * 64}/name',  # hex must be lowercase, matching hexdigest output
+      f'md5:{"0" * 64}/name',
+      f' {DIGEST}/name',
     ],
   )
   def test_malformed_refs(self, value):
     assert not artifact.is_ref(value)
+
+  def test_compose_and_split_round_trip(self):
+    ref = artifact.compose_ref(DIGEST, 'report.md')
+    assert artifact.is_ref(ref)
+    assert artifact.split_ref(ref) == (DIGEST, 'report.md')
+
+  @pytest.mark.parametrize(
+    ('digest', 'name'), [(DIGEST, 'a/b'), (DIGEST, '..'), ('sha256:0', 'name')]
+  )
+  def test_compose_refuses_a_malformed_part(self, digest, name):
+    with pytest.raises(ValueError):
+      artifact.compose_ref(digest, name)
+
+  def test_split_refuses_a_bare_digest(self):
+    with pytest.raises(ValueError, match='malformed artifact ref'):
+      artifact.split_ref(DIGEST)
+
+  @pytest.mark.parametrize(
+    ('path', 'name'),
+    [
+      ('report.md', 'report.md'),
+      ('out/bundle/', 'bundle'),
+      ('out/./data.json', 'data.json'),
+      ('a/b/..', 'a'),
+    ],
+  )
+  def test_path_name_is_the_last_component(self, path, name):
+    assert artifact.path_name(path) == name
+
+  @pytest.mark.parametrize('path', ['.', './', '/', '..'])
+  def test_path_name_refuses_a_path_without_one(self, path):
+    with pytest.raises(ValueError, match='name it explicitly'):
+      artifact.path_name(path)
 
 
 class TestDigest:
   def test_file_digest_is_the_plain_content_digest(self, tmp_path):
     path = tmp_path / 'a.bin'
     path.write_bytes(b'payload')
-    assert artifact.digest_path(path) == _ref_of(b'payload')
+    assert artifact.digest_path(path) == _digest_of(b'payload')
 
   def test_directory_digest_is_stable_across_identical_copies(self, tmp_path):
     for name in ('one', 'two'):
@@ -114,7 +168,7 @@ def _serve(monkeypatch, payload: dict) -> _FakeClient:
   return client
 
 
-REF = f'sha256:{"a" * 64}'
+REF = f'sha256:{"a" * 64}/bundle'
 
 
 class TestClient:
@@ -123,6 +177,13 @@ class TestClient:
     minted = artifact.mint_artifact('out/bundle')
     assert minted == artifact.Minted(ref=REF, size=7)
     assert client.calls == [(artifact.MINT, {'path': 'out/bundle'}, artifact.DEFAULT_TIMEOUT)]
+
+  def test_mint_sends_an_explicit_name(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
+    artifact.mint_artifact('.', name='bundle')
+    assert client.calls == [
+      (artifact.MINT, {'path': '.', 'name': 'bundle'}, artifact.DEFAULT_TIMEOUT)
+    ]
 
   def test_get_sends_the_kind_and_returns_the_path(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': f'/var/ride/artifacts/{REF}'}})  # fmt: skip
@@ -172,6 +233,11 @@ class TestCli:
     assert artifact.main(['artifact', 'mint', 'out/bundle']) == 0
     assert capsys.readouterr().out == f'{REF}\n'
 
+  def test_mint_forwards_the_name(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
+    assert artifact.main(['artifact', 'mint', '.', '--name', 'bundle']) == 0
+    assert client.calls[0][1] == {'path': '.', 'name': 'bundle'}
+
   def test_get_prints_the_path(self, monkeypatch, capsys):
     _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': '/var/ride/artifacts/x'}})
     assert artifact.main(['artifact', 'get', REF]) == 0
@@ -188,7 +254,18 @@ class TestCli:
     path = tmp_path / 'a.bin'
     path.write_bytes(b'payload')
     assert artifact.main(['artifact', 'digest', str(path)]) == 0
-    assert capsys.readouterr().out == f'{_ref_of(b"payload")}\n'
+    assert capsys.readouterr().out == f'{_digest_of(b"payload")}/a.bin\n'
+
+  def test_digest_takes_a_name(self, tmp_path, capsys):
+    path = tmp_path / 'a.bin'
+    path.write_bytes(b'payload')
+    assert artifact.main(['artifact', 'digest', str(path), '--name', 'b.bin']) == 0
+    assert capsys.readouterr().out == f'{_digest_of(b"payload")}/b.bin\n'
+
+  def test_digest_refuses_a_path_without_a_name(self, tmp_path, monkeypatch, caplog):
+    monkeypatch.chdir(tmp_path)
+    assert artifact.main(['artifact', 'digest', '.']) == 1
+    assert 'name it explicitly' in caplog.text
 
   def test_digest_relays_a_refusal(self, tmp_path, capsys, caplog):
     assert artifact.main(['artifact', 'digest', str(tmp_path / 'absent')]) == 1

@@ -355,7 +355,7 @@ def test_fixed_talk_type_refuses_a_named_talk_field(tmp_path, owner):
 
 
 def test_share_is_resolved_for_spawn(tmp_path, owner):
-  ref = 'sha256:' + 'a' * 64
+  ref = 'sha256:' + 'a' * 64 + '/report.md'
   control, _, _, host = _control(tmp_path, owner, Spawn(object(), object()))
   context = _handle(control, _message(share=[ref]))
   assert context.spawned
@@ -363,7 +363,7 @@ def test_share_is_resolved_for_spawn(tmp_path, owner):
 
 
 def test_unreachable_share_is_denied(tmp_path, owner):
-  ref = 'sha256:' + 'a' * 64
+  ref = 'sha256:' + 'a' * 64 + '/report.md'
   control, _, _, host = _control(tmp_path, owner, Spawn(object(), object()))
   host.artifacts.denied = True
   context = _handle(control, _message(share=[ref]))
@@ -371,7 +371,7 @@ def test_unreachable_share_is_denied(tmp_path, owner):
 
 
 def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, owner):
-  ref = 'sha256:' + 'a' * 64
+  ref = 'sha256:' + 'a' * 64 + '/report.md'
   spec = WorkerContainer(
     files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
     command=('worker',),
@@ -439,7 +439,7 @@ def test_container_run_carries_passes_to_the_host_spawner(tmp_path, owner):
   [Job(CommandJob(('true',), {})), Expect({})],
 )
 def test_share_is_denied_for_runs_without_a_host_workspace(tmp_path, owner, run):
-  ref = 'sha256:' + 'a' * 64
+  ref = 'sha256:' + 'a' * 64 + '/report.md'
   control, _, _, _ = _control(tmp_path, owner, run)
   args: dict[str, Any] = {'share': [ref]}
   if isinstance(run, Expect):

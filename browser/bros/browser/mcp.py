@@ -60,7 +60,7 @@ def _temporary_capture(content: str) -> Iterator[Path]:
 
 def _mint_text(content: str) -> str:
   with _temporary_capture(content) as path:
-    return mint_artifact(path.name).ref
+    return mint_artifact(path.name, name='page.txt').ref
 
 
 def _artifact_text(ref: str) -> str:

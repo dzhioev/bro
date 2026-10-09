@@ -133,7 +133,7 @@ def test_spawn_launch_carries_the_authorized_child(tmp_path):
       tmp_path,
       hold='guided',
       passes=('github+work',),
-      share=('sha256:' + 'a' * 64,),
+      share=('sha256:' + 'a' * 64 + '/report.md',),
     )
   )
   assert isinstance(run, Spawn)
@@ -151,7 +151,7 @@ def test_spawn_launch_carries_the_authorized_child(tmp_path):
   assert launch.parent_tree == tmp_path
   assert launch.hold == 'guided'
   assert launch.passes == ('github+work',)
-  assert launch.share == ('sha256:' + 'a' * 64,)
+  assert launch.share == ('sha256:' + 'a' * 64 + '/report.md',)
   assert launch.summoner == {'trail_id': 'trail'}
   assert launch.env == {'ONE': '1'}
 

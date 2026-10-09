@@ -147,7 +147,7 @@ On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alo
 `benchmark retain` takes either the artifact ref or the local job directory `benchmark-run` printed:
 
 ```
-uv run --project benchmark benchmark retain sha256:<artifact-digest>
+uv run --project benchmark benchmark retain sha256:<artifact-digest>/run
 uv run --project benchmark benchmark retain jobs/<job-name>
 ```
 

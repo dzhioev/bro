@@ -575,7 +575,7 @@ def _temporary_workspace_file(content: bytes, suffix: str) -> Iterator[Path]:
 
 async def _mint_bytes(content: bytes, suffix: str) -> tuple[str, int]:
   with _temporary_workspace_file(content, suffix) as path:
-    minted = await asyncio.to_thread(mint_artifact, path.name)
+    minted = await asyncio.to_thread(mint_artifact, path.name, name=f'reply{suffix}')
   return minted.ref, len(content)
 
 

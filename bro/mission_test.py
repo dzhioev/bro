@@ -12,7 +12,7 @@ from bro.broker.environment import BROKER_MISSION
 from bro.broker.journal import MAX_EVENT_BATCH
 from bro.quest_test_helper import next_message, quest_record, reply, running_server
 
-REF = f'sha256:{"a" * 64}'
+REF = f'sha256:{"a" * 64}/report.md'
 
 
 def _typed_entry(
