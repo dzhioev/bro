@@ -140,7 +140,10 @@ class TrailsStore(ABC):
     until: Optional[str] = None,
     cursor: Optional[str] = None,
     limit: Optional[int] = None,
-  ) -> dict: ...
+  ) -> dict:
+    """one page of the headers matching every selector given, newest first.
+    a page holds at most `limit` of them and may hold fewer, even none, while
+    its `next` cursor still continues the listing; `next` is None past the last."""
 
   def iter_trails(
     self,

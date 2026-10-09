@@ -335,8 +335,6 @@ def test_listing_preserves_selectors_and_cursor_pagination(tmp_path, monkeypatch
   following = store.list_trails(bro='dev', limit=1, cursor=page['next'])
   assert {page['trails'][0]['id'], following['trails'][0]['id']} == {first, second}
   assert [item['id'] for item in store.list_trails(forked_from=parent)['trails']] == [first]
-  with pytest.raises(ValueError, match='only one'):
-    store.list_trails(bro='dev', harness='bro')
 
 
 def test_stale_open_trail_infers_unreported_end_on_read(tmp_path):

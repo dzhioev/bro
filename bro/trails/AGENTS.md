@@ -172,9 +172,8 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   A prompt queued mid-turn from any other origin is a `user_input`, like the `user` record it would have been at a turn's start.
 - Header responses expose provider-raw usage by model.
   Provider normalization belongs to the provider-aware usage layer, not the trail format.
-- List queries accept exactly one selector
-  — `harness`, `bro`, or `forked_from`
-  — plus the common time range and opaque cursor.
+- List queries accept any combination of the selectors `harness`, `bro`, and `forked_from`, matching the trails that satisfy every one given,
+  plus the common time range and opaque cursor.
 - `DELETE /v1/admin/trails/{id}` removes a trail's rows and whatever they spilled, after writing a manifest of the header and rows it takes.
   Tool blobs are content-addressed and shared across trails, so no single trail's delete removes one.
   A trail some fork still points at is refused with the children named:
