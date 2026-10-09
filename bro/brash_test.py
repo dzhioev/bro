@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from bro import brash
+from bro.base.spawn import console_script
 
 
 def _environment(path: Path | None = None) -> dict[str, str]:
@@ -20,14 +21,28 @@ def _run(line: str, *entries: str, writable: bool = False) -> int:
   return brash.run(line, entries=entries, writable=writable, environment=_environment())
 
 
-@contextlib.contextmanager
-def _working_directory(path: Path):
-  previous = Path.cwd()
-  os.chdir(path)
-  try:
-    yield
-  finally:
-    os.chdir(previous)
+def _run_command(
+  line: str,
+  *entries: str,
+  writable: bool,
+  environment: dict[str, str],
+  directory: Path,
+  policy: Path,
+) -> subprocess.CompletedProcess[bytes]:
+  """run `line` through the `brash` command, which applies a descriptor-numbered
+  redirect to a process of its own rather than to the descriptors this test
+  process holds, its test runner's among them."""
+  policy.write_text(
+    json.dumps({'commands': list(entries), 'files': 'write' if writable else 'read'})
+  )
+  return subprocess.run(
+    [console_script('brash'), '--policy', str(policy), '-c', line],
+    cwd=directory,
+    env=environment,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    check=False,
+  )
 
 
 @contextlib.contextmanager
@@ -403,12 +418,19 @@ class TestRedirects:
     assert (tmp_path / 'output').exists()
 
   @pytest.mark.parametrize('operator', ['<', '3<'])
-  def test_file_reads_are_admitted_at_every_files_level(self, operator, tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
+  def test_file_reads_are_admitted_at_every_files_level(self, operator, tmp_path):
     (tmp_path / 'input').write_text('value')
     line = f'cat {operator} input' if operator == '<' else f'cat {operator} input </dev/null'
 
-    assert _run(line, 'cat') == 0
+    completed = _run_command(
+      line,
+      'cat',
+      writable=False,
+      environment=_environment(),
+      directory=tmp_path,
+      policy=tmp_path / 'policy.json',
+    )
+    assert completed.returncode == 0, completed.stdout
 
   @pytest.mark.parametrize('redirect', ['2>&1', '<&0', '2>&-', '</dev/null', '>/dev/null'])
   def test_descriptor_and_device_redirects_are_always_admitted(self, redirect):
@@ -471,11 +493,18 @@ class TestRedirects:
     with pytest.raises(brash.Refused, match=r'use \$\(\.\.\.\) instead'):
       _run(line, 'cat', 'printf value')
 
-  def test_descriptor_prefixed_here_document(self, capfd):
+  def test_descriptor_prefixed_here_document(self, tmp_path):
     line = "sh -c 'cat <&3' 3<<'EOF'\nvalue\nEOF"
 
-    assert _run(line, "sh -c 'cat <&3'") == 0
-    assert capfd.readouterr().out == 'value\n'
+    completed = _run_command(
+      line,
+      "sh -c 'cat <&3'",
+      writable=False,
+      environment=_environment(),
+      directory=tmp_path,
+      policy=tmp_path / 'policy.json',
+    )
+    assert (completed.returncode, completed.stdout) == (0, b'value\n')
 
   def test_large_here_document_does_not_block_before_the_reader_starts(self):
     body = 'x' * 100_000
@@ -591,21 +620,19 @@ class TestDifferential:
       stderr=subprocess.STDOUT,
       check=False,
     )
-    read_descriptor, write_descriptor = os.pipe()
-    with (
-      _working_directory(brash_directory),
-      _redirected_descriptor(1, write_descriptor),
-      _redirected_descriptor(2, write_descriptor),
-    ):
-      os.close(write_descriptor)
-      brash_status = brash.run(line, entries=entries, writable=writable, environment=environment)
-    with os.fdopen(read_descriptor, 'rb') as stream:
-      brash_output = stream.read()
+    brash_result = _run_command(
+      line,
+      *entries,
+      writable=writable,
+      environment=environment,
+      directory=brash_directory,
+      policy=tmp_path / 'policy.json',
+    )
 
     bash_status = (
       128 - bash_result.returncode if bash_result.returncode < 0 else bash_result.returncode
     )
-    assert (brash_status, brash_output) == (bash_status, bash_result.stdout)
+    assert (brash_result.returncode, brash_result.stdout) == (bash_status, bash_result.stdout)
 
   def test_corpus_matches_bash(self, tmp_path):
     lines = [
