@@ -207,6 +207,7 @@ PYTEST_FILES = [
   'bro/trails/server/server_test.py',
   'bro/trails/server/dynamo_test.py',
   'bro/show_test.py',
+  'bro/brash_test.py',
   'bro/shell_test.py',
   'oops/bro/oops/assets_test.py',
   'oops/bro/oops/config_test.py',

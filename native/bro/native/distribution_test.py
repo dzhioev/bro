@@ -183,6 +183,8 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'rich',
     'textual',
     'trafilatura',
+    'tree-sitter',
+    'tree-sitter-bash',
   }
   assert _project_dependencies(_ROOT / 'ride' / 'pyproject.toml') == {
     'bro',
@@ -191,6 +193,8 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'mcp',
     'rich',
     'textual',
+    'tree-sitter',
+    'tree-sitter-bash',
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',

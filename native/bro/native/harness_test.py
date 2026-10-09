@@ -365,7 +365,7 @@ class TestUnboxedSession:
 class _ShellBro(BaseBro):
   name = 'job-tools'
   description = 'd'
-  tools: ClassVar = [mcp.shell(mcp.ANY)]
+  tools: ClassVar = [mcp.brash(mcp.ANY)]
 
   def __init__(self):
     super().__init__(system_prompt='')
@@ -439,23 +439,23 @@ class TestNativeServiceTools:
         await skill.call({'name': ''})
 
   @pytest.mark.asyncio
-  async def test_exact_roster_rejects_appended_shell_syntax(self):
-    class ExactShellBro(BaseBro):
-      name = 'exact-shell'
+  async def test_exact_command_list_rejects_appended_shell_syntax(self):
+    class ExactBrashBro(BaseBro):
+      name = 'exact-brash'
       description = 'd'
-      tools: ClassVar = [mcp.shell('printf allowed')]
+      tools: ClassVar = [mcp.brash('printf allowed')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     run = _NativeRun()
-    server, tools = await _service_tools(ExactShellBro(), run)
+    server, tools = await _service_tools(ExactBrashBro(), run)
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
       result = await tools['job'].call({'command': '  printf allowed  ', 'mode': 'fg'})
       assert result == 'exited (code 0)\nallowed'
-      with pytest.raises(ValueError, match='must match exactly'):
+      with pytest.raises(ValueError, match='match one declared entry exactly'):
         await tools['job'].call({'command': 'printf allowed; true', 'mode': 'fg'})
 
   @pytest.mark.asyncio

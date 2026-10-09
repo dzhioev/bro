@@ -14,6 +14,8 @@ dependencies = [
   "humanize==4.16.0",
   "mcp==1.28.1",
   "rich==15.0.0",
+  "tree-sitter==0.26.0",
+  "tree-sitter-bash==0.25.1",
   "textual==8.2.8",
 ]
 
@@ -55,7 +57,7 @@ bro = ["bro", "bros"]
 
 [tool.deptry.per_rule_ignores]
 # Runtime dependencies imported by core modules that ride's adapters execute.
-DEP002 = ["mcp", "rich", "textual"]
+DEP002 = ["mcp", "rich", "textual", "tree-sitter", "tree-sitter-bash"]
 
 [tool.uv.build-backend]
 module-root = ""

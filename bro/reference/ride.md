@@ -145,7 +145,7 @@ Only waking lines hold a one-shot turn end open, and a run that ends drops the q
 A watch set to wake on quiet lines treats its every line as waking.
 
 Where a persona declares shell reach, both harnesses mount `bro::watch(command, wake_on_quiet)` and `bro::unwatch(command)`.
-The command must match the persona's shell roster exactly, as `bro::job` requires;
+The command must be admitted by the persona's brash command list, as `bro::job` requires;
 `wake_on_quiet` sets the watch to wake on its quiet lines, and `unwatch` refuses the runtime-owned session watch.
 `do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
 Each joined party member has its own session directory and therefore its own store.
