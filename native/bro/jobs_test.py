@@ -213,13 +213,17 @@ def test_supervisor_exits_when_the_process_that_started_the_job_dies(tmp_path, s
   with contextlib.closing(Liveness(tmp_path / 'liveness')) as liveness:
     command = liveness.holding(subject)
     script = (
-      'import os; from bro.jobs import Job; '
-      f'Job("job-1", {command!r}); print("started", flush=True); os._exit(0)'
+      'import os, sys; from bro.jobs import Job; '
+      f'Job("job-1", {command!r}); print("started", flush=True); sys.stdin.read(); os._exit(0)'
     )
-    process = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, text=True)
-    assert process.stdout is not None
-    assert process.stdout.readline() == 'started\n'
-    assert process.wait(timeout=10) == 0
+    with subprocess.Popen(
+      [sys.executable, '-c', script], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    ) as process:
+      assert process.stdin is not None and process.stdout is not None
+      assert process.stdout.readline() == 'started\n'
+      liveness.wait_started()
+      process.stdin.close()
+      assert process.wait(timeout=10) == 0
     liveness.assert_reaped()
 
 
