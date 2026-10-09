@@ -2,6 +2,7 @@
 
 import importlib.metadata
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, cast
 
 from bro.base.condition import Variables
@@ -9,11 +10,21 @@ from bro.base.condition import Variables
 if TYPE_CHECKING:
   from bro.bro import BaseBro, LiveRun
   from bro.llm.mcp import Tool
+  from bro.mcp import MCPServerSpec, Reach
 
 SessionEndReason = Literal['ok', 'raised']
 
 ENTRY_POINT_GROUP = 'bro.harnesses'
 _NAME = re.compile(r'[a-z][a-z0-9-]*')
+
+
+@dataclass(frozen=True)
+class Service:
+  """How one harness serves a reach: the servers it mounts for the reach's groups,
+  and the groups it leaves unserved, by name."""
+
+  server_specs: tuple['MCPServerSpec', ...] = ()
+  unserved: tuple[str, ...] = ()
 
 
 class Harness:
@@ -34,6 +45,10 @@ class Harness:
   def can_end_session(self) -> bool:
     """Whether this harness can end its current session."""
     return False
+
+  def serve(self, reach: 'Reach') -> Service:
+    """How this harness serves `reach`; a harness serving no group leaves each unserved."""
+    return Service(unserved=tuple(group.key.name for group in reach.groups))
 
   def own_tools(self, bro: 'BaseBro', live_run: 'LiveRun | None') -> tuple['Tool', ...]:
     """Service tools this harness serves itself for the selected declaration."""

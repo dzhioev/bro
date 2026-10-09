@@ -5,11 +5,13 @@ import pytest
 
 from bro.base.args import Argument, CommandSignature
 from bro.llm.cli_tool import LIMIT, OFFSET, TIMEOUT, _CommandTool, build_server
-from bro.mcp import cli
+from bro.mcp import Cli, cli
 
 
 def _tool(command: str, *arguments: str) -> _CommandTool:
-  server = cli(command, *arguments).server_specs[0].build()
+  [entry] = cli(command, *arguments).entries
+  assert isinstance(entry, Cli)
+  server = entry.spec.build()
   tool = asyncio.run(server.list_tools())[0]
   assert isinstance(tool, _CommandTool)
   return tool

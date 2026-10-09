@@ -250,7 +250,9 @@ class TestSpellServer:
 
   def test_declared_server_cannot_claim_reserved_namespace(self, fake_packages):
     package = fake_packages('_spell_reserved')
-    server_spec = MCPServerSpec(build=lambda: InProcessMCPServer(NAMESPACE, []))
+    server_spec = MCPServerSpec(
+      namespace=NAMESPACE, build=lambda: InProcessMCPServer(NAMESPACE, [])
+    )
     bro_class = type(
       'ReservedBro',
       (BaseBro,),

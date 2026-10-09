@@ -9,10 +9,10 @@ The template directive front (`bro/reference/template.md`) lowers text condition
 
 ## Why
 
-Component declarations (a bro's `tools` / `data_sources`) and static text (system prompts, spell bodies, tool descriptions) are written once but consumed by different surfaces
+Component declarations (a bro's `tools`) and static text (system prompts, spell bodies, tool descriptions) are written once but consumed in different environments and by different surfaces
 — the bro-native LLM loop and managed Claude sessions
-— with different toolsets, wire-name spellings, and credentials.
-Conditioning derives each surface's variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
+— with different wire-name spellings and credentials.
+Conditioning derives each variant from one declaration, and fails fast on a typo instead of silently deciding one way forever.
 
 ## Variables
 
@@ -31,10 +31,10 @@ The facts a surface supplies, typed:
 
 ## Conditions
 
-An operand is a variable reference (`var('harness')`, or a ready-made placeholder like `bro.mcp.harness`) or a string literal.
+An operand is a variable reference (`var('harness')`, or a ready-made placeholder like `bro.mcp.creds`) or a string literal.
 Two condition forms, spelled the same as their directive counterparts:
 
-- `harness == 'bro'` — equality of two strings or two booleans (`#harness = bro` in a directive)
+- `var('harness') == 'bro'` — equality of two strings or two booleans (`#harness = bro` in a directive)
 
 - `creds.contains('openai')` — membership of a string in a set variable, container first (`#creds contains openai` in a directive)
 
@@ -52,10 +52,10 @@ Three declaration-time guards close off the Python operators that cannot build d
 
 - `'openai' in creds` raises pointing at `contains`
   — the interpreter coerces `__contains__`'s result to bool, so `in` would evaluate at import time, before the facts exist (the reason membership is a method)
-- `harness != 'bro'` raises
+- `var('harness') != 'bro'` raises
   — there is no negated form;
   compare against the intended value
-- `bool(condition)` raises — a condition has no truth value until evaluated, so `if harness == 'bro':` in plain code fails at the line that wrote it instead of always taking the branch
+- `bool(condition)` raises — a condition has no truth value until evaluated, so `if var('harness') == 'bro':` in plain code fails at the line that wrote it instead of always taking the branch
 
 ## Declarative lists: when / iff / select
 
@@ -78,20 +78,14 @@ Three declaration-time guards close off the Python operators that cannot build d
 
 Consumers:
 
-- a bro's `tools` / `data_sources` entries may be `when`-wrapped or `iff`-grouped.
-  Each consumer injects its registered `Harness` object when selecting the entries, so an unmatched declaration is never applied.
-  When the native harness is installed, `BaseBro.__init__` also selects its metadata to compose the inspectable native prompt without inventing a second harness object.
-  E.g. the dev toolset mounts only on the bro harness (Claude has built-in file/search tools):
-  `tools = [when(harness == 'bro', mount(dev_mcp.toolset))]`.
-  The same wrapper gates native blocks:
-  `tools = [when(harness == 'claude', block('Read', 'Write'))]`;
-  selecting a block for the bro harness raises because it has no native tools to remove.
-  Since that condition is not a choice, `bro/harness/claude.py` carries it as sugar together with the tool names themselves:
-  `tools = [claude.block(*claude.FILES)]`.
+- a bro's `tools` entries may be `when`-wrapped or `iff`-grouped, gated on `#creds` and the bro's `#features`:
+  `tools = [when(feature('brog'), mount(brog_mcp.toolset))]`.
+  Selection supplies no `#harness`, so an entry conditioned on the harness fails construction:
+  the entries fold to one harness-neutral reach, which each harness serves its own way (`bro/reference/extending.md`, "Declaring a bro").
 
 ## Facts
 
-Two framework facts are exported by `bro/mcp.py` as ready-made placeholders (`from bro.mcp import creds, harness`):
+Two framework facts sit at the base of the vocabulary, and `bro/mcp.py` exports `creds` as a ready-made placeholder (`from bro.mcp import creds`):
 
 - `harness` — the registered loop that drives the work, supplied as a `bro.harness.Harness` object and exposed to conditions through its name.
   Names follow `[a-z][a-z0-9-]*`, an open grammar independent of what this installation carries, so a well-formed uninstalled literal compares false rather than raising.
@@ -150,7 +144,7 @@ a `Condition`, or a plain bool constant as in `when` (`True` pins it on, `False`
 The map is MRO-merged with derived classes overriding per name, and `False` is terminal:
 redeclaring a feature a base class disabled as anything but `False` fails construction, so an opt-out binds the whole sub-hierarchy.
 The declaration adds a `#features` variable (`BaseBro.vocabulary()`, passed as the fronts' `extra`) to everything the bro renders or assembles
-— `tools` / `data_sources` selection, prompt composition, spell bodies, ride's append prompt.
+— `tools` selection, prompt composition, spell bodies, ride's append prompt.
 Components gate with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`,
 so one declaration switches every consuming site together, and a gated component enters the credential manifest only where its gates resolve.
 The credential a `creds.contains(<kind>)` gate probes is tiered with the feature:

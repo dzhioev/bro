@@ -9,7 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from bro.llm.mcp import Context
-from bro.mcp import mount
 from bro.oops import mcp
 from bro.oops.targets import (
   PLAN_UNSAFE_EXIT_CODE,
@@ -62,7 +61,7 @@ def test_repository_registry_declares_trails_server_from_infra_config(monkeypatc
 def test_toolset_manifest_follows_the_project_registry():
   registry = load_project_registry(_ROOT)
   assert registry is not None
-  assert mount(mcp.toolset).server_specs[0].needed_secrets == registry.needed_secrets
+  assert mcp.toolset.manifest().needed_secrets == registry.needed_secrets
 
 
 def test_roster_reports_a_repository_relative_command_and_a_null_plan(tmp_path):
@@ -260,11 +259,6 @@ def test_devoops_manifest_comes_from_its_components(monkeypatch):
   assert persona.needed_secrets() == ('aws', 'brog', 'github', 'infra')
   assert persona.needed_secrets(harness='claude') == ('aws', 'brog', 'github', 'infra')
   assert persona.extra_secrets == ()
-
-
-def test_devoops_declares_an_unrestricted_shell_on_both_harnesses():
-  assert Devoops()._selected_tools_for('bro').brash_unrestricted is True
-  assert Devoops()._selected_tools_for('claude').brash_unrestricted is True
 
 
 def test_devoops_is_registered_as_a_persona():

@@ -7,7 +7,10 @@ from unittest.mock import patch
 import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
+from bro.bro import BaseBro
 from bro.llm.llms import claude_code
+from bro.mcp import ToolLayer, brash, files
+from ride.claude import native_tools
 from ride.claude.assembly import persona_servers
 from ride.claude.mcp import MCPEndpoint
 from ride.claude.statusline import statusline_command
@@ -48,6 +51,22 @@ def _settings(argv: list[str]) -> dict:
   return json.loads(argv[argv.index('--settings') + 1])
 
 
+def _tools(argv: list[str]) -> list[str]:
+  return argv[argv.index('--tools') + 1].split(',')
+
+
+def _declaring(*layers: ToolLayer) -> BaseBro:
+  class Declaring(BaseBro):
+    name = 'declaring'
+    description = 'd'
+    tools: ClassVar = list(layers)
+
+    def __init__(self):
+      super().__init__(system_prompt='')
+
+  return Declaring()
+
+
 class TestRideSessionLaunch:
   def test_basic_shape(self):
     launch = _ride_session_launch(_spec(), claude_args=['--foo'])
@@ -58,101 +77,53 @@ class TestRideSessionLaunch:
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
     assert '--foo' in argv
 
-  def test_selected_tool_blocks_reach_disallowed_tools(self, monkeypatch):
-    from bro.base.condition import when
-    from bro.bro import BaseBro
-    from bro.mcp import block, harness
+  def test_tools_carry_the_allowlist_the_personas_reach_maps_to(self):
+    from bro.registry import create_bro
 
-    class BlockingBro(BaseBro):
-      name = 'blocking'
-      description = 'd'
-      tools: ClassVar = [when(harness == 'claude', block('Read', 'Write', 'Bash'))]
+    argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
+    assert _tools(argv) == list(native_tools.allowlist(create_bro('dev').reach()))
 
-      def __init__(self):
-        super().__init__(system_prompt='')
+  def test_a_persona_declaring_no_group_keeps_only_the_loop_tools(self, monkeypatch):
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring())
+    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv
+    assert _tools(argv) == list(native_tools.LOOP)
 
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
-    argv = _ride_session_launch(_spec(bro='blocking'), claude_args=[]).argv
-    assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Read,Write,Bash'
+  def test_read_only_files_withhold_the_writing_natives(self, monkeypatch):
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(files(write=False)))
+    tools = _tools(_ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv)
+    assert set(native_tools.READ) <= set(tools)
+    assert set(native_tools.WRITE).isdisjoint(tools)
 
-  def test_narrowed_tool_is_served_and_gated_by_a_hook(self, monkeypatch):
-    from bro.base.condition import when
-    from bro.bro import BaseBro
-    from bro.mcp import allow_commands, block, harness
-
-    class WatchingBro(BaseBro):
-      name = 'watching'
-      description = 'd'
-      tools: ClassVar = [
-        when(harness == 'claude', block('Bash', 'Monitor')),
-        when(harness == 'claude', allow_commands('Monitor', 'quest watch')),
-      ]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: WatchingBro())
-    argv = _ride_session_launch(_spec(bro='watching'), claude_args=[]).argv
-    assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*,Bash'
-    (entry,) = _settings(argv)['hooks']['PreToolUse']
-    assert entry['matcher'] == 'Monitor'
-    (hook,) = entry['hooks']
-    assert hook['type'] == 'command'
-    assert shlex.split(hook['command']) == [
-      sys.executable,
-      '-m',
-      'ride.claude.watch_guard',
-      'Monitor',
-      'quest watch',
-    ]
-
-  def test_brash_list_gates_bash_and_monitor_and_returns_job_control(self, monkeypatch):
-    from bro.bro import BaseBro
-    from bro.harness import claude
-    from bro.mcp import brash
-
-    class ShellBro(BaseBro):
-      name = 'shell'
-      description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), brash('git status')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: ShellBro())
-    argv = _ride_session_launch(_spec(bro='shell'), claude_args=[]).argv
-    disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
-    assert set(claude.SHELL).isdisjoint(disallowed)
+  def test_a_finite_command_list_gates_bash_and_monitor(self, monkeypatch):
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
+    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv
+    assert set(native_tools.SHELL) <= set(_tools(argv))
     hooks = _settings(argv)['hooks']['PreToolUse']
     assert [entry['matcher'] for entry in hooks] == ['Bash', 'Monitor']
     for entry in hooks:
-      command = shlex.split(entry['hooks'][0]['command'])
-      assert command[-2:] == [entry['matcher'], 'git status']
+      (hook,) = entry['hooks']
+      assert hook['type'] == 'command'
+      assert shlex.split(hook['command']) == [
+        sys.executable,
+        '-m',
+        'ride.claude.watch_guard',
+        entry['matcher'],
+        'git status',
+      ]
 
-  def test_a_summoning_session_keeps_its_shell_blocked(self, monkeypatch):
-    from bro.bro import BaseBro
-    from bro.harness import claude
+  def test_a_summoning_session_without_brash_gets_no_shell(self, monkeypatch):
     from bro.summon import LAUNCH_ENV, encode_launch
 
-    class BlockingBro(BaseBro):
-      name = 'blocking'
-      description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL)]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring())
     monkeypatch.setenv(
       LAUNCH_ENV,
       encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
     )
-    argv = _ride_session_launch(_spec(bro='blocking'), claude_args=[]).argv
-    disallowed = argv[argv.index('--disallowed-tools') + 1].split(',')
-    assert set(claude.SHELL) <= set(disallowed)
+    argv = _ride_session_launch(_spec(bro='declaring'), claude_args=[]).argv
+    assert set(native_tools.SHELL).isdisjoint(_tools(argv))
     assert 'PreToolUse' not in _settings(argv)['hooks']
 
-  def test_no_narrowing_declares_no_tool_gate(self):
+  def test_an_unrestricted_shell_declares_no_tool_gate(self):
     assert (
       'PreToolUse' not in _settings(_ride_session_launch(_spec(), claude_args=[]).argv)['hooks']
     )
@@ -175,29 +146,19 @@ class TestRideSessionLaunch:
         ]
 
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch):
-    from bro.bro import BaseBro
-    from bro.harness import claude
     from bro.summon import LAUNCH_ENV, encode_launch
 
-    class BlockingBro(BaseBro):
-      name = 'blocking'
-      description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL)]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    monkeypatch.setattr('bro.registry.create_bro', lambda name: BlockingBro())
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
     monkeypatch.setenv(
       LAUNCH_ENV,
       encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
     )
     argv = _ride_session_launch(
-      _spec(bro='blocking', solo=True, hold='unattended', prompt='go'), claude_args=[]
+      _spec(bro='declaring', solo=True, hold='unattended', prompt='go'), claude_args=[]
     ).argv
 
     hooks = _settings(argv)['hooks']
-    assert 'PreToolUse' not in hooks
+    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash', 'Monitor']
     assert 'ride.claude.watch_waiter' in shlex.split(hooks['Stop'][0]['hooks'][0]['command'])
 
   def test_fast_mode_lands_in_settings(self):
@@ -237,12 +198,9 @@ class TestRideSessionLaunch:
       assert entry['headers'] == {'Authorization': 'Bearer tok'}
       assert entry['alwaysLoad'] is True
 
-  def test_ride_session_keeps_the_full_harness(self):
-    # no --strict-mcp-config / --allowed-tools: the persona namespaces mount on
-    # top of claude's own tools, not instead of them
+  def test_the_launch_config_is_the_sessions_only_mcp_source(self):
     argv = _ride_session_launch(_spec(bro='dev'), claude_args=[]).argv
-    assert '--strict-mcp-config' not in argv
-    assert '--allowed-tools' not in argv
+    assert '--strict-mcp-config' in argv
 
   def test_claude_args_precede_prompt_tail(self):
     argv = _ride_session_launch(_spec(prompt='go'), claude_args=['--x']).argv

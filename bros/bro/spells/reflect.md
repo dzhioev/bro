@@ -123,7 +123,7 @@ For each finding, name the one surface whose edit prevents the recurrence:
   or a procedure the run improvised that recurs often enough to deserve a spell that doesn't exist yet;
   a spell is a file under the owning bro package's `spells/` and an entry in the class's `spells` declaration
 - **the bro's declaration** — the roster and the reach the run had:
-  the `tools` / `data_sources` declarations on the bro's class, its `may_summon`, `extra_secrets`, and `features`, or a tool's description in the pack that owns it.
+  the `tools` declarations on the bro's class, its `may_summon`, `extra_secrets`, and `features`, or a tool's description in the pack that owns it.
   A tool's behavior is code and outside this loop;
   a tool the run lacked is mounted when it exists, and the text that leaned on it is edited to name the gap when it does not
 - **the launch scope** — what a launch adds to the declaration:

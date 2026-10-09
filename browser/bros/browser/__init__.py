@@ -1,8 +1,7 @@
 from bro import artifact_mcp
 from bro.datasources.current_time import CurrentTime
-from bro.harness import claude
 from bro.llm.llms import openai
-from bro.mcp import mount
+from bro.mcp import mount, source
 from bro.webview import mcp as webview_mcp
 from bros.bro import Bro
 from bros.browser import mcp
@@ -62,9 +61,8 @@ class Browser(Bro):
     mount(webview_mcp.toolset),
     mount(mcp.toolset),
     mount(artifact_mcp.toolset),
-    claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION, *claude.WEB),
+    source(CurrentTime()),
   ]
   llm_spec = openai.LLMSpec(reasoning_effort='medium')
-  data_sources = [CurrentTime()]
   spells = ('browse.md',)
   system_prompt = SYSTEM_PROMPT
