@@ -6,7 +6,7 @@ import pytest
 
 from bro.base.text_window import DEFAULT_LIMIT
 from bro.mcp import mount
-from bros.dev.mcp import (
+from bro.native.dev_mcp import (
   edit_file,
   glob,
   grep,

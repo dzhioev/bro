@@ -1,7 +1,6 @@
 import os
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
@@ -26,8 +25,9 @@ from bro.base.offload import off_loop
 from bro.brash import admit_exact
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
 from bro.datasources.base import DataSource
-from bro.datasources.man import ManPage, manual
-from bro.harness import Harness, get_harness, name_of
+from bro.datasources.file import FileSource
+from bro.datasources.man import manual
+from bro.harness import Harness, get_harness
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
@@ -606,12 +606,11 @@ def _build_service_server(
   # next to the `#tools` roster.
   from bro.summon import summoned
 
-  session_harness = harness if isinstance(harness, Harness) else get_harness(harness)
+  session_harness = _harness_object(harness)
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
   has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
   has_answer = has_broker and summoned() and session_harness.can_end_session()
-  selection = bro._selected_tools_for(harness)
-  has_watches = selection.brash_declared
+  brash = bro.reach().brash
   harness_tools = session_harness.own_tools(bro, live_run)
   harness_tool_names = tuple(tool.name for tool in harness_tools)
   duplicate_names = {
@@ -644,7 +643,7 @@ def _build_service_server(
         'quest_cancel',
       ]
     )
-  if has_watches:
+  if brash is not None:
     mounted.extend(['watch', 'unwatch'])
   mounted.extend(harness_tool_names)
   tool_universe = (*_CORE_SERVICE_TOOL_NAMES, *harness_tool_names)
@@ -669,12 +668,12 @@ def _build_service_server(
     tools.append(_quest_share_tool(variables))
     tools.append(_quest_list_tool(variables))
     tools.append(_quest_cancel_tool(variables))
-  if has_watches:
+  if brash is not None:
     tools.extend(
       _watch_tools(
         live_run=cast(Optional[WatchRun], live_run),
-        commands=selection.brash_commands,
-        unrestricted=selection.brash_unrestricted,
+        commands=brash.commands,
+        unrestricted=brash.unrestricted,
         variables=variables,
       )
     )
@@ -682,6 +681,22 @@ def _build_service_server(
   assert [tool.name for tool in tools] == mounted
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = tool_universe
+  return server
+
+
+def _harness_object(harness: Optional[mcp.HarnessLike]) -> Harness:
+  """the harness `harness` names, the bro harness for none."""
+  if isinstance(harness, Harness):
+    return harness
+  return get_harness('bro' if harness is None else harness)
+
+
+def _built(spec: mcp.MCPServerSpec) -> llm_mcp.MCPServer:
+  server = spec.build()
+  if server.namespace != spec.namespace:
+    raise ValueError(
+      f'a spec declared for namespace {spec.namespace!r} built a server for {server.namespace!r}'
+    )
   return server
 
 
@@ -715,107 +730,81 @@ def _component_optional_secrets(component: mcp.MCPServerSpec | DataSource) -> se
   return set(component.optional_secrets)
 
 
-_CLAUDE_COMMAND_TOOLS = ('Bash', 'Monitor')
-_CLAUDE_COMMAND_CONTROL = ('BashOutput', 'KillShell', 'TaskOutput', 'TaskStop')
-
-
-@dataclass(frozen=True)
-class _ToolSelection:
-  """what a bro's tool layers amount to on one harness."""
-
-  server_specs: list[mcp.MCPServerSpec]
-  blocked_tool_names: tuple[str, ...]
-  # native tool name -> the commands it may reach, for the harness to enforce
-  narrowed_tool_commands: dict[str, tuple[str, ...]]
-  brash_commands: tuple[str, ...]
-  brash_unrestricted: bool
-  brash_declared: bool
-
-
-def _fold_tool_layers(
-  layers: list[mcp.ToolLayer],
-  harness: mcp.HarnessLike,
-) -> _ToolSelection:
-  server_specs: list[mcp.MCPServerSpec] = []
-  blocked_names: list[str] = []
-  narrowed: dict[str, list[str]] = {}
-  handed_back: dict[str, str] = {}
-  declared_brash_commands: list[str] = []
-  brash_unrestricted = False
+def _reduce_class_entries(
+  class_name: str, layers: list[mcp.ToolLayer]
+) -> dict[mcp.ReachKey, mcp.ReachEntry]:
+  """one class's selected entries, reduced to one entry per key."""
+  reduced: dict[mcp.ReachKey, mcp.ReachEntry] = {}
   for layer in layers:
-    server_specs.extend(layer.server_specs)
-    native = (
-      layer.blocked_native_tool_names
-      + layer.served_native_tool_names
-      + tuple(name for name, _ in layer.native_tool_commands)
-    )
-    if len(native) > 0 and name_of(harness) != 'claude':
-      raise ValueError(
-        f'cannot declare native tools {native!r} on the {name_of(harness)!r} harness; '
-        'it serves only the tools the bro declares'
-      )
-    blocked_names.extend(layer.blocked_native_tool_names)
-    for name, command in layer.native_tool_commands:
-      narrowed.setdefault(name, []).append(command)
-      handed_back[name] = 'narrowed to specific commands'
-    for name in layer.served_native_tool_names:
-      handed_back[name] = 'served whole'
-    for command in layer.brash_commands:
-      if command is mcp.ANY:
-        brash_unrestricted = True
-      else:
-        assert isinstance(command, str)
-        declared_brash_commands.append(command)
+    for entry in layer.reach_entries:
+      current = reduced.get(entry.key)
+      if current is None:
+        reduced[entry.key] = entry
+        continue
+      merged = current.merge(entry)
+      if merged is None:
+        raise ValueError(
+          f'{class_name}.tools declares {current} and {entry} under one key ({entry.key}); '
+          'they do not reduce to one entry, and list order does not decide between them'
+        )
+      reduced[entry.key] = merged
+  return reduced
 
-  brash_commands = list(dict.fromkeys(declared_brash_commands))
-  brash_declared = brash_unrestricted or len(brash_commands) > 0
-  if name_of(harness) == 'claude' and len(brash_commands) > 0 and not brash_unrestricted:
-    for name in _CLAUDE_COMMAND_TOOLS:
-      narrowed.setdefault(name, []).extend(brash_commands)
-      handed_back[name] = 'narrowed through the brash command list'
-    for name in _CLAUDE_COMMAND_CONTROL:
-      handed_back[name] = 'served as shell job control'
 
-  blocked = dict.fromkeys(blocked_names)
-  for name, form in handed_back.items():
-    # a tool handed back is one the harness serves, so it leaves the block set
-    if name not in blocked:
-      raise ValueError(
-        f'{name} is {form} but never blocked; handing a native tool back means '
-        'nothing where the bro does not withhold it'
-      )
-    del blocked[name]
-
-  return _ToolSelection(
-    server_specs=server_specs,
-    blocked_tool_names=tuple(blocked),
-    narrowed_tool_commands={
-      name: tuple(dict.fromkeys(commands)) for name, commands in narrowed.items()
-    },
-    brash_commands=tuple(brash_commands),
-    brash_unrestricted=brash_unrestricted,
-    brash_declared=brash_declared,
+def _fold_reach(declarations: list[tuple[str, list[mcp.ToolLayer]]]) -> mcp.Reach:
+  """the reach `declarations` amount to: each declaring class's name and its
+  selected layers, nearest class first, as the MRO lists them. The first class
+  that declares a key decides it."""
+  decided: dict[mcp.ReachKey, mcp.ReachEntry] = {}
+  for class_name, layers in declarations:
+    for key, entry in _reduce_class_entries(class_name, layers).items():
+      decided.setdefault(key, entry)
+  # keys keep the order a base-to-derived reading first declares them in
+  order = dict.fromkeys(
+    entry.key
+    for _, layers in reversed(declarations)
+    for layer in layers
+    for entry in layer.reach_entries
+  )
+  groups: dict[str, mcp.ReachEntry] = {}
+  server_specs: list[mcp.MCPServerSpec] = []
+  sources: list[Optional[DataSource]] = []
+  pages: list[FileSource] = []
+  for key in order:
+    entry = decided[key]
+    if isinstance(entry, mcp.Files | mcp.Brash | mcp.Web | mcp.Delegation):
+      groups[key.name] = entry
+    elif isinstance(entry, mcp.Mount | mcp.Cli | mcp.Server):
+      server_specs.append(entry.spec)
+    elif isinstance(entry, mcp.Source):
+      sources.append(entry.source)
+    elif isinstance(entry, mcp.Man):
+      # the pages amount to one manual, mounted where the first of them was
+      # declared: a namespace is one server, so pages from several classes
+      # share a single `read` tool
+      if len(pages) == 0:
+        sources.append(None)
+      pages.append(entry.page)
+    elif not isinstance(entry, mcp.Revoked):
+      raise TypeError(f'unknown reach entry {entry!r}')
+  return mcp.Reach(
+    files=cast(Optional[mcp.Files], groups.get('files')),
+    brash=cast(Optional[mcp.Brash], groups.get('brash')),
+    web=cast(Optional[mcp.Web], groups.get('web')),
+    delegation=cast(Optional[mcp.Delegation], groups.get('delegation')),
+    server_specs=tuple(server_specs),
+    sources=tuple(manual(pages) if entry is None else entry for entry in sources),
   )
 
 
-def _fold_man_pages(entries: list[DataSource | ManPage]) -> list[DataSource]:
-  # the declared pages amount to one manual, mounted where the first of them was
-  # declared — a namespace is one server, so a hierarchy contributing pages from
-  # several classes still serves a single `read` tool over all of them.
-  pages = [entry for entry in entries if isinstance(entry, ManPage)]
-  sources: list[DataSource] = []
-  folded = False
-  for entry in entries:
-    if not isinstance(entry, ManPage):
-      sources.append(entry)
-    elif not folded:
-      sources.append(manual(pages))
-      folded = True
-  return sources
-
-
-_COMPONENT_DECLARATION_ATTRIBUTES = frozenset({'data_sources', 'tools'})
-_RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {'mcp_servers': 'tools'}
+# attributes that once held component declarations -> the guidance for each
+_RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {
+  'mcp_servers': "'mcp_servers' was renamed to 'tools'",
+  'data_sources': (
+    "'data_sources' folded into 'tools': declare a data source as source(...) and a "
+    "reference page as man('<topic>')"
+  ),
+}
 
 
 def _gate_credential(gate: Condition | bool) -> Optional[str]:
@@ -856,31 +845,45 @@ def _declared_components(entries: Iterable[Entry[Any]], declaration: str) -> lis
   return components
 
 
-def _validate_component_credentials(entries: Iterable[Entry[Any]], declaration: str) -> None:
+def _entry_secrets(entry: mcp.ReachEntry) -> Optional[tuple[str, tuple[str, ...], tuple[str, ...]]]:
+  """what an entry's manifest names, its needed and its optional credentials; None
+  for an entry that mounts nothing."""
+  if isinstance(entry, mcp.Mount | mcp.Cli | mcp.Server):
+    spec = entry.spec
+    return f'MCP server {spec.namespace!r}', spec.needed_secrets, spec.optional_secrets
+  if isinstance(entry, mcp.Source):
+    component = entry.source
+  elif isinstance(entry, mcp.Man):
+    component = entry.page
+  else:
+    return None
+  return type(component).__name__, component.needed_secrets, component.optional_secrets
+
+
+def _validate_tool_declarations(entries: Iterable[Entry[Any]], declaration: str) -> None:
   for component, component_declaration in _declared_components(entries, declaration):
-    if isinstance(component, mcp.ToolLayer):
-      for spec_index, spec in enumerate(component.server_specs):
-        manifest = f'{component_declaration} MCP server {spec_index}'
-        for name in spec.needed_secrets:
-          credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
-        for name in spec.optional_secrets:
-          credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
-    elif isinstance(component, DataSource):
-      manifest = f'{component_declaration} {type(component).__name__}'
-      for name in component.needed_secrets:
-        credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
-      for name in component.optional_secrets:
-        credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
-    elif isinstance(component, ManPage):
-      manifest = f'{component_declaration} {type(component.page).__name__}'
-      for name in component.page.needed_secrets:
-        credentials.require_kind_declaration(name, f'{manifest}.needed_secrets')
-      for name in component.page.optional_secrets:
-        credentials.require_kind_declaration(name, f'{manifest}.optional_secrets')
+    if isinstance(component, DataSource):
+      raise TypeError(
+        f'{component_declaration} is a data source; declare it as source(...) in tools'
+      )
+    if not isinstance(component, mcp.ToolLayer):
+      raise TypeError(f'{component_declaration} is {component!r}, not a ToolLayer')
+    for entry in component.reach_entries:
+      secrets = _entry_secrets(entry)
+      if secrets is None:
+        continue
+      manifest, needed, optional = secrets
+      for name in needed:
+        credentials.require_kind_declaration(
+          name, f'{component_declaration} {manifest}.needed_secrets'
+        )
+      for name in optional:
+        credentials.require_kind_declaration(
+          name, f'{component_declaration} {manifest}.optional_secrets'
+        )
 
 
-def _component_destinations(value: object) -> set[str]:
-  destinations: set[str] = set()
+def _declares_components(value: object) -> bool:
   entries = value if isinstance(value, list) else (value,)
   for entry in entries:
     if isinstance(entry, When):
@@ -889,26 +892,21 @@ def _component_destinations(value: object) -> set[str]:
       components = tuple(item for _, item in entry.branches) + (entry.otherwise or ())
     else:
       components = (entry,)
-    for component in components:
-      if isinstance(component, mcp.ToolLayer):
-        destinations.add('tools')
-      elif isinstance(component, DataSource | ManPage):
-        destinations.add('data_sources')
-  return destinations
+    if any(isinstance(component, mcp.ToolLayer | DataSource) for component in components):
+      return True
+  return False
 
 
 class BaseBro(ABC):
   name: str
   description: str
   llm_spec: NativeLLMSpec = DEFAULT_LLM_SPEC
-  # entries may be wrapped with `bro.base.condition.when(...)` / grouped with
-  # `iff(...)` to gate them on the assembling surface's facts (`#harness`,
-  # `#creds`); a wrapped entry whose condition does not hold is omitted before
-  # the declaration is applied. each `tools` layer mounts server specs, blocks
-  # harness-native tools, or does both; data sources remain a separate read-only
-  # contract, one entry per source — or per reference page (`man('<topic>')`),
-  # which fold into a single manual.
-  data_sources: ClassVar[list[Entry[DataSource | ManPage]]] = []
+  # the bro's tool reach: tool groups, mounts, `cli` tools, data sources, and
+  # reference pages, each entry keyed by its kind and a name. entries may be
+  # wrapped with `bro.base.condition.when(...)` / grouped with `iff(...)` to gate
+  # them on `#creds` and `#features`; a wrapped entry whose condition does not
+  # hold is omitted before keys resolve. each key resolves along the MRO to the
+  # first class declaring it (`_fold_reach`).
   tools: ClassVar[list[Entry[mcp.ToolLayer]]] = []
   # named optional capabilities: feature name → the gate deciding whether the
   # feature is on — a `Condition` over the environment's resolvable credentials
@@ -919,17 +917,16 @@ class BaseBro(ABC):
   # enters the manifest, mounts, and renders its text only where its gates
   # resolve. the credential a `creds.contains(<kind>)` gate probes is the
   # feature's own, tiered with it: in `optional_secrets()` while gated, in
-  # `needed_secrets()` once pinned on. MRO-walked like `tools`, with derived
-  # classes overriding parents per name — `{'<name>': True}` pins an inherited
+  # `needed_secrets()` once pinned on. MRO-walked, with derived classes
+  # overriding parents per name — `{'<name>': True}` pins an inherited
   # feature on, turning its components and that credential into hard
   # requirements. False is terminal: redeclaring a
   # feature a base class disabled fails construction, so an opt-out binds the
   # whole sub-hierarchy.
   features: ClassVar[dict[str, Condition | bool]] = {}
   # credentials no component expresses — the escape hatch for a bro's environment
-  # needs. MRO-walked and unioned like `tools`, so a subclass declares only
-  # what it adds. folded into
-  # `needed_secrets()`.
+  # needs. MRO-walked and unioned, so a subclass declares only what it adds.
+  # folded into `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
   # bros this bro may summon — the targets seeded into a session's launch section. root sessions get
   # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
@@ -948,15 +945,13 @@ class BaseBro(ABC):
   provisioning: tuple[ProvisionStep, ...] = ()
   # the bro's spells: markdown files named relative to the `spells/` directory
   # beside the declaring module, each served as `spell::<file stem>`.
-  # MRO-walked like `tools`, a derived class's file replacing a parent's of
-  # the same name.
+  # MRO-walked, a derived class's file replacing a parent's of the same name.
   spells: tuple[str, ...] = ()
   # subclasses declare their own `system_prompt = "..."` as a class attribute;
   # `__init__` walks the MRO from base to derived and concatenates each class's
   # own contribution. so a `ReviewDev(Dev)` subclass declares only what it adds —
-  # Dev's prompt (and Bro's) are picked up automatically. same for `tools` and
-  # `data_sources`. inherit directly from BaseBro to opt out
-  # of the concrete `Bro`'s shared defaults.
+  # Dev's prompt (and Bro's) are picked up automatically. inherit directly from
+  # BaseBro to opt out of the concrete `Bro`'s shared defaults.
   system_prompt: str = ''
   # the bro's own class prompts (MRO-concatenated); set in __init__
   persona: str
@@ -964,24 +959,19 @@ class BaseBro(ABC):
   def __init_subclass__(cls, **kwargs: Any) -> None:
     super().__init_subclass__(**kwargs)
     for attribute_name, value in vars(cls).items():
-      if attribute_name in _COMPONENT_DECLARATION_ATTRIBUTES:
+      if attribute_name == 'tools' or not _declares_components(value):
         continue
-      component_destinations = _component_destinations(value)
-      if len(component_destinations) == 0:
-        continue
-      destination_text = ' or '.join(repr(name) for name in sorted(component_destinations))
       message = (
         f'{cls.__name__}.{attribute_name} contains component declarations under an attribute '
-        f'BaseBro does not read; move them to {destination_text}'
+        "BaseBro does not read; move them to 'tools'"
       )
-      retired_destination = _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES.get(attribute_name)
-      if retired_destination in component_destinations:
-        message += f'; {attribute_name!r} was renamed to {retired_destination!r}'
+      retired = _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES.get(attribute_name)
+      if retired is not None:
+        message += f'; {retired}'
       raise TypeError(message)
 
   def __init__(self, system_prompt: Optional[str] = None):
-    tool_entries: list[Entry[mcp.ToolLayer]] = []
-    data_source_entries: list[Entry[DataSource | ManPage]] = []
+    tool_declarations: list[tuple[str, list[Entry[mcp.ToolLayer]]]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
     may_summon_names: list[str] = []
@@ -993,12 +983,8 @@ class BaseBro(ABC):
     for cls in reversed(type(self).__mro__):
       raw_tools = cls.__dict__.get('tools')
       if raw_tools is not None:
-        _validate_component_credentials(raw_tools, f'{cls.__name__}.tools')
-        tool_entries.extend(raw_tools)
-      raw_sources = cls.__dict__.get('data_sources')
-      if raw_sources is not None:
-        _validate_component_credentials(raw_sources, f'{cls.__name__}.data_sources')
-        data_source_entries.extend(raw_sources)
+        _validate_tool_declarations(raw_tools, f'{cls.__name__}.tools')
+        tool_declarations.insert(0, (cls.__name__, list(raw_tools)))
       raw_prompt = cls.__dict__.get('system_prompt')
       if isinstance(raw_prompt, str) and len(raw_prompt) > 0:
         prompt_parts.append(raw_prompt)
@@ -1053,9 +1039,9 @@ class BaseBro(ABC):
     # the membership probe is lazy, so the vocabulary built here stays current
     # with the store — only selection (below) bakes feature truth in.
     self._feature_vocabulary: Variables = _feature_variables(feature_gates)
-    self._tool_entries = tool_entries
-    self._data_source_entries = data_source_entries
-    self._live_mcp: Optional[list[llm_mcp.MCPServer]] = None
+    self._tool_declarations = tool_declarations
+    # harness name -> the live servers built for it
+    self._live_mcp: dict[str, list[llm_mcp.MCPServer]] = {}
     self._system_prompt_override: Optional[str] = None
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
@@ -1070,19 +1056,17 @@ class BaseBro(ABC):
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
-    from bro.harness import get_harness, installed_harness_names
+    # a declaration whose entries do not fold fails here, not at first use
+    self.reach()
+    from bro.harness import installed_harness_names
 
     if 'bro' in installed_harness_names():
-      native_harness = get_harness('bro')
-      self._mcp_specs, self._data_sources = self._components_for(native_harness)
-      self.system_prompt = self._composed_prompt(native_harness)
+      self.system_prompt = self._composed_prompt(get_harness('bro'))
     else:
-      self._mcp_specs = []
-      self._data_sources = []
       self.system_prompt = ''
 
   def _composed_prompt(self, harness: mcp.HarnessLike) -> str:
-    _, data_sources = self._components_for(harness)
+    data_sources = list(self.reach().sources)
     parts = []
     shared = _load_shared_prompts()
     if len(shared) > 0:
@@ -1161,37 +1145,23 @@ class BaseBro(ABC):
       return ''
     return _render_spells(include_cast=spell_store.cast_available())
 
-  def _selected_tools_for(self, harness: mcp.HarnessLike) -> '_ToolSelection':
-    selected: list[mcp.ToolLayer] = mcp.select(
-      self._tool_entries,
-      harness=harness,
-      creds=credentials.known_names(),
-      extra=self._feature_vocabulary,
+  def reach(self) -> mcp.Reach:
+    """the harness-neutral tool reach this declaration folds to in this
+    environment: each class's entries selected on `#creds` and `#features`,
+    then each key resolved along the MRO."""
+    known = credentials.known_names()
+    return _fold_reach(
+      [
+        (class_name, mcp.select(entries, creds=known, extra=self._feature_vocabulary))
+        for class_name, entries in self._tool_declarations
+      ]
     )
-    return _fold_tool_layers(selected, harness)
 
-  def blocked_tool_names(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
-    """harness-native tool names blocked by this bro's selected layers."""
-    return self._selected_tools_for(harness).blocked_tool_names
-
-  def narrowed_tool_commands(self, harness: mcp.HarnessLike) -> dict[str, tuple[str, ...]]:
-    """harness-native tool name -> the commands this bro's selected layers narrow
-    it to; the harness rejects every other command the tool is called with."""
-    return self._selected_tools_for(harness).narrowed_tool_commands
-
-  def _components_for(
-    self, harness: mcp.HarnessLike
-  ) -> tuple[list[mcp.MCPServerSpec], list[DataSource]]:
-    specs = self._selected_tools_for(harness).server_specs
-    sources = _fold_man_pages(
-      mcp.select(
-        self._data_source_entries,
-        harness=harness,
-        creds=credentials.known_names(),
-        extra=self._feature_vocabulary,
-      )
-    )
-    return specs, sources
+  def _components_for(self, harness: Harness) -> tuple[list[mcp.MCPServerSpec], list[DataSource]]:
+    """the servers and data sources `harness` mounts for this bro: those its
+    reach declares, after the ones the harness serves the reach's groups with."""
+    reach = self.reach()
+    return [*harness.serve(reach).server_specs, *reach.server_specs], list(reach.sources)
 
   def _feature_secrets(self, *, pinned: bool) -> set[str]:
     return {
@@ -1211,11 +1181,7 @@ class BaseBro(ABC):
     # own auth, not the bro's spec. the host hydrates the
     # per-surface set into a scoped store; a secret used but not declared
     # surfaces as SecretNotFound — an under-declaration to fix.
-    if harness is None:
-      from bro.harness import get_harness
-
-      harness = get_harness('bro')
-    specs, sources = self._components_for(harness)
+    specs, sources = self._components_for(_harness_object(harness))
     names: set[str] = set()
     for spec in specs:
       names.update(_component_needed_secrets(spec))
@@ -1232,11 +1198,7 @@ class BaseBro(ABC):
     # features and the cast key when this bro has spells. minus anything
     # already required — a hard requirement is never downgraded. an unpicked
     # optional empty instance may be absent without failing a managed launch.
-    if harness is None:
-      from bro.harness import get_harness
-
-      harness = get_harness('bro')
-    specs, sources = self._components_for(harness)
+    specs, sources = self._components_for(_harness_object(harness))
     names: set[str] = set()
     for spec in specs:
       names.update(_component_optional_secrets(spec))
@@ -1276,25 +1238,22 @@ class BaseBro(ABC):
 
   def _live_mcp_servers(self, harness: Optional[mcp.HarnessLike] = None) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
-    # post-secrets — and are built once: a live server may hold real resources
-    # and every run through this bro reuses the same set.
-    if harness is None:
-      from bro.harness import get_harness
-
-      harness = get_harness('bro')
-    if self._live_mcp is None:
-      specs, sources = self._components_for(harness)
-      self._live_mcp = [spec.build() for spec in specs]
-      self._live_mcp.extend(source.as_mcp_server() for source in sources)
-    return self._live_mcp
+    # post-secrets — and are built once per harness: a live server may hold real
+    # resources and every run through this bro on one harness reuses the same set.
+    session_harness = _harness_object(harness)
+    servers = self._live_mcp.get(session_harness.name)
+    if servers is None:
+      specs, sources = self._components_for(session_harness)
+      servers = [_built(spec) for spec in specs]
+      servers.extend(source.as_mcp_server() for source in sources)
+      self._live_mcp[session_harness.name] = servers
+    return servers
 
   def close(self) -> None:
     """release the live MCP servers this bro materialized; a bro whose tools were
     never used holds none. Best-effort: a failing teardown must not mask the
     outcome of whatever ran the bro."""
-    if self._live_mcp is None:
-      return
-    for server in self._live_mcp:
+    for server in (server for servers in self._live_mcp.values() for server in servers):
       try:
         server.close()
       except Exception as error:
@@ -1308,12 +1267,7 @@ class BaseBro(ABC):
     live_run: Optional[LiveRun] = None,
   ) -> list[llm_mcp.MCPServer]:
     """materialize this declaration for one consuming surface."""
-    if name_of(harness) == 'bro':
-      servers = list(self._live_mcp_servers(harness))
-    else:
-      specs, sources = self._components_for(harness)
-      servers = [spec.build() for spec in specs]
-      servers.extend(source.as_mcp_server() for source in sources)
+    servers = list(self._live_mcp_servers(harness))
     servers.append(
       _build_service_server(self, include_raise=include_raise, harness=harness, live_run=live_run)
     )
@@ -1326,12 +1280,7 @@ class BaseBro(ABC):
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
     # (the level files are documented in prompts/AGENTS.md).
-    from bro.harness import get_harness
-
-    if harness is None:
-      harness = get_harness('bro')
-    elif not isinstance(harness, Harness):
-      harness = get_harness(harness)
+    harness = _harness_object(harness)
     fragment = session_fragment(
       hold,
       harness=harness,

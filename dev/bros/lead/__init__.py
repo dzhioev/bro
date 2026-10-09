@@ -1,7 +1,5 @@
 import bro.brog.mcp as brog_mcp
-from bro.datasources.references import man
-from bro.harness import claude
-from bro.mcp import cli, mount
+from bro.mcp import cli, man, mount
 from bros.bro import Bro
 
 SYSTEM_PROMPT = """\
@@ -52,7 +50,6 @@ class Lead(Bro):
   description = 'coordinator that drives multi-stage work by handing it to other bros'
   tools = [
     mount(brog_mcp.toolset),
-    claude.block(*claude.FILES, *claude.SHELL, *claude.DELEGATION),
     cli('bro list'),
     cli('bro show', 'name'),
     cli('rewind list', 'harness', 'bro', 'since', 'until', 'forked_from', 'limit'),
@@ -70,8 +67,6 @@ class Lead(Bro):
       'limit',
     ),
     cli('rewind tree', 'trail_id'),
-  ]
-  data_sources = [
     man('environment'),
     man('dive-in'),
     man('ride'),

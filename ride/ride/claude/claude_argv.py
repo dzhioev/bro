@@ -1,11 +1,11 @@
 """the claude argv for a `ride solo|along` session.
 
-Every session runs the full Claude Code harness with the ride-injected append
-prompt and its bro's session-local MCP namespaces mounted. Model, the merged
-`--settings` (fastMode + statusLine + attribution), `--effort`, the forwarded
-claude args, and prompt seeding are handled once, identically wherever the
-session runs. Model, effort and fast mode come off the session's claude-code
-`LLMSpec` (`SessionRun.llm_spec`).
+Every session runs Claude Code with the natives its bro's reach maps to, the
+ride-injected append prompt, and its bro's session-local MCP namespaces mounted
+as its only MCP servers. Model, the merged `--settings` (fastMode + statusLine +
+attribution + hooks), `--effort`, the forwarded claude args, and prompt seeding
+are handled once, identically wherever the session runs. Model, effort and fast
+mode come off the session's claude-code `LLMSpec` (`SessionRun.llm_spec`).
 """
 
 import contextlib
@@ -15,8 +15,10 @@ import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
+from bro.mcp import Reach
+from ride.claude import native_tools
 from ride.claude.assembly import persona_servers
-from ride.claude.harness import CLAUDE, llm_spec
+from ride.claude.harness import llm_spec
 from ride.claude.mcp import MCPEndpoint, http_mcp_config
 from ride.claude.statusline import REFRESH_SECONDS, statusline_command
 from ride.claude.system_prompt import session_append_prompt
@@ -40,8 +42,8 @@ def _settings_command(module: str, *args: str) -> str:
   return shlex.join([sys.executable, '-m', module, *args])
 
 
-def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
-  """the `hooks` settings block gating each narrowed native tool to its commands."""
+def _tool_gate_hooks(gated: dict[str, tuple[str, ...]]) -> dict:
+  """the `hooks` settings block gating each command tool to its commands."""
   return {
     'PreToolUse': [
       {
@@ -53,9 +55,22 @@ def _tool_gate_hooks(narrowed: dict[str, tuple[str, ...]]) -> dict:
           }
         ],
       }
-      for tool, commands in narrowed.items()
+      for tool, commands in gated.items()
     ]
   }
+
+
+def reach_arguments(reach: Reach) -> list[str]:
+  """the arguments holding a session to `reach`: exactly its natives, and no MCP
+  server beyond the `--mcp-config` the launch passes."""
+  return [
+    '--tools',
+    ','.join(native_tools.allowlist(reach)),
+    '--strict-mcp-config',
+    # claude.ai connectors reach a session through the account, not the config
+    '--disallowed-tools',
+    'mcp__claude_ai_*',
+  ]
 
 
 WAITER_TIMEOUT_SECONDS = 24 * 60 * 60
@@ -139,16 +154,15 @@ def build_claude_launch(
     for server in servers:
       server_stack.callback(server.close)
     namespaces = list(dict.fromkeys(server.namespace for server in servers))
-  blocked_tool_names = bro.blocked_tool_names(CLAUDE)
-  narrowed_tool_commands = bro.narrowed_tool_commands(CLAUDE)
+  reach = bro.reach()
+  gated = native_tools.command_gate(reach)
   hooks = watch_waiter_hooks()
-  if len(narrowed_tool_commands) > 0:
-    hooks.update(_tool_gate_hooks(narrowed_tool_commands))
+  if len(gated) > 0:
+    hooks.update(_tool_gate_hooks(gated))
   settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   argv += [
-    '--disallowed-tools',
-    ','.join(('mcp__claude_ai_*', *blocked_tool_names)),
+    *reach_arguments(reach),
     '--settings',
     json.dumps(settings, separators=(',', ':')),
     '--mcp-config',

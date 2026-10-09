@@ -7,7 +7,7 @@ from starlette.testclient import TestClient
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
-from bro.mcp import MCPServerSpec, ToolLayer, Toolset, describe
+from bro.mcp import MCPServerSpec, ToolLayer, Toolset, describe, source
 from bro.runtime import mcp_server
 from bro.runtime.mcp_server import _resolve_servers, create_http_app
 
@@ -58,8 +58,10 @@ def _resolve_ping_target(value: str) -> list[MCPServer]:
 class _ShimBro(BaseBro):
   name = 'shim-test'
   description = 'composes a ping server and a data source'
-  data_sources: ClassVar = [_NoopSource()]
-  tools: ClassVar = [ToolLayer(server_specs=(MCPServerSpec(build=_create_ping_server),))]
+  tools: ClassVar = [
+    source(_NoopSource()),
+    ToolLayer(server_specs=(MCPServerSpec(namespace='ping', build=_create_ping_server),)),
+  ]
 
   def __init__(self):
     super().__init__(system_prompt='test')
@@ -79,7 +81,7 @@ class _SecondSource(SearchableDataSource):
 class _TwoSourceBro(BaseBro):
   name = 'two-source'
   description = 'two searchable sources that both expose search/fetch'
-  data_sources: ClassVar = [_NoopSource(), _SecondSource()]
+  tools: ClassVar = [source(_NoopSource()), source(_SecondSource())]
 
   def __init__(self):
     super().__init__(system_prompt='test')

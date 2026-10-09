@@ -12,7 +12,7 @@ from bro.bro import feature
 from bro.datasources.web_search import WebSearch
 from bro.harness import Harness
 from bro.llm.mcp import InProcessMCPServer
-from bro.mcp import MCPServerSpec, ToolLayer, creds
+from bro.mcp import MCPServerSpec, ToolLayer, creds, source
 from bros.bro import Bro
 from ride.harness import get_harness
 from ride.scope import ScopeRecipe
@@ -34,7 +34,7 @@ CLAUDE_RECIPE = ScopeRecipe(
 class SearchBro(Bro):
   name = 'scope-search'
   description = 'searchable bro for launch scope tests'
-  data_sources: ClassVar = [WebSearch()]
+  tools: ClassVar = [source(WebSearch())]
   extra_secrets = ('catalog',)
 
 
@@ -50,7 +50,7 @@ class GatedBro(Bro):
   description = 'feature-gated bro for launch scope tests'
   features: ClassVar = {'x': creds.contains('gate')}
   tools: ClassVar = [
-    when(feature('x'), ToolLayer(server_specs=(MCPServerSpec.of(_PayloadServer),)))
+    when(feature('x'), ToolLayer(server_specs=(MCPServerSpec.of('payload-srv', _PayloadServer),)))
   ]
 
 

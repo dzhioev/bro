@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from bro import mcp, registry
@@ -162,62 +164,48 @@ class TestRenderText:
       render_text('{{include ../AGENTS.md}}', harness='bro')
 
 
+def _toolset(namespace: str, *tool_names: str) -> mcp.Toolset:
+  toolset = mcp.Toolset(namespace)
+  for name in tool_names:
+
+    def tool() -> str:
+      return 'ok'
+
+    tool.__name__ = name
+    toolset.tool(f'{name} tool')(tool)
+  return toolset
+
+
 class TestToolLayer:
-  @pytest.mark.parametrize(
-    ('tool_names', 'error_type', 'message'),
-    [
-      (
-        (),
-        ValueError,
-        'must mount a server, block or narrow a native tool, serve one, or declare shell commands',
-      ),
-      (('',), TypeError, 'non-empty strings'),
-      (('Read', 'Read'), ValueError, 'duplicate names'),
-    ],
-  )
-  def test_block_rejects_invalid_declarations(self, tool_names, error_type, message):
-    with pytest.raises(error_type, match=message):
-      mcp.block(*tool_names)
-
-  def test_allow_commands_pairs_each_command_with_its_tool(self):
-    layer = mcp.allow_commands('Monitor', 'watch one', 'watch two')
-    assert layer.native_tool_commands == (('Monitor', 'watch one'), ('Monitor', 'watch two'))
-    assert layer.blocked_native_tool_names == ()
-
-  @pytest.mark.parametrize(
-    ('commands', 'error_type', 'message'),
-    [
-      ((), ValueError, 'needs at least one command'),
-      (('',), TypeError, 'non-empty \\(name, command\\) pairs'),
-    ],
-  )
-  def test_allow_commands_rejects_invalid_declarations(self, commands, error_type, message):
-    with pytest.raises(error_type, match=message):
-      mcp.allow_commands('Monitor', *commands)
-
-  @pytest.mark.parametrize(
-    ('tool_names', 'error_type', 'message'),
-    [
-      ((), ValueError, 'needs at least one tool name'),
-      (('',), TypeError, 'non-empty strings'),
-      (('TaskStop', 'TaskStop'), ValueError, 'duplicate names'),
-    ],
-  )
-  def test_serve_rejects_invalid_declarations(self, tool_names, error_type, message):
-    with pytest.raises(error_type, match=message):
-      mcp.serve(*tool_names)
+  def test_a_layer_declares_something(self):
+    with pytest.raises(ValueError, match='must declare a server or a reach entry'):
+      mcp.ToolLayer()
 
   def test_layers_merge_into_one(self):
-    layer = mcp.allow_commands('Monitor', 'watch it') | mcp.serve('TaskStop')
-    assert layer.native_tool_commands == (('Monitor', 'watch it'),)
-    assert layer.served_native_tool_names == ('TaskStop',)
+    layer = mcp.files() | mcp.web()
+    assert [entry.key.name for entry in layer.reach_entries] == ['files', 'web']
+
+  def test_a_raw_spec_is_keyed_by_the_namespace_it_serves(self):
+    spec = mcp.MCPServerSpec(namespace='raw', build=lambda: InProcessMCPServer('raw', []))
+    [entry] = mcp.ToolLayer(server_specs=(spec,)).reach_entries
+    assert entry.key == mcp.ReachKey('server', 'raw')
+
+  def test_a_spec_namespace_is_a_wire_segment(self):
+    with pytest.raises(ValueError, match='double underscore'):
+      mcp.MCPServerSpec(namespace='a__b', build=lambda: InProcessMCPServer('a__b', []))
+
+  def test_entries_of_different_kinds_never_share_a_key(self):
+    keys = [
+      entry.key
+      for layer in (mcp.mount(_toolset('man', 'read')), mcp.man('ride'), mcp.cli('bro list'))
+      for entry in layer.reach_entries
+    ]
+    assert len(set(keys)) == len(keys)
 
   def test_brash_declares_quote_aware_command_patterns_or_any(self):
-    assert mcp.brash(' git log ... ', "grep -E 'a*b' ...").brash_commands == (
-      'git log ...',
-      "grep -E 'a*b' ...",
-    )
-    assert mcp.brash(mcp.ANY).brash_commands == (mcp.ANY,)
+    [entry] = mcp.brash(' git log ... ', "grep -E 'a*b' ...").entries
+    assert entry == mcp.Brash(commands=('git log ...', "grep -E 'a*b' ..."))
+    assert mcp.brash(mcp.ANY).entries == (mcp.Brash(unrestricted=True),)
 
   @pytest.mark.parametrize(
     ('commands', 'error_type', 'message'),
@@ -232,20 +220,93 @@ class TestToolLayer:
     with pytest.raises(error_type, match=message):
       mcp.brash(*commands)
 
-  def test_mount_selects_from_one_toolset_type(self):
-    toolset = mcp.Toolset('layer')
+  def test_mount_resolves_its_subset_at_declaration(self):
+    toolset = _toolset('layer', 'read', 'write')
+    assert mcp.mount(toolset).entries == (mcp.Mount(toolset, ('read', 'write')),)
+    assert mcp.mount(toolset, 'read').entries == (mcp.Mount(toolset, ('read',)),)
+    with pytest.raises(ValueError, match='unknown layer tools'):
+      mcp.mount(toolset, 'nope')
 
-    @toolset.tool('read')
-    def read() -> str:
-      return 'read'
+  def test_cli_is_keyed_by_its_generated_tool_name(self):
+    [entry] = mcp.cli('rewind show', 'trail_id').entries
+    assert isinstance(entry, mcp.Cli)
+    assert entry.key == mcp.ReachKey('cli', 'rewind_show')
+    assert entry.spec.namespace == 'cli'
 
-    full = mcp.mount(toolset)
-    selected = mcp.mount(toolset, 'read')
+  def test_source_requires_a_data_source(self):
+    with pytest.raises(TypeError, match='requires a DataSource'):
+      mcp.source('dev-style')  # type: ignore[arg-type]
 
-    assert isinstance(full, mcp.ToolLayer)
-    assert isinstance(selected, mcp.ToolLayer)
-    assert len(full.server_specs) == 1
-    assert len(selected.server_specs) == 1
+  def test_man_resolves_its_topic_at_declaration(self):
+    [entry] = mcp.man('Dive-In').entries
+    assert entry.key == mcp.ReachKey('man', 'dive-in')
+    with pytest.raises(LookupError, match='dive-in'):
+      mcp.man('no-such-topic')
+
+  def test_revoke_withholds_the_keys_it_wraps_whatever_their_level(self):
+    toolset = _toolset('pack', 'read', 'write')
+    layer = mcp.revoke(mcp.files(write=False), mcp.mount(toolset, 'read'), mcp.cli('bro list'))
+    assert [entry.key for entry in layer.reach_entries] == [
+      mcp.ReachKey('group', 'files'),
+      mcp.ReachKey('mount', 'pack'),
+      mcp.ReachKey('cli', 'bro_list'),
+    ]
+    assert all(isinstance(entry, mcp.Revoked) for entry in layer.reach_entries)
+
+
+class TestReduction:
+  def test_files_levels_reduce_to_the_wider(self):
+    narrow, wide = mcp.Files(write=False), mcp.Files()
+    assert narrow.merge(wide) == wide
+    assert wide.merge(narrow) == wide
+
+  def test_command_lists_reduce_to_their_union(self):
+    first = mcp.Brash(commands=('git log ...', 'gh pr view *'))
+    second = mcp.Brash(commands=('gh pr view *', 'rewind show *'))
+    assert first.merge(second) == mcp.Brash(
+      commands=('git log ...', 'gh pr view *', 'rewind show *')
+    )
+
+  def test_any_absorbs_a_command_list(self):
+    finite = mcp.Brash(commands=('git status',))
+    unrestricted = mcp.Brash(unrestricted=True)
+    assert finite.merge(unrestricted) == unrestricted
+    assert unrestricted.merge(finite) == unrestricted
+
+  def test_mounts_of_one_toolset_reduce_to_the_union_of_their_subsets(self):
+    toolset = _toolset('pack', 'read', 'write', 'grep')
+    merged = mcp.Mount(toolset, ('read', 'grep')).merge(mcp.Mount(toolset, ('write', 'read')))
+    assert merged == mcp.Mount(toolset, ('read', 'grep', 'write'))
+
+  def test_identical_entries_reduce_to_one(self):
+    assert mcp.Web().merge(mcp.Web()) == mcp.Web()
+    [first] = mcp.cli('bro show', 'name').entries
+    [second] = mcp.cli('bro show', 'name').entries
+    assert first.merge(second) == first
+
+  def test_a_revoke_beside_a_grant_is_refused(self):
+    [revoked] = mcp.revoke(mcp.delegation()).entries
+    assert revoked.merge(mcp.Delegation()) is None
+    assert mcp.Delegation().merge(revoked) is None
+
+  def test_two_toolsets_under_one_namespace_are_refused(self):
+    first, second = _toolset('pack', 'read'), _toolset('pack', 'read')
+    assert mcp.Mount(first, ('read',)).merge(mcp.Mount(second, ('read',))) is None
+
+  def test_two_different_sources_or_raw_specs_are_refused(self):
+    from bro.datasources.file import FileSource
+
+    page = FileSource('doc', summary='x', path=Path(__file__))
+    other = FileSource('doc', summary='x', path=Path(__file__))
+    assert mcp.Source(page).merge(mcp.Source(other)) is None
+    first = mcp.MCPServerSpec(namespace='raw', build=lambda: InProcessMCPServer('raw', []))
+    second = mcp.MCPServerSpec(namespace='raw', build=lambda: InProcessMCPServer('raw', []))
+    assert mcp.Server(first).merge(mcp.Server(second)) is None
+
+  def test_cli_entries_exposing_different_arguments_are_refused(self):
+    [full] = mcp.cli('bro show').entries
+    [narrowed] = mcp.cli('bro show', 'name').entries
+    assert full.merge(narrowed) is None
 
 
 class TestToolsetRendering:
@@ -289,7 +350,7 @@ class TestToolsetRendering:
 
 class TestSelect:
   def test_harness_condition_filters_entries(self):
-    entries = ['plain', when(mcp.harness == 'bro', 'devtools')]
+    entries = ['plain', when(var('harness') == 'bro', 'devtools')]
     assert select(entries, harness='bro') == ['plain', 'devtools']
     assert select(entries, harness='claude') == ['plain']
 

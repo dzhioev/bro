@@ -156,7 +156,6 @@ PYTEST_FILES = [
   'bro/llm/openai_retry_test.py',
   'bro/llm/tracker_test.py',
   'bro/mcp_test.py',
-  'bro/harness/claude_test.py',
   'bro/harness/registry_test.py',
   'bro/bro_test.py',
   'bro/mission_test.py',
@@ -168,6 +167,7 @@ PYTEST_FILES = [
   'native/bro/fork_test.py',
   'native/bro/native/llms/openai_test.py',
   'native/bro/native/runner_test.py',
+  'native/bro/native/dev_mcp_test.py',
   'bro/roster_test.py',
   'bro/spells_test.py',
   'bro/procedures_test.py',
@@ -222,13 +222,11 @@ PYTEST_FILES = [
   'native/bro/launch/resume_test.py',
   'native/bro/launch/run_test.py',
   'dev/bros/dev/dev_test.py',
-  'dev/bros/dev/mcp_test.py',
   'native/bro/jobs_test.py',
   'native/bro/inbox_test.py',
   'dev/bros/eyebro/eyebro_test.py',
   'dev/bros/lead/lead_test.py',
   'dev/bros/terminal/terminal_test.py',
-  'dev/bros/analyst/analyst_test.py',
   'dev/bros/analyst/scripts/trails_usage_test.py',
   'bro/launch/broxy_test.py',
   'native/bro/native/harness_test.py',
@@ -406,6 +404,7 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/project_dir_llm_test.py',
   'ride/ride/claude/shell_prefix_llm_test.py',
   'ride/ride/claude/watch_waiter_llm_test.py',
+  'ride/ride/claude/native_tools_llm_test.py',
 ]
 # conformance probes: each launches real sessions on every installed harness under
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like

@@ -1,7 +1,6 @@
 import subprocess
 import sys
 
-from bro.harness import claude
 from bros.browser import Browser
 
 
@@ -48,11 +47,3 @@ def test_browser_mounts_the_same_bounded_roster_on_both_harnesses() -> None:
       server.namespace for server in Browser().assemble(harness=harness, include_raise=False)
     }
     assert {'webview', 'browser', 'artifact', 'current-time-source'} <= namespaces
-
-
-def test_browser_withholds_claudes_file_shell_delegation_and_web_tools() -> None:
-  blocked = set(Browser().blocked_tool_names('claude'))
-
-  assert {*claude.FILES, *claude.SHELL, *claude.DELEGATION, *claude.WEB} <= blocked
-  assert Browser().blocked_tool_names('bro') == ()
-  assert Browser()._selected_tools_for('bro').brash_unrestricted is False

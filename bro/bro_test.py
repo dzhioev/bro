@@ -13,13 +13,13 @@ import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
 from bro import watches
 from bro.base import credentials
-from bro.base.condition import ConditionError, iff, when
+from bro.base.condition import ConditionError, iff, var, when
 from bro.bro import BaseBro, feature
 from bro.broker.environment import BROKER_TALK
 from bro.datasources.file import FileSource
-from bro.datasources.man import ManPage, ManSource
+from bro.datasources.man import ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.harness import Harness, SessionEndReason, claude
+from bro.harness import Harness, Service, SessionEndReason
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
@@ -101,7 +101,7 @@ class TestBroDataSources:
     class SourceBro(BaseBro):
       name = 'with-source'
       description = 'has a data source'
-      data_sources: ClassVar = [_StubSource()]
+      tools: ClassVar = [mcp.source(_StubSource())]
 
       def __init__(self):
         super().__init__(system_prompt='hi')
@@ -120,17 +120,17 @@ class TestBroDataSources:
     class ParentSourceBro(BaseBro):
       name = 'parent-sources'
       description = 'd'
-      data_sources: ClassVar = [_StubSource()]
+      tools: ClassVar = [mcp.source(_StubSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
 
     class ChildSourceBro(ParentSourceBro):
       name = 'child-sources'
-      data_sources: ClassVar = [_MarkerSource()]
+      tools: ClassVar = [mcp.source(_MarkerSource())]
 
     bro = ChildSourceBro()
-    assert [ds.name for ds in bro._data_sources] == ['stub', 'marker']
+    assert [ds.name for ds in bro.reach().sources] == ['stub', 'marker']
 
   def test_man_pages_fold_into_one_manual_along_the_mro(self):
     page = FileSource('alpha', summary='the alpha page', path=Path(__file__))
@@ -139,43 +139,46 @@ class TestBroDataSources:
     class ParentManBro(BaseBro):
       name = 'parent-man'
       description = 'd'
-      data_sources: ClassVar = [ManPage(page), _StubSource()]
+      tools: ClassVar = [_man(page), mcp.source(_StubSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
 
     class ChildManBro(ParentManBro):
       name = 'child-man'
-      # the repeat collapses; a namespace is one server either way
-      data_sources: ClassVar = [ManPage(other), ManPage(page)]
+      # a page both classes declare is one key, decided by the nearer class
+      tools: ClassVar = [_man(other), _man(page)]
 
     bro = ChildManBro()
     # the manual sits where the first page was declared, ahead of the stub
-    assert [ds.name for ds in bro._data_sources] == ['man', 'stub']
-    folded = bro._data_sources[0]
+    sources = bro.reach().sources
+    assert [ds.name for ds in sources] == ['man', 'stub']
+    folded = sources[0]
     assert isinstance(folded, ManSource)
     assert [p.name for p in folded.pages] == ['alpha', 'beta']
 
   def test_man_pages_gate_on_conditions_like_any_source(self):
     page = FileSource('alpha', summary='the alpha page', path=Path(__file__))
 
-    class GatedManBro(BaseBro):
-      name = 'gated-man'
-      description = 'd'
-      data_sources: ClassVar = [when(mcp.harness == 'claude', ManPage(page))]
+    def gated(enabled: bool) -> BaseBro:
+      class GatedManBro(BaseBro):
+        name = 'gated-man'
+        description = 'd'
+        tools: ClassVar = [when(enabled, _man(page))]
 
-      def __init__(self):
-        super().__init__(system_prompt='base')
+        def __init__(self):
+          super().__init__(system_prompt='base')
 
-    bro = GatedManBro()
-    assert bro._data_sources == []
-    assert [ds.name for ds in bro._components_for('claude')[1]] == ['man']
+      return GatedManBro()
+
+    assert gated(False).reach().sources == ()
+    assert [ds.name for ds in gated(True).reach().sources] == ['man']
 
   def test_data_source_summary_in_system_prompt(self):
     class SourceBro(BaseBro):
       name = 'summary-bro'
       description = 'd'
-      data_sources: ClassVar = [_StubSource()]
+      tools: ClassVar = [mcp.source(_StubSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -196,7 +199,7 @@ class TestBroDataSources:
     class MarkBro(BaseBro):
       name = 'mark-on'
       description = 'd'
-      data_sources: ClassVar = [_MarkerSource()]
+      tools: ClassVar = [mcp.source(_MarkerSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -214,7 +217,7 @@ class TestBroDataSources:
     class MarkBro(BaseBro):
       name = 'mark-off'
       description = 'd'
-      data_sources: ClassVar = [_MarkerSource()]
+      tools: ClassVar = [mcp.source(_MarkerSource())]
 
       def __init__(self):
         super().__init__(system_prompt='base')
@@ -290,7 +293,11 @@ def _server_layer(server_spec: MCPServerSpec) -> mcp.ToolLayer:
 
 
 def _make_layer(*tool_names: str) -> mcp.ToolLayer:
-  return _server_layer(MCPServerSpec(build=lambda: _make_server(*tool_names)))
+  return _server_layer(MCPServerSpec(namespace='test', build=lambda: _make_server(*tool_names)))
+
+
+def _man(page: FileSource) -> mcp.ToolLayer:
+  return mcp.ToolLayer(entries=(mcp.Man(page),))
 
 
 class TestComponentDeclarations:
@@ -316,10 +323,30 @@ class TestComponentDeclarations:
         tool = iff(False, _make_layer('a'), _make_layer('b'))
 
   def test_data_source_under_typo_raises_at_class_definition(self):
-    with pytest.raises(TypeError, match=r"SourceTypoBro\.datasources.*move them to 'data_sources'"):
+    with pytest.raises(TypeError, match=r"SourceTypoBro\.datasources.*move them to 'tools'"):
 
       class SourceTypoBro(BaseBro):
         datasources: ClassVar = [when(False, _StubSource())]
+
+  def test_data_sources_names_its_fold_into_tools(self):
+    with pytest.raises(TypeError, match=r"'data_sources' folded into 'tools'.*source\(\.\.\.\)"):
+
+      class RetiredSourceBro(BaseBro):
+        data_sources: ClassVar = [mcp.source(_StubSource())]
+
+  def test_a_bare_data_source_in_tools_names_its_constructor(self):
+    class BareSourceBro(BaseBro):
+      name = 'bare-source'
+      description = 'd'
+      tools: ClassVar = [_StubSource()]  # type: ignore[list-item]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    with pytest.raises(
+      TypeError, match=r'BareSourceBro\.tools\[0\] is a data source.*source\(\.\.\.\)'
+    ):
+      BareSourceBro()
 
   def test_unrelated_helper_attributes_remain_valid(self):
     class HelperBro(BaseBro):
@@ -355,7 +382,7 @@ class TestBroMCPServers:
     class CountBro(BaseBro):
       name = 'count'
       description = 'd'
-      tools: ClassVar = [_server_layer(MCPServerSpec(build=build))]
+      tools: ClassVar = [_server_layer(MCPServerSpec(namespace='test', build=build))]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -382,238 +409,271 @@ class TestToolPackEntries:
     class ToolsetBro(BaseBro):
       name = 'toolset-entry'
       description = 'd'
-      tools: ClassVar = [when(mcp.harness == 'bro', mcp.mount(toolset))]
+      tools: ClassVar = [mcp.mount(toolset)]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     bro = ToolsetBro()
-    assert len(bro._mcp_specs) == 1
+    assert len(bro.reach().server_specs) == 1
     tools = await bro._live_mcp_servers()[0].list_tools()
     assert {tool.name for tool in tools} == {'ping'}
 
 
-class TestToolLayers:
-  def test_grouped_names_and_mro_entries_compose(self):
+def _toolset(namespace: str, *tool_names: str) -> mcp.Toolset:
+  toolset = mcp.Toolset(namespace)
+  for name in tool_names:
+
+    def tool() -> str:
+      return 'ok'
+
+    tool.__name__ = name
+    toolset.tool(f'{name} tool')(tool)
+  return toolset
+
+
+_PACK = _toolset('pack', 'read', 'write')
+
+
+class TestReachFold:
+  def test_each_key_resolves_to_the_nearest_class_declaring_it(self):
     class Base(BaseBro):
-      name = 'base-block'
+      name = 'fold-base'
       description = 'd'
-      tools: ClassVar = [when(mcp.harness == 'claude', mcp.block('Read', 'Write'))]
+      tools: ClassVar = [mcp.files(), mcp.mount(_PACK), mcp.brash('git log ...')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     class Derived(Base):
-      name = 'derived-block'
-      tools: ClassVar = [when(mcp.harness == 'claude', mcp.block('Bash', 'Read'))]
+      name = 'fold-derived'
+      tools: ClassVar = [mcp.web(), mcp.brash('git status')]
 
-    bro = Derived()
-    assert bro.blocked_tool_names('bro') == ()
-    assert bro.blocked_tool_names('claude') == ('Read', 'Write', 'Bash')
+    reach = Derived().reach()
+    assert [str(group) for group in reach.groups] == ['files', "brash('git status')", 'web']
+    assert [spec.namespace for spec in reach.server_specs] == ['pack']
 
-  def test_iff_can_choose_mounts_or_blocks(self):
-    class ConditionalBro(BaseBro):
-      name = 'conditional-block'
+  def test_a_subclass_narrows_what_its_base_grants(self):
+    class Base(BaseBro):
+      name = 'narrow-base'
+      description = 'd'
+      tools: ClassVar = [mcp.files(), mcp.brash('git log ...', 'gh pr view *')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    class Narrowed(Base):
+      name = 'narrowed'
+      tools: ClassVar = [mcp.files(write=False), mcp.brash('git log ...')]
+
+    reach = Narrowed().reach()
+    assert reach.files == mcp.Files(write=False)
+    assert reach.brash == mcp.Brash(commands=('git log ...',))
+
+  def test_one_class_reduces_its_own_entries_by_kind(self):
+    class Reducing(BaseBro):
+      name = 'reducing'
       description = 'd'
       tools: ClassVar = [
-        iff(
-          mcp.harness == 'claude',
-          mcp.block('Read'),
-          _make_layer('read'),
-        )
+        mcp.files(write=False),
+        mcp.brash('git status'),
+        mcp.mount(_PACK, 'read'),
+        mcp.files() | mcp.brash('git diff'),
+        mcp.mount(_PACK, 'write'),
+        mcp.web(),
+        mcp.web(),
       ]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    bro = ConditionalBro()
-    assert len(bro._mcp_specs) == 1
-    assert bro.blocked_tool_names('claude') == ('Read',)
+    reach = Reducing().reach()
+    assert reach.files == mcp.Files()
+    assert reach.brash == mcp.Brash(commands=('git status', 'git diff'))
+    assert reach.web == mcp.Web()
+    [spec] = reach.server_specs
+    assert [tool.name for tool in asyncio.run(spec.build().list_tools())] == ['read', 'write']
 
-  def test_block_selected_for_bro_harness_raises(self):
-    class InvalidBro(BaseBro):
-      name = 'invalid-block'
+  def test_any_absorbs_a_command_list_declared_beside_it(self):
+    class Unrestricted(BaseBro):
+      name = 'brash-any'
       description = 'd'
-      tools: ClassVar = [mcp.block('Read')]
+      tools: ClassVar = [mcp.brash('git status'), mcp.brash(mcp.ANY)]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    with pytest.raises(ValueError, match="cannot declare native tools.*'bro' harness"):
-      InvalidBro()
+    assert Unrestricted().reach().brash == mcp.Brash(unrestricted=True)
 
-  def test_narrowing_serves_the_tool_it_takes_out_of_the_block(self):
-    class WatchingBro(BaseBro):
-      name = 'watching'
+  @pytest.mark.parametrize(
+    'entries',
+    [
+      pytest.param(lambda: [mcp.delegation(), mcp.revoke(mcp.delegation())], id='revoke-and-grant'),
+      pytest.param(lambda: [mcp.cli('bro show'), mcp.cli('bro show', 'name')], id='two-clis'),
+      pytest.param(
+        lambda: [mcp.source(_StubSource()), mcp.source(_StubSource())], id='two-sources'
+      ),
+      pytest.param(lambda: [_make_layer('a'), _make_layer('a')], id='two-raw-specs'),
+    ],
+  )
+  def test_a_pair_that_does_not_reduce_fails_construction(self, entries):
+    class Conflicting(BaseBro):
+      name = 'conflicting'
       description = 'd'
-      tools: ClassVar = [
-        when(mcp.harness == 'claude', mcp.block('Bash', 'Monitor')),
-        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch it')),
-      ]
+      tools: ClassVar = entries()
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    bro = WatchingBro()
-    assert bro.blocked_tool_names('claude') == ('Bash',)
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': ('watch it',)}
-    assert bro.narrowed_tool_commands('bro') == {}
+    with pytest.raises(ValueError, match=r'Conflicting\.tools declares .* under one key'):
+      Conflicting()
 
-  def test_narrowing_layers_accumulate_their_commands(self):
-    class WatchingBro(BaseBro):
-      name = 'watching-twice'
+  def test_a_revoke_withholds_and_a_descendant_grants_again(self):
+    class Base(BaseBro):
+      name = 'revoke-base'
       description = 'd'
-      tools: ClassVar = [
-        when(mcp.harness == 'claude', mcp.block('Monitor')),
-        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch one')),
-        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch two')),
-      ]
+      tools: ClassVar = [mcp.delegation(), mcp.mount(_PACK), mcp.files()]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    assert WatchingBro().narrowed_tool_commands('claude') == {'Monitor': ('watch one', 'watch two')}
+    class Revoking(Base):
+      name = 'revoking'
+      tools: ClassVar = [mcp.revoke(mcp.delegation(), mcp.mount(_PACK, 'read'))]
 
-  def test_narrowing_a_tool_the_bro_never_blocked_raises(self):
-    class InvalidBro(BaseBro):
-      name = 'invalid-narrowing'
+    class Regranting(Revoking):
+      name = 'regranting'
+      tools: ClassVar = [mcp.delegation()]
+
+    revoked = Revoking().reach()
+    assert revoked.delegation is None
+    assert revoked.server_specs == ()
+    assert revoked.files == mcp.Files()
+    regranted = Regranting().reach()
+    assert regranted.delegation == mcp.Delegation()
+    assert regranted.server_specs == ()
+
+  def test_an_unmet_condition_leaves_the_base_entry_in_force(self):
+    class Base(BaseBro):
+      name = 'conditional-base'
       description = 'd'
-      tools: ClassVar = [when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'go'))]
+      tools: ClassVar = [mcp.files(), mcp.web()]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    with pytest.raises(ValueError, match='Monitor is narrowed.*never blocked'):
-      InvalidBro().blocked_tool_names('claude')
+    def conditional(*, narrow: bool, offline: bool) -> mcp.Reach:
+      class Conditional(Base):
+        name = 'conditional'
+        tools: ClassVar = [
+          when(narrow, mcp.files(write=False)),
+          when(offline, mcp.revoke(mcp.web())),
+        ]
 
-  def test_serving_takes_a_tool_out_of_the_block_unnarrowed(self):
-    class WatchingBro(BaseBro):
-      name = 'serving'
+      return Conditional().reach()
+
+    unmet = conditional(narrow=False, offline=False)
+    assert (unmet.files, unmet.web) == (mcp.Files(), mcp.Web())
+    narrowed = conditional(narrow=True, offline=False)
+    assert (narrowed.files, narrowed.web) == (mcp.Files(write=False), mcp.Web())
+    offline = conditional(narrow=False, offline=True)
+    assert (offline.files, offline.web) == (mcp.Files(), None)
+
+  @pytest.mark.asyncio
+  async def test_a_subclass_replaces_one_cli_entry_and_keeps_its_sibling(self):
+    class Base(BaseBro):
+      name = 'cli-base'
       description = 'd'
-      tools: ClassVar = [
-        when(mcp.harness == 'claude', mcp.block('Bash', 'Monitor', 'TaskStop')),
-        when(mcp.harness == 'claude', mcp.allow_commands('Monitor', 'watch it')),
-        when(mcp.harness == 'claude', mcp.serve('TaskStop')),
-      ]
+      tools: ClassVar = [mcp.cli('bro show'), mcp.cli('bro list')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    bro = WatchingBro()
-    assert bro.blocked_tool_names('claude') == ('Bash',)
-    assert bro.narrowed_tool_commands('claude') == {'Monitor': ('watch it',)}
+    class Replacing(Base):
+      name = 'cli-replacing'
+      tools: ClassVar = [mcp.cli('bro show', 'name')]
 
-  def test_serving_a_tool_the_bro_never_blocked_raises(self):
-    class InvalidBro(BaseBro):
-      name = 'invalid-serving'
+    parameters = {}
+    for spec in Replacing().reach().server_specs:
+      [tool] = await spec.build().list_tools()
+      parameters[tool.name] = set(tool.parameters['properties'])
+    assert set(parameters) == {'bro_show', 'bro_list'}
+    assert 'name' in parameters['bro_show']
+    assert 'system_prompt' not in parameters['bro_show']
+
+  def test_a_key_two_bases_declare_resolves_to_the_first_in_the_mro(self):
+    class ReadOnly(BaseBro):
+      name = 'read-only-base'
       description = 'd'
-      tools: ClassVar = [when(mcp.harness == 'claude', mcp.serve('TaskStop'))]
+      tools: ClassVar = [mcp.files(write=False)]
+
+    class Writing(BaseBro):
+      name = 'writing-base'
+      description = 'd'
+      tools: ClassVar = [mcp.files(), mcp.web()]
+
+    class ReadOnlyFirst(ReadOnly, Writing):
+      name = 'read-only-first'
+
+    class WritingFirst(Writing, ReadOnly):
+      name = 'writing-first'
+
+    assert ReadOnlyFirst().reach().files == mcp.Files(write=False)
+    assert ReadOnlyFirst().reach().web == mcp.Web()
+    assert WritingFirst().reach().files == mcp.Files()
+
+  def test_a_declaration_cannot_condition_on_the_harness(self):
+    class HarnessGated(BaseBro):
+      name = 'harness-gated'
+      description = 'd'
+      tools: ClassVar = [when(var('harness') == 'bro', mcp.files())]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    with pytest.raises(ValueError, match='TaskStop is served whole but never blocked'):
-      InvalidBro().blocked_tool_names('claude')
-
-  def test_a_summoning_run_keeps_its_block_of_the_shell(self, monkeypatch):
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    bro = _ShellBlockingBro()
-    assert {'Bash', 'Monitor'} <= set(bro.blocked_tool_names('claude'))
-    assert bro.narrowed_tool_commands('claude') == {}
-
-  def test_a_summoning_run_keeps_its_declared_shell_narrowing(self, monkeypatch):
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-
-    class WatchingBro(BaseBro):
-      name = 'watching-and-summoning'
-      description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), mcp.brash('watch it')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    assert WatchingBro().narrowed_tool_commands('claude') == {
-      'Bash': ('watch it',),
-      'Monitor': ('watch it',),
-    }
-
-  def test_an_unwithheld_shell_is_left_as_it_is(self, monkeypatch):
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-
-    class OpenBro(BaseBro):
-      name = 'open-shell'
-      description = 'd'
-      tools: ClassVar = [claude.block('Monitor')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = OpenBro()
-    assert bro.blocked_tool_names('claude') == ('Monitor',)
-    assert bro.narrowed_tool_commands('claude') == {}
-
-
-class _ShellBlockingBro(BaseBro):
-  name = 'blocking-shell'
-  description = 'd'
-  tools: ClassVar = [claude.block(*claude.SHELL)]
-
-  def __init__(self):
-    super().__init__(system_prompt='')
+    with pytest.raises(ConditionError, match='unknown variable #harness'):
+      HarnessGated()
 
 
 class TestConditionalComponents:
-  # a bro instance composes for the bro harness, so `when`-wrapped entries are
-  # decided against `#harness = bro` at construction.
-  def test_off_harness_server_excluded_and_never_built(self):
+  def test_unmet_server_excluded_and_never_built(self):
     def build():
       raise AssertionError('an unmatched spec must never build')
 
     class CondBro(BaseBro):
       name = 'cond'
       description = 'd'
-      tools: ClassVar = [when(mcp.harness == 'claude', _server_layer(MCPServerSpec(build=build)))]
+      tools: ClassVar = [when(False, _server_layer(MCPServerSpec(namespace='test', build=build)))]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     bro = CondBro()
-    assert bro._mcp_specs == []
+    assert bro.reach().server_specs == ()
     assert bro._live_mcp_servers() == []
-
-  def test_matching_condition_included(self):
-    class MatchBro(BaseBro):
-      name = 'match'
-      description = 'd'
-      tools: ClassVar = [when(mcp.harness == 'bro', _make_layer('a'))]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    assert len(MatchBro()._mcp_specs) == 1
 
   def test_bool_condition_is_a_constant(self):
     class BoolBro(BaseBro):
       name = 'bool'
       description = 'd'
-      tools: ClassVar = [when(False, _make_layer('a')), _make_layer('b')]
+      tools: ClassVar = [when(False, _make_layer('a')), when(True, _make_layer('b'))]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    assert len(BoolBro()._mcp_specs) == 1
+    assert len(BoolBro().reach().server_specs) == 1
 
-  def test_off_harness_data_source_excluded_everywhere(self):
+  def test_unmet_data_source_excluded_everywhere(self):
     class CondSourceBro(BaseBro):
       name = 'cond-source'
       description = 'd'
-      data_sources: ClassVar = [when(mcp.harness == 'claude', _SecretSource())]
+      tools: ClassVar = [when(False, mcp.source(_SecretSource()))]
 
       def __init__(self):
         super().__init__(system_prompt='base')
 
     bro = CondSourceBro()
-    assert bro._data_sources == []
+    assert bro.reach().sources == ()
     assert '## Data sources' not in bro.system_prompt
     assert bro.needed_secrets() == ()
     assert bro._live_mcp_servers() == []
@@ -629,7 +689,9 @@ class TestFeatures:
       name = 'feature-bro'
       description = 'd'
       features: ClassVar = {'x': mcp.creds.contains('xkey')}
-      tools: ClassVar = [when(feature('x'), _server_layer(MCPServerSpec.of(_SecretServer)))]
+      tools: ClassVar = [
+        when(feature('x'), _server_layer(MCPServerSpec.of('secret', _SecretServer)))
+      ]
       system_prompt = 'base text{{when #features contains x}} FEATURE TEXT{{end}}'
 
     return FeatureBro
@@ -637,13 +699,13 @@ class TestFeatures:
   def test_gated_component_and_text_follow_the_gates(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
     on = self._bro_class()()
-    assert len(on._mcp_specs) == 1
+    assert len(on.reach().server_specs) == 1
     assert 'FEATURE TEXT' in on.system_prompt
     assert set(on.needed_secrets()) == {'alpha', 'beta'}
 
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     off = self._bro_class()()
-    assert off._mcp_specs == []
+    assert off.reach().server_specs == ()
     assert 'FEATURE TEXT' not in off.system_prompt
     assert off.needed_secrets() == ()
 
@@ -660,7 +722,7 @@ class TestFeatures:
       features: ClassVar = {'x': True}
 
     child = Pinned()
-    assert len(child._mcp_specs) == 1
+    assert len(child.reach().server_specs) == 1
     assert 'FEATURE TEXT' in child.system_prompt
 
   def test_derived_disables_parent_feature(self, monkeypatch):
@@ -671,7 +733,7 @@ class TestFeatures:
       features: ClassVar = {'x': False}
 
     child = Disabled()
-    assert child._mcp_specs == []
+    assert child.reach().server_specs == ()
     assert 'FEATURE TEXT' not in child.system_prompt
 
   def test_gate_credential_is_tiered_with_the_feature(self, monkeypatch):
@@ -731,13 +793,13 @@ class TestFeatures:
       name = 'feature-grandchild'
       features: ClassVar = {'x': False}
 
-    assert StillDisabled()._mcp_specs == []
+    assert StillDisabled().reach().server_specs == ()
 
   def test_gate_may_reference_only_the_gate_vocabulary(self):
     class SurfaceGated(BaseBro):
       name = 'surface-gated'
       description = 'd'
-      features: ClassVar = {'x': mcp.harness == 'bro'}
+      features: ClassVar = {'x': var('harness') == 'bro'}
       tools: ClassVar = [when(feature('x'), _make_layer('a'))]
 
       def __init__(self):
@@ -767,43 +829,6 @@ class TestFeatures:
       NoFeature()
 
 
-class TestClaudePersonaServers:
-  def _bro(self):
-    class PersonaBro(BaseBro):
-      name = 'persona'
-      description = 'd'
-      tools: ClassVar = [
-        when(mcp.harness == 'bro', _server_layer(MCPServerSpec.of(_SecretServer))),
-        _make_layer('a'),
-      ]
-      data_sources: ClassVar = [when(mcp.harness == 'bro', _SecretSource())]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    return PersonaBro()
-
-  def test_serves_only_claude_harness_components(self):
-    servers = self._bro().assemble(harness='claude', include_raise=False)
-    assert [s.namespace for s in servers] == ['test', 'bro']
-
-  def test_service_server_carries_banner_but_not_raise(self):
-    names = asyncio.run(
-      _collect_tool_names(self._bro().assemble(harness='claude', include_raise=False))
-    )
-    # `raise` is gated on the session hold (not unattended here — no BRO_HOLD);
-    # the environment facts stay available as `banner`
-    assert 'banner' in names
-    assert 'raise' not in names
-
-  def test_manifest_is_harness_aware(self):
-    bro = self._bro()
-    # alpha/beta (the bro-gated server) and gamma (the bro-gated source) are
-    # invisible to the claude-harness manifest
-    assert set(bro.needed_secrets()) == {'alpha', 'beta', 'gamma'}
-    assert bro.needed_secrets(harness='claude') == ()
-
-
 class _SecretServer(InProcessMCPServer):
   needed_secrets = ('alpha', 'beta')
 
@@ -823,13 +848,69 @@ class _SecretSource(SearchableDataSource):
     return ''
 
 
+class _FilesHarness(Harness):
+  """serves `files` with a server of its own, and leaves `web` unserved."""
+
+  name = 'files-serving'
+
+  def serve(self, reach):
+    specs = ()
+    if reach.files is not None:
+      specs = (MCPServerSpec.of('secret', _SecretServer),)
+    unserved = ('web',) if reach.web is not None else ()
+    return Service(server_specs=specs, unserved=unserved)
+
+
+class TestHarnessService:
+  def _bro(self):
+    class ServedBro(BaseBro):
+      name = 'served'
+      description = 'd'
+      tools: ClassVar = [mcp.files(), mcp.web(), _make_layer('a')]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    return ServedBro()
+
+  def test_a_harness_mounts_the_servers_it_serves_the_groups_with(self):
+    servers = self._bro().assemble(harness=_FilesHarness(), include_raise=False)
+    assert [server.namespace for server in servers] == ['secret', 'test', 'bro']
+
+  def test_the_manifest_follows_what_the_harness_serves(self):
+    bro = self._bro()
+    assert set(bro.needed_secrets(harness=_FilesHarness())) == {'alpha', 'beta'}
+    assert bro.needed_secrets(harness=Harness('plain')) == ()
+
+  def test_a_harness_serving_nothing_leaves_every_group_unserved(self):
+    assert Harness('plain').serve(self._bro().reach()).unserved == ('files', 'web')
+
+  def test_each_harness_gets_the_servers_built_for_it(self):
+    bro = self._bro()
+    served = bro._live_mcp_servers(_FilesHarness())
+    plain = bro._live_mcp_servers(Harness('plain'))
+    assert [server.namespace for server in plain] == ['test']
+    assert bro._live_mcp_servers(_FilesHarness()) is served
+
+  def test_service_server_carries_banner_but_not_raise(self):
+    names = asyncio.run(
+      _collect_tool_names(self._bro().assemble(harness='claude', include_raise=False))
+    )
+    # `raise` is gated on the session hold (not unattended here — no BRO_HOLD);
+    # the environment facts stay available as `banner`
+    assert 'banner' in names
+    assert 'raise' not in names
+
+
 class TestNeededSecrets:
   def test_unions_mcp_datasources_and_extra(self):
     class ManifestBro(BaseBro):
       name = 'manifest'
       description = 'd'
-      tools: ClassVar = [_server_layer(MCPServerSpec.of(_SecretServer))]
-      data_sources: ClassVar = [_SecretSource()]
+      tools: ClassVar = [
+        _server_layer(MCPServerSpec.of('secret', _SecretServer)),
+        mcp.source(_SecretSource()),
+      ]
       extra_secrets = ('delta',)
 
       def __init__(self):
@@ -896,7 +977,7 @@ class TestCredentialDeclarations:
   @pytest.mark.parametrize('manifest_name', ['needed_secrets', 'optional_secrets'])
   def test_mcp_server_manifest_rejects_an_instance_name(self, manifest_name):
     manifest = {manifest_name: ('github+reviewer',)}
-    spec = MCPServerSpec(build=lambda: _make_server('probe'), **manifest)
+    spec = MCPServerSpec(namespace='test', build=lambda: _make_server('probe'), **manifest)
 
     class InstanceBro(BaseBro):
       name = 'instance-server'
@@ -919,14 +1000,14 @@ class TestCredentialDeclarations:
     class InstanceBro(BaseBro):
       name = 'instance-source'
       description = 'd'
-      data_sources: ClassVar = [InstanceSource()]
+      tools: ClassVar = [mcp.source(InstanceSource())]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     with pytest.raises(
       ValueError,
-      match=rf'InstanceBro\.data_sources\[0\] InstanceSource\.{manifest_name}.*github\+reviewer',
+      match=rf'InstanceBro\.tools\[0\] InstanceSource\.{manifest_name}.*github\+reviewer',
     ):
       InstanceBro()
 
@@ -1090,8 +1171,10 @@ class TestOptionalSecrets:
     class OptBro(BaseBro):
       name = 'opt'
       description = 'd'
-      tools: ClassVar = [_server_layer(MCPServerSpec.of(_OptionalServer))]
-      data_sources: ClassVar = [_OptionalSource()]
+      tools: ClassVar = [
+        _server_layer(MCPServerSpec.of('optional-srv', _OptionalServer)),
+        mcp.source(_OptionalSource()),
+      ]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1122,8 +1205,10 @@ class TestOptionalSecrets:
     class BothBro(BaseBro):
       name = 'both'
       description = 'd'
-      tools: ClassVar = [_server_layer(MCPServerSpec.of(_BothServer))]
-      data_sources: ClassVar = [_OptShared()]
+      tools: ClassVar = [
+        _server_layer(MCPServerSpec.of('both-srv', _BothServer)),
+        mcp.source(_OptShared()),
+      ]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1150,7 +1235,7 @@ class TestOptionalSecrets:
       name = 'optional'
       description = 'no required secrets'
       llm_spec = llm_llms_echo.LLMSpec()
-      data_sources: ClassVar = [OptionalSource()]
+      tools: ClassVar = [mcp.source(OptionalSource())]
 
     optional_bro = OptionalBro()
     assert optional_bro.optional_secrets() == ('gamma',)
@@ -1664,70 +1749,11 @@ class TestShellRoster:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    selection = ShellBro()._selected_tools_for('bro')
-    assert selection.brash_commands == ('git status', 'git diff')
-    assert selection.brash_unrestricted is False
-
-  def test_any_dominates_exact_commands(self):
-    class ShellBro(BaseBro):
-      name = 'shell-any'
-      description = 'd'
-      tools: ClassVar = [mcp.brash('git status'), mcp.brash(mcp.ANY)]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    selection = ShellBro()._selected_tools_for('bro')
-    assert selection.brash_unrestricted is True
-
-  def test_finite_claude_roster_gates_bash_and_monitor_and_returns_control(self):
-    class ShellBro(BaseBro):
-      name = 'shell-gated'
-      description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), mcp.brash('git status')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = ShellBro()
-    assert bro.blocked_tool_names('claude') == ()
-    assert bro.narrowed_tool_commands('claude') == {
-      'Bash': ('git status',),
-      'Monitor': ('git status',),
-    }
-
-  def test_finite_claude_roster_requires_the_shell_to_be_blocked(self):
-    class InvalidBro(BaseBro):
-      name = 'shell-unblocked'
-      description = 'd'
-      tools: ClassVar = [mcp.brash('git status')]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    with pytest.raises(
-      ValueError, match='Bash is narrowed through the brash command list but never blocked'
-    ):
-      InvalidBro().blocked_tool_names('claude')
-
-  def test_any_leaves_claude_native_shell_untouched(self):
-    class ShellBro(BaseBro):
-      name = 'shell-unrestricted'
-      description = 'd'
-      tools: ClassVar = [mcp.brash(mcp.ANY)]
-
-      def __init__(self):
-        super().__init__(system_prompt='')
-
-    bro = ShellBro()
-    assert bro.blocked_tool_names('claude') == ()
-    assert bro.narrowed_tool_commands('claude') == {}
+    assert ShellBro().reach().brash == mcp.Brash(commands=('git status', 'git diff'))
 
   def test_summoning_does_not_add_an_undeclared_shell_command(self, monkeypatch):
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
-    selection = EchoBro()._selected_tools_for('bro')
-    assert selection.brash_commands == ()
-    assert selection.brash_unrestricted is False
+    assert EchoBro().reach().brash is None
 
 
 class TestWatchServiceTools:
@@ -1741,18 +1767,11 @@ class TestWatchServiceTools:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    class ExactClaudeBrashBro(ExactBrashBro):
-      name = 'exact-claude-watch-brash'
-      tools: ClassVar = [claude.block(*claude.SHELL)]
-
     with watches.Owner.temporary() as owner:
       run = StubRun()
       run.watch_store = owner.store
-      for harness, declaration in (
-        (Harness('alternate'), ExactBrashBro()),
-        ('claude', ExactClaudeBrashBro()),
-      ):
-        server = _service_server(declaration, run=run, harness=harness)
+      for harness in (Harness('alternate'), 'claude'):
+        server = _service_server(ExactBrashBro(), run=run, harness=harness)
         with contextlib.closing(server):
           tools = {tool.name: tool for tool in await server.list_tools()}
           assert await tools['watch'].call({'command': ' printf allowed '}) == (

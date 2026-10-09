@@ -1,11 +1,6 @@
-"""MCP file and search tools for the dev Bro.
+"""MCP file and search tools over the workspace.
 
-Each tool wraps a file or search primitive a Claude Code session would normally
-reach as a built-in. Exposing them via MCP keeps the Bro abstraction
-declarative: the dev Bro picks the toolset and the LLM reaches it through the
-same `ToolRegistry` used by every MCP provider.
-
-Shared output-limit and marker behaviour lives in sibling `REFERENCE.md` so
+Shared output-limit and marker behaviour lives in sibling `dev_reference.md` so
 per-tool descriptions stay terse. Add new shared concepts there, not in each
 tool's description.
 """
@@ -19,12 +14,14 @@ from bro.base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
 from bro.mcp import Toolset
 
 # default wall-clock cap for grep. On expiry its whole process group is killed;
-# callers can raise `timeout_seconds` to retry. See REFERENCE.md.
+# callers can raise `timeout_seconds` to retry. See dev_reference.md.
 DEFAULT_TIMEOUT_SECONDS = 45
 
-_REFERENCE_PATH = Path(__file__).parent / 'REFERENCE.md'
+_REFERENCE_PATH = Path(__file__).parent / 'dev_reference.md'
 
 toolset = Toolset('dev')
+# the tools that leave the workspace as they found it
+READ_ONLY = ('read_reference', 'read_file', 'grep', 'glob')
 
 
 def _require_regular_file(path: Path) -> None:

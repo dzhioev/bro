@@ -28,6 +28,7 @@ _NATIVE_DOMAIN = {
   'bro/launch/call_tui.py',
   'bro/launch/resume.py',
   'bro/launch/run.py',
+  'bro/native/dev_mcp.py',
   'bro/native/harness.py',
   'bro/native/llm.py',
   'bro/native/llms/echo.py',
