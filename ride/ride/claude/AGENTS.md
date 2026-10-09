@@ -6,8 +6,8 @@ Claude Code's own harness themed with the session's bro.
 ## Modules
 
 - `harness.py`
-  — `ClaudeHarness`, its prompt facts, private `ScopeRecipe`, auth preflight, Claude LLM resolution, terminal service-tool delivery and managed-session termination, the workspace session reads, and the launch hooks the neutral skeleton consumes:
-  the runner, Claude state mounts and env for a container, the private state dir and auth for a host runner env.
+  — `ClaudeHarness`, its prompt facts, private `ScopeRecipe`, auth preflight, Claude LLM resolution, terminal service-tool delivery and managed-session termination, and host-cache cleanup.
+  Its workspace session reads and launch hooks supply the runner, Claude state mounts and env for a container, and the private state dir and auth for a host runner.
   Its `serve` mounts nothing, since Claude's own tools serve every group.
 - `assembly.py` — the Claude composition over core `BaseBro.assemble`:
   a session selects the Claude harness, mounting the bro's servers and data sources beside Claude Code's own tools under the session's hold.

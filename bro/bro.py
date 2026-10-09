@@ -71,19 +71,6 @@ def _render_data_sources(sources: list[DataSource]) -> str:
   return '\n'.join(lines)
 
 
-def _render_skill_loader() -> str:
-  return '\n'.join(
-    [
-      '## Skills',
-      '',
-      'Third-party skills load through `bro::skill`. A user message starting with `/<name>` '
-      'requests that skill: call `bro::skill` with its name, then execute the returned '
-      'instructions with the rest of the message as arguments. An empty body means the skill '
-      'is unavailable.',
-    ]
-  )
-
-
 def _render_spells(*, include_cast: bool) -> str:
   run_instruction = (
     'call `bro::cast` with the enclosed text and follow the returned instructions. An error '
@@ -714,11 +701,11 @@ def _build_service_server(
   return server
 
 
-def _harness_object(harness: Optional[mcp.HarnessLike]) -> Harness:
-  """the harness `harness` names, the bro harness for none."""
+def _harness_object(harness: mcp.HarnessLike) -> Harness:
+  """Resolve the selected harness object."""
   if isinstance(harness, Harness):
     return harness
-  return get_harness('bro' if harness is None else harness)
+  return get_harness(harness)
 
 
 def _built(spec: mcp.MCPServerSpec) -> llm_mcp.MCPServer:
@@ -1077,19 +1064,15 @@ class BaseBro(ABC):
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
       prompt_parts = [system_prompt] if len(system_prompt) > 0 else []
-    # the bro's own persona: MRO-concatenated class system_prompt(s) under a
-    # `# Persona: <name>` heading — the segment lands inside larger composed
-    # prompts (below, and ride's append prompt), where headingless identity text
-    # reads as a stray fragment. no shared / data-source / spells blocks here;
-    # injected into managed Claude sessions (ride/ride/claude/system_prompt.py)
-    # so they carry the bro's policies under the claude harness.
     self.persona = (
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
     # a declaration whose entries do not fold fails here, not at first use
     self.reach()
 
-  def _composed_prompt(self, harness: mcp.HarnessLike, hold: str) -> str:
+  def composed_prompt(self, harness: mcp.HarnessLike, *, hold: str) -> str:
+    """Compose the declaration with the selected harness and session hold."""
+    harness = _harness_object(harness)
     data_sources = list(self.reach().sources)
     parts = []
     shared = _load_shared_prompts()
@@ -1103,7 +1086,9 @@ class BaseBro(ABC):
     spell_instructions = self.spell_instructions()
     if len(spell_instructions) > 0:
       parts.append(spell_instructions)
-    parts.append(_render_skill_loader())
+    instructions = harness.prompt_instructions()
+    if len(instructions) > 0:
+      parts.append(instructions)
     return mcp.render_text(
       '\n\n'.join(parts),
       harness=harness,
@@ -1196,7 +1181,7 @@ class BaseBro(ABC):
       if self._features[name] is not False and (self._features[name] is True) == pinned
     }
 
-  def needed_secrets(self, harness: Optional[mcp.HarnessLike] = None) -> tuple[str, ...]:
+  def needed_secrets(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
     # the bro's component credential manifest for a consuming harness: the union
     # of each declared MCP server's + data source's `needed_secrets`, over only
     # the components that hold on `harness` — a surface never hydrates a secret
@@ -1217,7 +1202,7 @@ class BaseBro(ABC):
     names.update(self._feature_secrets(pinned=True))
     return tuple(sorted(names))
 
-  def optional_secrets(self, harness: Optional[mcp.HarnessLike] = None) -> tuple[str, ...]:
+  def optional_secrets(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
     # the bro's best-effort credential tier: the union of each declared MCP
     # server's + data source's `optional_secrets` over the same per-harness
     # component set as `needed_secrets`, plus the credentials of its gated
@@ -1235,7 +1220,7 @@ class BaseBro(ABC):
       names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
-  def missing_secrets(self, harness: Optional[mcp.HarnessLike] = None) -> tuple[str, ...]:
+  def missing_secrets(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
     # every required name — the component manifest plus the LLM key, since
     # run()/send() execute the bro as an LLM process — that does not resolve in
     # this process's credential store. the optional tier is never gated.
@@ -1262,7 +1247,7 @@ class BaseBro(ABC):
       return servers
     return [*servers, spell_store.build_spell_server(self, harness=harness, hold=hold)]
 
-  def _live_mcp_servers(self, harness: Optional[mcp.HarnessLike] = None) -> list[llm_mcp.MCPServer]:
+  def _live_mcp_servers(self, harness: mcp.HarnessLike) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
     # post-secrets — and are built once per harness: a live server may hold real
     # resources and every run through this bro on one harness reuses the same set.
@@ -1298,9 +1283,8 @@ class BaseBro(ABC):
     servers.append(_build_service_server(self, hold=hold, harness=harness, live_run=live_run))
     return self._servers_with_spell_tools(servers, harness=harness, hold=hold)
 
-  def system_prompt_for(self, *, hold: str, harness: Optional[mcp.HarnessLike] = None) -> str:
-    """the bro-native system prompt under a hold — the composed prompt plus the
-    session fragments."""
+  def system_prompt_for(self, *, hold: str, harness: mcp.HarnessLike) -> str:
+    """The selected harness's composed prompt plus the session fragments."""
     # the hold is pinned at run start, so the matching hold fragment is
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
@@ -1315,6 +1299,6 @@ class BaseBro(ABC):
     prompt = (
       self._system_prompt_override
       if self._system_prompt_override is not None
-      else self._composed_prompt(harness, hold)
+      else self.composed_prompt(harness, hold=hold)
     )
     return f'{prompt}\n\n{fragment}'

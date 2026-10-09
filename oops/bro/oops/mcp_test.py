@@ -256,7 +256,7 @@ def test_devoops_manifest_comes_from_its_components(monkeypatch):
 
   persona = Devoops()
 
-  assert persona.needed_secrets() == ('aws', 'brog', 'github', 'infra')
+  assert persona.needed_secrets('bro') == ('aws', 'brog', 'github', 'infra')
   assert persona.needed_secrets(harness='claude') == ('aws', 'brog', 'github', 'infra')
   assert persona.extra_secrets == ()
 

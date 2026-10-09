@@ -259,6 +259,21 @@ def test_core_and_ride_wheels_compose_a_claude_session_without_native(wheels, tm
     'assert "bro.native.harness" not in sys.modules'
   )
   subprocess.run([str(venv / 'bin' / 'python'), '-c', probe], check=True, capture_output=True)
+  data_home = tmp_path / 'data'
+  release = data_home / 'ride' / 'claude-code' / 'verification-cache'
+  release.mkdir(parents=True)
+  env = {**os.environ, 'XDG_DATA_HOME': str(data_home)}
+  dry_run = subprocess.run(
+    [str(venv / 'bin' / 'ride'), 'clean', '--dry-run'],
+    env=env,
+    check=True,
+    capture_output=True,
+    text=True,
+  )
+  assert 'would clean 1 Claude Code release(s)' in dry_run.stdout + dry_run.stderr
+  assert release.is_dir()
+  subprocess.run([str(venv / 'bin' / 'ride'), 'clean'], env=env, check=True, capture_output=True)
+  assert not release.exists()
 
 
 def test_bundled_ride_checks_native_without_the_runtime_on_path(wheels, tmp_path):

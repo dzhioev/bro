@@ -1,9 +1,14 @@
 import contextlib
 import shutil
+import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 import ride.clean as clean
+from ride.harness import SessionHarness
 from ride.workspace.metadata import Isolation
 
 
@@ -27,10 +32,11 @@ def test_clean_collects_all_global_stores_after_removing_workspaces(monkeypatch)
   monkeypatch.setattr(clean, 'hold_workspace_removal', lambda *_args: contextlib.nullcontext())
   mirrors = MagicMock(return_value=(1, 1))
   bundles = MagicMock(return_value=(2, 0))
-  releases = MagicMock(return_value=(3, 1))
+  harness = MagicMock(spec=SessionHarness)
   monkeypatch.setattr(clean, 'clean_managed_mirrors', mirrors)
   monkeypatch.setattr(clean, 'clean_runtime_bundles', bundles)
-  monkeypatch.setattr(clean, 'clean_cached_releases', releases)
+  monkeypatch.setattr(clean, 'installed_harness_names', lambda: ('example',))
+  monkeypatch.setattr(clean, 'get_harness', lambda _name: harness)
 
   assert clean.clean_workspaces() == 0
 
@@ -38,7 +44,7 @@ def test_clean_collects_all_global_stores_after_removing_workspaces(monkeypatch)
   retained.remove.assert_not_called()
   mirrors.assert_called_once_with({'https://example.test/retained.git'}, dry_run=False)
   bundles.assert_called_once_with(dry_run=False)
-  releases.assert_called_once_with(dry_run=False)
+  harness.clean_cache.assert_called_once_with(dry_run=False)
 
 
 def test_clean_aborts_before_removing_anything_when_docker_is_unreachable(monkeypatch):
@@ -59,7 +65,7 @@ def test_dry_run_does_not_create_a_workspace_lock(monkeypatch):
   workspace = clean.Workspace.create('dry', None, clean.Isolation.UNBOXED)
   monkeypatch.setattr(clean, 'clean_managed_mirrors', MagicMock(return_value=(0, 0)))
   monkeypatch.setattr(clean, 'clean_runtime_bundles', MagicMock(return_value=(0, 0)))
-  monkeypatch.setattr(clean, 'clean_cached_releases', MagicMock(return_value=(0, 0)))
+  monkeypatch.setattr(clean, 'installed_harness_names', lambda: ())
 
   assert clean.clean_workspaces(dry_run=True, names=['dry']) == 0
   assert not workspace.lockfile.exists()
@@ -82,7 +88,34 @@ def test_force_removes_an_explicit_unrecognized_workspace_without_reading_it(mon
   monkeypatch.setattr(clean.Workspace, 'all', MagicMock(return_value=[]))
   monkeypatch.setattr(clean, 'clean_managed_mirrors', MagicMock(return_value=(0, 0)))
   monkeypatch.setattr(clean, 'clean_runtime_bundles', MagicMock(return_value=(0, 0)))
-  monkeypatch.setattr(clean, 'clean_cached_releases', MagicMock(return_value=(0, 0)))
+  monkeypatch.setattr(clean, 'installed_harness_names', lambda: ())
 
   assert clean.clean_workspaces(force=True, names=['old']) == 0
   removed.assert_called_once_with(path)
+
+
+@pytest.mark.parametrize('names', [('first',), ('second',), ('first', 'second')])
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_clean_dispatches_to_each_installed_harness(monkeypatch, names, dry_run):
+  harnesses = {name: MagicMock(spec=SessionHarness) for name in names}
+  resolver = MagicMock(side_effect=harnesses.__getitem__)
+  monkeypatch.setattr(clean.Workspace, 'all', list)
+  monkeypatch.setattr(clean, 'clean_managed_mirrors', MagicMock(return_value=(0, 0)))
+  monkeypatch.setattr(clean, 'clean_runtime_bundles', MagicMock(return_value=(0, 0)))
+  monkeypatch.setattr(clean, 'installed_harness_names', lambda: names)
+  monkeypatch.setattr(clean, 'get_harness', resolver)
+
+  assert clean.clean_workspaces(dry_run=dry_run) == 0
+  assert [call.args[0] for call in resolver.call_args_list] == list(names)
+  for harness in harnesses.values():
+    harness.clean_cache.assert_called_once_with(dry_run=dry_run)
+
+
+def test_importing_clean_loads_no_harness():
+  probe = (
+    'import sys; import ride.clean; '
+    'assert "ride.claude.claude_release" not in sys.modules; '
+    'assert "ride.claude.harness" not in sys.modules; '
+    'assert "bro.native.harness" not in sys.modules'
+  )
+  subprocess.run([sys.executable, '-c', probe], check=True, capture_output=True, text=True)

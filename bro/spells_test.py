@@ -291,7 +291,7 @@ class TestSpellServer:
     assert not hasattr(bro, 'get_skill_body')
     assert not hasattr(bro, 'skill_descriptions')
     assert 'skill' not in persona_tool_names
-    assert '## Skills' in bro.system_prompt_for(hold='unattended')
+    assert '## Skills' in bro.composed_prompt('bro', hold='unattended')
     assert skill.parameters['required'] == ['name']
     assert await skill.call({'name': 'third-party'}) == ''
 
@@ -591,25 +591,27 @@ class TestSpellsPrompt:
     bro = package.bro_class()()
 
     spells_section = (
-      bro.system_prompt_for(hold='unattended').split('## Spells', 1)[1].split('## Skills', 1)[0]
+      bro.composed_prompt('bro', hold='unattended')
+      .split('## Spells', 1)[1]
+      .split('## Skills', 1)[0]
     )
     assert '`/<name>`' not in spells_section
     assert '`bro::cast`' not in spells_section
     assert "call the named spell's own tool" in spells_section
-    assert description not in bro.system_prompt_for(hold='unattended')
+    assert description not in bro.composed_prompt('bro', hold='unattended')
 
   def test_dispatch_contract_is_present_when_secret_resolves(self, fake_packages, monkeypatch):
     package = fake_packages('_spell_prompt_dispatch', {'do-work': _spell()})
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == CAST_SECRET)
     bro = package.bro_class()()
 
-    assert '## Spells' in bro.system_prompt_for(hold='unattended')
-    assert '`bro::cast`' in bro.system_prompt_for(hold='unattended')
-    assert 'follow the returned instructions' in bro.system_prompt_for(hold='unattended')
+    assert '## Spells' in bro.composed_prompt('bro', hold='unattended')
+    assert '`bro::cast`' in bro.composed_prompt('bro', hold='unattended')
+    assert 'follow the returned instructions' in bro.composed_prompt('bro', hold='unattended')
 
   def test_section_is_absent_without_spells(self, fake_packages):
     package = fake_packages('_spell_prompt_empty')
-    assert '## Spells' not in package.bro_class()().system_prompt_for(hold='unattended')
+    assert '## Spells' not in package.bro_class()().composed_prompt('bro', hold='unattended')
 
 
 class TestSpellOptionalSecret:
@@ -621,7 +623,7 @@ class TestSpellOptionalSecret:
 
   def test_empty_roster_does_not_declare_cast_secret(self, fake_packages):
     package = fake_packages('_spell_no_optional_secret')
-    assert CAST_SECRET not in package.bro_class()().optional_secrets()
+    assert CAST_SECRET not in package.bro_class()().optional_secrets('bro')
 
 
 class TestSpellToolNames:
