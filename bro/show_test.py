@@ -329,3 +329,24 @@ class TestFormatCard:
     card = await format_card(_LongBro())
     assert '…' in card
     assert long_description not in card
+
+
+@pytest.mark.asyncio
+async def test_card_composes_a_prompt_for_each_installed_harness(monkeypatch):
+  import bro.show as show
+  from bro.base.condition import StringVariable
+  from bro.harness import Harness
+
+  class NamedHarness(Harness):
+    def facts(self):
+      return {'tool_name_rule': StringVariable(f'{self.name} tool rule')}
+
+  harnesses = {name: NamedHarness(name) for name in ('first', 'second')}
+  monkeypatch.setattr(show, 'installed_harness_names', lambda: tuple(harnesses))
+  monkeypatch.setattr(show, 'get_harness', harnesses.__getitem__)
+
+  card = await show.format_card(_MinimalBro(), include_system_prompt=True)
+  for name in harnesses:
+    section = card.split(f'### {name}', 1)[1].split('### ', 1)[0]
+    assert 'you are minimal' in section
+    assert f'{name} tool rule' in section

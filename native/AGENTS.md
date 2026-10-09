@@ -13,12 +13,12 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 - `bro/native/` — the bro-native engine, the layer above the framework core:
   registered session harness, runner, live LLM contract, provider dispatch, and provider clients.
   `harness.py:BRO` owns native recipe resolution, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
-  Its `Harness.facts` contributes native prompt passages, and `Harness.own_tools` contributes `skill` and the shell-gated job tools.
+  Its `Harness.facts` contributes native prompt passages, `Harness.prompt_instructions` supplies the skill-loader contract, and `Harness.own_tools` contributes `skill` and the shell-gated job tools.
   Its `Harness.serve` mounts `dev_mcp.py`, the file and search toolset whose shared output rules are `dev_reference.md`, for the `files` group.
   It also owns the `bro run|chat …` spawn with exact-recipe continuation and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, trail, and an in-process run's temporary watch store;
-  it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and prompt composition.
+  it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and `BaseBro.system_prompt_for`.
   `bro/jobs.py` and `bro/inbox.py` are native-owned modules under their public namespace paths:
   jobs supervise process groups through core's `bro.job_supervisor`, spool bounded output, and live in a lifetime-scoped registry, while the inbox wakes the model on job news and framework notices and drains their bounded notification slices.
   A job or watch line runs in brash under the policy `Runner` writes from the bro's reach into a directory its lifetime owns, where the command list is finite, and in bash otherwise.

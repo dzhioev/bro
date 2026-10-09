@@ -14,6 +14,7 @@ import pytest
 
 from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
+from bro.harness import installed_harness_names
 from bro.inbox import Inbox
 from bro.jobs import Registry
 from bro.llm.mcp import MCPServer, Tool
@@ -126,9 +127,10 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('name', sorted(declared_specs()))
-async def test_composed_prompts_leak_no_directives(name):
+@pytest.mark.parametrize('harness', installed_harness_names())
+async def test_composed_prompts_leak_no_directives(name, harness):
   bro = create_bro(name)
-  assert _DIRECTIVE_RE.search(bro.system_prompt) is None
+  assert _DIRECTIVE_RE.search(bro.composed_prompt(harness)) is None
 
 
 class TestSummonRecovery:

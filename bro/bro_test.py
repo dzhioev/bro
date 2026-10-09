@@ -1,6 +1,9 @@
 import asyncio
 import contextlib
 import json
+import subprocess
+import sys
+import textwrap
 import time
 from pathlib import Path
 from typing import ClassVar, Optional
@@ -111,7 +114,7 @@ class TestBroDataSources:
         super().__init__(system_prompt='hi')
 
     bro = SourceBro()
-    servers = bro._live_mcp_servers()
+    servers = bro._live_mcp_servers('bro')
     assert len(servers) == 1
     assert servers[0].namespace == 'stub-source'
     tools = await servers[0].list_tools()
@@ -188,12 +191,12 @@ class TestBroDataSources:
         super().__init__(system_prompt='base')
 
     bro = SourceBro()
-    assert '## Data sources' in bro.system_prompt
-    assert '**stub**' in bro.system_prompt
-    assert 'a stub data source for tests' in bro.system_prompt
+    assert '## Data sources' in bro.composed_prompt('bro')
+    assert '**stub**' in bro.composed_prompt('bro')
+    assert 'a stub data source for tests' in bro.composed_prompt('bro')
     # canonical `::` in the data-source block, resolved by the tool-names rule;
     # the example derives from the bro's own first source
-    assert 'stub-source::' in bro.system_prompt
+    assert 'stub-source::' in bro.composed_prompt('bro')
 
   def test_summary_feature_directive_rendered_present(self, monkeypatch):
     from bro.base import credentials
@@ -208,7 +211,7 @@ class TestBroDataSources:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    prompt = MarkBro().system_prompt
+    prompt = MarkBro().composed_prompt('bro')
     assert 'query summary on' in prompt
     assert 'no key' not in prompt
     assert '{{' not in prompt  # markers fully resolved, never leak raw
@@ -226,7 +229,7 @@ class TestBroDataSources:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    prompt = MarkBro().system_prompt
+    prompt = MarkBro().composed_prompt('bro')
     assert 'no key' in prompt
     assert 'query summary on' not in prompt
 
@@ -241,7 +244,7 @@ class TestToolNamesBlock:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    prompt = ToolBro().system_prompt
+    prompt = ToolBro().composed_prompt('bro')
     assert '# Tool names' in prompt
     assert '`namespace::tool`' in prompt
     assert '`namespace__tool`' in prompt
@@ -260,9 +263,9 @@ class TestToolNamesBlock:
         super().__init__(system_prompt='base')
 
     bro = BareBro()
-    assert '# Tool names' in bro.system_prompt
-    assert '`namespace__tool`' in bro.system_prompt
-    assert '`mcp__namespace__tool`' not in bro.system_prompt
+    assert '# Tool names' in bro.composed_prompt('bro')
+    assert '`namespace__tool`' in bro.composed_prompt('bro')
+    assert '`mcp__namespace__tool`' not in bro.composed_prompt('bro')
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):
@@ -372,7 +375,7 @@ class TestBroMCPServers:
         super().__init__(system_prompt='')
 
     bro = SpecBro()
-    tools = await bro._live_mcp_servers()[0].list_tools()
+    tools = await bro._live_mcp_servers('bro')[0].list_tools()
     assert {t.name for t in tools} == {'a', 'b', 'c'}
 
   def test_spec_built_lazily_and_once(self):
@@ -393,11 +396,11 @@ class TestBroMCPServers:
 
     bro = CountBro()
     # metadata surfaces never build the live server
-    bro.needed_secrets()
+    bro.needed_secrets('bro')
     assert calls == 0
-    first = bro._live_mcp_servers()
+    first = bro._live_mcp_servers('bro')
     assert calls == 1
-    assert bro._live_mcp_servers() is first
+    assert bro._live_mcp_servers('bro') is first
     assert calls == 1
 
 
@@ -420,7 +423,7 @@ class TestToolPackEntries:
 
     bro = ToolsetBro()
     assert len(bro.reach().server_specs) == 1
-    tools = await bro._live_mcp_servers()[0].list_tools()
+    tools = await bro._live_mcp_servers('bro')[0].list_tools()
     assert {tool.name for tool in tools} == {'ping'}
 
 
@@ -654,7 +657,7 @@ class TestConditionalComponents:
 
     bro = CondBro()
     assert bro.reach().server_specs == ()
-    assert bro._live_mcp_servers() == []
+    assert bro._live_mcp_servers('bro') == []
 
   def test_bool_condition_is_a_constant(self):
     class BoolBro(BaseBro):
@@ -678,9 +681,9 @@ class TestConditionalComponents:
 
     bro = CondSourceBro()
     assert bro.reach().sources == ()
-    assert '## Data sources' not in bro.system_prompt
-    assert bro.needed_secrets() == ()
-    assert bro._live_mcp_servers() == []
+    assert '## Data sources' not in bro.composed_prompt('bro')
+    assert bro.needed_secrets('bro') == ()
+    assert bro._live_mcp_servers('bro') == []
 
 
 class TestFeatures:
@@ -704,14 +707,14 @@ class TestFeatures:
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
     on = self._bro_class()()
     assert len(on.reach().server_specs) == 1
-    assert 'FEATURE TEXT' in on.system_prompt
-    assert set(on.needed_secrets()) == {'alpha', 'beta'}
+    assert 'FEATURE TEXT' in on.composed_prompt('bro')
+    assert set(on.needed_secrets('bro')) == {'alpha', 'beta'}
 
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     off = self._bro_class()()
     assert off.reach().server_specs == ()
-    assert 'FEATURE TEXT' not in off.system_prompt
-    assert off.needed_secrets() == ()
+    assert 'FEATURE TEXT' not in off.composed_prompt('bro')
+    assert off.needed_secrets('bro') == ()
 
   def test_gate_on_an_unregistered_kind_fails_the_probe(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.known_names', lambda: frozenset())
@@ -727,7 +730,7 @@ class TestFeatures:
 
     child = Pinned()
     assert len(child.reach().server_specs) == 1
-    assert 'FEATURE TEXT' in child.system_prompt
+    assert 'FEATURE TEXT' in child.composed_prompt('bro')
 
   def test_derived_disables_parent_feature(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
@@ -738,29 +741,29 @@ class TestFeatures:
 
     child = Disabled()
     assert child.reach().server_specs == ()
-    assert 'FEATURE TEXT' not in child.system_prompt
+    assert 'FEATURE TEXT' not in child.composed_prompt('bro')
 
   def test_gate_credential_is_tiered_with_the_feature(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     gated = self._bro_class()()
-    assert 'xkey' in gated.optional_secrets()
-    assert 'xkey' not in gated.needed_secrets()
+    assert 'xkey' in gated.optional_secrets('bro')
+    assert 'xkey' not in gated.needed_secrets('bro')
 
     class Pinned(self._bro_class()):
       name = 'feature-child'
       features: ClassVar = {'x': True}
 
     pinned = Pinned()
-    assert 'xkey' in pinned.needed_secrets()
-    assert 'xkey' not in pinned.optional_secrets()
+    assert 'xkey' in pinned.needed_secrets('bro')
+    assert 'xkey' not in pinned.optional_secrets('bro')
 
     class Disabled(self._bro_class()):
       name = 'feature-child'
       features: ClassVar = {'x': False}
 
     disabled = Disabled()
-    assert 'xkey' not in disabled.needed_secrets()
-    assert 'xkey' not in disabled.optional_secrets()
+    assert 'xkey' not in disabled.needed_secrets('bro')
+    assert 'xkey' not in disabled.optional_secrets('bro')
 
   def test_regating_a_feature_replaces_its_credential(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.known_names', lambda: frozenset({'xkey', 'ykey'}))
@@ -771,8 +774,8 @@ class TestFeatures:
       features: ClassVar = {'x': mcp.creds.contains('ykey')}
 
     regated = Regated()
-    assert 'ykey' in regated.optional_secrets()
-    assert 'xkey' not in regated.optional_secrets()
+    assert 'ykey' in regated.optional_secrets('bro')
+    assert 'xkey' not in regated.optional_secrets('bro')
 
   def test_reenabling_a_disabled_feature_fails_construction(self):
     class Disabled(self._bro_class()):
@@ -922,7 +925,7 @@ class TestNeededSecrets:
 
     bro = ManifestBro()
     # the llm key is NOT in needed_secrets() — surfaces that run the bro add it
-    assert bro.needed_secrets() == ('alpha', 'beta', 'delta', 'gamma')
+    assert bro.needed_secrets('bro') == ('alpha', 'beta', 'delta', 'gamma')
     assert bro.llm_spec.needed_secrets() == ('openai',)  # default openai
 
   def test_extra_secrets_mro_unioned(self):
@@ -938,7 +941,7 @@ class TestNeededSecrets:
       name = 'derived'
       extra_secrets = ('two',)
 
-    assert {'one', 'two'} <= set(Derived().needed_secrets())
+    assert {'one', 'two'} <= set(Derived().needed_secrets('bro'))
 
 
 class TestCredentialDeclarations:
@@ -1133,7 +1136,7 @@ class TestEmptyManifest:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    assert Bare().needed_secrets() == ()
+    assert Bare().needed_secrets('bro') == ()
 
 
 class _OptionalServer(InProcessMCPServer):
@@ -1169,7 +1172,7 @@ class TestOptionalSecrets:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    assert OptionalBro().optional_secrets() == ('gamma',)
+    assert OptionalBro().optional_secrets('bro') == ('gamma',)
 
   def test_unions_mcp_and_datasource_optional(self):
     class OptBro(BaseBro):
@@ -1184,7 +1187,7 @@ class TestOptionalSecrets:
         super().__init__(system_prompt='')
 
     bro = OptBro()
-    assert bro.optional_secrets() == ('omega', 'psi')
+    assert bro.optional_secrets('bro') == ('omega', 'psi')
 
   def test_required_wins_over_optional(self):
     # a secret declared both required (by one component) and optional (by another)
@@ -1218,8 +1221,8 @@ class TestOptionalSecrets:
         super().__init__(system_prompt='')
 
     bro = BothBro()
-    assert 'shared' in bro.needed_secrets()
-    assert bro.optional_secrets() == ()
+    assert 'shared' in bro.needed_secrets('bro')
+    assert bro.optional_secrets('bro') == ()
 
   def test_missing_secrets_ignores_the_optional_tier(self, monkeypatch):
     monkeypatch.setattr(credentials, 'available', lambda name: False)
@@ -1242,8 +1245,8 @@ class TestOptionalSecrets:
       tools: ClassVar = [mcp.source(OptionalSource())]
 
     optional_bro = OptionalBro()
-    assert optional_bro.optional_secrets() == ('gamma',)
-    assert optional_bro.missing_secrets() == ()
+    assert optional_bro.optional_secrets('bro') == ('gamma',)
+    assert optional_bro.missing_secrets('bro') == ()
 
 
 class TestProvisioning:
@@ -1426,10 +1429,10 @@ class TestAnswer:
 class TestSessionModePrompts:
   def test_non_interactive_runs_pin_the_unattended_hold(self):
     bro = EchoBro()
-    prompt = bro.system_prompt_for(hold='unattended')
+    prompt = bro.system_prompt_for(hold='unattended', harness='bro')
     assert '`bro::raise`' in prompt
     assert 'unclear' in prompt
-    assert bro.system_prompt in prompt
+    assert bro.composed_prompt('bro') in prompt
     assert '# Unattended session' in prompt
     assert '# Guided session' not in prompt
     # the fragment renders at run start — no directive may leak
@@ -1443,16 +1446,16 @@ class TestSessionModePrompts:
 
   def test_interactive_runs_pin_the_guided_hold(self):
     bro = EchoBro()
-    prompt = bro.system_prompt_for(hold='guided')
+    prompt = bro.system_prompt_for(hold='guided', harness='bro')
     assert 'clarifying question' in prompt
-    assert bro.system_prompt in prompt
+    assert bro.composed_prompt('bro') in prompt
     assert '# Guided session' in prompt
     assert '# Unattended session' not in prompt
 
   def test_native_system_prompt_passes_the_runs_talk_to_the_summoned_contract(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.question')
-    prompt = EchoBro().system_prompt_for(hold='unattended')
+    prompt = EchoBro().system_prompt_for(hold='unattended', harness='bro')
     assert 'call `bro::quest_ask` on `self`' in prompt
     assert 'quest does not permit' not in prompt
 
@@ -1928,3 +1931,34 @@ class TestWatchServiceTools:
         assert owner.store.has_waking_lines()
         assert await tools['quest_watch'].call({'wake_on_quiet': False}) == {'wake_on_quiet': False}
         assert not owner.store.has_waking_lines()
+
+
+def test_selected_claude_composition_imports_no_other_harness():
+  probe = textwrap.dedent("""
+    import sys
+    from unittest.mock import patch
+    from bro.harness import get_harness
+    from bro.registry import create_bro, register
+    from bro.bro import BaseBro
+    from ride.claude.system_prompt import session_append_prompt
+
+    harness = get_harness('claude')
+    assert 'bro.native.harness' not in sys.modules
+    with patch('bro.bro._load_shared_prompts', side_effect=AssertionError('eager composition')):
+        create_bro('bro')
+    assert 'bro.native.harness' not in sys.modules
+
+    class SelectedBro(BaseBro):
+        name = 'selected-probe'
+        description = 'selected harness probe'
+        system_prompt = '{{iff #harness = claude}}selected prompt{{end}}'
+
+    register(SelectedBro)
+    bro = create_bro('selected-probe')
+    prompt = bro.composed_prompt(harness)
+    assert 'selected prompt' in prompt
+    assert 'bro::skill' not in prompt
+    assert 'selected prompt' in session_append_prompt('unattended', 'selected-probe')
+    assert 'bro.native.harness' not in sys.modules
+  """)
+  subprocess.run([sys.executable, '-c', probe], check=True, capture_output=True, text=True)

@@ -657,11 +657,8 @@ class TestForkLinkage:
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
-      runner = fork(
-        forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test'
-      )
+      fork(forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test')
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
-    assert runner.bro.system_prompt == 'swapped prompt'
     # prefix on the new OpenAI's seam carries the override at index 0
     seeded = created[0]._input_prefix
     assert seeded is not None

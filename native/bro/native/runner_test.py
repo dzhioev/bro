@@ -407,7 +407,7 @@ class TestLifetime:
 
     runner = StubRunner(bro=_Holder())
     with runner:
-      runner.bro._live_mcp_servers()
+      runner.bro._live_mcp_servers('bro')
       assert closed == []
     assert closed == ['holder']
 
@@ -423,7 +423,7 @@ class TestLifetime:
 
     runner = StubRunner(bro=_Holder())
     with runner:
-      runner.bro._live_mcp_servers()
+      runner.bro._live_mcp_servers('bro')
     assert runner._last_end_reason == 'ok'
 
   def test_exit_without_send_is_safe(self):
