@@ -43,6 +43,10 @@ class Harness:
     """Typed facts and passages this harness contributes to prompt rendering."""
     return {}
 
+  def prompt_instructions(self) -> str:
+    """Additional instructions this harness contributes to composed prompts."""
+    return ''
+
   def can_end_session(self) -> bool:
     """Whether this harness can end its current session."""
     return False

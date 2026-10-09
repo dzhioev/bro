@@ -10,6 +10,6 @@ def test_bro_dev_is_registered_as_a_persona():
 
 
 def test_bro_dev_carries_the_framework_context_and_the_author_block():
-  prompt = BroDev().system_prompt_for(hold='unattended')
+  prompt = BroDev().composed_prompt('bro', hold='unattended')
   assert FRAMEWORK_PROJECT.strip() in prompt
   assert AUTHORING.strip() in prompt

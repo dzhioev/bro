@@ -30,14 +30,15 @@ async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None)
     for name, gate in bro._features.items():
       parts.append(_feature_line(bro, name, gate))
 
-  manifest = bro.needed_secrets()
-  optional = bro.optional_secrets()
+  harnesses = [get_harness(name) for name in installed_harness_names()]
+  manifest = {name for harness in harnesses for name in bro.needed_secrets(harness)}
+  optional = {name for harness in harnesses for name in bro.optional_secrets(harness)} - manifest
   llm_secrets = bro.llm_spec.needed_secrets()
   if len(manifest) > 0 or len(optional) > 0 or len(llm_secrets) > 0:
     parts.extend(['', '## Secrets', ''])
-    for name in manifest:
+    for name in sorted(manifest):
       parts.append(f'- `{name}`')
-    for name in optional:
+    for name in sorted(optional):
       parts.append(f'- `{name}` — optional (used if present)')
     for name in llm_secrets:
       parts.append(f'- `{name}` — LLM key')
@@ -50,8 +51,18 @@ async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None)
       parts.append(f'- **spell::{name}** — {_one_line(description)}')
 
   if system_prompt_hold is not None:
-    system_prompt = bro.system_prompt_for(hold=system_prompt_hold)
-    parts.extend(['', '## System prompt', '', '```', system_prompt, '```'])
+    parts.extend(['', '## System prompt'])
+    for harness in harnesses:
+      parts.extend(
+        [
+          '',
+          f'### {harness.name}',
+          '',
+          '```',
+          bro.system_prompt_for(harness=harness, hold=system_prompt_hold),
+          '```',
+        ]
+      )
 
   return '\n'.join(parts) + '\n'
 

@@ -59,7 +59,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/identity.py` — managed-session git identities:
   the bro a session commits as, and the launching human it credits, read from the attachment's own git configuration.
 - `ride/harness.py`
-  — the `SessionHarness` protocol (scope, auth, session reads, preparation, the runtime probe, and the launch hooks), the metadata-derived harness roster, and the lazy checked resolver.
+  — the `SessionHarness` protocol (scope, auth, session reads, preparation, the runtime probe, host-cache cleanup, and the launch hooks), the metadata-derived harness roster, and the lazy checked resolver.
   The framework identity, prompt facts, and `bro.harnesses` registry live in `bro/harness/__init__.py`.
 - `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
@@ -77,7 +77,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 ## Invariants
 
 - The neutral layer owns one started-party launcher parameterized by isolation;
-  the harness seam supplies scope recipes, auth, LLM resolution, session preparation and the run under `do-ride`, runtime checks, session-state reads, and per-harness launch extras.
+  the harness seam supplies scope recipes, auth, LLM resolution, session preparation and the run under `do-ride`, runtime checks, host-cache cleanup, session-state reads, and per-harness launch extras.
   `do-ride` owns every session's common setup before asking the selected harness to prepare and run it.
   A managed boxed or unboxed workspace is always launched by `ride`;
   a summon child is spawned by `summon`

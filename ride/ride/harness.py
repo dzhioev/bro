@@ -43,6 +43,10 @@ class SessionHarness(Protocol):
 
   def check_runtime(self) -> None: ...
 
+  def clean_cache(self, *, dry_run: bool = False) -> None:
+    """Remove unused host-wide caches and report what was removed or retained."""
+    ...
+
   def run_session(self, spec: 'SessionRun') -> int: ...
 
   def container_extras(

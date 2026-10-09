@@ -79,7 +79,7 @@ The other facts are documented there too.
 — the bro surfaces pass the owning bro's `#features` — and the renderer resolves `{{include}}` targets through the `prompts` loader.
 Each surface renders its copy once, with its own facts:
 
-- `BaseBro.system_prompt_for` — the bro-native system prompt (harness `bro`)
+- `BaseBro.composed_prompt(harness, hold=…)` — a composed system prompt for the explicitly selected harness
 - `ride/ride/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`)
 - `bro.prompts.session_fragment` — the session fragments, closing on the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`)
 - spell bodies — each `spell::` tool renders for its serving harness and the session's hold;
