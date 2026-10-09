@@ -51,25 +51,23 @@ class _NoRun:
   current_tool_step_id = None
 
 
-def _servers(bro: BaseBro) -> list[llm_mcp.MCPServer]:
-  return bro.assemble(harness='bro', include_raise=True, live_run=_NoRun())
+def _servers(bro: BaseBro, *, hold: str = 'unattended') -> list[llm_mcp.MCPServer]:
+  return bro.assemble(harness='bro', hold=hold, live_run=_NoRun())
 
 
 def _persona_servers(bro: BaseBro) -> list[llm_mcp.MCPServer]:
-  return bro.assemble(harness='claude', include_raise=True)
+  return bro.assemble(harness='claude', hold='unattended')
 
 
-def _spell_server(bro: BaseBro) -> llm_mcp.MCPServer:
-  return next(server for server in _servers(bro) if server.namespace == NAMESPACE)
+def _spell_server(bro: BaseBro, *, hold: str = 'unattended') -> llm_mcp.MCPServer:
+  return next(server for server in _servers(bro, hold=hold) if server.namespace == NAMESPACE)
 
 
-def _service_server(
-  bro: BaseBro, *, harness: mcp.HarnessLike = 'bro', include_raise: bool = True
-) -> llm_mcp.MCPServer:
+def _service_server(bro: BaseBro, *, harness: mcp.HarnessLike = 'bro') -> llm_mcp.MCPServer:
   # built on its own rather than picked out of a full assembly: these tests read
   # service tools only, and materializing a bro's declared servers would demand
   # the credentials they hold.
-  return bro_module._build_service_server(bro, include_raise=include_raise, harness=harness)
+  return bro_module._build_service_server(bro, hold='unattended', harness=harness)
 
 
 class TestSpellDeclaration:
@@ -102,7 +100,7 @@ class TestSpellDeclaration:
 
   def test_a_nested_path_names_the_spell_by_its_stem(self, fake_packages):
     package = fake_packages('_spell_nested', {'review/pr': _spell(body='nested')})
-    assert package.bro_class()().get_spell_body('pr', harness='bro') == 'nested'
+    assert package.bro_class()().get_spell_body('pr', harness='bro', hold='unattended') == 'nested'
 
   @pytest.mark.parametrize(
     ('entry', 'match'),
@@ -148,12 +146,12 @@ class TestSpellStore:
     bro = package.bro_class()()
 
     assert bro.spell_descriptions() == [('do-work', 'First sentence. Full detail follows.')]
-    assert bro.get_spell_body('do-work', harness='bro') == '# Procedure\n\nwork'
+    assert bro.get_spell_body('do-work', harness='bro', hold='unattended') == '# Procedure\n\nwork'
 
   def test_unknown_spell_names_available_spells(self, fake_packages):
     package = fake_packages('_spell_unknown', {'known': _spell()})
     with pytest.raises(KeyError, match='available: known'):
-      package.bro_class()().get_spell_body('missing', harness='bro')
+      package.bro_class()().get_spell_body('missing', harness='bro', hold='unattended')
 
   def test_checked_in_spells_render_for_every_surface(self):
     spell_files = sorted((Path(spell_store.__file__).parent.parent / 'bros').glob('*/spells/*.md'))
@@ -165,13 +163,15 @@ class TestSpellStore:
       spell = load_spell(path.stem, path)
       for name in installed_harness_names():
         harness = get_harness(name)
-        for enabled in (True, False):
-          mcp.render_text(
-            spell.body,
-            harness=harness,
-            creds=spell_store.credentials.known_names(),
-            extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
-          )
+        for hold in mcp.HOLDS:
+          for enabled in (True, False):
+            mcp.render_text(
+              spell.body,
+              harness=harness,
+              creds=spell_store.credentials.known_names(),
+              hold=hold,
+              extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
+            )
 
   def test_spell_body_renders_against_the_bro_features(self, fake_packages, monkeypatch):
     package = fake_packages(
@@ -185,9 +185,21 @@ class TestSpellStore:
 
     # the probe is live: one instance renders both states as availability moves
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == 'xkey')
-    assert bro.get_spell_body('gated', harness='bro') == 'on-branch'
+    assert bro.get_spell_body('gated', harness='bro', hold='unattended') == 'on-branch'
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: False)
-    assert bro.get_spell_body('gated', harness='bro') == 'off-branch'
+    assert bro.get_spell_body('gated', harness='bro', hold='unattended') == 'off-branch'
+
+  @pytest.mark.asyncio
+  async def test_spell_tool_renders_under_the_assembled_hold(self, fake_packages):
+    package = fake_packages(
+      '_spell_hold',
+      {'held': _spell(body='{{iff #hold = unattended}}alone{{else}}watched{{end}}')},
+    )
+    bro = package.bro_class()()
+
+    for hold, body in (('unattended', 'alone'), ('attended', 'watched')):
+      tools = await _spell_server(bro, hold=hold).list_tools()
+      assert await next(tool for tool in tools if tool.name == 'held').call({}) == body
 
   def test_checked_in_store_has_no_legacy_skill_directories(self):
     skill_directories = list((Path(spell_store.__file__).parent.parent / 'bros').glob('*/skills'))
@@ -279,7 +291,7 @@ class TestSpellServer:
     assert not hasattr(bro, 'get_skill_body')
     assert not hasattr(bro, 'skill_descriptions')
     assert 'skill' not in persona_tool_names
-    assert '## Skills' in bro.system_prompt
+    assert '## Skills' in bro.system_prompt_for(hold='unattended')
     assert skill.parameters['required'] == ['name']
     assert await skill.call({'name': 'third-party'}) == ''
 
@@ -578,24 +590,26 @@ class TestSpellsPrompt:
     package = fake_packages('_spell_prompt_direct', {'do-work': _spell(description)})
     bro = package.bro_class()()
 
-    spells_section = bro.system_prompt.split('## Spells', 1)[1].split('## Skills', 1)[0]
+    spells_section = (
+      bro.system_prompt_for(hold='unattended').split('## Spells', 1)[1].split('## Skills', 1)[0]
+    )
     assert '`/<name>`' not in spells_section
     assert '`bro::cast`' not in spells_section
     assert "call the named spell's own tool" in spells_section
-    assert description not in bro.system_prompt
+    assert description not in bro.system_prompt_for(hold='unattended')
 
   def test_dispatch_contract_is_present_when_secret_resolves(self, fake_packages, monkeypatch):
     package = fake_packages('_spell_prompt_dispatch', {'do-work': _spell()})
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == CAST_SECRET)
     bro = package.bro_class()()
 
-    assert '## Spells' in bro.system_prompt
-    assert '`bro::cast`' in bro.system_prompt
-    assert 'follow the returned instructions' in bro.system_prompt
+    assert '## Spells' in bro.system_prompt_for(hold='unattended')
+    assert '`bro::cast`' in bro.system_prompt_for(hold='unattended')
+    assert 'follow the returned instructions' in bro.system_prompt_for(hold='unattended')
 
   def test_section_is_absent_without_spells(self, fake_packages):
     package = fake_packages('_spell_prompt_empty')
-    assert '## Spells' not in package.bro_class()().system_prompt
+    assert '## Spells' not in package.bro_class()().system_prompt_for(hold='unattended')
 
 
 class TestSpellOptionalSecret:

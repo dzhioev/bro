@@ -269,7 +269,7 @@ class ScriptedLLM(LLM):
 
 class ScriptedRunner(Runner):
   def _create_llm(self, *, hold):
-    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
 
@@ -544,7 +544,7 @@ class ScriptedRunner(Runner):
       yield
 
   def _create_llm(self, *, hold):
-    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
 

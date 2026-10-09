@@ -68,7 +68,7 @@ def session_fragment(
   if can_summon or is_summoned:
     contracts.append('turn_end.md')
   parts = [
-    mcp.render_text(get_prompt(name), harness=harness, creds=creds, talk=talk).strip()
+    mcp.render_text(get_prompt(name), harness=harness, creds=creds, talk=talk, hold=hold).strip()
     for name in contracts
   ]
   parts.append(hold_fragment(hold, harness=harness, creds=creds))
@@ -83,9 +83,7 @@ def hold_fragment(
 ) -> str:
   """render the hold fragment for `hold` — the one rendering path, so the
   `{{…}}` directives in the hold text never leak unrendered. `hold.md` selects
-  the per-level file on the `#hold` fact, which only this call supplies:
-  everything else renders hold-neutrally and a stray `#hold` directive there
-  raises.
+  the per-level file on the `#hold` fact.
   """
   from bro import mcp
 

@@ -1447,7 +1447,8 @@ Wrappers and session daemons rely on a small set of env vars:
   a session commits as its bro, so the human it credits reaches its commits only through what the launch carried (`bro.workflow.co_author`).
 - `BRO_HOLD` — the session's user-involvement level (`unattended | detached | attended | guided`);
   the neutral `do-ride` layer exports it from `--hold` for every harness, overwriting any ambient value (a session launched from inside another must not inherit its hold), before anything the session spawns inherits the environment.
-  Read by the claude service-server assemblies in `bro/bro.py` to gate the `raise` service tool's mount on the unattended level.
+  Read by the Claude persona server (`ride.claude.assembly`), which assembles the session's tools under it:
+  the `raise` mount at the unattended level, and the hold spell bodies render under.
 - `RIDE_RUNNER_PID` — the `do-ride` process's own pid, always (re-)exported next to `BRO_HOLD`.
   Its pid and operating-system start-time identity also live in `RIDE_SESSION_DIR/runner.pid` while the process owns the session.
   The `raise` service tool's kill target:

@@ -80,7 +80,7 @@ class TestGeneratedSurface:
     parameters = _tool('bro show').parameters
     assert parameters['required'] == ['name']
     assert parameters['properties']['name'] == {'type': 'string', 'description': 'bro name'}
-    assert parameters['properties']['system_prompt']['type'] == 'boolean'
+    assert _tool('rewind grep').parameters['properties']['ignore_case']['type'] == 'boolean'
 
   def test_choices_become_an_enum_and_int_type_carries(self):
     properties = _tool('rewind grep').parameters['properties']

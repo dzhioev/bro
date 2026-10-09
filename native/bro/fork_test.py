@@ -12,6 +12,7 @@ from bro.fork import fork, latest_fork_point, replay_messages
 from bro.llm.llms.openai import LLMSpec as OpenAISpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.native.harness import BRO
+from bro.registry import create_bro
 from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 
 _SYS_TEXT = 'you are a test bro'
@@ -23,7 +24,7 @@ def _trail_header(
   bro: str = 'bro',
   llm_spec: Optional[dict] = None,
   harness: str = 'bro',
-  hold: Optional[str] = None,
+  hold: Optional[str] = 'guided',
 ) -> Trail:
   return Trail(
     id=trail_id,
@@ -660,38 +661,33 @@ class TestForkLinkage:
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
-      runner = fork(
-        forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test'
-      )
+      fork(forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test')
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
-    assert runner.bro.system_prompt == 'swapped prompt'
     # prefix on the new OpenAI's seam carries the override at index 0
     seeded = created[0]._input_prefix
     assert seeded is not None
     assert seeded[0] == {'role': 'system', 'content': 'swapped prompt'}
 
-  def test_explicit_hold_replaces_the_recorded_hold_fragment(self):
-    from bro.base import credentials
-    from bro.prompts import hold_fragment
+  @pytest.mark.parametrize('recorded_hold', ['unattended', None])
+  def test_an_omitted_hold_forks_guided_under_a_guided_prompt(self, recorded_hold):
+    trail = _simple_trail(hold=recorded_hold)
+    tracker = _RecordingTracker()
+    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
+    with context:
+      fork(trail, 2, tracker=tracker, surface='call')
+    expected_prompt = create_bro('bro').system_prompt_for(hold='guided', harness=BRO)
+    assert tracker.headers[0]['system_prompt'] == expected_prompt
+    assert tracker.headers[0]['hold'] == 'guided'
 
-    known_credentials = credentials.known_names()
-    unattended = hold_fragment('unattended', harness=BRO, creds=known_credentials)
-    attended = hold_fragment('attended', harness=BRO, creds=known_credentials)
-    recorded = _simple_trail(hold='unattended')
-    trail = RecordedTrail(
-      header=recorded.header,
-      steps=[
-        dataclasses.replace(recorded.steps[0], body=f'{_SYS_TEXT}\n\n{unattended}'),
-        *recorded.steps[1:],
-      ],
-    )
+  def test_a_changed_hold_recomposes_the_prompt_under_it(self):
+    trail = _simple_trail(hold='unattended')
     tracker = _RecordingTracker()
     context, _, created = _patch_native_openai_create(
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
       fork(trail, 2, hold='attended', tracker=tracker, surface='call')
-    expected_prompt = f'{_SYS_TEXT}\n\n{attended}'
+    expected_prompt = create_bro('bro').system_prompt_for(hold='attended', harness=BRO)
     assert tracker.headers[0]['system_prompt'] == expected_prompt
     assert tracker.headers[0]['hold'] == 'attended'
     prefix = created[0]._input_prefix

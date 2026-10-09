@@ -1,20 +1,18 @@
-import os
-
 from bro.bro import BaseBro
-from bro.launch.hold import UNATTENDED, session_hold
+from bro.launch.hold import HOLD_VARIABLE, session_hold
 from bro.llm.mcp import MCPServer
 from bro.registry import create_bro
 from ride.claude.harness import CLAUDE
 
 
-def _include_raise() -> bool:
-  return session_hold() == UNATTENDED and os.environ.get('RIDE_RUNNER_PID') is not None
-
-
-def persona_servers(bro: BaseBro) -> list[MCPServer]:
-  """assemble additions to Claude Code's native tool surface."""
-  return bro.assemble(harness=CLAUDE, include_raise=_include_raise())
+def persona_servers(bro: BaseBro, hold: str) -> list[MCPServer]:
+  """assemble additions to Claude Code's native tool surface for a session under
+  `hold`."""
+  return bro.assemble(harness=CLAUDE, hold=hold)
 
 
 def resolve_persona_target(name: str) -> list[MCPServer]:
-  return persona_servers(create_bro(name))
+  hold = session_hold()
+  if hold is None:
+    raise RuntimeError(f'persona servers run inside a managed session, which sets {HOLD_VARIABLE}')
+  return persona_servers(create_bro(name), hold)

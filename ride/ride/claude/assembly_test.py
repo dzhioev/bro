@@ -1,6 +1,8 @@
 import asyncio
 import importlib.metadata
 
+import pytest
+
 from bro.bro import BaseBro
 from bro.runtime.mcp_server import _resolve_servers
 from ride.claude.assembly import persona_servers
@@ -17,23 +19,21 @@ async def _tool_names(servers) -> set[str]:
 
 
 def test_unattended_killable_session_mounts_raise(monkeypatch):
-  monkeypatch.setenv('BRO_HOLD', 'unattended')
   monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
 
-  assert 'raise' in asyncio.run(_tool_names(persona_servers(_AssemblyBro())))
+  assert 'raise' in asyncio.run(_tool_names(persona_servers(_AssemblyBro(), 'unattended')))
 
 
 def test_session_without_a_kill_target_does_not_mount_raise(monkeypatch):
-  monkeypatch.setenv('BRO_HOLD', 'unattended')
+  monkeypatch.delenv('RIDE_RUNNER_PID', raising=False)
 
-  assert 'raise' not in asyncio.run(_tool_names(persona_servers(_AssemblyBro())))
+  assert 'raise' not in asyncio.run(_tool_names(persona_servers(_AssemblyBro(), 'unattended')))
 
 
 def test_human_facing_holds_do_not_mount_raise(monkeypatch):
   monkeypatch.setenv('RIDE_RUNNER_PID', '4242')
   for hold in ('detached', 'attended', 'guided'):
-    monkeypatch.setenv('BRO_HOLD', hold)
-    assert 'raise' not in asyncio.run(_tool_names(persona_servers(_AssemblyBro())))
+    assert 'raise' not in asyncio.run(_tool_names(persona_servers(_AssemblyBro(), hold)))
 
 
 def test_ride_contributes_the_persona_target():
@@ -45,5 +45,12 @@ def test_ride_contributes_the_persona_target():
   } == {('persona', 'ride.claude.assembly:resolve_persona_target')}
 
 
-def test_core_server_resolves_the_contributed_persona_target():
+def test_core_server_resolves_the_contributed_persona_target(monkeypatch):
+  monkeypatch.setenv('BRO_HOLD', 'attended')
   assert 'bro' in {server.namespace for server in _resolve_servers('persona:bro')}
+
+
+def test_the_persona_target_outside_a_managed_session_is_refused(monkeypatch):
+  monkeypatch.delenv('BRO_HOLD', raising=False)
+  with pytest.raises(RuntimeError, match='BRO_HOLD'):
+    _resolve_servers('persona:bro')

@@ -27,14 +27,14 @@ def test_browser_declares_its_worker_seed_reader_and_spell() -> None:
   assert browser._may_launch == ('webview',)
   assert 'openai' in browser.optional_secrets('bro')
   assert 'browse' in browser.spell_paths
-  assert browser.get_spell_body('browse', harness='bro').startswith('# browse\n')
+  assert browser.get_spell_body('browse', harness='bro', hold='unattended').startswith('# browse\n')
 
 
 def test_browse_spell_uses_session_watch_notifications_and_branches_final_delivery() -> None:
   browser = Browser()
 
   for harness in ('bro', 'claude'):
-    body = browser.get_spell_body('browse', harness=harness)
+    body = browser.get_spell_body('browse', harness=harness, hold='unattended')
     assert 'session watch delivers owner questions as notifications' in body
     assert '[[watch quest watch]]' not in body
     assert 'call `bro::answer`' in body
@@ -44,6 +44,6 @@ def test_browse_spell_uses_session_watch_notifications_and_branches_final_delive
 def test_browser_mounts_the_same_bounded_roster_on_both_harnesses() -> None:
   for harness in ('bro', 'claude'):
     namespaces = {
-      server.namespace for server in Browser().assemble(harness=harness, include_raise=False)
+      server.namespace for server in Browser().assemble(harness=harness, hold='attended')
     }
     assert {'webview', 'browser', 'artifact', 'current-time-source'} <= namespaces

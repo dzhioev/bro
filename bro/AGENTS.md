@@ -141,25 +141,24 @@ A harness mounts, for a bro, the servers its `serve` returns for that reach ahea
 ### Prompt composition
 
 `BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading.
-When the native harness is installed, it composes the bro-native `system_prompt` around that persona.
+`system_prompt_for(hold=…, harness=…)` composes the text a bro-native run starts under around that persona.
 The composition starts with every `bro/prompts/shared/*.md`, then the persona and the tool-name rule (`bro/prompts/tool_names.md`).
 It adds a `## Data sources` block describing each declared `DataSource`, the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
-The composition renders with the registered harness object's own facts, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary.
-A Claude-only installation can therefore construct the core persona without loading or carrying `bro-native`.
+The composition renders with the harness object's own facts, the run's hold, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary,
+then closes on the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
 A managed Claude session runs under a prompt of its own;
 its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`bro/reference/ride.md`, "Auto-injected system prompt").
-`system_prompt_for(hold=…, harness=…)` is the text a bro-native run starts under:
-the harness-composed prompt plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
 
 ### Service tools
 
-Every assembly (`assemble(harness, …)`) receives the engine's registered `Harness` object and appends the `bro` service server.
+Every assembly (`assemble(harness=…, hold=…)`) receives the engine's registered `Harness` object and the session's hold, and appends the `bro` service server;
+the spell tools and `cast` render spell bodies under that hold.
 `_build_service_server` decides core's roster from the surface and the process environment, then appends `Harness.own_tools` and renders the combined roster as the `#tools` universe:
 
 - `banner`, always:
   the session facts of `ride banner --llm` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly since an in-process run's environment carries the launcher's;
   the playbook is `bro/prompts/environment.md`.
-- `raise`, at the unattended hold alone
+- `raise`, at the unattended hold alone, on a harness whose `can_end_session()` holds
   — `Runner.run()`'s default, `bro run`, summoned children, and the Claude builds when `do-ride` exports `BRO_HOLD=unattended` with `RIDE_RUNNER_PID`:
   the agent aborts with a reason when the request cannot be fulfilled, through the selected harness's `end_session`.
   The bro harness raises `BroRaised(reason)` out of `Runner.run()`;

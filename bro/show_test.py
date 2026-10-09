@@ -261,7 +261,7 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_system_prompt_included_when_requested(self):
-    card = await format_card(_FullBro(), include_system_prompt=True)
+    card = await format_card(_FullBro(), system_prompt_hold='unattended')
     assert '## System prompt' in card
     assert 'YOU ARE FULL' in card
     assert '```' in card

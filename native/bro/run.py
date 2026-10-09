@@ -2,6 +2,7 @@ import asyncio
 from typing import Optional
 
 import bro.base.args as base_args
+from bro.mcp import HOLDS
 
 __cli_name__ = 'bro'
 
@@ -13,12 +14,12 @@ def _command_list() -> None:
     print(f'{bro_class.name}: {bro_class.description}')
 
 
-def _command_show(name: str, system_prompt: bool) -> None:
+def _command_show(name: str, system_prompt: Optional[str]) -> None:
   from bro.registry import create_bro
   from bro.show import format_card
 
   bro = create_bro(name)
-  card = asyncio.run(format_card(bro, include_system_prompt=system_prompt))
+  card = asyncio.run(format_card(bro, system_prompt_hold=system_prompt))
   print(card, end='')
 
 
@@ -52,8 +53,9 @@ def main(argv: list[str]) -> Optional[int]:
   show_parser.add_argument('name', help='bro name')
   show_parser.add_argument(
     '--system-prompt',
-    action='store_true',
-    help='also include the full assembled system prompt',
+    choices=HOLDS,
+    metavar='HOLD',
+    help=f'also include the full system prompt the bro runs under HOLD ({", ".join(HOLDS)})',
   )
   show_parser.set_handler(_command_show)
 

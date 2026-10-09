@@ -200,8 +200,10 @@ def fork(
   `fetch_forked_from` when the forked_from trail is itself a fork (see
   `replay_messages`).
 
-  `hold` replaces the recorded hold fragment when provided; that prompt change
-  selects client-side replay. Omit it to preserve the recorded prompt.
+  the fork runs under `hold`, guided when omitted. A hold that differs from the
+  recorded one, or a trail that recorded none, recomposes the prompt under it
+  from the bro's current definition; that prompt change selects client-side
+  replay.
 
   `record=False` pins the new runner to a `NullTracker` — handy for one-shot
   exploration where the fork's trail is not worth keeping. `record=True` (the
@@ -234,12 +236,9 @@ def fork(
     system_prompt if system_prompt is not None else forked_from_system_prompt
   )
   prompt_changed = system_prompt is not None
-  if system_prompt is None and hold is not None and hold != forked_from_trail.header.hold:
-    effective_system_prompt = _replace_hold_fragment(
-      forked_from_system_prompt,
-      recorded_hold=forked_from_trail.header.hold,
-      resumed_hold=hold,
-    )
+  effective_hold = hold if hold is not None else 'guided'
+  if system_prompt is None and effective_hold != forked_from_trail.header.hold:
+    effective_system_prompt = bro.system_prompt_for(hold=effective_hold, harness=BRO)
     prompt_changed = True
   use_server_side = _server_side_eligible(
     forked_from_spec=forked_from_trail.header.llm_spec,
@@ -247,11 +246,9 @@ def fork(
     fork_step=fork_step,
     system_prompt_override=effective_system_prompt if prompt_changed else None,
   )
-  # This value is the complete recorded prompt, including its hold fragment;
+  # This value is the complete prompt, including its hold fragment;
   # pre-assigning it bypasses the runner's fresh-run fragment append.
-  bro.system_prompt = effective_system_prompt
   bro._system_prompt_override = effective_system_prompt
-  effective_hold = hold if hold is not None else 'guided'
 
   runner = Runner(bro, activity_file=activity_file)
   runner._tracker = (
@@ -286,26 +283,6 @@ def fork(
   )
   runner.trail_id = trail_id if len(trail_id) > 0 else None
   return runner
-
-
-def _replace_hold_fragment(
-  system_prompt: str,
-  *,
-  recorded_hold: Optional[str],
-  resumed_hold: str,
-) -> str:
-  if recorded_hold is None:
-    raise ValueError('cannot change the hold of a trail that recorded no hold')
-  from bro.base import credentials
-  from bro.prompts import hold_fragment
-
-  known_credentials = credentials.known_names()
-  recorded_fragment = hold_fragment(recorded_hold, harness=BRO, creds=known_credentials)
-  suffix = f'\n\n{recorded_fragment}'
-  if not system_prompt.endswith(suffix):
-    raise ValueError('recorded system prompt does not end with its hold fragment')
-  resumed_fragment = hold_fragment(resumed_hold, harness=BRO, creds=known_credentials)
-  return f'{system_prompt.removesuffix(suffix)}\n\n{resumed_fragment}'
 
 
 def _server_side_eligible(

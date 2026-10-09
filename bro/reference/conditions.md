@@ -125,9 +125,10 @@ an empty published set is the root or another mute quest and tests every right f
 No ready-made placeholder is exported.
 
 `hold` — the session's user-involvement level (`unattended | detached | attended | guided`, the domain is `bro.mcp.HOLDS`).
-It is supplied only when rendering the hold text (`bro.prompts.hold_fragment` → `render_text(hold=…)`), never by the general conditioning surfaces, so hold-neutral text
-— spells, procedure docs
-— fails fast on a stray `#hold` directive.
+The session-level text surfaces
+— prompt composition, the session fragments, spell bodies, ride's append prompt
+— supply the hold the session runs under, so a passage that applies at some levels renders only there:
+`{{when #hold = unattended}}`.
 No ready-made placeholder is exported.
 
 `bro.mcp.select(entries, harness=…, creds=…, may_summon=…, talk=…)` owns the facts-to-variables mapping for declarative lists (`bro.mcp.render_text` is its sibling for text — see `bro/reference/template.md`).

@@ -20,9 +20,7 @@ def test_reviewer_carries_review_spells_but_no_author_procedures():
 
 
 def test_claude_surface_selects_the_reference_tools():
-  assert [
-    server.namespace for server in Eyebro().assemble(harness='claude', include_raise=False)
-  ] == [
+  assert [server.namespace for server in Eyebro().assemble(harness='claude', hold='attended')] == [
     'dev-style-source',
     'bro',
     'spell',
@@ -40,23 +38,25 @@ def test_review_spells_render_for_every_surface():
   for path in Eyebro().spell_paths.values():
     spell = load_spell(path.stem, path)
     for harness in installed_harness_names():
-      for enabled in (True, False):
-        mcp.render_text(
-          spell.body,
-          harness=harness,
-          creds=spell_store.credentials.known_names(),
-          extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
-        )
+      for hold in mcp.HOLDS:
+        for enabled in (True, False):
+          mcp.render_text(
+            spell.body,
+            harness=harness,
+            creds=spell_store.credentials.known_names(),
+            hold=hold,
+            extra={'features': SetVariable(lambda name, on=enabled: on, universe=feature_names)},
+          )
 
 
 def test_review_pr_drives_the_pull_request_only_under_a_github_identity(monkeypatch):
   bro = Eyebro()
   monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'github')
-  with_identity = bro.get_spell_body('review-pr', harness='claude')
+  with_identity = bro.get_spell_body('review-pr', harness='claude', hold='unattended')
   assert 'pr-state' in with_identity
   assert 'no GitHub identity' not in with_identity
 
   monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
-  without_identity = bro.get_spell_body('review-pr', harness='claude')
+  without_identity = bro.get_spell_body('review-pr', harness='claude', hold='unattended')
   assert 'no GitHub identity' in without_identity
   assert 'pr-state' not in without_identity

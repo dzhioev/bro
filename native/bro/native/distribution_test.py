@@ -252,7 +252,7 @@ def test_core_and_ride_wheels_compose_a_claude_session_without_native(wheels, tm
     'from ride.claude.system_prompt import session_append_prompt; '
     'assert installed_harness_names() == ("claude",); '
     'assert "# Persona: bro" in session_append_prompt("unattended", "bro"); '
-    'servers = persona_servers(create_bro("bro")); '
+    'servers = persona_servers(create_bro("bro"), "attended"); '
     'names = {tool.name for server in servers for tool in asyncio.run(server.list_tools())}; '
     'assert names.isdisjoint({"job", "poll", "kill", "jobs", "skill"}); '
     'assert importlib.util.find_spec("bro.jobs") is None; '

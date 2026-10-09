@@ -6,12 +6,12 @@ _PROMPTS_DIR = Path(prompts.__file__).parent
 # auto-injected into every `ride solo|along` session via --append-system-prompt. Files in
 # `shared/` also flow into every bro (via bro/bro.py:_load_shared_prompts), so
 # put cross-surface conventions there. Prompt files may carry template
-# directives (the harness's facts, `#creds`, plus the bro's own `#features`) —
+# directives (the harness's facts, `#creds`, `#hold`, plus the bro's own `#features`) —
 # the whole append text renders once in `session_append_prompt` with this
 # surface's facts and the session bro's vocabulary. The one top-level file
 # injected here is `tool_names.md` — it inserts the harness's tool-name rule;
-# bro-native LLM runs compose their own rendering into
-# `BaseBro.system_prompt` — do not give a bro a `FileSource` for this file.
+# bro-native LLM runs compose their own rendering through
+# `BaseBro.system_prompt_for` — do not give a bro a `FileSource` for this file.
 # Other reference docs (`environment.md`, …) reach every harness as `FileSource`
 # tools instead (bro/datasources/references.py).
 _BASE_PROMPT_DIRECTORIES = ['shared']
@@ -37,12 +37,11 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
   base prompts plus the session bro's own persona prompts and spell
   instructions (`bro_name`, the `--bro` bro) — so a ride-session carries the
   bro's policies even though it runs the Claude Code harness. the assembled text renders
-  once with this surface's facts: the claude harness, with
+  once with this surface's facts: the claude harness, the session's `hold`, and
   the session environment's credentials (this composes in the session's own
   process — in-container for container sessions — so the store is the scoped
   one, and the summoned mark is this session's own). the session fragments
-  render separately through `bro.prompts.session_fragment` — the `#hold` fact is
-  supplied only there, so the base and persona prompts stay hold-neutral.
+  follow, rendered through `bro.prompts.session_fragment`.
   """
   # Keep the bro class graph out of this leaf module's import closure.
   import bro.mcp as mcp
@@ -61,6 +60,7 @@ def session_append_prompt(hold: str, bro_name: str) -> str:
     harness=CLAUDE,
     creds=credentials.known_names(),
     may_summon=summon.effective_may_summon(),
+    hold=hold,
     extra=bro.vocabulary(),
   )
   fragment = prompts.session_fragment(

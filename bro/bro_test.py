@@ -52,7 +52,7 @@ def _native_servers(
 ) -> list[MCPServer]:
   return bro.assemble(
     harness='bro',
-    include_raise=hold == 'unattended',
+    hold=hold,
     live_run=run if run is not None else StubRun(),
   )
 
@@ -62,7 +62,7 @@ def _service_server(
 ) -> MCPServer:
   return bro_module._build_service_server(
     bro,
-    include_raise=True,
+    hold='unattended',
     harness=harness,
     live_run=run if run is not None else StubRun(),
   )
@@ -188,12 +188,12 @@ class TestBroDataSources:
         super().__init__(system_prompt='base')
 
     bro = SourceBro()
-    assert '## Data sources' in bro.system_prompt
-    assert '**stub**' in bro.system_prompt
-    assert 'a stub data source for tests' in bro.system_prompt
+    assert '## Data sources' in bro.system_prompt_for(hold='unattended')
+    assert '**stub**' in bro.system_prompt_for(hold='unattended')
+    assert 'a stub data source for tests' in bro.system_prompt_for(hold='unattended')
     # canonical `::` in the data-source block, resolved by the tool-names rule;
     # the example derives from the bro's own first source
-    assert 'stub-source::' in bro.system_prompt
+    assert 'stub-source::' in bro.system_prompt_for(hold='unattended')
 
   def test_summary_feature_directive_rendered_present(self, monkeypatch):
     from bro.base import credentials
@@ -208,7 +208,7 @@ class TestBroDataSources:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    prompt = MarkBro().system_prompt
+    prompt = MarkBro().system_prompt_for(hold='unattended')
     assert 'query summary on' in prompt
     assert 'no key' not in prompt
     assert '{{' not in prompt  # markers fully resolved, never leak raw
@@ -226,7 +226,7 @@ class TestBroDataSources:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    prompt = MarkBro().system_prompt
+    prompt = MarkBro().system_prompt_for(hold='unattended')
     assert 'no key' in prompt
     assert 'query summary on' not in prompt
 
@@ -241,14 +241,15 @@ class TestToolNamesBlock:
       def __init__(self):
         super().__init__(system_prompt='base')
 
-    prompt = ToolBro().system_prompt
+    prompt = ToolBro().system_prompt_for(hold='unattended')
     assert '# Tool names' in prompt
     assert '`namespace::tool`' in prompt
     assert '`namespace__tool`' in prompt
     # generic wording: nothing about a repo/codebase (reaches repo-unaware bros).
-    # scoped to the block — the shared prompts ahead of it legitimately contain
-    # words like "report" that a bare substring scan would trip on
-    tool_names_block = prompt[prompt.index('# Tool names') :]
+    # scoped to the block — the prompts around it legitimately contain words
+    # like "report" that a bare substring scan would trip on
+    start = prompt.index('# Tool names')
+    tool_names_block = prompt[start : prompt.index('\n#', start)]
     assert 'repo' not in tool_names_block.lower()
 
   def test_present_for_framework_skill_loader(self):
@@ -260,9 +261,9 @@ class TestToolNamesBlock:
         super().__init__(system_prompt='base')
 
     bro = BareBro()
-    assert '# Tool names' in bro.system_prompt
-    assert '`namespace__tool`' in bro.system_prompt
-    assert '`mcp__namespace__tool`' not in bro.system_prompt
+    assert '# Tool names' in bro.system_prompt_for(hold='unattended')
+    assert '`namespace__tool`' in bro.system_prompt_for(hold='unattended')
+    assert '`mcp__namespace__tool`' not in bro.system_prompt_for(hold='unattended')
 
   @pytest.mark.asyncio
   async def test_data_source_search_and_fetch_calls(self):
@@ -678,7 +679,7 @@ class TestConditionalComponents:
 
     bro = CondSourceBro()
     assert bro.reach().sources == ()
-    assert '## Data sources' not in bro.system_prompt
+    assert '## Data sources' not in bro.system_prompt_for(hold='unattended')
     assert bro.needed_secrets() == ()
     assert bro._live_mcp_servers() == []
 
@@ -704,13 +705,13 @@ class TestFeatures:
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
     on = self._bro_class()()
     assert len(on.reach().server_specs) == 1
-    assert 'FEATURE TEXT' in on.system_prompt
+    assert 'FEATURE TEXT' in on.system_prompt_for(hold='unattended')
     assert set(on.needed_secrets()) == {'alpha', 'beta'}
 
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
     off = self._bro_class()()
     assert off.reach().server_specs == ()
-    assert 'FEATURE TEXT' not in off.system_prompt
+    assert 'FEATURE TEXT' not in off.system_prompt_for(hold='unattended')
     assert off.needed_secrets() == ()
 
   def test_gate_on_an_unregistered_kind_fails_the_probe(self, monkeypatch):
@@ -727,7 +728,7 @@ class TestFeatures:
 
     child = Pinned()
     assert len(child.reach().server_specs) == 1
-    assert 'FEATURE TEXT' in child.system_prompt
+    assert 'FEATURE TEXT' in child.system_prompt_for(hold='unattended')
 
   def test_derived_disables_parent_feature(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'xkey')
@@ -738,7 +739,7 @@ class TestFeatures:
 
     child = Disabled()
     assert child.reach().server_specs == ()
-    assert 'FEATURE TEXT' not in child.system_prompt
+    assert 'FEATURE TEXT' not in child.system_prompt_for(hold='unattended')
 
   def test_gate_credential_is_tiered_with_the_feature(self, monkeypatch):
     monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
@@ -878,7 +879,7 @@ class TestHarnessService:
     return ServedBro()
 
   def test_a_harness_mounts_the_servers_it_serves_the_groups_with(self):
-    servers = self._bro().assemble(harness=_FilesHarness(), include_raise=False)
+    servers = self._bro().assemble(harness=_FilesHarness(), hold='attended')
     assert [server.namespace for server in servers] == ['secret', 'test', 'bro']
 
   def test_the_manifest_follows_what_the_harness_serves(self):
@@ -898,10 +899,10 @@ class TestHarnessService:
 
   def test_service_server_carries_banner_but_not_raise(self):
     names = asyncio.run(
-      _collect_tool_names(self._bro().assemble(harness='claude', include_raise=False))
+      _collect_tool_names(self._bro().assemble(harness='claude', hold='attended'))
     )
-    # `raise` is gated on the session hold (not unattended here — no BRO_HOLD);
-    # the environment facts stay available as `banner`
+    # `raise` is gated on the session hold; the environment facts stay
+    # available as `banner`
     assert 'banner' in names
     assert 'raise' not in names
 
@@ -1338,7 +1339,7 @@ class TestHarnessOwnTools:
   async def test_mounts_the_harness_roster_and_extends_the_tools_universe(self):
     server = _service_server(EchoBro(), harness=OwnToolsHarness())
 
-    assert {tool.name for tool in await server.list_tools()} >= {'banner', 'raise', 'harness_tool'}
+    assert {tool.name for tool in await server.list_tools()} >= {'banner', 'harness_tool'}
     assert server.tool_universe == (*bro_module._CORE_SERVICE_TOOL_NAMES, 'harness_tool')
 
 
@@ -1357,6 +1358,11 @@ class TestRaise:
       assert 'raise' not in names
 
   @pytest.mark.asyncio
+  async def test_raise_tool_needs_a_harness_able_to_end_the_session(self):
+    server = _service_server(EchoBro(), harness=EndingHarness(available=False))
+    assert 'raise' not in {tool.name for tool in await server.list_tools()}
+
+  @pytest.mark.asyncio
   async def test_raise_tool_ends_through_the_harness(self):
     harness = EndingHarness()
     tool = await _find_raise_tool(EchoBro(), harness)
@@ -1366,7 +1372,7 @@ class TestRaise:
 
   @pytest.mark.asyncio
   async def test_raise_description_states_the_session_end_for_every_harness(self):
-    for harness in (EndingHarness(), Harness('identity-only')):
+    for harness in (EndingHarness(), 'bro'):
       tool = await _find_raise_tool(EchoBro(), harness)
       assert 'ends the session' in tool.description
       assert '{{' not in tool.description
@@ -1374,7 +1380,7 @@ class TestRaise:
 
 class TestAnswer:
   async def _names(self, harness: Harness) -> set[str]:
-    server = bro_module._build_service_server(EchoBro(), include_raise=False, harness=harness)
+    server = bro_module._build_service_server(EchoBro(), hold='attended', harness=harness)
     return {tool.name for tool in await server.list_tools()}
 
   @pytest.mark.asyncio
@@ -1397,7 +1403,7 @@ class TestAnswer:
   async def _tool(self, harness: EndingHarness, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    server = bro_module._build_service_server(EchoBro(), include_raise=False, harness=harness)
+    server = bro_module._build_service_server(EchoBro(), hold='attended', harness=harness)
     for tool in await server.list_tools():
       if tool.name == 'answer':
         return tool
@@ -1429,7 +1435,7 @@ class TestSessionModePrompts:
     prompt = bro.system_prompt_for(hold='unattended')
     assert '`bro::raise`' in prompt
     assert 'unclear' in prompt
-    assert bro.system_prompt in prompt
+    assert bro.persona in prompt
     assert '# Unattended session' in prompt
     assert '# Guided session' not in prompt
     # the fragment renders at run start — no directive may leak
@@ -1441,11 +1447,24 @@ class TestSessionModePrompts:
     tool = await _find_raise_tool(bro)
     assert 'unclear' in tool.description
 
+  def test_persona_text_renders_under_the_runs_hold(self):
+    class HeldBro(BaseBro):
+      name = 'held'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='{{iff #hold = unattended}}ALONE{{else}}WATCHED{{end}}')
+
+    alone = HeldBro().system_prompt_for(hold='unattended')
+    watched = HeldBro().system_prompt_for(hold='attended')
+    assert 'ALONE' in alone and 'WATCHED' not in alone
+    assert 'WATCHED' in watched and 'ALONE' not in watched
+
   def test_interactive_runs_pin_the_guided_hold(self):
     bro = EchoBro()
     prompt = bro.system_prompt_for(hold='guided')
     assert 'clarifying question' in prompt
-    assert bro.system_prompt in prompt
+    assert bro.persona in prompt
     assert '# Guided session' in prompt
     assert '# Unattended session' not in prompt
 
@@ -1824,7 +1843,7 @@ class TestWatchServiceTools:
     monkeypatch.setenv(brash_policy.POLICY_ENV, str(policy))
     with watches.Owner.for_session() as owner:
       server = bro_module._build_service_server(
-        declaration, include_raise=False, harness='claude', live_run=None
+        declaration, hold='attended', harness='claude', live_run=None
       )
       with contextlib.closing(server):
         tools = {tool.name: tool for tool in await server.list_tools()}

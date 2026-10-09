@@ -40,7 +40,7 @@ procedure body
 def cast(tmp_path, monkeypatch):
   package = spell_package(monkeypatch, tmp_path, '_cast_probe', {'fix': FIX, 'run-pr': RUN_PR})
   with host_credential_store():
-    yield build_cast_tool(package.bro_class()(), harness='bro')
+    yield build_cast_tool(package.bro_class()(), harness='bro', hold='unattended')
 
 
 @pytest.mark.asyncio

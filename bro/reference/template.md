@@ -74,15 +74,15 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 `bro.mcp.render_text(text, harness=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows.
 A registered `Harness` contributes its capability facts and passages through `Harness.facts()`;
 `may_summon` is the session's `launch.bro.bros` set as described in `bro/reference/conditions.md`.
-The other facts, `#hold`'s single-purpose supply rule included, are documented there too.
+The other facts are documented there too.
 `extra` merges a caller-owned vocabulary next to them
 — the bro surfaces pass the owning bro's `#features` — and the renderer resolves `{{include}}` targets through the `prompts` loader.
 Each surface renders its copy once, with its own facts:
 
-- `BaseBro.__init__` — the bro-native system prompt (harness `bro`)
+- `BaseBro.system_prompt_for` — the bro-native system prompt (harness `bro`)
 - `ride/ride/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`)
-- `bro.prompts.hold_fragment` — the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`), the only surface that supplies `#hold`
-- spell bodies — each `spell::` tool renders for its serving harness;
+- `bro.prompts.session_fragment` — the session fragments, closing on the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`)
+- spell bodies — each `spell::` tool renders for its serving harness and the session's hold;
   the bro-native loop uses the bro branch, while a managed Claude session uses the Claude branch
 - tool descriptions and parameter annotations
   — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`;
