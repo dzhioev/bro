@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING, Optional
 from bro.base import credentials, log
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
-from bro.harness import Harness, SessionEndReason
+from bro.harness import Harness, Service, SessionEndReason
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
+from bro.mcp import Reach
 from bro.monitor import CLAUDE_CONFIG_DIR_ENV
 from bro.run_lifecycle import RunLifecycle
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
@@ -87,6 +88,11 @@ class ClaudeHarness(Harness):
 
   def can_end_session(self) -> bool:
     return os.environ.get('RIDE_RUNNER_PID') is not None
+
+  def serve(self, reach: Reach) -> Service:
+    # every group maps onto Claude's own tools (`ride.claude.native_tools`)
+    del reach
+    return Service()
 
   async def end_session(self, result: str, end_reason: SessionEndReason) -> str:
     from bro.bro import RAISE_EXIT_STATUS

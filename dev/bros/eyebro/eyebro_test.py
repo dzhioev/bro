@@ -1,8 +1,7 @@
-from typing import get_args
-
 import bro.mcp as mcp
 from bro import spells as spell_store
 from bro.base.condition import SetVariable
+from bro.harness import installed_harness_names
 from bro.spells import load_spell
 from bros.eyebro import Eyebro
 
@@ -18,11 +17,6 @@ def test_reviewer_carries_review_spells_but_no_author_procedures():
   assert 'fix' not in bro.spell_paths
   assert 'run-pr' not in bro.spell_paths
   assert 'land' not in bro.spell_paths
-
-
-def test_eyebro_declares_an_unrestricted_shell_on_both_harnesses():
-  for harness in get_args(mcp.Harness):
-    assert Eyebro()._selected_tools_for(harness).brash_unrestricted is True
 
 
 def test_claude_surface_selects_the_reference_tools():
@@ -45,7 +39,7 @@ def test_review_spells_render_for_every_surface():
   feature_names = frozenset({'github'})
   for path in Eyebro().spell_paths.values():
     spell = load_spell(path.stem, path)
-    for harness in get_args(mcp.Harness):
+    for harness in installed_harness_names():
       for enabled in (True, False):
         mcp.render_text(
           spell.body,

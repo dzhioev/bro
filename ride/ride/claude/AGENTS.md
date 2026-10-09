@@ -8,8 +8,9 @@ Claude Code's own harness themed with the session's bro.
 - `harness.py`
   — `ClaudeHarness`, its prompt facts, private `ScopeRecipe`, auth preflight, Claude LLM resolution, terminal service-tool delivery and managed-session termination, the workspace session reads, and the launch hooks the neutral skeleton consumes:
   the runner, Claude state mounts and env for a container, the private state dir and auth for a host runner env.
+  Its `serve` mounts nothing, since Claude's own tools serve every group.
 - `assembly.py` — the Claude composition over core `BaseBro.assemble`:
-  a session selects the Claude harness, mounting the bro's additions to Claude Code's native tools.
+  a session selects the Claude harness, mounting the bro's servers and data sources beside Claude Code's own tools.
   It contributes the `persona:` resolver through `bro.mcp.targets`.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
   pinned absolute binary selection per isolation, resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
@@ -18,7 +19,11 @@ Claude Code's own harness themed with the session's bro.
   a TUI runs on a runner-owned pty that proxies the session's terminal, ended by the interrupt keypress.
   Either stop stands the watch waiter down first.
 - `claude_argv.py`
-  — the argv builder, including solo print mode, settings, status line, MCP config, the append prompt, blocked and narrowed native tools, model/effort/fast selection, prompt, and forwarded Claude arguments.
+  — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, and the append prompt;
+  the `--tools` allowlist and the command gate on a finite command list;
+  and model/effort/fast selection, prompt, and forwarded Claude arguments.
+- `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, and the command tools a finite command list gates;
+  `native_tools_llm_test.py` holds them against that release (`bro/reference/ride.md`, "The claude argv").
 - `claude_auth.py` — the setup-token environment.
 - `claude_release.py` — the host-wide standalone-release cache:
   a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, and cleanup.

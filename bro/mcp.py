@@ -11,6 +11,8 @@ from bro.base.condition import var
 from bro.harness import Harness, harness_name, name_of
 
 if TYPE_CHECKING:
+  from bro.datasources.base import DataSource
+  from bro.datasources.file import FileSource
   from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
 
 
@@ -40,9 +42,8 @@ HOLDS: tuple[str, ...] = get_args(Hold)
 _HOLDS = frozenset(HOLDS)
 _FRAMEWORK_FACT_NAMES = frozenset({'harness', 'creds', 'may_summon', 'talk', 'hold'})
 
-# the facts pair as ready-made condition variables, so declarations read
-# `harness == 'bro'` / `creds.contains('openai')`.
-harness = var('harness')
+# the credential fact as a ready-made condition variable, so a declaration's
+# gate reads `creds.contains('openai')`.
 creds = var('creds')
 
 
@@ -188,40 +189,38 @@ def surface_variables(
 
 @dataclass(frozen=True)
 class MCPServerSpec:
-  """declarative manifest for an MCP server: its credential needs plus a builder.
+  """declarative manifest for an MCP server: the namespace it serves, its
+  credential needs, and a builder.
 
   the declaration/runtime split: a spec is pure metadata — hosts read
   `needed_secrets` / `optional_secrets` from it before any credential exists
   (a bro's manifest, ride's container scoping) — while `build()` produces the
   live server and runs only in a serving process, so a server's constructor
-  is free to hold real resources.
+  is free to hold real resources. `namespace` is known before anything is
+  built, and the server `build()` returns serves it.
   """
 
+  namespace: str
   build: Callable[[], MCPServer]
   needed_secrets: tuple[str, ...] = ()
   optional_secrets: tuple[str, ...] = ()
 
+  def __post_init__(self) -> None:
+    validate_segment('namespace', self.namespace)
+
   @staticmethod
-  def of(server_cls: type[MCPServer], *args: Any, **kwargs: Any) -> MCPServerSpec:
+  def of(namespace: str, server_cls: type[MCPServer], *args: Any, **kwargs: Any) -> MCPServerSpec:
     """spec for a server class that declares its secrets as class attributes.
 
     the escape hatch for irregularly-shaped servers; roster-based servers
     (a module-level list of tool functions) declare a `Toolset` instead.
     """
     return MCPServerSpec(
+      namespace=namespace,
       build=functools.partial(server_cls, *args, **kwargs),
       needed_secrets=tuple(server_cls.needed_secrets),
       optional_secrets=tuple(server_cls.optional_secrets),
     )
-
-
-def _validate_native_names(names: object, field: str, verb: str) -> None:
-  if not isinstance(names, tuple) or any(
-    not isinstance(name, str) or len(name) == 0 for name in names
-  ):
-    raise TypeError(f'{field} must be a tuple of non-empty strings')
-  if len(set(names)) != len(names):
-    raise ValueError(f'a tool layer {verb} duplicate names: {names!r}')
 
 
 class _AnyCommand:
@@ -232,99 +231,265 @@ class _AnyCommand:
 ANY = _AnyCommand()
 BrashCommand = str | _AnyCommand
 
+# the namespace every `cli(...)` tool serves under
+CLI_NAMESPACE = 'cli'
+
+
+@dataclass(frozen=True)
+class ReachKey:
+  """what one reach entry decides: its kind, and the name it decides under that
+  kind. A persona's entries resolve per key along the MRO."""
+
+  kind: str
+  name: str
+
+  def __str__(self) -> str:
+    return f'{self.kind} {self.name!r}'
+
+
+class ReachEntry:
+  """one harness-neutral reach entry under its key."""
+
+  @property
+  def key(self) -> ReachKey:
+    raise NotImplementedError
+
+  def merge(self, other: ReachEntry) -> Optional[ReachEntry]:
+    """this entry and `other`, declared under one key by one class, reduced to
+    one entry; None where the pair is refused."""
+    return self if other == self else None
+
+
+@dataclass(frozen=True)
+class Files(ReachEntry):
+  write: bool = True
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('group', 'files')
+
+  def merge(self, other: ReachEntry) -> Optional[ReachEntry]:
+    if isinstance(other, Files):
+      return self if self.write else other
+    return None
+
+  def __str__(self) -> str:
+    return 'files' if self.write else 'files(write=False)'
+
+
+@dataclass(frozen=True)
+class Brash(ReachEntry):
+  """the command list reachable through the harness shell: finite `commands`,
+  or any command where `unrestricted`."""
+
+  commands: tuple[str, ...] = ()
+  unrestricted: bool = False
+
+  def __post_init__(self) -> None:
+    if self.unrestricted == (len(self.commands) > 0):
+      raise ValueError('a brash reach is either unrestricted or a finite command list')
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('group', 'brash')
+
+  def merge(self, other: ReachEntry) -> Optional[ReachEntry]:
+    if not isinstance(other, Brash):
+      return None
+    if self.unrestricted or other.unrestricted:
+      return Brash(unrestricted=True)
+    return Brash(commands=tuple(dict.fromkeys(self.commands + other.commands)))
+
+  def __str__(self) -> str:
+    if self.unrestricted:
+      return 'brash(ANY)'
+    return f'brash({", ".join(repr(command) for command in self.commands)})'
+
+
+@dataclass(frozen=True)
+class Web(ReachEntry):
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('group', 'web')
+
+  def __str__(self) -> str:
+    return 'web'
+
+
+@dataclass(frozen=True)
+class Delegation(ReachEntry):
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('group', 'delegation')
+
+  def __str__(self) -> str:
+    return 'delegation'
+
+
+@dataclass(frozen=True)
+class Mount(ReachEntry):
+  toolset: Toolset[Any]
+  tool_names: tuple[str, ...]
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('mount', self.toolset.namespace)
+
+  @property
+  def spec(self) -> MCPServerSpec:
+    return self.toolset.manifest(*self.tool_names)
+
+  def merge(self, other: ReachEntry) -> Optional[ReachEntry]:
+    if isinstance(other, Mount) and other.toolset is self.toolset:
+      return Mount(self.toolset, tuple(dict.fromkeys(self.tool_names + other.tool_names)))
+    return None
+
+  def __str__(self) -> str:
+    return f'mount({self.toolset.namespace}: {", ".join(self.tool_names)})'
+
+
+@dataclass(frozen=True)
+class Cli(ReachEntry):
+  words: tuple[str, ...]
+  argument_names: tuple[str, ...]
+
+  @property
+  def name(self) -> str:
+    return '_'.join(self.words).replace('.', '_')
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('cli', self.name)
+
+  @property
+  def spec(self) -> MCPServerSpec:
+    words, argument_names, name = self.words, self.argument_names, self.name
+
+    def build() -> MCPServer:
+      from bro.llm import cli_tool
+
+      return cli_tool.build_server(words, argument_names, name)
+
+    return MCPServerSpec(namespace=CLI_NAMESPACE, build=build)
+
+  def __str__(self) -> str:
+    return f'cli({", ".join(repr(word) for word in (" ".join(self.words), *self.argument_names))})'
+
+
+@dataclass(frozen=True)
+class Server(ReachEntry):
+  spec: MCPServerSpec
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('server', self.spec.namespace)
+
+  def __str__(self) -> str:
+    return f'server({self.spec.namespace})'
+
+
+@dataclass(frozen=True)
+class Source(ReachEntry):
+  source: DataSource
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('source', self.source.namespace)
+
+  def __str__(self) -> str:
+    return f'source({self.source.name})'
+
+
+@dataclass(frozen=True)
+class Man(ReachEntry):
+  page: FileSource
+
+  @property
+  def key(self) -> ReachKey:
+    return ReachKey('man', self.page.name)
+
+  def __str__(self) -> str:
+    return f'man({self.page.name!r})'
+
+
+@dataclass(frozen=True)
+class Revoked(ReachEntry):
+  withheld: ReachKey
+
+  @property
+  def key(self) -> ReachKey:
+    return self.withheld
+
+  def __str__(self) -> str:
+    return f'revoke({self.withheld})'
+
 
 @dataclass(frozen=True)
 class ToolLayer:
-  """one composable layer of server mounts and harness-native tool policy."""
+  """one composable declaration: raw server specs, each keyed by the namespace
+  it serves, and reach entries, each under its own key."""
 
   server_specs: tuple[MCPServerSpec, ...] = ()
-  blocked_native_tool_names: tuple[str, ...] = ()
-  # `(tool name, command)` pairs narrowing a harness-native tool that takes a
-  # command to run: the tool is served, and the harness rejects every call whose
-  # command is not one of these
-  native_tool_commands: tuple[tuple[str, str], ...] = ()
-  # harness-native tools served whole over a block, their calls unrestricted
-  served_native_tool_names: tuple[str, ...] = ()
-  # command-list entries reachable through the harness shell; ANY lifts the list
-  brash_commands: tuple[BrashCommand, ...] = ()
+  entries: tuple[ReachEntry, ...] = ()
 
   def __post_init__(self) -> None:
     if not isinstance(self.server_specs, tuple) or any(
       not isinstance(spec, MCPServerSpec) for spec in self.server_specs
     ):
       raise TypeError('server_specs must be a tuple of MCPServerSpec values')
-    _validate_native_names(self.blocked_native_tool_names, 'blocked_native_tool_names', 'blocks')
-    _validate_native_names(self.served_native_tool_names, 'served_native_tool_names', 'serves')
-    pairs = self.native_tool_commands
-    if not isinstance(pairs, tuple) or any(
-      not isinstance(value, str) or len(value) == 0 for pair in pairs for value in pair
+    if not isinstance(self.entries, tuple) or any(
+      not isinstance(entry, ReachEntry) for entry in self.entries
     ):
-      raise TypeError('native_tool_commands must be a tuple of non-empty (name, command) pairs')
-    commands = self.brash_commands
-    if not isinstance(commands, tuple) or any(
-      command is not ANY and (not isinstance(command, str) or len(command.strip()) == 0)
-      for command in commands
-    ):
-      raise TypeError('brash_commands must be a tuple of non-empty command strings or ANY')
-    if len(set(commands)) != len(commands):
-      raise ValueError(f'a tool layer declares duplicate brash commands: {commands!r}')
-    if ANY in commands and len(commands) != 1:
-      raise ValueError('ANY must be the only shell command in its layer')
-    if (
-      len(self.server_specs) == 0
-      and len(self.blocked_native_tool_names) == 0
-      and len(pairs) == 0
-      and len(self.served_native_tool_names) == 0
-      and len(commands) == 0
-    ):
-      raise ValueError(
-        'a tool layer must mount a server, block or narrow a native tool, serve one, '
-        'or declare shell commands'
-      )
+      raise TypeError('entries must be a tuple of ReachEntry values')
+    if len(self.server_specs) == 0 and len(self.entries) == 0:
+      raise ValueError('a tool layer must declare a server or a reach entry')
+
+  @property
+  def reach_entries(self) -> tuple[ReachEntry, ...]:
+    """every entry this layer contributes, in declaration order."""
+    return (*(Server(spec) for spec in self.server_specs), *self.entries)
 
   def __or__(self, other: ToolLayer) -> ToolLayer:
     """both layers' declarations as one layer."""
     return ToolLayer(
       server_specs=self.server_specs + other.server_specs,
-      blocked_native_tool_names=self.blocked_native_tool_names + other.blocked_native_tool_names,
-      native_tool_commands=self.native_tool_commands + other.native_tool_commands,
-      served_native_tool_names=self.served_native_tool_names + other.served_native_tool_names,
-      brash_commands=self.brash_commands + other.brash_commands,
+      entries=self.entries + other.entries,
     )
 
 
-def mount(toolset: Toolset[Any], *tool_names: str) -> ToolLayer:
-  if not isinstance(toolset, Toolset):
-    raise TypeError('mount requires a Toolset')
-  return ToolLayer(server_specs=(toolset._manifest(*tool_names),))
+@dataclass(frozen=True)
+class Reach:
+  """what a persona's `tools` fold to, before any harness serves it: the groups
+  it declares, and the servers and data sources it mounts."""
+
+  files: Optional[Files] = None
+  brash: Optional[Brash] = None
+  web: Optional[Web] = None
+  delegation: Optional[Delegation] = None
+  server_specs: tuple[MCPServerSpec, ...] = ()
+  sources: tuple[DataSource, ...] = ()
+
+  @property
+  def groups(self) -> tuple[Files | Brash | Web | Delegation, ...]:
+    """the declared groups, in the order files, brash, web, delegation."""
+    return tuple(
+      group for group in (self.files, self.brash, self.web, self.delegation) if group is not None
+    )
 
 
-def block(*tool_names: str) -> ToolLayer:
-  return ToolLayer(blocked_native_tool_names=tool_names)
+def files(*, write: bool = True) -> ToolLayer:
+  """reach the workspace's files: read, search, and, where `write`, modify them."""
+  return ToolLayer(entries=(Files(write=write),))
 
 
-def allow_commands(tool_name: str, *commands: str) -> ToolLayer:
-  """serve the harness-native `tool_name`, reaching only `commands`.
-
-  For a native tool whose argument is a command line to run: the harness admits
-  a call whose command is exactly one of `commands` and rejects the rest, so a
-  persona reaches what it declares and no more — the same bargain as `shell`,
-  for a tool the harness serves rather than this layer.
-  """
-  if len(commands) == 0:
-    raise ValueError(f'narrowing {tool_name} needs at least one command')
-  return ToolLayer(native_tool_commands=tuple((tool_name, command) for command in commands))
+def web() -> ToolLayer:
+  """fetch and search web content."""
+  return ToolLayer(entries=(Web(),))
 
 
-def serve(*tool_names: str) -> ToolLayer:
-  """serve the harness-native `tool_names` whole, over a block that withholds them.
-
-  `allow_commands` without the narrowing, for a tool whose argument is not a
-  command line. Like a narrowing, it must name a tool the bro also blocks.
-  """
-  if len(tool_names) == 0:
-    raise ValueError('serving needs at least one tool name')
-  return ToolLayer(served_native_tool_names=tool_names)
+def delegation() -> ToolLayer:
+  """start work in the harness's own agents, outside the framework's summons."""
+  return ToolLayer(entries=(Delegation(),))
 
 
 def brash(*commands: BrashCommand) -> ToolLayer:
@@ -336,13 +501,19 @@ def brash(*commands: BrashCommand) -> ToolLayer:
   """
   if len(commands) == 0:
     raise ValueError('brash needs at least one command or ANY')
-  if commands == (ANY,):
-    return ToolLayer(brash_commands=commands)
   if ANY in commands:
-    return ToolLayer(brash_commands=commands)
+    if commands != (ANY,):
+      raise ValueError('ANY must be the only argument of its brash declaration')
+    return ToolLayer(entries=(Brash(unrestricted=True),))
   from bro.brash import validate_entries
 
-  return ToolLayer(brash_commands=validate_entries(cast(tuple[str, ...], commands)))
+  return ToolLayer(entries=(Brash(commands=validate_entries(cast(tuple[str, ...], commands))),))
+
+
+def mount(toolset: Toolset[Any], *tool_names: str) -> ToolLayer:
+  if not isinstance(toolset, Toolset):
+    raise TypeError('mount requires a Toolset')
+  return ToolLayer(entries=(Mount(toolset, toolset.resolve(tool_names)),))
 
 
 _COMMAND_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')
@@ -371,15 +542,35 @@ def cli(command: str, *argument_names: str) -> ToolLayer:
         f'{word!r} is not a command word; a declaration names a program and its '
         'subcommands, and nothing a shell would interpret'
       )
-  name = '_'.join(words).replace('.', '_')
-  validate_segment('tool name', name)
+  entry = Cli(words, argument_names)
+  validate_segment('tool name', entry.name)
+  return ToolLayer(entries=(entry,))
 
-  def build() -> MCPServer:
-    from bro.llm import cli_tool
 
-    return cli_tool.build_server(words, argument_names, name)
+def source(data_source: DataSource) -> ToolLayer:
+  """mount a read-only data source; its summary joins the composed prompt."""
+  from bro.datasources.base import DataSource
 
-  return ToolLayer(server_specs=(MCPServerSpec(build=build),))
+  if not isinstance(data_source, DataSource):
+    raise TypeError('source requires a DataSource')
+  return ToolLayer(entries=(Source(data_source),))
+
+
+def man(topic: str) -> ToolLayer:
+  """declare the reference page `topic` into the bro's one manual. An unknown
+  topic raises here, at declaration."""
+  from bro.datasources.references import page
+
+  return ToolLayer(entries=(Man(page(topic)),))
+
+
+def revoke(*layers: ToolLayer) -> ToolLayer:
+  """withhold the keys of the entries `layers` declare, whatever their level or
+  subset; a descendant may grant them again."""
+  keys = tuple(dict.fromkeys(entry.key for layer in layers for entry in layer.reach_entries))
+  if len(keys) == 0:
+    raise ValueError('revoke needs at least one entry to withhold')
+  return ToolLayer(entries=tuple(Revoked(key) for key in keys))
 
 
 class Toolset[T]:
@@ -440,7 +631,7 @@ class Toolset[T]:
     """credentials needed by a server scoped to `tool_names`; default: the class var."""
     return self.secrets
 
-  def _resolve(self, tool_names: tuple[str, ...]) -> tuple[str, ...]:
+  def resolve(self, tool_names: tuple[str, ...]) -> tuple[str, ...]:
     """the full roster for no names; otherwise the given names, validated."""
     if len(tool_names) == 0:
       return tuple(self._by_name)
@@ -472,7 +663,7 @@ class Toolset[T]:
     """the live server: per-server state built once, shared by every call through it."""
     from bro.llm.mcp import FunctionTool, InProcessMCPServer
 
-    names = self._resolve(tool_names)
+    names = self.resolve(tool_names)
     state = self._state_factory()
     variables = self._variables(names)
     close = None if self._close_state is None else functools.partial(self._close_state, state)
@@ -489,9 +680,11 @@ class Toolset[T]:
     server.tool_universe = tuple(self._by_name)
     return server
 
-  def _manifest(self, *tool_names: str) -> MCPServerSpec:
-    names = self._resolve(tool_names)
+  def manifest(self, *tool_names: str) -> MCPServerSpec:
+    """the spec of a server scoped to `tool_names`, all of them for none."""
+    names = self.resolve(tool_names)
     return MCPServerSpec(
+      namespace=self.namespace,
       build=lambda: self.build(*names),
       needed_secrets=self.get_secrets(names),
       optional_secrets=self.optional_secrets,

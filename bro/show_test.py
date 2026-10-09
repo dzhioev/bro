@@ -4,6 +4,7 @@ import pytest
 
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
+from bro import mcp
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.mcp import FunctionTool, InProcessMCPServer
@@ -12,8 +13,8 @@ from bro.show import format_card
 from bro.spells_test_helper import spell_package
 
 
-def _layer(server_class: type[InProcessMCPServer]) -> ToolLayer:
-  return ToolLayer(server_specs=(MCPServerSpec.of(server_class),))
+def _layer(namespace: str, server_class: type[InProcessMCPServer]) -> ToolLayer:
+  return ToolLayer(server_specs=(MCPServerSpec.of(namespace, server_class),))
 
 
 def _make_tools(*tool_names: str) -> list[FunctionTool]:
@@ -64,8 +65,7 @@ class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
   llm_spec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
-  data_sources: ClassVar = [_StubSource()]
-  tools: ClassVar = [_layer(ServerAB), _layer(ServerXZ)]
+  tools: ClassVar = [mcp.source(_StubSource()), _layer('ab', ServerAB), _layer('xz', ServerXZ)]
 
   def __init__(self):
     super().__init__(system_prompt='YOU ARE FULL')
@@ -126,14 +126,17 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_mcp_servers_sharing_a_namespace_grouped(self):
-    class ServerAB2(InProcessMCPServer):
-      def __init__(self):
-        super().__init__('ab', _make_tools('c'))
+    toolset = mcp.Toolset('ab')
+
+    def c() -> str:
+      return 'ok'
+
+    toolset.tool('c tool description')(c)
 
     class _SharedBro(BaseBro):
       name = 'shared'
       description = 'two servers in one namespace'
-      tools: ClassVar = [_layer(ServerAB), _layer(ServerAB2)]
+      tools: ClassVar = [_layer('ab', ServerAB), mcp.mount(toolset)]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -141,6 +144,25 @@ class TestFormatCard:
     card = await format_card(_SharedBro())
     assert '- `ab` — 3 tools' in card
     assert '  - `c` — c tool description' in card
+
+  @pytest.mark.asyncio
+  async def test_tool_groups_section_marks_what_each_harness_leaves_unserved(self):
+    class _GroupBro(BaseBro):
+      name = 'grouped'
+      description = 'declares two groups'
+      tools: ClassVar = [mcp.files(write=False), mcp.web()]
+
+      def __init__(self):
+        super().__init__(system_prompt='')
+
+    card = await format_card(_GroupBro())
+    assert '- on `bro`: `files(write=False)`, `web` (unserved)' in card
+    assert '- on `claude`: `files(write=False)`, `web`' in card
+
+  @pytest.mark.asyncio
+  async def test_tool_groups_section_names_none_declared(self):
+    card = await format_card(_MinimalBro())
+    assert '- on `bro`: none' in card
 
   @pytest.mark.asyncio
   async def test_features_section_omitted_when_none_declared(self):
@@ -299,7 +321,7 @@ class TestFormatCard:
     class _LongBro(BaseBro):
       name = 'long'
       description = 'd'
-      tools: ClassVar = [_layer(LongServer)]
+      tools: ClassVar = [_layer('long', LongServer)]
 
       def __init__(self):
         super().__init__(system_prompt='')

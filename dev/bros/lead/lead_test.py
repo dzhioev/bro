@@ -1,23 +1,15 @@
-from typing import get_args
-
 import bro.mcp as mcp
 from bro import spells as spell_store
+from bro.harness import installed_harness_names
 from bro.spells import load_spell
 from bro.summon import LAUNCH_ENV, encode_launch
 from bros.lead import Lead
 
 
-def test_lead_declares_no_shell():
-  for harness in get_args(mcp.Harness):
-    selection = Lead()._selected_tools_for(harness)
-    assert selection.brash_unrestricted is False
-    assert selection.brash_commands == ()
-
-
 def test_coordination_spells_render_for_every_surface():
   for path in Lead().spell_paths.values():
     spell = load_spell(path.stem, path)
-    for harness in get_args(mcp.Harness):
+    for harness in installed_harness_names():
       for granted in (('eyebro',), ()):
         mcp.render_text(
           spell.body,

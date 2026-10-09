@@ -1,19 +1,12 @@
-from bro.base.condition import when
 from bro.bro import BaseBro
-from bro.harness import claude
 from bro.llm.llms import openai
-from bro.mcp import ANY, brash, harness, mount
-from bros.dev import mcp as dev_mcp
+from bro.mcp import ANY, brash, files
 
 
 class Terminal(BaseBro):
   name = 'terminal'
   description = 'software developer working alone inside a container'
-  tools = [
-    when(harness == 'bro', mount(dev_mcp.toolset)),
-    brash(ANY),
-    claude.block(*claude.DELEGATION),
-  ]
+  tools = [files(), brash(ANY)]
   may_summon = ('terminal',)
   llm_spec = openai.LLMSpec(compact_threshold=200_000)
   system_prompt = """\

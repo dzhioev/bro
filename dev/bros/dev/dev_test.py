@@ -1,10 +1,10 @@
-from typing import ClassVar, get_args
+from typing import ClassVar
 
 import bro.mcp as mcp
 from bro import spells as spell_store
 from bro.base.condition import SetVariable
 from bro.dev import references
-from bro.harness import get_harness
+from bro.harness import get_harness, installed_harness_names
 from bro.spells import load_spell
 from bro.summon import LAUNCH_ENV, encode_launch
 from bros.dev import Dev
@@ -17,11 +17,6 @@ class _TrackerDev(Dev):
 
 def test_style_reference_ships_with_the_dev_domain():
   assert references.dev_style.read().startswith('# Development style\n')
-
-
-def test_dev_declares_an_unrestricted_shell_on_both_harnesses():
-  for harness in get_args(mcp.Harness):
-    assert Dev()._selected_tools_for(harness).brash_unrestricted is True
 
 
 def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
@@ -58,7 +53,7 @@ def test_development_spells_render_for_every_surface():
   feature_names = frozenset({'brog'})
   for path in _TrackerDev().spell_paths.values():
     spell = load_spell(path.stem, path)
-    for harness in get_args(mcp.Harness):
+    for harness in installed_harness_names():
       for enabled in (True, False):
         for granted in (('eyebro',), ()):
           mcp.render_text(

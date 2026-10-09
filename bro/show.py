@@ -1,20 +1,25 @@
 from bro.base.condition import Condition
 from bro.bro import BaseBro
-from bro.mcp import MCPServerSpec
+from bro.harness import get_harness, installed_harness_names
+from bro.mcp import MCPServerSpec, Reach
 
 
 async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
   parts = [f'# {bro.name}', '', bro.description, '']
   parts.extend(_identity_lines(bro))
+  reach = bro.reach()
 
-  if len(bro._data_sources) > 0:
+  parts.extend(['', '## Tool groups', ''])
+  parts.extend(_group_lines(reach))
+
+  if len(reach.sources) > 0:
     parts.extend(['', '## Data sources', ''])
-    for ds in bro._data_sources:
+    for ds in reach.sources:
       parts.append(f'- **{ds.name}** — {ds.rendered_summary()}')
 
-  if len(bro._mcp_specs) > 0:
+  if len(reach.server_specs) > 0:
     parts.extend(['', '## MCP tools', ''])
-    parts.extend(await _mcp_tool_lines(bro._mcp_specs))
+    parts.extend(await _mcp_tool_lines(list(reach.server_specs)))
 
   if len(bro._features) > 0:
     parts.extend(['', '## Features', ''])
@@ -44,6 +49,20 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
     parts.extend(['', '## System prompt', '', '```', bro.system_prompt, '```'])
 
   return '\n'.join(parts) + '\n'
+
+
+def _group_lines(reach: Reach) -> list[str]:
+  # the groups are harness-neutral, but each installed harness serves them its
+  # own way and may leave some unserved
+  lines = []
+  for harness_name in installed_harness_names():
+    unserved = set(get_harness(harness_name).serve(reach).unserved)
+    groups = [
+      f'`{group}` (unserved)' if group.key.name in unserved else f'`{group}`'
+      for group in reach.groups
+    ]
+    lines.append(f'- on `{harness_name}`: {", ".join(groups) if len(groups) > 0 else "none"}')
+  return lines
 
 
 def _feature_line(bro: BaseBro, name: str, gate: Condition | bool) -> str:
