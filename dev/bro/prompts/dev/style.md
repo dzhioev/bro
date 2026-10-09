@@ -13,12 +13,14 @@
   — a bug, a stale abstraction, a doc that's drifted, a redundant pattern
   — propose it and let the user decide, don't silently do it.
 
-- Don't shrink the fix to shrink the diff.
+- Lead with the cleanest solution, not the cheapest.
   Scope is the task's goal, not the number of files touched:
-  when the clean fix means changing a shared abstraction and all its consumers, or rewriting a doc section instead of patching one paragraph, that breadth is the fix.
-  Before presenting a proposal, evaluate it against the fix you would design if diff size were no concern
-  — a gap between the two means you're optimizing diff size over result quality:
+  when the clean fix means changing a shared abstraction and all its consumers, changing a format everywhere it is read, or rewriting a doc section instead of patching one paragraph, that breadth is the fix.
+  Before presenting a proposal, evaluate it against the fix you would design if diff size and effort were no concern
+  — a gap between the two means you're optimizing cost over result quality:
   work out the clean version and lead with it, even when it touches more than you'd like.
+  Among options, the one you recommend is the one you judge cleanest;
+  an option that keeps a known-wrong behavior because its case is rare is a cut corner, not the simple choice.
   This widens how thoroughly you fix, not what you take on:
   improvements the task doesn't need still get proposed, not silently done.
 
