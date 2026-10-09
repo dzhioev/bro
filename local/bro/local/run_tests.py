@@ -21,7 +21,11 @@ from bro.dev.affected_tests import (
   module_names,
   reachable,
 )
-from bro.dev.packaging_policy import TEST_MODULE_SUFFIXES, distribution_roots
+from bro.dev.packaging_policy import (
+  TEST_MODULE_NAMES,
+  TEST_MODULE_SUFFIXES,
+  distribution_roots,
+)
 from bro.dev.sharding import Shard, parse_shard
 from bro.dev.shell_policy import shell_files
 from bro.local import gate_display, green_trees
@@ -30,7 +34,9 @@ __cli_name__ = 'run-tests'
 
 DIR = Path(__file__).resolve().parents[3]
 
-TEST_MODULE_PATTERN = f'.*({"|".join(TEST_MODULE_SUFFIXES)})\\.py$'
+TEST_MODULE_PATTERN = (
+  f'((.*/)?({"|".join(TEST_MODULE_NAMES)})|.*({"|".join(TEST_MODULE_SUFFIXES)}))\\.py$'
+)
 
 
 # this checkout's projects outside the workspace, which the root metadata names
@@ -61,7 +67,6 @@ DISTRIBUTIONS = [
     directory='.',
     deptry_exclude=(
       TEST_MODULE_PATTERN,
-      'conftest\\.py$',
       'bro/base/yesno\\.py$',
       'bro/setup/',
       '^bench/',
