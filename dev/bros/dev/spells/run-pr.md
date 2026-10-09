@@ -16,7 +16,7 @@ Also the re-entry point for a PR that is already open
 — checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
 
 parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.10.1
+version: 7.11.0
 ---
 
 # run-pr
@@ -79,6 +79,8 @@ Restore the state that session had, reconcile what happened while nobody watched
    Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it;
    handle each per step 15.
    If the latest owner review is APPROVED, nothing actionable is pending, and `reviewDecision` is `APPROVED` or `null`, retain that cleared review state against the current head and continue to the watcher.
+   Where that review's `commit` is the current head, retain it as step 15's owner's approval too:
+   the restarted watcher baselines it as seen.
    Its first green edge clears the checks gate before landing;
    watcher silence does not.{{when #may_summon contains eyebro}}
    A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
@@ -533,8 +535,8 @@ address every comment that has arrived, then pay one verification pass and one p
 
 **`review` with `state: "APPROVED"` and empty `comments`**:
 
-Three gates stand between this event and the merge.
-Read all three before you touch the watcher:
+Four gates stand between this event and the merge.
+Read all four before you touch the watcher:
 stopping it is what you would have to undo, and a fresh `poll-pr` baselines every existing event as seen.
 
 **The reviewer's verdict.**{{iff #may_summon contains eyebro}}
@@ -570,11 +572,20 @@ handle it as feedback above.
 **The head checks.**
 Only a `checks` event with `state: "green"` whose `head` is the current head clears this gate.
 Retain all cleared gates against that head SHA;
-a push invalidates the reviewer, base, and check results together, while a `red` or `pending` event clears the check result.
+a push invalidates every one of them together, while a `red` or `pending` event clears the check result.
 Watcher silence is not evidence that checks finished.
 If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
 
-With all three gates clear, chain into the merge, and batch it
+**The owner's approval**, where questions reach the user.
+The repo owner's approving review on this head clears it, and so do `review_decision: "APPROVED"` and the user's own ask to land this PR;
+retain it with the other gates.
+A `null` decision is no evidence either way:
+it reads the base's rules, not who approved.
+With none retained once the other gates are clear, **leave the watcher running** and report the PR ready to merge with the reviewer's verdict and the checks;
+either answer then clears it
+— the user saying to land it, or the owner approving on GitHub, which arrives as another `review` event on the watch you kept.
+
+With all four gates clear, chain into the merge, and batch it
 — stop the watcher with `bro::unwatch('poll-pr <owner>/<repo> <pr_number>')`, then [[land]] **in the same response** and follow it through the merge.
 
 **`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
