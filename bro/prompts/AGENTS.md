@@ -20,7 +20,7 @@ load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
 Prompt content may carry `bro.base.template` directives over the surface facts (`#creds`, the harness's own facts, and session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
 every rendering surface renders its text once with its registered `Harness` object via `bro.mcp.render_text`
-— `BaseBro.__init__` for the bro-native prompt, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
+— `BaseBro.composed_prompt(harness)` for an explicitly selected harness, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
 — so a directive works in `shared/` and bro class prompts alike.
 `FileSource`-served docs are the exception:
 one rendering is read by every harness, so their bodies must be surface-neutral
@@ -68,7 +68,7 @@ Current reference docs:
 - `tool_names.md` — inserts the selected harness's `tool_name_rule` passage;
   one file serves every surface.
   Managed Claude sessions get the Claude harness's `ns::tool` → `mcp__ns__tool` rule, injected here;
-  bro-native LLM runs compose the bro harness's `ns::tool` → `ns__tool` rule into `BaseBro.system_prompt`.
+  bro-native LLM runs compose the bro harness's `ns::tool` → `ns__tool` rule through `BaseBro.composed_prompt`.
   Deliberately no `FileSource`
 
 ## Session fragments

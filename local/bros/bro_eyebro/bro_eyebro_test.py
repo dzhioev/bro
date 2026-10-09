@@ -15,6 +15,6 @@ def test_bro_eyebro_requires_a_github_identity():
 
 
 def test_bro_eyebro_carries_the_framework_context_without_the_author_block():
-  prompt = BroEyebro().system_prompt
+  prompt = BroEyebro().composed_prompt('bro')
   assert FRAMEWORK_PROJECT.strip() in prompt
   assert AUTHORING.strip() not in prompt

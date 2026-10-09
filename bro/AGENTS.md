@@ -141,15 +141,15 @@ A harness mounts, for a bro, the servers its `serve` returns for that reach ahea
 ### Prompt composition
 
 `BaseBro.__init__` keeps the MRO-concatenated class prompts as `persona`, under a `# Persona: <name>` heading.
-When the native harness is installed, it composes the bro-native `system_prompt` around that persona.
+`composed_prompt(harness)` composes a system prompt around that persona using the explicitly selected harness.
 The composition starts with every `bro/prompts/shared/*.md`, then the persona and the tool-name rule (`bro/prompts/tool_names.md`).
-It adds a `## Data sources` block describing each declared `DataSource`, the `## Spells` contract when the bro has spells, and the `## Skills` block mapping `/<name>` requests to `bro::skill`.
+It adds a `## Data sources` block describing each declared `DataSource`, the `## Spells` contract when the bro has spells, and any instructions the selected harness supplies through `prompt_instructions()`.
 The composition renders with the registered harness object's own facts, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary.
-A Claude-only installation can therefore construct the core persona without loading or carrying `bro-native`.
+Construction loads no harness and renders no composed prompt.
 A managed Claude session runs under a prompt of its own;
 its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`bro/reference/ride.md`, "Auto-injected system prompt").
-`system_prompt_for(hold=…, harness=…)` is the text a bro-native run starts under:
-the harness-composed prompt plus the session fragments and the hold text (`bro/prompts/AGENTS.md`, "Session fragments").
+`system_prompt_for(hold=…, harness=…)` adds the hold and session fragments to the selected harness's composed prompt:
+the fragments and hold text are described in `bro/prompts/AGENTS.md`, "Session fragments".
 
 ### Service tools
 

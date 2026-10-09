@@ -70,7 +70,7 @@ the launcher's own `--log` never reaches the session.
 - `ride list` lists every workspace, its attachment, and its activity state.
   Live badges are `[o]` boxed and `.o.` unboxed;
   idle badges are `[-]` boxed and `.-.` unboxed.
-- `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, and unlocked runtime bundles;
+- `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, unlocked runtime bundles, and each installed harness's unused host caches;
   `--force` permits dirty workspaces and removal when an attached repository no longer exists, while `--dry-run` reports only.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
   The exec process is outside the running session's process tree and has no broker channel of its own.
@@ -1255,7 +1255,7 @@ Worker types resolve accepted shared refs through `Host.artifacts`, under the sa
 ### The launcher↔session contract
 
 The launcher and `do-ride` come from the same frozen or explicitly given runtime, so workspace age and the installation that first received a manual token cannot skew their contract, and the operated repository need not install either command.
-`ride clean` sweeps idle workspaces, unreferenced managed mirrors, and unlocked runtime bundles;
+`ride clean` sweeps idle workspaces, unreferenced managed mirrors, unlocked runtime bundles, and the unused host caches each installed harness cleans through `SessionHarness.clean_cache`;
 removing a bundle also removes its unused runtime volume, while Docker keeps an in-use volume alive.
 
 ## The session executable

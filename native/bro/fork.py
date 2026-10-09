@@ -247,7 +247,6 @@ def fork(
   )
   # This value is the complete recorded prompt, including its hold fragment;
   # pre-assigning it bypasses the runner's fresh-run fragment append.
-  bro.system_prompt = effective_system_prompt
   bro._system_prompt_override = effective_system_prompt
   effective_hold = hold if hold is not None else 'guided'
 

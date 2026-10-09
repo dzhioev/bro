@@ -182,6 +182,18 @@ class BroHarness(Harness):
       'skipped_permission_prompt_notice': StringVariable(''),
     }
 
+  def prompt_instructions(self) -> str:
+    return '\n'.join(
+      [
+        '## Skills',
+        '',
+        'Third-party skills load through `bro::skill`. A user message starting with `/<name>` '
+        'requests that skill: call `bro::skill` with its name, then execute the returned '
+        'instructions with the rest of the message as arguments. An empty body means the skill '
+        'is unavailable.',
+      ]
+    )
+
   def can_end_session(self) -> bool:
     return True
 
@@ -241,6 +253,9 @@ class BroHarness(Harness):
 
   def prepare_session(self, run: 'SessionRun') -> None:
     del run
+
+  def clean_cache(self, *, dry_run: bool = False) -> None:
+    del dry_run
 
   def check_runtime(self) -> None:
     subprocess.run([spawn.console_script('bro'), '--help'], check=True)

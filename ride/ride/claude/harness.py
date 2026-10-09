@@ -152,6 +152,11 @@ class ClaudeHarness(Harness):
       config_directory = Path(config_value)
     seed_session_plugins(config_directory, container=boxed)
 
+  def clean_cache(self, *, dry_run: bool = False) -> None:
+    removed, skipped = claude_release.clean_cached_releases(dry_run=dry_run)
+    action = 'would clean' if dry_run else 'cleaned'
+    log.info('%s %d Claude Code release(s), skipped %d active', action, removed, skipped)
+
   def check_runtime(self) -> None:
     carried = Path(sys.prefix).parent / 'claude' / 'claude'
     binary = (

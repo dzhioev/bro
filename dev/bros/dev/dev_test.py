@@ -45,8 +45,8 @@ def test_tracker_dev_inherits_shared_and_dev_spells():
   # the shared bros/bro layer, fix with bros/dev
   assert 'reflect' in bro.spell_paths
   assert 'fix' in bro.spell_paths
-  assert '## Spells' in bro.system_prompt
-  assert '## Available skills' not in bro.system_prompt
+  assert '## Spells' in bro.composed_prompt('bro')
+  assert '## Available skills' not in bro.composed_prompt('bro')
 
 
 def test_development_spells_render_for_every_surface():
