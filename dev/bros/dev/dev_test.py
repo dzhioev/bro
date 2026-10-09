@@ -21,7 +21,7 @@ def test_style_reference_ships_with_the_dev_domain():
 
 def test_dev_declares_an_unrestricted_shell_on_both_harnesses():
   for harness in get_args(mcp.Harness):
-    assert Dev()._selected_tools_for(harness).shell_unrestricted is True
+    assert Dev()._selected_tools_for(harness).brash_unrestricted is True
 
 
 def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):

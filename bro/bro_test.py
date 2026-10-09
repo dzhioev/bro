@@ -527,7 +527,7 @@ class TestToolLayers:
     class WatchingBro(BaseBro):
       name = 'watching-and-summoning'
       description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), mcp.shell('watch it')]
+      tools: ClassVar = [claude.block(*claude.SHELL), mcp.brash('watch it')]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1659,32 +1659,32 @@ class TestShellRoster:
     class ShellBro(BaseBro):
       name = 'shell-roster'
       description = 'd'
-      tools: ClassVar = [mcp.shell('git status'), mcp.shell('git diff', 'git status')]
+      tools: ClassVar = [mcp.brash('git status'), mcp.brash('git diff', 'git status')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     selection = ShellBro()._selected_tools_for('bro')
-    assert selection.shell_commands == ('git status', 'git diff')
-    assert selection.shell_unrestricted is False
+    assert selection.brash_commands == ('git status', 'git diff')
+    assert selection.brash_unrestricted is False
 
   def test_any_dominates_exact_commands(self):
     class ShellBro(BaseBro):
       name = 'shell-any'
       description = 'd'
-      tools: ClassVar = [mcp.shell('git status'), mcp.shell(mcp.ANY)]
+      tools: ClassVar = [mcp.brash('git status'), mcp.brash(mcp.ANY)]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     selection = ShellBro()._selected_tools_for('bro')
-    assert selection.shell_unrestricted is True
+    assert selection.brash_unrestricted is True
 
   def test_finite_claude_roster_gates_bash_and_monitor_and_returns_control(self):
     class ShellBro(BaseBro):
       name = 'shell-gated'
       description = 'd'
-      tools: ClassVar = [claude.block(*claude.SHELL), mcp.shell('git status')]
+      tools: ClassVar = [claude.block(*claude.SHELL), mcp.brash('git status')]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1700,13 +1700,13 @@ class TestShellRoster:
     class InvalidBro(BaseBro):
       name = 'shell-unblocked'
       description = 'd'
-      tools: ClassVar = [mcp.shell('git status')]
+      tools: ClassVar = [mcp.brash('git status')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
     with pytest.raises(
-      ValueError, match='Bash is narrowed through the shell roster but never blocked'
+      ValueError, match='Bash is narrowed through the brash command list but never blocked'
     ):
       InvalidBro().blocked_tool_names('claude')
 
@@ -1714,7 +1714,7 @@ class TestShellRoster:
     class ShellBro(BaseBro):
       name = 'shell-unrestricted'
       description = 'd'
-      tools: ClassVar = [mcp.shell(mcp.ANY)]
+      tools: ClassVar = [mcp.brash(mcp.ANY)]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1726,31 +1726,31 @@ class TestShellRoster:
   def test_summoning_does_not_add_an_undeclared_shell_command(self, monkeypatch):
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     selection = EchoBro()._selected_tools_for('bro')
-    assert selection.shell_commands == ()
-    assert selection.shell_unrestricted is False
+    assert selection.brash_commands == ()
+    assert selection.brash_unrestricted is False
 
 
 class TestWatchServiceTools:
   @pytest.mark.asyncio
-  async def test_watch_tools_apply_the_exact_shell_roster_on_every_harness(self):
-    class ExactShellBro(BaseBro):
-      name = 'exact-watch-shell'
+  async def test_watch_tools_apply_the_exact_brash_list_on_every_harness(self):
+    class ExactBrashBro(BaseBro):
+      name = 'exact-watch-brash'
       description = 'd'
-      tools: ClassVar = [mcp.shell('printf allowed')]
+      tools: ClassVar = [mcp.brash('printf allowed')]
 
       def __init__(self):
         super().__init__(system_prompt='')
 
-    class ExactClaudeShellBro(ExactShellBro):
-      name = 'exact-claude-watch-shell'
+    class ExactClaudeBrashBro(ExactBrashBro):
+      name = 'exact-claude-watch-brash'
       tools: ClassVar = [claude.block(*claude.SHELL)]
 
     with watches.Owner.temporary() as owner:
       run = StubRun()
       run.watch_store = owner.store
       for harness, declaration in (
-        (Harness('alternate'), ExactShellBro()),
-        ('claude', ExactClaudeShellBro()),
+        (Harness('alternate'), ExactBrashBro()),
+        ('claude', ExactClaudeBrashBro()),
       ):
         server = _service_server(declaration, run=run, harness=harness)
         with contextlib.closing(server):
@@ -1758,18 +1758,22 @@ class TestWatchServiceTools:
           assert await tools['watch'].call({'command': ' printf allowed '}) == (
             'watching `printf allowed`'
           )
-          with pytest.raises(ValueError, match='must match exactly'):
+          with pytest.raises(ValueError, match='match one declared entry exactly'):
             await tools['watch'].call({'command': 'printf allowed; true'})
           assert await tools['unwatch'].call({'command': 'printf allowed'}) == (
             'stopped watching `printf allowed`'
           )
+          owner.store.start('sleep 60')
+          assert await tools['unwatch'].call({'command': ' sleep 60 '}) == (
+            'stopped watching `sleep 60`'
+          )
 
   @pytest.mark.asyncio
   async def test_unwatch_refuses_the_runtime_owned_session_watch(self):
-    class SessionShellBro(BaseBro):
-      name = 'session-watch-shell'
+    class SessionBrashBro(BaseBro):
+      name = 'session-watch-brash'
       description = 'd'
-      tools: ClassVar = [mcp.shell(watches.SESSION_WATCH_COMMAND)]
+      tools: ClassVar = [mcp.brash(watches.SESSION_WATCH_COMMAND)]
 
       def __init__(self):
         super().__init__(system_prompt='')
@@ -1777,7 +1781,7 @@ class TestWatchServiceTools:
     with watches.Owner.temporary() as owner:
       run = StubRun()
       run.watch_store = owner.store
-      server = _service_server(SessionShellBro(), run=run, harness=Harness('alternate'))
+      server = _service_server(SessionBrashBro(), run=run, harness=Harness('alternate'))
       with contextlib.closing(server):
         tools = {tool.name: tool for tool in await server.list_tools()}
         with pytest.raises(watches.WatchError, match='owned by the runtime'):

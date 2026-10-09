@@ -4,7 +4,7 @@ import functools
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Optional, cast, get_args
 
 from bro.base import condition, credentials, template
 from bro.base.condition import var
@@ -230,7 +230,7 @@ class _AnyCommand:
 
 
 ANY = _AnyCommand()
-ShellCommand = str | _AnyCommand
+BrashCommand = str | _AnyCommand
 
 
 @dataclass(frozen=True)
@@ -245,8 +245,8 @@ class ToolLayer:
   native_tool_commands: tuple[tuple[str, str], ...] = ()
   # harness-native tools served whole over a block, their calls unrestricted
   served_native_tool_names: tuple[str, ...] = ()
-  # commands reachable through the harness's shell capability; ANY lifts the roster
-  shell_commands: tuple[ShellCommand, ...] = ()
+  # command-list entries reachable through the harness shell; ANY lifts the list
+  brash_commands: tuple[BrashCommand, ...] = ()
 
   def __post_init__(self) -> None:
     if not isinstance(self.server_specs, tuple) or any(
@@ -260,14 +260,14 @@ class ToolLayer:
       not isinstance(value, str) or len(value) == 0 for pair in pairs for value in pair
     ):
       raise TypeError('native_tool_commands must be a tuple of non-empty (name, command) pairs')
-    commands = self.shell_commands
+    commands = self.brash_commands
     if not isinstance(commands, tuple) or any(
       command is not ANY and (not isinstance(command, str) or len(command.strip()) == 0)
       for command in commands
     ):
-      raise TypeError('shell_commands must be a tuple of non-empty command strings or ANY')
+      raise TypeError('brash_commands must be a tuple of non-empty command strings or ANY')
     if len(set(commands)) != len(commands):
-      raise ValueError(f'a tool layer declares duplicate shell commands: {commands!r}')
+      raise ValueError(f'a tool layer declares duplicate brash commands: {commands!r}')
     if ANY in commands and len(commands) != 1:
       raise ValueError('ANY must be the only shell command in its layer')
     if (
@@ -289,7 +289,7 @@ class ToolLayer:
       blocked_native_tool_names=self.blocked_native_tool_names + other.blocked_native_tool_names,
       native_tool_commands=self.native_tool_commands + other.native_tool_commands,
       served_native_tool_names=self.served_native_tool_names + other.served_native_tool_names,
-      shell_commands=self.shell_commands + other.shell_commands,
+      brash_commands=self.brash_commands + other.brash_commands,
     )
 
 
@@ -327,19 +327,22 @@ def serve(*tool_names: str) -> ToolLayer:
   return ToolLayer(served_native_tool_names=tool_names)
 
 
-def shell(*commands: ShellCommand) -> ToolLayer:
-  """declare the whole command lines reachable through the harness shell.
+def brash(*commands: BrashCommand) -> ToolLayer:
+  """declare the command list reachable through the harness shell.
 
-  Commands match exactly after surrounding whitespace is removed. `ANY` lifts
-  the roster and must be the declaration's only argument; an empty declaration
-  never means unrestricted access.
+  A finite list uses brash word patterns: an unquoted `*` matches within one
+  argument and a final unquoted `...` admits further arguments. `ANY` lifts the
+  command list and must be the declaration's only argument.
   """
   if len(commands) == 0:
-    raise ValueError('shell needs at least one command or ANY')
-  normalized = tuple(
-    command.strip() if isinstance(command, str) else command for command in commands
-  )
-  return ToolLayer(shell_commands=normalized)
+    raise ValueError('brash needs at least one command or ANY')
+  if commands == (ANY,):
+    return ToolLayer(brash_commands=commands)
+  if ANY in commands:
+    return ToolLayer(brash_commands=commands)
+  from bro.brash import validate_entries
+
+  return ToolLayer(brash_commands=validate_entries(cast(tuple[str, ...], commands)))
 
 
 _COMMAND_WORD = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]*')

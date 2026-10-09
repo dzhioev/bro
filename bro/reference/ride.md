@@ -139,7 +139,7 @@ A cut batch ends in a pending marker and the next batch starts after the watch t
 A line wider than the byte bound is delivered in successive pieces, with its first piece naming the whole line size.
 
 Where a persona declares shell reach, both harnesses mount `bro::watch(command)` and `bro::unwatch(command)`.
-The command must match the persona's shell roster exactly, as `bro::job` requires;
+The command must be admitted by the persona's brash command list, as `bro::job` requires;
 `unwatch` refuses the runtime-owned session watch.
 `do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
 Each joined party member has its own session directory and therefore its own store.

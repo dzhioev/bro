@@ -18,6 +18,10 @@ def bro_base_time_util():
   return run_cli('bro.base.time_util', sys.argv)
 
 
+def bro_brash():
+  return run_cli('bro.brash', sys.argv)
+
+
 def bro_broker_broxy():
   return run_cli('bro.broker.broxy', sys.argv)
 

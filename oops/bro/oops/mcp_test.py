@@ -263,8 +263,8 @@ def test_devoops_manifest_comes_from_its_components(monkeypatch):
 
 
 def test_devoops_declares_an_unrestricted_shell_on_both_harnesses():
-  assert Devoops()._selected_tools_for('bro').shell_unrestricted is True
-  assert Devoops()._selected_tools_for('claude').shell_unrestricted is True
+  assert Devoops()._selected_tools_for('bro').brash_unrestricted is True
+  assert Devoops()._selected_tools_for('claude').brash_unrestricted is True
 
 
 def test_devoops_is_registered_as_a_persona():
