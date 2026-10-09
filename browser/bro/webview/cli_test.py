@@ -10,7 +10,7 @@ from bro.quest_test_helper import next_message, quest_record, reply, running_ser
 from bro.webview import cli
 
 MISSION = 'WEB-1'
-REF = 'sha256:' + 'a' * 64
+REF = 'sha256:' + 'a' * 64 + '/upload.txt'
 
 
 def _live_webview(**overrides):

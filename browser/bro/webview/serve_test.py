@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 import pytest
 
+from bro.artifact import path_name
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
 from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
@@ -21,7 +22,7 @@ from bro.webview import profile, serve
 
 TIMEOUT = 5.0
 MISSION = 'webview-mission'
-REF = 'sha256:' + 'a' * 64
+REF = 'sha256:' + 'a' * 64 + '/file'
 SECRET_MARKER = 'profile-secret-marker'
 
 
@@ -185,13 +186,14 @@ class BrokerSink:
     if message.type == Tag.REQUEST and message.kind == 'artifact.mint':
       assert message.id is not None
       path = message.args['path']
+      name = message.args.get('name', path_name(path))
       content = (self.workspace / path).read_bytes()
       self.minted.append((path, content))
       assert self.transport is not None
       if self.refused_mints:
         reply = brotocol.result(message.id, 'denied', error='artifact store cap reached')
       else:
-        ref = f'sha256:{hashlib.sha256(content).hexdigest()}'
+        ref = f'sha256:{hashlib.sha256(content).hexdigest()}/{name}'
         reply = brotocol.result(message.id, 'ok', value={'ref': ref, 'size': len(content)})
       await self.transport.send(channel, reply)
       return
@@ -539,7 +541,7 @@ async def test_command_files_are_minted_listed_and_removed(daemon_files, monkeyp
   def mint(path: str):
     content = (workspace / path).read_bytes()
     minted.append((path, content))
-    return SimpleMint(f'sha256:{hashlib.sha256(content).hexdigest()}')
+    return SimpleMint(f'sha256:{hashlib.sha256(content).hexdigest()}/{path_name(path)}')
 
   monkeypatch.setattr(serve, 'mint_artifact', mint)
   async with running_broker(monkeypatch, workspace) as sink:
@@ -559,7 +561,7 @@ async def test_command_files_are_minted_listed_and_removed(daemon_files, monkeyp
     assert reply['files'] == [
       {
         'name': 'nested/screenshot.png',
-        'ref': f'sha256:{hashlib.sha256(b"image bytes").hexdigest()}',
+        'ref': f'sha256:{hashlib.sha256(b"image bytes").hexdigest()}/screenshot.png',
       }
     ]
     assert minted == [('nested/screenshot.png', b'image bytes')]
@@ -699,17 +701,17 @@ async def test_text_and_whole_reply_spills(monkeypatch, tmp_path):
   monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
   minted: list[bytes] = []
 
-  def mint(path: str):
+  def mint(path: str, name: str):
     content = (tmp_path / path).read_bytes()
     minted.append(content)
-    return SimpleMint(f'sha256:{hashlib.sha256(content).hexdigest()}')
+    return SimpleMint(f'sha256:{hashlib.sha256(content).hexdigest()}/{name}')
 
   monkeypatch.setattr(serve, 'mint_artifact', mint)
   text = 'x' * (serve.MAX_MESSAGE_BYTES + 1)
   text_reply = await serve.bound_reply({'text': text, 'files': []})
   assert text_reply == {
     'spilled': 'text',
-    'ref': f'sha256:{hashlib.sha256(text.encode()).hexdigest()}',
+    'ref': f'sha256:{hashlib.sha256(text.encode()).hexdigest()}/reply.txt',
     'bytes': len(text),
     'files': [],
   }
@@ -730,7 +732,7 @@ class SimpleMint:
 async def test_spill_mint_refusal_is_a_bounded_error(monkeypatch, tmp_path):
   monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
 
-  def refuse(path: str):
+  def refuse(path: str, name: str):
     raise serve.ArtifactError('store cap ' + 'x' * 5000)
 
   monkeypatch.setattr(serve, 'mint_artifact', refuse)

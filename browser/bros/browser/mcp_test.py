@@ -7,9 +7,9 @@ import pytest
 from bro.llm.llm import LLMUnavailable
 from bros.browser import mcp
 
-CAPTURE_REF = f'sha256:{"1" * 64}'
-SOURCE_REF = f'sha256:{"2" * 64}'
-DECODED_REF = f'sha256:{"3" * 64}'
+CAPTURE_REF = f'sha256:{"1" * 64}/capture.yml'
+SOURCE_REF = f'sha256:{"2" * 64}/page.txt'
+DECODED_REF = f'sha256:{"3" * 64}/page.txt'
 _PAGE_REPLY = '- Page URL: https://example.test/form\n- Page Title: Reader form'
 
 
@@ -95,7 +95,7 @@ def test_text_capture_decodes_and_mints_the_reader_input(monkeypatch, tmp_path) 
   monkeypatch.setattr('bro.webview.mcp.command_reply', command_reply)
   minted = []
 
-  def mint(path):
+  def mint(path, name=None):
     minted.append(Path(path).read_text())
     return SimpleNamespace(ref=DECODED_REF)
 
@@ -146,7 +146,9 @@ def test_text_capture_drops_snapshot_shaped_element_claims(monkeypatch, tmp_path
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: _capture_reply('browser-look-text.json'),
   )
-  monkeypatch.setattr(mcp, 'mint_artifact', lambda path: SimpleNamespace(ref=DECODED_REF))
+  monkeypatch.setattr(
+    mcp, 'mint_artifact', lambda path, name=None: SimpleNamespace(ref=DECODED_REF)
+  )
   monkeypatch.setattr(
     mcp,
     '_read_page',

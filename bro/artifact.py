@@ -5,32 +5,36 @@ The peer side of artifact sharing uses three request kinds on the peer's channel
 The ride's host-side store answers them (`ride/ride/artifacts.py`).
 This module owns their kinds, argument keys, and ref grammar for the library clients and CLI/session commands.
 
-- `artifact.mint` with args `{path}` — `path` names a file or directory
-  relative to the requesting peer's workspace root.
+- `artifact.mint` with args `{path, name?}` — `path` names a file or directory
+  relative to the requesting peer's workspace root, and `name` the artifact,
+  defaulting to the path's last component.
   The host ingests a private copy into the ride store and answers `ok{ref, size}`.
 - `artifact.get` with args `{ref}` — the host makes the ref visible to the requesting peer
-  and answers `ok{path}` with the path it appears at:
+  and answers `ok{path}` with the path it appears at, which ends in the ref's name:
   the read-only view mount for a boxed peer, or a copy under the peer's workspace directory
   for an unboxed one.
   The path is not the peer's to write;
   a peer that wants an editable copy makes one itself.
 - `artifact.share` with args `{id, ref}` — the owner of a live mission hands one ref it can reach to that mission's worker.
 
-A ref is `sha256:` plus 64 hex digits. For a file it is the plain content
-digest, so `sha256sum` checks it. For a directory it is the digest of a
-canonical manifest of typed entries — `digest_path` is the one implementation,
-shared by the host's ingest and the local `artifact digest` verb: entries in
-depth-first name order, each `{path, type}` plus per type the content digest
-and executable bit of a file or the recorded (never followed) target of a
-symlink, refused when that target escapes the directory; the manifest digested
-as compact sorted-key JSON.
+A ref is `<digest>/<name>`. The digest is `sha256:` plus 64 hex digits. For a
+file it is the plain content digest, so `sha256sum` checks it. For a directory
+it is the digest of a canonical manifest of typed entries — `digest_path` is
+the one implementation, shared by the host's ingest and the local `artifact
+digest` verb: entries in depth-first name order, each `{path, type}` plus per
+type the content digest and executable bit of a file or the recorded (never
+followed) target of a symlink, refused when that target escapes the directory;
+the manifest digested as compact sorted-key JSON. The name is one file name
+(`name_error` holds its rules) and is not digested: the same content under two
+names is one stored object and two refs, and passing a ref passes its name.
 
 A minted ref is readable by the minting peer and its summoners up to the ride root.
 An owner may hand a ref down when the mission opens or after it is live.
 Nothing else reaches a ref — knowing one is not access.
+Reach is to the digest, so a peer that may read the content gets or shares it under any name.
 
 The CLI blocks for the host's answer: `artifact mint <path>` prints the ref,
-`artifact get <ref>` prints the path, and `artifact digest <path>` computes a
+`artifact get <ref>` prints the path, and `artifact digest <path>` computes the
 ref locally, with no channel involved. Like `summon`, an unset
 `BROKER_CHANNEL` is an error rather than inert, and broker imports are
 deferred to call time so importers of the contract constants never pull the
@@ -55,20 +59,73 @@ if TYPE_CHECKING:
 
 __cli_name__ = 'artifact'
 
-MINT = 'artifact.mint'  # the kind a mint request names; args {path}
+MINT = 'artifact.mint'  # the kind a mint request names; args {path, name?}
 GET = 'artifact.get'  # the kind a get request names; args {ref}
 SHARE = 'artifact.share'  # the kind a live mission share names; args {id, ref}
 # client-side bound on the host's answer — ingest reads and copies the full
 # content, so a multi-gigabyte bundle takes real time
 DEFAULT_TIMEOUT = 600.0
 
-_REF = re.compile(r'sha256:[0-9a-f]{64}')
+REF_FORM = 'sha256:<64 hex digits>/<name>'  # a ref's shape, as help and errors spell it
+
+_DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
+_REF = re.compile(rf'({_DIGEST.pattern})/(.+)', re.DOTALL)
+# NAME_MAX: a ref's name becomes one directory entry in each reader's view
+_NAME_MAX_BYTES = 255
 _EXECUTABLE_BITS = 0o111
+
+
+def name_error(name: str) -> Optional[str]:
+  """why `name` cannot name an artifact, or None when it can."""
+  if name in ('', '.', '..') or '/' in name:
+    return f'artifact name must be one file name: {name!r}'
+  if any(ord(character) < 0x20 or ord(character) == 0x7F for character in name):
+    return f'artifact name must not contain control characters: {name!r}'
+  try:
+    encoded = name.encode()
+  except UnicodeEncodeError:
+    return f'artifact name must be valid UTF-8: {name!r}'
+  if len(encoded) > _NAME_MAX_BYTES:
+    return f'artifact name must be at most {_NAME_MAX_BYTES} UTF-8 bytes: {name!r}'
+  return None
+
+
+def path_name(path: str) -> str:
+  """the default artifact name for `path`: its last component. Raises
+  `ValueError` when that is no valid name, as for `.`."""
+  name = PurePosixPath(posixpath.normpath(path)).name
+  error = name_error(name)
+  if error is not None:
+    raise ValueError(f'{path!r} ends in no usable artifact name; name it explicitly ({error})')
+  return name
+
+
+def compose_ref(digest: str, name: str) -> str:
+  """the ref naming the content `digest` as `name`. Raises `ValueError` on a
+  malformed digest or name."""
+  if _DIGEST.fullmatch(digest) is None:
+    raise ValueError(f'malformed artifact digest: {digest!r}')
+  error = name_error(name)
+  if error is not None:
+    raise ValueError(error)
+  return f'{digest}/{name}'
+
+
+def split_ref(ref: str) -> tuple[str, str]:
+  """the content digest and name of `ref`. Raises `ValueError` on a malformed
+  ref."""
+  match = _REF.fullmatch(ref)
+  if match is None or name_error(match[2]) is not None:
+    raise ValueError(f'malformed artifact ref (expected {REF_FORM}): {ref!r}')
+  return match[1], match[2]
 
 
 def is_ref(value: Any) -> bool:
   """whether `value` is a well-formed artifact ref."""
-  return isinstance(value, str) and _REF.fullmatch(value) is not None
+  if not isinstance(value, str):
+    return False
+  match = _REF.fullmatch(value)
+  return match is not None and name_error(match[2]) is None
 
 
 def _file_digest(path: Path) -> str:
@@ -118,7 +175,8 @@ def directory_manifest(path: Path) -> list[dict[str, Any]]:
 
 
 def digest_path(path: Path) -> str:
-  """the artifact ref of the file or directory at `path`."""
+  """the content digest of the file or directory at `path` — a ref's leading
+  part."""
   if path.is_file():
     return _file_digest(path)
   if path.is_dir():
@@ -182,10 +240,14 @@ def _call(kind: str, args: dict[str, Any], timeout: Optional[float]) -> dict[str
   return _interpret_result(result)
 
 
-def mint_artifact(path: str, *, timeout: Optional[float] = None) -> Minted:
-  """mint the file or directory at workspace-relative `path` and return its ref
-  and size. Raises `ArtifactError` on any failure."""
-  value = _call(MINT, {'path': path}, timeout)
+def mint_artifact(
+  path: str, *, name: Optional[str] = None, timeout: Optional[float] = None
+) -> Minted:
+  """mint the file or directory at workspace-relative `path` as `name` (by
+  default the path's last component) and return its ref and size. Raises
+  `ArtifactError` on any failure."""
+  args = {'path': path} if name is None else {'path': path, 'name': name}
+  value = _call(MINT, args, timeout)
   ref = value.get('ref')
   size = value.get('size')
   if not is_ref(ref) or not isinstance(size, int) or isinstance(size, bool) or size < 0:
@@ -206,9 +268,9 @@ def get_artifact(ref: str, *, timeout: Optional[float] = None) -> str:
 # --- CLI ------------------------------------------------------------------------
 
 
-def _mint(path: str, timeout: Optional[float]) -> int:
+def _mint(path: str, name: Optional[str], timeout: Optional[float]) -> int:
   try:
-    minted = mint_artifact(path, timeout=timeout)
+    minted = mint_artifact(path, name=name, timeout=timeout)
   except ArtifactError as e:
     log.error('%s', e)
     return 1
@@ -227,9 +289,9 @@ def _get(ref: str, timeout: Optional[float]) -> int:
   return 0
 
 
-def _digest(path: str) -> int:
+def _digest(path: str, name: Optional[str]) -> int:
   try:
-    ref = digest_path(Path(path))
+    ref = compose_ref(digest_path(Path(path)), path_name(path) if name is None else name)
   except (OSError, ValueError) as e:
     log.error('%s', e)
     return 1
@@ -238,6 +300,7 @@ def _digest(path: str) -> int:
 
 
 _TIMEOUT_HELP = f"seconds to wait for the host's answer (default: {DEFAULT_TIMEOUT:.0f})"
+_NAME_HELP = "the ref's file name (default: the path's last component)"
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -249,6 +312,7 @@ def main(argv: list[str]) -> Optional[int]:
       'peer and its summoners, and a summon request can share it down',
     )
     parser.add_argument('path', help='file or directory, relative to the workspace root')
+    parser.add_argument('--name', help=_NAME_HELP)
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
     return _mint(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'get':
@@ -257,7 +321,7 @@ def main(argv: list[str]) -> Optional[int]:
       description='make an artifact ref visible to this peer and print the read-only '
       'path it appears at; copy from there for an editable version',
     )
-    parser.add_argument('ref', help='artifact ref (sha256:<64 hex digits>)')
+    parser.add_argument('ref', help=f'artifact ref ({REF_FORM})')
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
     return _get(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'digest':
@@ -268,6 +332,7 @@ def main(argv: list[str]) -> Optional[int]:
       'way sha256sum checks a file one',
     )
     parser.add_argument('path', help='file or directory to digest')
+    parser.add_argument('--name', help=_NAME_HELP)
     return _digest(**parser.parse(argv[1:]))
   log.error('usage: artifact mint|get|digest …; each verb takes --help')
   return 2

@@ -8,13 +8,13 @@ from typing import Any, cast
 import pytest
 
 import ride.artifacts
-from bro.artifact import GET, MINT, SHARE, digest_path
+from bro.artifact import GET, MINT, SHARE, compose_ref, digest_path, split_ref
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal, Record
 from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
-from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
+from ride.artifacts import JOB_RUN_NAME, ArtifactControl, ArtifactStore, JobArtifacts
 from ride.bro_worker import BroFacts
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
@@ -22,7 +22,7 @@ from ride.workspace.model import Workspace
 
 ROOT = 'ROOT-CHANNEL'
 CHILD = 'CHILD-CHANNEL'
-UNKNOWN_REF = f'sha256:{"a" * 64}'
+UNKNOWN_REF = f'sha256:{"a" * 64}/unknown.bin'
 _DEFAULT_ARTIFACT_VIEW = PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
 
 
@@ -73,6 +73,11 @@ def _tree_file(name: str, content: bytes) -> str:
   return name
 
 
+def _object(ref: str) -> Path:
+  digest, _ = split_ref(ref)
+  return ride.artifacts.store_dir('ws') / 'objects' / digest
+
+
 def _audit(ride_name: str = 'ws') -> list[dict]:
   lines = ride.artifacts.audit_file(ride_name).read_text().splitlines()
   return [json.loads(line) for line in lines]
@@ -82,10 +87,11 @@ class TestMint:
   def test_mints_a_file_and_links_the_minter_view(self, store):
     relative = _tree_file('out/a.bin', b'payload')
     ref, size = store.mint(_root_identity(), (), relative)
-    assert ref == digest_path(workspace_tree('ws') / relative)
+    digest = digest_path(workspace_tree('ws') / relative)
+    assert ref == f'{digest}/a.bin'
     assert size == 7
-    assert (ride.artifacts.store_dir('ws') / 'objects' / ref).read_bytes() == b'payload'
-    assert (ride.artifacts.view_dir('ws', 'ws') / ref).read_bytes() == b'payload'
+    assert _object(ref).read_bytes() == b'payload'
+    assert (ride.artifacts.view_dir('ws', 'ws') / digest / 'a.bin').read_bytes() == b'payload'
     [entry] = _audit()
     assert entry['event'] == 'mint'
     assert entry['ride'] == 'ws'
@@ -99,16 +105,17 @@ class TestMint:
     relative = _tree_file('a.bin', b'payload')
     ref, _ = store.mint(_root_identity(), (), relative)
     (workspace_tree('ws') / relative).write_bytes(b'REWRITTEN AFTER MINT')
-    assert (ride.artifacts.store_dir('ws') / 'objects' / ref).read_bytes() == b'payload'
+    assert _object(ref).read_bytes() == b'payload'
 
   def test_reminting_identical_content_is_free(self, store, monkeypatch):
     first = _tree_file('a.bin', b'payload')
     second = _tree_file('b.bin', b'payload')
     ref, size = store.mint(_root_identity(), (), first)
     # the cap admits one copy of the content; the dedup mint still fits, so the
-    # re-mint stored nothing new
+    # re-mint under another name stored nothing new
     monkeypatch.setattr(ride.artifacts, 'MAX_STORE_BYTES', size)
-    assert store.mint(_root_identity(), (), second) == (ref, size)
+    digest, _ = split_ref(ref)
+    assert store.mint(_root_identity(), (), second) == (f'{digest}/b.bin', size)
     different = _tree_file('c.bin', b'other!!')
     with pytest.raises(ArtifactDenied, match='byte cap'):
       store.mint(_root_identity(), (), different)
@@ -122,13 +129,45 @@ class TestMint:
     (tree / 'bundle' / 'sub' / 'tool').chmod(0o700)
     os.symlink('data.txt', tree / 'bundle' / 'link')
     ref, size = store.mint(_root_identity(), (), 'bundle')
-    assert ref == digest_path(tree / 'bundle')
-    stored = ride.artifacts.store_dir('ws') / 'objects' / ref
-    assert digest_path(stored) == ref
+    assert ref == compose_ref(digest_path(tree / 'bundle'), 'bundle')
+    stored = _object(ref)
+    assert digest_path(stored) == split_ref(ref)[0]
     assert (stored / 'data.txt').stat().st_mode & 0o777 == 0o644
     assert (stored / 'sub' / 'tool').stat().st_mode & 0o777 == 0o755
     assert os.readlink(stored / 'link') == 'data.txt'
     assert size == len(b'alpha') + len(b'#!/bin/sh\n')
+
+  def test_an_explicit_name_names_the_ref_and_the_view_entry(self, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'), 'renamed.txt')
+    digest, name = split_ref(ref)
+    assert name == 'renamed.txt'
+    assert (ride.artifacts.view_dir('ws', 'ws') / digest / 'renamed.txt').read_bytes() == b'payload'
+    assert _audit()[-1]['path'] == 'a.bin'
+
+  def test_the_workspace_root_needs_an_explicit_name(self, store):
+    _tree_file('a.bin', b'payload')
+    with pytest.raises(ArtifactDenied, match='name it explicitly'):
+      store.mint(_root_identity(), (), '.')
+    ref, _ = store.mint(_root_identity(), (), '.', 'tree')
+    assert (ride.artifacts.view_dir('ws', 'ws') / ref / 'a.bin').read_bytes() == b'payload'
+
+  def test_equal_names_of_different_content_do_not_collide(self, store):
+    first, _ = store.mint(_root_identity(), (), _tree_file('one/report.md', b'first'))
+    second, _ = store.mint(_root_identity(), (), _tree_file('two/report.md', b'second'))
+    assert first != second
+    view = ride.artifacts.view_dir('ws', 'ws')
+    assert (view / first).read_bytes() == b'first'
+    assert (view / second).read_bytes() == b'second'
+
+  def test_one_content_under_two_names_keeps_both_view_entries(self, store):
+    first, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    second, _ = store.mint(_root_identity(), (), _tree_file('b.bin', b'payload'))
+    view = ride.artifacts.view_dir('ws', 'ws')
+    assert sorted(path.name for path in (view / split_ref(first)[0]).iterdir()) == [
+      'a.bin',
+      'b.bin',
+    ]
+    assert (view / first).stat().st_ino == (view / second).stat().st_ino
 
   def test_shared_with_covers_the_minter_and_its_ancestors(self, store):
     relative = _tree_file('a.bin', b'payload')
@@ -183,7 +222,13 @@ class TestMint:
 class TestReachAndResolve:
   def test_resolve_answers_the_object_path_for_a_reader(self, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    assert store.resolve(ref, 'ws') == ride.artifacts.store_dir('ws') / 'objects' / ref
+    assert store.resolve(ref, 'ws') == _object(ref)
+
+  def test_reach_is_to_the_content_under_any_name(self, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    renamed = compose_ref(split_ref(ref)[0], 'renamed.bin')
+    assert store.reachable(renamed, 'ws')
+    assert store.resolve(renamed, 'ws') == _object(ref)
 
   def test_denial_is_uniform_between_unknown_and_unshared(self, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
@@ -252,7 +297,7 @@ class TestMaterialize:
     assert (workspace_dir('ws') / 'artifacts' / ref).read_bytes() == b'payload'
     # the copy shares no inode with the store, and a repeat answers the same copy
     (workspace_dir('ws') / 'artifacts' / ref).write_bytes(b'edited')
-    assert (ride.artifacts.store_dir('ws') / 'objects' / ref).read_bytes() == b'payload'
+    assert _object(ref).read_bytes() == b'payload'
     assert store.materialize(_root_identity(), ref) == path
     assert (workspace_dir('ws') / 'artifacts' / ref).read_bytes() == b'edited'
 
@@ -279,12 +324,18 @@ class TestMaterialize:
     with pytest.raises(ArtifactDenied, match='is not shared with this peer'):
       store.materialize(_root_identity(), UNKNOWN_REF)
 
+  def test_a_reader_gets_reached_content_under_a_new_name(self, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    renamed = compose_ref(split_ref(ref)[0], 'renamed.bin')
+    assert store.materialize(_root_identity(), renamed) == str(CONTAINER_ARTIFACTS_ROOT / renamed)
+    assert (ride.artifacts.view_dir('ws', 'ws') / renamed).read_bytes() == b'payload'
+
 
 class TestLifecycle:
   def test_construction_wipes_a_leftover_store(self, workspace, store):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     fresh = ArtifactStore(workspace, root_boxed=True)
-    assert not (ride.artifacts.store_dir('ws') / 'objects' / ref).exists()
+    assert not _object(ref).exists()
     with pytest.raises(ArtifactDenied):
       fresh.resolve(ref, 'ws')
 
@@ -406,7 +457,7 @@ class TestJobArtifacts:
     directory = jobs.open()
     (directory / 'stdout').write_bytes(b'ran')
     value = await jobs.collect(directory, cast(Dispatcher, _context(jobs)), ROOT)
-    assert value == {'ref': digest_path(directory), 'size': 3}
+    assert value == {'ref': compose_ref(digest_path(directory), JOB_RUN_NAME), 'size': 3}
     assert store.reachable(value['ref'], 'ws')
     assert [entry['event'] for entry in _audit()] == ['job']
 
@@ -431,8 +482,16 @@ class TestArtifactControl:
     assert result.request == message.id
     assert result.payload['outcome'] == 'ok'
     value = result.payload['value']
-    assert value['ref'] == digest_path(workspace_tree('ws') / 'out/a.bin')
+    assert value['ref'] == compose_ref(digest_path(workspace_tree('ws') / 'out/a.bin'), 'a.bin')
     assert value['size'] == 7
+
+  @pytest.mark.asyncio
+  async def test_mint_carries_the_requested_name(self, control):
+    _tree_file('out/a.bin', b'payload')
+    context = _context(control)
+    control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': 'out/a.bin', 'name': 'b.bin'}))  # fmt: skip
+    _, result = await _delivered(context)
+    assert split_ref(result.payload['value']['ref'])[1] == 'b.bin'
 
   @pytest.mark.asyncio
   async def test_get_answers_the_view_path(self, control, store):
@@ -533,6 +592,7 @@ class TestArtifactControl:
     context = _context(control)
     control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': ''}))
     control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': 'x', 'extra': 1}))  # fmt: skip
+    control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, {'path': 'x', 'name': 'a/b'}))  # fmt: skip
     control.get(cast(Dispatcher, context), ROOT, brotocol.request(GET, {'ref': 'nope'}))
     control.share(
       cast(Dispatcher, context), ROOT, brotocol.request(SHARE, {'id': '', 'ref': UNKNOWN_REF})
@@ -542,13 +602,14 @@ class TestArtifactControl:
       ROOT,
       brotocol.request(SHARE, {'id': 'WEB-1', 'ref': UNKNOWN_REF, 'extra': 1}),
     )
-    assert [payload['outcome'] for _, payload in context.replies] == ['denied'] * 5
+    assert [payload['outcome'] for _, payload in context.replies] == ['denied'] * 6
     assert "non-empty string 'path'" in context.replies[0][1]['error']
     assert 'unknown artifact.mint field(s): extra' in context.replies[1][1]['error']
-    assert "well-formed 'ref'" in context.replies[2][1]['error']
-    assert "non-empty string 'id'" in context.replies[3][1]['error']
-    assert 'unknown artifact.share field(s): extra' in context.replies[4][1]['error']
-    assert [entry['event'] for entry in _audit()] == ['deny'] * 5
+    assert 'must be one file name' in context.replies[2][1]['error']
+    assert "well-formed 'ref'" in context.replies[3][1]['error']
+    assert "non-empty string 'id'" in context.replies[4][1]['error']
+    assert 'unknown artifact.share field(s): extra' in context.replies[5][1]['error']
+    assert [entry['event'] for entry in _audit()] == ['deny'] * 6
 
   def test_an_unattributable_peer_is_denied(self, control):
     context = _context(control)

@@ -6,14 +6,14 @@ peer-named tree path — a reflink where the filesystem clones, a plain copy
 otherwise, never a hardlink, so nothing a producer writes afterwards reaches
 stored bytes — normalizes modes to the manifest's vocabulary (0o755/0o644 per
 the recorded executable bit), digests the copy (`bro.artifact.digest_path`),
-and commits it to `objects/<ref>`, deduplicating by digest and refusing a mint
-past the byte cap rather than evicting. Committed content is immutable by
+and commits it to `objects/<digest>`, deduplicating by digest and refusing a
+mint past the byte cap rather than evicting. Committed content is immutable by
 construction, so the read path re-verifies nothing.
 
 Each boxed peer has a view directory `shared/<workspace>/` holding one
-hardlink (or hardlinked tree) per ref it may reach — the source of its
-declared read-only artifact-view bind mount, so a ref linked while the peer
-runs appears without a remount.
+hardlink (or hardlinked tree) per ref it reached, at the ref's own relative
+path `<digest>/<name>` — the source of its declared read-only artifact-view
+bind mount, so a ref linked while the peer runs appears without a remount.
 A mint links the minter and its owners up to the root.
 An artifact share links the ref into the worker's view either during lowering or after it is live.
 An unboxed peer has no mount
@@ -27,7 +27,7 @@ recording mints, gets, shares, and denials.
 
 `JobArtifacts` collects a broker job's run directory the same way: the run is
 staged under the store's `jobs/`, and the ref that closes the job's mission
-reaches the peer that requested the job and its owners.
+names it `JOB_RUN_NAME` and reaches the peer that requested the job and its owners.
 
 `ArtifactControl` serves the `artifact.mint`, `artifact.get`, and `artifact.share` kinds
 (contract: `bro/artifact.py`) and implements the worker-type resolver
@@ -56,7 +56,15 @@ from collections.abc import Callable, Generator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Optional
 
-from bro.artifact import digest_path, is_ref
+from bro.artifact import (
+  REF_FORM,
+  compose_ref,
+  digest_path,
+  is_ref,
+  name_error,
+  path_name,
+  split_ref,
+)
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer, tree_path
@@ -76,9 +84,10 @@ MAX_STORE_BYTES = 32 << 30
 # filesystem that cannot clone, a cross-device pair) falls back to a plain copy
 _FICLONE = 0x40049409
 
-_MINT_KEYS = frozenset({'path'})
+_MINT_KEYS = frozenset({'path', 'name'})
 _GET_KEYS = frozenset({'ref'})
 _SHARE_KEYS = frozenset({'id', 'ref'})
+JOB_RUN_NAME = 'run'  # the name a collected job run's ref carries
 
 
 def store_dir(ride: str) -> Path:
@@ -178,7 +187,7 @@ class ArtifactStore:
     self._root_boxed = root_boxed
     self._lock = threading.Lock()
     self._audit_lock = threading.Lock()
-    self._reach: dict[str, set[str]] = {}  # ref -> workspace names that may read it
+    self._reach: dict[str, set[str]] = {}  # digest -> workspace names that may read it
     self._bytes = 0
     root = store_dir(workspace.name)
     if root.exists():
@@ -214,31 +223,40 @@ class ArtifactStore:
     directory.mkdir()
     return directory
 
-  def mint(self, identity: PeerDescription, ancestors: Sequence[str], relative: str) -> tuple[str, int]:  # fmt: skip
+  def mint(
+    self,
+    identity: PeerDescription,
+    ancestors: Sequence[str],
+    relative: str,
+    name: Optional[str] = None,
+  ) -> tuple[str, int]:
     """ingest the file or directory at `relative` in the minting peer's tree
-    and return its ref and size, shared with the minter and its ancestors.
-    Raises `ArtifactDenied` on any refusal; heavy, called off-loop."""
+    as `name` (by default the path's last component) and return its ref and
+    size, shared with the minter and its ancestors. Raises `ArtifactDenied` on
+    any refusal; heavy, called off-loop."""
     try:
       source = tree_path(identity.tree, relative)
+      name = path_name(relative) if name is None else name
     except ValueError as e:
       raise ArtifactDenied(str(e)) from None
     if not source.is_file() and not source.is_dir():
       raise ArtifactDenied(f'no file or directory at {relative!r} in the workspace')
-    return self.adopt(source, identity.workspace, ancestors, event='mint', origin=relative)
+    return self.adopt(source, name, identity.workspace, ancestors, event='mint', origin=relative)
 
   def adopt(
     self,
     source: Path,
+    name: str,
     workspace: str,
     ancestors: Sequence[str],
     *,
     event: str,
     origin: str,
   ) -> tuple[str, int]:
-    """ingest the host path `source` and return its ref and size, shared with
-    the peer named `workspace` and its `ancestors`; `event` and `origin` are
-    what the audit records it as. Raises `ArtifactDenied` on any refusal;
-    heavy, called off-loop.
+    """ingest the host path `source` as `name` and return its ref and size,
+    shared with the peer named `workspace` and its `ancestors`; `event` and
+    `origin` are what the audit records it as. Raises `ArtifactDenied` on any
+    refusal; heavy, called off-loop.
 
     The source is digested before anything is copied — the dedup probe that
     makes re-ingesting unchanged content free of both the copy and the cap, and
@@ -247,21 +265,22 @@ class ArtifactStore:
     under the copy's own digest, so stored bytes always match their ref even
     when the producer wrote the source mid-ingest."""
     try:
-      ref = digest_path(source)
+      digest = digest_path(source)
     except ValueError as e:
       raise ArtifactDenied(str(e)) from None
     size = _content_size(source)
-    if not (self._objects / ref).exists():
+    if not (self._objects / digest).exists():
       with self._lock:
         over = self._bytes + size > MAX_STORE_BYTES
       if over:
         raise ArtifactDenied(f'ingesting {origin!r} would exceed the store byte cap')
-      ref, size = self._ingest(source)
+      digest, size = self._ingest(source)
+    ref = compose_ref(digest, name)
     shared_with = {workspace, *ancestors}
     with self._lock:
-      self._reach.setdefault(ref, set()).update(shared_with)
-    for name in shared_with:
-      self._link_into_view(name, ref)
+      self._reach.setdefault(digest, set()).update(shared_with)
+    for peer_workspace in shared_with:
+      self._link_into_view(peer_workspace, ref)
     self.audit(
       event,
       {
@@ -278,23 +297,23 @@ class ArtifactStore:
     with _staged(self._staging) as staging:
       try:
         size = _private_copy(source, staging)
-        ref = digest_path(staging)
+        digest = digest_path(staging)
       except ValueError as e:
         raise ArtifactDenied(str(e)) from None
       with self._lock:
         if self._bytes + size > MAX_STORE_BYTES:
           raise ArtifactDenied(f'minting {source.name!r} would exceed the store byte cap')
         self._bytes += size  # reserved; released again when the commit dedupes
-      if not self._commit(staging, ref):
+      if not self._commit(staging, digest):
         with self._lock:
           self._bytes -= size
-      return ref, size
+      return digest, size
 
-  def _commit(self, staging: Path, ref: str) -> bool:
+  def _commit(self, staging: Path, digest: str) -> bool:
     """move the staged copy to its object path; False when identical content
     was already committed (the digest names the bytes, so the loser of a
     commit race discards its copy)."""
-    target = self._objects / ref
+    target = self._objects / digest
     if staging.is_dir():
       try:
         staging.rename(target)
@@ -316,10 +335,12 @@ class ArtifactStore:
     view = self._views / peer_workspace
     if not view.is_dir():
       return  # no view: the unboxed root, or a manually launched child
+    digest, _ = split_ref(ref)
     entry = view / ref
     if entry.exists():
       return
-    source = self._objects / ref
+    entry.parent.mkdir(exist_ok=True)
+    source = self._objects / digest
     if not source.is_dir():
       try:
         os.link(source, entry)
@@ -335,17 +356,19 @@ class ArtifactStore:
           raise
 
   def reachable(self, ref: str, workspace: str) -> bool:
-    """whether the peer named `workspace` may read `ref` — one uniform check,
-    identical whether or not the ref exists."""
+    """whether the peer named `workspace` may read `ref`'s content — one
+    uniform check, identical whether or not the ref exists."""
+    digest, _ = split_ref(ref)
     with self._lock:
-      return workspace in self._reach.get(ref, ())
+      return workspace in self._reach.get(digest, ())
 
   def resolve(self, ref: str, requester: str) -> Path:
     """the host path holding `ref`'s content, for the peer named `requester`;
     raises `ArtifactDenied` when it may not read it."""
     if not self.reachable(ref, requester):
       raise ArtifactDenied(_denial(ref))
-    return self._objects / ref
+    digest, _ = split_ref(ref)
+    return self._objects / digest
 
   def share(self, refs: Sequence[str], *, to: str, by: str) -> None:
     """extend each ref's reach to the peer named `to` and link it into that
@@ -355,7 +378,8 @@ class ArtifactStore:
       return
     with self._lock:
       for ref in refs:
-        self._reach.setdefault(ref, set()).add(to)
+        digest, _ = split_ref(ref)
+        self._reach.setdefault(digest, set()).add(to)
     self.view(to)
     for ref in refs:
       self._link_into_view(to, ref)
@@ -383,13 +407,14 @@ class ArtifactStore:
     return path
 
   def _unboxed_copy(self, ref: str, workspace: str) -> Path:
-    destination_directory = workspace_dir(workspace) / 'artifacts'
-    destination = destination_directory / ref
+    digest, _ = split_ref(ref)
+    destination = workspace_dir(workspace) / 'artifacts' / ref
     if destination.exists():
       return destination
-    destination_directory.mkdir(exist_ok=True)
+    destination_directory = destination.parent
+    destination_directory.mkdir(parents=True, exist_ok=True)
     with _staged(destination_directory) as staging:
-      _private_copy(self._objects / ref, staging)
+      _private_copy(self._objects / digest, staging)
       try:
         staging.rename(destination)
       except OSError:
@@ -420,6 +445,11 @@ def _validate_mint(args: dict[str, Any]) -> Optional[str]:
   path = args.get('path')
   if not isinstance(path, str) or len(path) == 0:
     return "artifact.mint needs a non-empty string 'path'"
+  if 'name' in args:
+    name = args['name']
+    if not isinstance(name, str):
+      return "artifact.mint 'name' must be a string"
+    return name_error(name)
   return None
 
 
@@ -428,7 +458,7 @@ def _validate_get(args: dict[str, Any]) -> Optional[str]:
   if len(unknown) > 0:
     return f'unknown artifact.get field(s): {", ".join(unknown)}'
   if not is_ref(args.get('ref')):
-    return "artifact.get needs a well-formed 'ref' (sha256:<64 hex digits>)"
+    return f"artifact.get needs a well-formed 'ref' ({REF_FORM})"
   return None
 
 
@@ -440,7 +470,7 @@ def _validate_share(args: dict[str, Any]) -> Optional[str]:
   if not isinstance(mission_id, str) or len(mission_id) == 0:
     return "artifact.share needs a non-empty string 'id'"
   if not is_ref(args.get('ref')):
-    return "artifact.share needs a well-formed 'ref' (sha256:<64 hex digits>)"
+    return f"artifact.share needs a well-formed 'ref' ({REF_FORM})"
   return None
 
 
@@ -462,6 +492,7 @@ class JobArtifacts:
     ref, size = await asyncio.to_thread(
       self._store.adopt,
       directory,
+      JOB_RUN_NAME,
       identity.workspace,
       ancestors,
       event='job',
@@ -494,12 +525,13 @@ class ArtifactControl:
       self._deny(context, peer, message, identity, error)
       return
     path = args['path']
-    self._answer_off_loop(context, peer, message.request_id, lambda: self._minted(identity, ancestors, path))  # fmt: skip
+    name = args.get('name')
+    self._answer_off_loop(context, peer, message.request_id, lambda: self._minted(identity, ancestors, path, name))  # fmt: skip
 
   def _minted(
-    self, identity: PeerDescription, ancestors: Sequence[str], path: str
+    self, identity: PeerDescription, ancestors: Sequence[str], path: str, name: Optional[str]
   ) -> dict[str, Any]:
-    ref, size = self._store.mint(identity, ancestors, path)
+    ref, size = self._store.mint(identity, ancestors, path, name)
     return {'ref': ref, 'size': size}
 
   def get(self, context: Dispatcher, peer: Peer, message: Message) -> None:

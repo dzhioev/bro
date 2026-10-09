@@ -3,7 +3,7 @@ from pathlib import Path
 from bro.base.suite_environment import host_credential_store
 from bros.browser import mcp
 
-SNAPSHOT_REF = f'sha256:{"4" * 64}'
+SNAPSHOT_REF = f'sha256:{"4" * 64}/snapshot.yml'
 SNAPSHOT = Path(__file__).parents[2] / 'testdata' / 'browser-reader-snapshot.yml'
 
 

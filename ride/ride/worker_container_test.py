@@ -302,7 +302,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
     spec=_spec(PurePosixPath('/workspace/shared')),
     owner_workspace='owner',
     passes=(),
-    share=('sha256:' + 'a' * 64,),
+    share=('sha256:' + 'a' * 64 + '/upload.txt',),
   )
 
   lowered = worker_container._lower_worker_container(
@@ -335,7 +335,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
   assert workspace.metadata.throwaway
   assert artifacts.views == ['webview-CH']
   assert artifacts.shares == [
-    (('sha256:' + 'a' * 64,), 'webview-CH', 'owner'),
+    (('sha256:' + 'a' * 64 + '/upload.txt',), 'webview-CH', 'owner'),
   ]
 
 

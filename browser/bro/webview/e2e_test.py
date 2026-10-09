@@ -126,7 +126,7 @@ try:
     'browser_snapshot',
     {'filename': 'typed-snapshot.yml'},
   )
-  snapshot_match = re.search(r'typed-snapshot\.yml: (sha256:[0-9a-f]{64})', snapshot)
+  snapshot_match = re.search(r'typed-snapshot\.yml: (sha256:[0-9a-f]{64}/typed-snapshot\.yml)', snapshot)
   assert snapshot_match is not None, snapshot
   snapshot_ref = snapshot_match.group(1)
   read = artifact_mcp.read(snapshot_ref)
@@ -475,7 +475,7 @@ class ScriptedLLM(LLM):
       return 'clicked the requested Done button'
 
     if self.phase == 'upload':
-      match = re.search(r'sha256:[0-9a-f]{64}', instruction.text)
+      match = re.search(r'sha256:[0-9a-f]{64}/browser-thread-upload', instruction.text)
       assert match is not None, instruction
       shared = await self.tools.call(
         'webview__share', {'webview': self.webview, 'ref': match.group(0)}

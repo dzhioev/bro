@@ -9,7 +9,7 @@ from typing import Annotated, Optional
 
 from pydantic import Field
 
-from bro.artifact import get_artifact
+from bro.artifact import REF_FORM, get_artifact
 from bro.base.text_window import (
   BYTE_LIMIT,
   DEFAULT_LIMIT,
@@ -20,7 +20,7 @@ from bro.mcp import Toolset
 
 toolset = Toolset[None]('artifact')
 
-_REF_FIELD = Field(description='artifact ref (sha256:<64 hex digits>)')
+_REF_FIELD = Field(description=f'artifact ref ({REF_FORM})')
 _PATH_FIELD = Field(
   description='file path inside a directory artifact; omit when the ref is a file artifact'
 )

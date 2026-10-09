@@ -1213,11 +1213,13 @@ Peers pass files by content-addressed reference through the ride's store the lau
 
 - `artifact mint <path>` ingests a file or directory named relative to the minting peer's workspace root
   — a private reflink-or-copy, so nothing the producer writes afterwards changes stored bytes
-  — and prints its ref:
-  `sha256:` plus the content digest for a file (so `sha256sum` checks it) or the digest of a canonical typed-entry manifest for a directory (`artifact digest <path>` computes either locally, which is how a ref is verified end to end).
-  Re-minting unchanged content answers the same ref without storing anything new;
+  — and prints its ref, `<digest>/<name>`.
+  The digest is `sha256:` plus the content digest for a file (so `sha256sum` checks it) or the digest of a canonical typed-entry manifest for a directory;
+  the name is the path's last component unless `--name` gives another
+  (`artifact digest <path>` computes the same ref locally, which is how a ref is verified end to end).
+  The name is not digested, so passing a ref passes its name, and re-minting unchanged content under any name stores nothing new;
   a mint past the ride's byte cap is refused rather than evicted.
-- `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at.
+- `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at, the ref itself under the peer's artifact root, so the content keeps its name and two refs never collide.
   A boxed peer reads it under its declared artifact-view path
   — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path, as webview does with `/workspace/artifacts`;
   the per-peer view directory is bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
@@ -1231,6 +1233,7 @@ Peers pass files by content-addressed reference through the ride's store the lau
   A share into a boxed worker appears in its mounted artifact view without a remount.
   There is no other path
   — knowing a ref is not access, and a denial is uniform whether or not the ref exists.
+  Reach is to the digest, so a peer that may read the content gets or shares it under any name.
   A manual summon refuses launch-time and live `share`, and a manual child's `get` is denied
   — the launcher builds no launch for it, so no view is mounted
   — while its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
