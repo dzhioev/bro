@@ -1,8 +1,8 @@
-"""The parts of a session's own Claude configuration that could take a call around the command gate.
+"""The parts of a session's own Claude configuration that could take a call around a tool's gate.
 
 Claude applies the `updatedInput` of every `PreToolUse` hook a call matches, and
-the last rewrite wins, so another hook on `Bash` or `Monitor` could rewrite a
-call after the command gate; a `disableAllHooks` setting turns the gate off.
+the last rewrite wins, so another hook on a gated tool could rewrite a call
+after its gate; a `disableAllHooks` setting turns every gate off.
 `find` lists both wherever the pinned Claude Code loads them for a session:
 the project's settings and local settings in its working directory;
 the frontmatter of the skills, commands, and agents in the session's Claude
@@ -26,7 +26,6 @@ from typing import Any
 
 import yaml
 
-_GATED_TOOLS = ('Bash', 'Monitor')
 # a matcher Claude reads as a list of tool names rather than as a pattern
 _NAME_LIST = re.compile(r'[a-zA-Z0-9_|, -]+')
 _FRONTMATTER = re.compile(r'---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)', re.DOTALL)
@@ -41,24 +40,24 @@ class _Unreadable(Exception):
   """a candidate the scan cannot read or parse."""
 
 
-def _matches(matcher: Any) -> bool:
-  """whether Claude applies a hook group with `matcher` to `Bash` or `Monitor`."""
+def _matches(matcher: Any, tools: tuple[str, ...]) -> bool:
+  """whether Claude applies a hook group with `matcher` to one of `tools`."""
   if matcher is None or matcher == '' or matcher == '*':
     return True
   if not isinstance(matcher, str):
     raise _Unreadable(f'a matcher that is not a string: {matcher!r}')
   if _NAME_LIST.fullmatch(matcher) is not None:
     names = {name.strip() for name in re.split(r'[|,]', matcher)}
-    return any(tool in names for tool in _GATED_TOOLS)
+    return any(tool in names for tool in tools)
   try:
     pattern = re.compile(matcher)
   except re.error as error:
     raise _Unreadable(f'a matcher pattern the scan cannot read: {matcher!r}') from error
-  return any(pattern.search(tool) is not None for tool in _GATED_TOOLS)
+  return any(pattern.search(tool) is not None for tool in tools)
 
 
-def _gate_hooks(hooks: Any) -> list[str]:
-  """each `PreToolUse` hook group of a `hooks` block that runs on `Bash` or `Monitor`."""
+def _gate_hooks(hooks: Any, tools: tuple[str, ...]) -> list[str]:
+  """each `PreToolUse` hook group of a `hooks` block that runs on one of `tools`."""
   if not isinstance(hooks, dict):
     raise _Unreadable('a hooks block that is not a mapping')
   groups = hooks.get('PreToolUse', [])
@@ -69,7 +68,7 @@ def _gate_hooks(hooks: Any) -> list[str]:
     if not isinstance(group, dict) or not isinstance(group.get('hooks'), list):
       raise _Unreadable('a PreToolUse hook group without a list of hooks')
     matcher = group.get('matcher')
-    if len(group['hooks']) > 0 and _matches(matcher):
+    if len(group['hooks']) > 0 and _matches(matcher, tools):
       label = 'every tool' if matcher in (None, '', '*') else repr(matcher)
       found.append(f'a PreToolUse hook matching {label}')
   return found
@@ -95,10 +94,10 @@ def _enabled_plugins(settings: dict[str, Any]) -> dict[str, Any]:
   return enabled
 
 
-def _settings_findings(settings: dict[str, Any]) -> list[str]:
-  found = _gate_hooks(settings.get('hooks', {}))
+def _settings_findings(settings: dict[str, Any], tools: tuple[str, ...]) -> list[str]:
+  found = _gate_hooks(settings.get('hooks', {}), tools)
   if settings.get('disableAllHooks') is True:
-    found.append('disableAllHooks, which turns the command gate off')
+    found.append('disableAllHooks, which turns every gate off')
   return found
 
 
@@ -124,7 +123,7 @@ def _is_list(value: str) -> bool:
     return False
 
 
-def _frontmatter_findings(path: Path) -> list[str]:
+def _frontmatter_findings(path: Path, tools: tuple[str, ...]) -> list[str]:
   try:
     text = path.read_text()
   except (OSError, UnicodeDecodeError) as error:
@@ -141,7 +140,7 @@ def _frontmatter_findings(path: Path) -> list[str]:
       raise _Unreadable(f'frontmatter that is not YAML: {error}') from error
   if not isinstance(fields, dict) or fields.get('hooks') is None:
     return []
-  return _gate_hooks(fields['hooks'])
+  return _gate_hooks(fields['hooks'], tools)
 
 
 def _component_files(path: Path, kind: str) -> Iterator[Path]:
@@ -187,20 +186,22 @@ def _installed_roots(path: Path, keys: list[str]) -> list[Path]:
   return roots
 
 
-def _settings(path: Path) -> tuple[list[str], dict[str, Any]]:
+def _settings(path: Path, tools: tuple[str, ...]) -> tuple[list[str], dict[str, Any]]:
   """a project settings file's findings, and the plugins it enables or disables."""
   settings = _json_object(path)
-  return _settings_findings(settings), _enabled_plugins(settings)
+  return _settings_findings(settings, tools), _enabled_plugins(settings)
 
 
-def _hooks_file(path: Path) -> list[str]:
-  return _gate_hooks(_json_object(path).get('hooks', {}))
+def _hooks_file(path: Path, tools: tuple[str, ...]) -> list[str]:
+  return _gate_hooks(_json_object(path).get('hooks', {}), tools)
 
 
 class _Scan:
-  """the findings of one scan, a candidate it cannot read among them."""
+  """the findings of one scan for hooks on `tools`, a candidate it cannot read
+  among them."""
 
-  def __init__(self) -> None:
+  def __init__(self, tools: tuple[str, ...]) -> None:
+    self.tools = tools
     self.found: list[str] = []
 
   def read[T](self, path: Path, compute: Callable[[], T], unread: T) -> T:
@@ -217,7 +218,7 @@ class _Scan:
   def components(self, path: Path, kind: str) -> None:
     if path.exists():
       for file in _component_files(path, kind):
-        self.report(file, self.read(file, partial(_frontmatter_findings, file), []))
+        self.report(file, self.read(file, partial(_frontmatter_findings, file, self.tools), []))
 
   def plugin(self, root: Path) -> None:
     manifest_path = root / '.claude-plugin' / 'plugin.json'
@@ -229,28 +230,30 @@ class _Scan:
     hooks = manifest.get('hooks')
     hooks_files = [root / 'hooks' / 'hooks.json']
     if isinstance(hooks, dict):
-      self.report(manifest_path, self.read(manifest_path, partial(_gate_hooks, hooks), []))
+      self.report(
+        manifest_path, self.read(manifest_path, partial(_gate_hooks, hooks, self.tools), [])
+      )
     else:
       hooks_files.extend(listed('hooks'))
     for path in hooks_files:
       if path.exists():
-        self.report(path, self.read(path, partial(_hooks_file, path), []))
+        self.report(path, self.read(path, partial(_hooks_file, path, self.tools), []))
     for kind in _COMPONENT_KINDS:
       for path in (root / kind, *listed(kind)):
         self.components(path, kind)
 
 
-def find(project: Path, config: Path) -> list[str]:
+def find(project: Path, config: Path, tools: tuple[str, ...]) -> list[str]:
   """each place the Claude configuration of a session working in `project`, with
-  `config` as its Claude folder, carries a hook that could rewrite a `Bash` or
-  `Monitor` call after the command gate, or turns the gate off, as one line naming
-  the file and what it carries."""
-  scan = _Scan()
+  `config` as its Claude folder, carries a hook that could rewrite a call of one
+  of `tools` after its gate, or turns every gate off, as one line naming the file
+  and what it carries."""
+  scan = _Scan(tools)
   user_settings = config / 'settings.json'
-  enabled = scan.read(user_settings, partial(_settings, user_settings), ([], {}))[1]
+  enabled = scan.read(user_settings, partial(_settings, user_settings, tools), ([], {}))[1]
   for name in ('settings.json', 'settings.local.json'):
     path = project / '.claude' / name
-    findings, plugins = scan.read(path, partial(_settings, path), ([], {}))
+    findings, plugins = scan.read(path, partial(_settings, path, tools), ([], {}))
     scan.report(path, findings)
     enabled = {**enabled, **plugins}
 

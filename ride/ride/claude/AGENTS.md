@@ -15,16 +15,16 @@ Claude Code's own harness themed with the session's bro.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
   pinned absolute binary selection per isolation, the brash policy of a finite command list and the refusal of competing hooks before it,
   resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
-- `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a `Bash` or `Monitor` call after the command gate or turn it off.
+- `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a gated tool's call after its gate or turn every gate off.
 - `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its in-flight turn reaches the transcript.
   Print mode runs over stream-json as the harness's `bro.turn_end` port, settling each turn end and ended by SIGINT;
   a TUI runs on a runner-owned pty that proxies the session's terminal, ended by the interrupt keypress.
   Either stop stands the watch waiter down first.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, and the append prompt;
-  the `--tools` allowlist and the command gate on a finite command list;
-  and model/effort/fast selection, prompt, and forwarded Claude arguments.
-- `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, and the command tools a finite command list gates;
+  the `--tools` allowlist, the command gate on a finite command list, and the read gate without files;
+  and model/effort/fast selection, prompt, and the resumed session.
+- `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, the gated `Read` of a persona without files, and the command tools a finite command list gates;
   `native_tools_llm_test.py` holds them against that release (`bro/reference/ride.md`, "The claude argv").
 - `claude_auth.py` — the setup-token environment.
 - `claude_release.py` — the host-wide standalone-release cache:
@@ -40,9 +40,10 @@ Claude Code's own harness themed with the session's bro.
 - `statusline.py` — the session-local projector process:
   it renders recording and every owned mission's state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
-- `command_gate.py` and `watch_waiter.py`
+- `command_gate.py`, `read_gate.py`, and `watch_waiter.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`spawn.module_argv('ride.claude.<module>')`);
   the command gate rewrites each Bash and Monitor call of a finite command list into a brash call,
+  the read gate holds the `Read` of a persona without files to the session's own Claude folders,
   and the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch (`bro/reference/ride.md`, "Claude harness").
 - `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
   the current waiter's registration, the count of rewakes waiters began, the stand-down mark, the stdout mark that attributes a waiter's hook events,

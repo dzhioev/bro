@@ -282,7 +282,6 @@ def _child_session_spec(
     bro=launch.target,
     prompt=launch.prompt,
     subject=launch.prompt,
-    arguments=[],
     summon_depth=launch.summon_depth,
     summon_harness=launch.summon_harness,
     runtime_bundle=runtime_reference,

@@ -66,7 +66,6 @@ def _spec(
   into: Optional[str] = None,
   bro: Optional[str] = None,
   prompt: Optional[str] = None,
-  arguments: Optional[list[str]] = None,
   env: Optional[dict[str, str]] = None,
 ) -> ride_session.SessionSpec:
   resolved_bro = bro if bro is not None else 'bro-dev'
@@ -90,7 +89,6 @@ def _spec(
     bro=resolved_bro,
     prompt=prompt,
     subject=prompt,
-    arguments=arguments if arguments is not None else [],
     env=env if env is not None else {},
   )
 
@@ -660,7 +658,7 @@ class TestContainerCommand:
     command = h.run_started_party.call_args.args[0].command
     assert command == [
       'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
-      '--hold', 'attended', '--llm', '::xhigh+fast', 'dev', 'go',
+      '--hold', 'attended', '--llm', '::xhigh+fast', '--', 'dev', 'go',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
@@ -680,6 +678,7 @@ class TestContainerCommand:
       str(Path.cwd()),
       '--hold',
       'attended',
+      '--',
       'dev',
     ]
     # RIDE_BRO themes the whole container (ride exec shells), set explicitly in the
@@ -732,7 +731,7 @@ class TestContainerCommand:
     assert not launch.tty
     assert launch.command == [
       'do-ride', 'solo', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
-      '--hold', 'unattended', 'bro-dev', 'go',
+      '--hold', 'unattended', '--', 'bro-dev', 'go',
     ]  # fmt: skip
 
   def test_ride_session_stamps_the_default_bro_as_ride_bro(self):
@@ -821,6 +820,7 @@ class TestContainerCommand:
       str(Path.cwd()),
       '--hold',
       'attended',
+      '--',
       'bro-dev',
     ]
 
@@ -841,7 +841,7 @@ class TestContainerDrop:
 
 
 class TestCommandArgv:
-  def test_create_command_includes_drop_into_and_forwarded_arguments(self):
+  def test_create_command_includes_drop_and_into(self):
     parts = _spec(
       hold='attended',
       drop=True,
@@ -851,13 +851,11 @@ class TestCommandArgv:
       grant=['gmail_creds', '@bro'],
       revoke=['notion'],
       into='feature',
-      arguments=['--foo'],
     ).to_command_argv()
     assert parts == [
       'ride', 'along', '--drop', '--repo', str(Path.cwd()), '--hold', 'attended', '--llm', '::xhigh+fast',
       '--harness', 'claude', '--workspace', 'w', '--cred', 'github+work',
       '--grant', 'gmail_creds', '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'dev',
-      '--', '--foo',
     ]  # fmt: skip
 
   def test_unboxed_session_carries_the_unboxed_flag(self):
@@ -1005,7 +1003,6 @@ class TestResumeSpecRecord:
       grant=['gmail_creds'],
       into='feature',
       prompt='do it',
-      arguments=['--foo'],
       env={'IS_SANDBOX': '1'},
     )
     workspace = _workspace(tmp_path)
@@ -1013,7 +1010,7 @@ class TestResumeSpecRecord:
     loaded = ride_session.load_resume_spec(workspace)
     assert loaded == spec.resume_variant()
     assert loaded is not None and loaded.resume and not loaded.drop
-    assert loaded.into is None and loaded.prompt is None and loaded.arguments == []
+    assert loaded.into is None and loaded.prompt is None
     # the forwarded flags survive, so the resumed session runs as it was launched
     assert (loaded.hold, loaded.llm, loaded.bro, loaded.cred, loaded.grant, loaded.env) == (
       'attended',
@@ -1067,6 +1064,25 @@ class TestResumeSpecRecord:
 
     assert ride_session.harness_for_workspace(workspace) is None
     assert 'installed harnesses: bro, claude' in caplog.text
+
+  def test_ride_list_reads_a_record_carrying_the_empty_harness_arguments_of_older_rides(
+    self, tmp_path
+  ):
+    workspace = _workspace(tmp_path)
+    spec = _spec(bro='dev')
+    workspace.resume_file.write_text(json.dumps({**spec.resume_variant().dump(), 'arguments': []}))
+
+    assert ride_session.load_resume_spec(workspace) == spec.resume_variant()
+    assert ride_session.harness_for_workspace(workspace) is claude_harness.CLAUDE
+
+  def test_a_record_carrying_harness_arguments_is_unreadable(self, tmp_path, caplog):
+    workspace = _workspace(tmp_path)
+    workspace.resume_file.write_text(
+      json.dumps({**_spec().resume_variant().dump(), 'arguments': ['--debug']})
+    )
+
+    assert ride_session.load_resume_spec(workspace) is None
+    assert "a session takes no harness arguments: ['--debug']" in caplog.text
 
   def test_record_from_an_incompatible_ride_reads_as_none(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
@@ -1250,7 +1266,6 @@ class TestUnboxedSession:
       hold='attended',
       llm='::xhigh',
       prompt='go',
-      arguments=['--foo'],
     )
 
     launch = ride_session.started_party_launch(
@@ -1283,10 +1298,9 @@ class TestUnboxedSession:
       'attended',
       '--llm',
       '::xhigh',
+      '--',
       'bro-dev',
       'go',
-      '--',
-      '--foo',
     ]
     assert launch.env['RIDE_ISOLATION'] == 'unboxed'
     assert launch.env['RIDE_HOST'] == socket.gethostname()

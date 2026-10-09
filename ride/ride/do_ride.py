@@ -58,7 +58,6 @@ class SessionRun:
   resume: bool
   bro: str
   prompt: Optional[str]
-  arguments: list[str]
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -82,11 +81,9 @@ def command(spec: 'SessionSpec') -> list[str]:
   parts.extend(['--hold', spec.hold])
   if spec.llm is not None:
     parts.extend(['--llm', spec.llm])
-  parts.append(spec.bro)
+  parts.extend(['--', spec.bro])
   if spec.prompt is not None:
     parts.append(spec.prompt)
-  if len(spec.arguments) > 0:
-    parts.extend(['--', *spec.arguments])
   return parts
 
 
@@ -120,13 +117,8 @@ def build_parser() -> Parser:
   return parser
 
 
-def _parse(argv: list[str]) -> tuple[dict, list[str]]:
-  parser = build_parser()
-  try:
-    separator = argv.index('--')
-  except ValueError:
-    return parser.parse(argv), []
-  return parser.parse(argv[:separator]), argv[separator + 1 :]
+def _parse(argv: list[str]) -> dict:
+  return build_parser().parse(argv)
 
 
 def encode_resolved_llm(resolved_llm: dict) -> str:
@@ -143,7 +135,7 @@ def _resolved_llm(harness: 'SessionHarness', llm: Optional[str], bro: str) -> di
   return LLMSpec.from_dict(data).dump()
 
 
-def _session_run(args: dict, arguments: list[str]) -> tuple['SessionHarness', SessionRun]:
+def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:
   from ride.harness import get_harness
 
   mode = args.pop('mode')
@@ -159,7 +151,6 @@ def _session_run(args: dict, arguments: list[str]) -> tuple['SessionHarness', Se
     bro=bro,
     llm=llm,
     resolved_llm=_resolved_llm(harness, llm, bro),
-    arguments=arguments,
     **args,
   )
   return harness, run
@@ -292,6 +283,5 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
 
 @reports_runtime_errors
 def main(argv: list[str]) -> Optional[int]:
-  args, arguments = _parse(argv)
-  harness, run = _session_run(args, arguments)
+  harness, run = _session_run(_parse(argv))
   return run_session(harness, run)

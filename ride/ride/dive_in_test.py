@@ -22,7 +22,7 @@ URL = f'https://tracker.example/tasks/my-task-{HEX}'
 FRESH_SHA = 'a' * 40
 
 
-def _parse_emitted(tokens: list[str]) -> tuple[dict, list[str]]:
+def _parse_emitted(tokens: list[str]) -> dict:
   return ride_cli._parse(ride_cli.build_parser(), tokens)
 
 
@@ -74,18 +74,17 @@ class TestLaunchCommand:
     tokens = shlex.split(capsys.readouterr().out.strip())
     assert tokens[0] == 'ride'
     # Parser.parse strips argv[0] as the program name, matching the console-script bridge.
-    args, harness_arguments = _parse_emitted(tokens)
+    args = _parse_emitted(tokens)
     assert args['cmd'] == 'along'
     assert args['repo'] == str(fake_proj)
     assert len(args['workspace']) > 0
-    assert harness_arguments == []  # nothing leaked into the forwarded REMAINDER
 
   @pytest.mark.parametrize('isolation', [[], ['--unboxed']])
   def test_an_omitted_hold_is_left_for_ride_along_to_resolve(self, isolation, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n', *isolation])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    args, harness_arguments = _parse_emitted(tokens)
+    args = _parse_emitted(tokens)
     assert args['hold'] is None
     assert args['unboxed'] == (len(isolation) > 0)
 
@@ -93,16 +92,15 @@ class TestLaunchCommand:
     rc = dive_in.main(['dive-in', '-n', '--unboxed', '--hold', 'attended'])
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
-    args, harness_arguments = _parse_emitted(tokens)
+    args = _parse_emitted(tokens)
     assert args['hold'] == 'attended'
 
   def test_forwarded_flags_ride_verbatim(self, fake_proj, capsys, monkeypatch):
     monkeypatch.delenv('RIDE_BRO', raising=False)
     rc = dive_in.dive_in(forwarded=[], dry_run=True, bro='bro-dev')
     assert rc == 0
-    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['bro'] == 'bro-dev'
-    assert harness_arguments == []
     # ride owns the session theming (persona default, RIDE_BRO export); dive-in
     # must not preempt it
     assert 'RIDE_BRO' not in os.environ
@@ -110,7 +108,7 @@ class TestLaunchCommand:
   def test_harness_rides_the_forwarded_flags(self, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n', '--harness', 'bro'])
     assert rc == 0
-    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['harness'] == 'bro'
 
 
@@ -120,21 +118,21 @@ class TestBaseRef:
   def test_omitted_into_forwards_the_fetched_sha(self, fake_proj, capsys):
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
-    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] == FRESH_SHA
 
   def test_explicit_into_skips_the_fetch(self, fake_proj, capsys, monkeypatch):
     monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: pytest.fail('must not fetch'))
     rc = dive_in.main(['dive-in', '-n', '--into', 'feature'])
     assert rc == 0
-    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] == 'feature'
 
   def test_unreachable_origin_falls_back_to_the_host_head(self, fake_proj, capsys, monkeypatch):
     monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: None)
     rc = dive_in.main(['dive-in', '-n'])
     assert rc == 0
-    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['into'] is None
 
 
@@ -232,7 +230,7 @@ class TestTaskMode:
       'llm': '::high',
     }
     # the flags still ride into the forwarded `ride along` untouched
-    args, harness_arguments = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
+    args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['cred'] == ['brog+github']
     assert args['grant'] is None
     assert args['revoke'] is None

@@ -109,7 +109,6 @@ class SessionSpec:
   bro: str
   prompt: Optional[str]
   subject: Optional[str]
-  arguments: list[str]
   repo: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
@@ -179,8 +178,6 @@ class SessionSpec:
     parts.append(self.bro)
     if self.prompt is not None:
       parts.append(self.prompt)
-    if len(self.arguments) > 0:
-      parts.extend(['--', *self.arguments])
     return parts
 
   @property
@@ -197,7 +194,6 @@ class SessionSpec:
       resume=True,
       into=None,
       prompt=None,
-      arguments=[],
     )
 
   def with_scope_overrides(
@@ -272,6 +268,12 @@ class SessionSpec:
 
   @classmethod
   def load(cls, data: dict) -> 'SessionSpec':
+    # an older ride's record carries `arguments`, always empty in the resume
+    # variant a record holds
+    if 'arguments' in data:
+      if data['arguments'] != []:
+        raise ValueError(f'a session takes no harness arguments: {data["arguments"]!r}')
+      data = {name: value for name, value in data.items() if name != 'arguments'}
     fields = {field.name for field in dataclasses.fields(cls)}
     if data.keys() != fields:
       raise ValueError(f'unexpected fields: {sorted(data.keys() ^ fields)}')

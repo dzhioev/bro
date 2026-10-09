@@ -23,7 +23,7 @@ import pytest
 
 from bro import brash_policy, mcp
 from bro.base.spawn import console_script
-from ride.claude.claude_argv import STREAM_JSON_ARGS, _command_gate_hooks, reach_arguments
+from ride.claude.claude_argv import STREAM_JSON_ARGS, gate_hooks, reach_arguments
 from ride.claude.claude_config import _SESSION_SETTINGS_JSON
 from ride.claude.competing_hooks import find
 from ride.claude.live_claude_test_helper import (
@@ -31,6 +31,7 @@ from ride.claude.live_claude_test_helper import (
   claude_token,
   pinned_claude,
 )
+from ride.claude.native_tools import COMMAND_TOOLS
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
 
@@ -153,7 +154,7 @@ def _gated_arguments(policy: Path) -> list[str]:
   return [
     *reach_arguments(_REACH),
     '--settings',
-    json.dumps({'hooks': _command_gate_hooks(policy)}),
+    json.dumps({'hooks': gate_hooks(_REACH, policy)}),
   ]
 
 
@@ -359,7 +360,7 @@ def test_the_scanned_places_and_matcher_forms_are_where_the_release_loads_hooks(
 
   ran = set(session.hook_log.read_text().split())
   assert ran == {'project-settings', 'local-settings', 'skill', 'skill-above', 'plugin'}
-  assert sorted(find(session.workspace, session.config)) == sorted(
+  assert sorted(find(session.workspace, session.config, COMMAND_TOOLS)) == sorted(
     [
       f'{project_settings}: a PreToolUse hook matching every tool',
       f'{local_settings}: a PreToolUse hook matching every tool',
