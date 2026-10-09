@@ -398,20 +398,18 @@ def _declaring(*layers: mcp.ToolLayer) -> BaseBro:
 class TestServe:
   @pytest.mark.asyncio
   async def test_files_mount_the_dev_toolset(self):
-    servers = _declaring(mcp.files()).assemble(harness=bro_harness.BRO, include_raise=False)
+    servers = _declaring(mcp.files()).assemble(harness=bro_harness.BRO, hold='attended')
     [dev] = [server for server in servers if server.namespace == dev_mcp.toolset.namespace]
     assert {tool.name for tool in await dev.list_tools()} == set(dev_mcp.toolset.tool_names)
 
   @pytest.mark.asyncio
   async def test_read_only_files_mount_only_its_read_only_part(self):
-    servers = _declaring(mcp.files(write=False)).assemble(
-      harness=bro_harness.BRO, include_raise=False
-    )
+    servers = _declaring(mcp.files(write=False)).assemble(harness=bro_harness.BRO, hold='attended')
     [dev] = [server for server in servers if server.namespace == dev_mcp.toolset.namespace]
     assert {tool.name for tool in await dev.list_tools()} == set(dev_mcp.READ_ONLY)
 
   def test_no_files_mount_no_file_tools(self):
-    servers = _declaring().assemble(harness=bro_harness.BRO, include_raise=False)
+    servers = _declaring().assemble(harness=bro_harness.BRO, hold='attended')
     assert dev_mcp.toolset.namespace not in {server.namespace for server in servers}
 
   def test_web_and_delegation_are_left_unserved(self):
@@ -442,7 +440,7 @@ async def _service_tools(
 ) -> tuple[MCPServer, dict[str, Tool]]:
   servers = declaration.assemble(
     harness=bro_harness.BRO,
-    include_raise=False,
+    hold='attended',
     live_run=run,
   )
   server = next(server for server in servers if server.namespace == 'bro')

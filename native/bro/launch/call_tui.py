@@ -321,5 +321,5 @@ class ChatApp(App):
     return True
 
   async def action_show_stats(self) -> None:
-    card = await format_card(self._runner.bro, include_system_prompt=False)
+    card = await format_card(self._runner.bro)
     await self.push_screen(StatsScreen(card))

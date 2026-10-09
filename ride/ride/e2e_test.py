@@ -2598,7 +2598,7 @@ class ScriptedRunner(Runner):
       yield
 
   def _create_llm(self, *, hold):
-    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
 asyncio.run(ScriptedRunner(AskingBro()).run('go', surface='e2e', tracker=NullTracker()))
@@ -2765,7 +2765,7 @@ class ScriptedRunner(Runner):
       yield
 
   def _create_llm(self, *, hold):
-    servers = self.bro.assemble(harness='bro', include_raise=True, live_run=self)
+    servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
 asyncio.run(ScriptedRunner(RemindBro()).run('go', surface='e2e', tracker=NullTracker()))

@@ -1,4 +1,5 @@
 import ride.claude.system_prompt as ride_system_prompt
+from bro.bro import BaseBro
 from bro.broker.environment import BROKER_TALK
 from bro.summon import SUMMONED_ENV
 
@@ -27,6 +28,20 @@ class TestSessionAppendPrompt:
       out = ride_system_prompt.session_append_prompt(hold, 'bro')
       assert heading in out
       assert '# Guided session' not in out
+
+  def test_persona_text_renders_under_the_sessions_hold(self, monkeypatch):
+    class HeldBro(BaseBro):
+      name = 'held'
+      description = 'd'
+
+      def __init__(self):
+        super().__init__(system_prompt='{{iff #hold = unattended}}ALONE{{else}}WATCHED{{end}}')
+
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: HeldBro())
+    alone = ride_system_prompt.session_append_prompt('unattended', 'held')
+    watched = ride_system_prompt.session_append_prompt('attended', 'held')
+    assert 'ALONE' in alone and 'WATCHED' not in alone
+    assert 'WATCHED' in watched and 'ALONE' not in watched
 
   def test_persona_prompts_injected(self):
     out = ride_system_prompt.session_append_prompt('guided', 'dev')

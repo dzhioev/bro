@@ -35,10 +35,11 @@ def _brog_config(monkeypatch):
   )
 
 
-def _dev_persona_namespaces() -> list[str]:
+def _dev_persona_namespaces(hold: str) -> list[str]:
   from bro.registry import create_bro
 
-  return list(dict.fromkeys(server.namespace for server in persona_servers(create_bro('dev'))))
+  servers = persona_servers(create_bro('dev'), hold)
+  return list(dict.fromkeys(server.namespace for server in servers))
 
 
 def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
@@ -204,9 +205,10 @@ class TestRideSessionLaunch:
     assert '--dangerously-skip-permissions' not in argv
 
   def test_mcp_config_covers_the_personas_namespaces(self):
-    argv = _ride_session_launch(_spec(bro='dev')).argv
+    spec = _spec(bro='dev')
+    argv = _ride_session_launch(spec).argv
     config = json.loads(argv[argv.index('--mcp-config') + 1])
-    namespaces = _dev_persona_namespaces()
+    namespaces = _dev_persona_namespaces(spec.hold)
     # the service server's `banner` tool rides the `bro` namespace
     assert 'bro' in namespaces
     assert list(config['mcpServers']) == namespaces

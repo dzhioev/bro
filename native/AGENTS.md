@@ -33,14 +33,15 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;
-  `bro list` and `bro show <name> [--system-prompt]` remain metadata paths (card renderer in core `show.py`)
+  `bro list` and `bro show <name> [--system-prompt HOLD]` remain metadata paths (card renderer in core `show.py`)
 - `bro/launch/{run,call,call_tui,resume}.py` — native one-shot and interactive launch surfaces
 - `bro/fork.py` — fork of a recorded trail.
   `replay_messages` rebuilds the provider input through the selected fork point and follows `forked_from` ancestors when needed;
   `latest_fork_point` chooses the newest consistent point.
   `fork(..., surface=<caller>)` requires the driving program's surface, returns a `Runner` preseeded with the replayed prefix, and opens the child trail with `ForkedFrom(trail_id, step_id)`;
   it replays bro-native records, so a trail from another harness is refused up front rather than partway into a header that never carried what replay needs.
-  Same-provider/model forks at an `llm_call` use the provider's `previous_response_id`;
+  A fork runs under the hold it is given, guided when omitted, and recomposes the prompt under it when the recorded hold differs.
+  Same-provider/model forks at an `llm_call` under the recorded prompt use the provider's `previous_response_id`;
   every other case replays the prefix client-side.
   Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
 - `bro/trails/record/bro.py` — native tracker-to-trails recorder

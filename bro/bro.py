@@ -27,6 +27,7 @@ from bro.datasources.base import DataSource
 from bro.datasources.file import FileSource
 from bro.datasources.man import manual
 from bro.harness import Harness, get_harness
+from bro.launch.hold import UNATTENDED
 from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
@@ -611,7 +612,7 @@ _CORE_SERVICE_TOOL_NAMES = (
 def _build_service_server(
   bro: 'BaseBro',
   *,
-  include_raise: bool,
+  hold: str,
   harness: mcp.HarnessLike,
   live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
@@ -620,18 +621,19 @@ def _build_service_server(
   # surfaces (credential scoping, prompt composition, `bro show`) must not pay.
   # the core roster is decided by the caller's surface and local process state:
   # `banner` is unconditional; `cast` needs spells and its optional secret;
-  # `raise` only makes sense non-interactively (a caller to abort to — interactive
-  # callers pass include_raise=False); `answer` is the summoned run's delivery
-  # surface — it needs the summoned mark, broker intent, and a harness able to end
-  # this session; the summon tools need the same intent. The harness contributes
-  # the tools it serves itself. The combined roster then feeds the tools'
-  # rendering vocabulary: service tools are harness features, the one tool
-  # surface that conditions on system and harness-contributed facts, injected
-  # next to the `#tools` roster.
+  # `raise` only makes sense unattended (a caller to abort to, where an attended
+  # session reports to its human) and on a harness able to end this session;
+  # `answer` is the summoned run's delivery surface — it needs the summoned mark,
+  # broker intent, and a harness able to end this session; the summon tools need
+  # the same intent. The harness contributes the tools it serves itself. The
+  # combined roster then feeds the tools' rendering vocabulary: service tools are
+  # harness features, the one tool surface that conditions on system and
+  # harness-contributed facts, injected next to the `#tools` roster.
   from bro.summon import summoned
 
   session_harness = _harness_object(harness)
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
+  has_raise = hold == UNATTENDED and session_harness.can_end_session()
   has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
   has_answer = has_broker and summoned() and session_harness.can_end_session()
   has_quest_watch = has_broker and len(summon.effective_may_summon()) > 0
@@ -651,7 +653,7 @@ def _build_service_server(
   mounted = ['banner']
   if has_cast:
     mounted.append('cast')
-  if include_raise:
+  if has_raise:
     mounted.append('raise')
   if has_answer:
     mounted.append('answer')
@@ -681,8 +683,8 @@ def _build_service_server(
 
   tools: list[llm_mcp.Tool] = [_banner_tool(bro, live_run, variables)]
   if has_cast:
-    tools.append(spell_store.build_cast_tool(bro, harness=harness))
-  if include_raise:
+    tools.append(spell_store.build_cast_tool(bro, harness=harness, hold=hold))
+  if has_raise:
     tools.append(_raise_tool(session_harness, variables))
   if has_answer:
     tools.append(_answer_tool(session_harness, variables))
@@ -1086,14 +1088,8 @@ class BaseBro(ABC):
     )
     # a declaration whose entries do not fold fails here, not at first use
     self.reach()
-    from bro.harness import installed_harness_names
 
-    if 'bro' in installed_harness_names():
-      self.system_prompt = self._composed_prompt(get_harness('bro'))
-    else:
-      self.system_prompt = ''
-
-  def _composed_prompt(self, harness: mcp.HarnessLike) -> str:
+  def _composed_prompt(self, harness: mcp.HarnessLike, hold: str) -> str:
     data_sources = list(self.reach().sources)
     parts = []
     shared = _load_shared_prompts()
@@ -1113,6 +1109,7 @@ class BaseBro(ABC):
       harness=harness,
       creds=credentials.known_names(),
       may_summon=summon.effective_may_summon(),
+      hold=hold,
       extra=self._feature_vocabulary,
     ).strip()
 
@@ -1149,7 +1146,7 @@ class BaseBro(ABC):
     """the bro's spell files by spell name, read-only."""
     return MappingProxyType(self._spells)
 
-  def get_spell_body(self, name: str, *, harness: mcp.HarnessLike) -> str:
+  def get_spell_body(self, name: str, *, harness: mcp.HarnessLike, hold: str) -> str:
     path = self._spells.get(name)
     if path is None:
       available = ', '.join(sorted(self._spells)) if len(self._spells) > 0 else '(none)'
@@ -1160,6 +1157,7 @@ class BaseBro(ABC):
       harness=harness,
       creds=credentials.known_names(),
       may_summon=summon.effective_may_summon(),
+      hold=hold,
       extra=self._feature_vocabulary,
     ).strip()
 
@@ -1256,13 +1254,13 @@ class BaseBro(ABC):
     return bro
 
   def _servers_with_spell_tools(
-    self, servers: list[llm_mcp.MCPServer], *, harness: mcp.HarnessLike
+    self, servers: list[llm_mcp.MCPServer], *, harness: mcp.HarnessLike, hold: str
   ) -> list[llm_mcp.MCPServer]:
     if any(server.namespace == spell_store.NAMESPACE for server in servers):
       raise ValueError(f'namespace {spell_store.NAMESPACE!r} is reserved for bro framework tools')
     if len(self._spells) == 0:
       return servers
-    return [*servers, spell_store.build_spell_server(self, harness=harness)]
+    return [*servers, spell_store.build_spell_server(self, harness=harness, hold=hold)]
 
   def _live_mcp_servers(self, harness: Optional[mcp.HarnessLike] = None) -> list[llm_mcp.MCPServer]:
     # specs materialize here, on first tool use — always in a serving process,
@@ -1291,15 +1289,14 @@ class BaseBro(ABC):
     self,
     *,
     harness: mcp.HarnessLike,
-    include_raise: bool,
+    hold: str,
     live_run: Optional[LiveRun] = None,
   ) -> list[llm_mcp.MCPServer]:
-    """materialize this declaration for one consuming surface."""
+    """materialize this declaration for one consuming surface, in a session
+    under `hold`."""
     servers = list(self._live_mcp_servers(harness))
-    servers.append(
-      _build_service_server(self, include_raise=include_raise, harness=harness, live_run=live_run)
-    )
-    return self._servers_with_spell_tools(servers, harness=harness)
+    servers.append(_build_service_server(self, hold=hold, harness=harness, live_run=live_run))
+    return self._servers_with_spell_tools(servers, harness=harness, hold=hold)
 
   def system_prompt_for(self, *, hold: str, harness: Optional[mcp.HarnessLike] = None) -> str:
     """the bro-native system prompt under a hold — the composed prompt plus the
@@ -1318,6 +1315,6 @@ class BaseBro(ABC):
     prompt = (
       self._system_prompt_override
       if self._system_prompt_override is not None
-      else self._composed_prompt(harness)
+      else self._composed_prompt(harness, hold)
     )
     return f'{prompt}\n\n{fragment}'

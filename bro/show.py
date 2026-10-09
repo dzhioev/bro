@@ -1,10 +1,14 @@
+from typing import Optional
+
 from bro.base.condition import Condition
 from bro.bro import BaseBro
 from bro.harness import get_harness, installed_harness_names
 from bro.mcp import MCPServerSpec, Reach
 
 
-async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> str:
+async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None) -> str:
+  """the bro's info card, closing on the system prompt it runs under
+  `system_prompt_hold` when one is given."""
   parts = [f'# {bro.name}', '', bro.description, '']
   parts.extend(_identity_lines(bro))
   reach = bro.reach()
@@ -45,8 +49,9 @@ async def format_card(bro: BaseBro, *, include_system_prompt: bool = False) -> s
     for name, description in spells:
       parts.append(f'- **spell::{name}** — {_one_line(description)}')
 
-  if include_system_prompt:
-    parts.extend(['', '## System prompt', '', '```', bro.system_prompt, '```'])
+  if system_prompt_hold is not None:
+    system_prompt = bro.system_prompt_for(hold=system_prompt_hold)
+    parts.extend(['', '## System prompt', '', '```', system_prompt, '```'])
 
   return '\n'.join(parts) + '\n'
 

@@ -829,13 +829,14 @@ class TestCommandSignature:
     assert current_cli_name() == 'rewind'
 
   def test_positional_and_flag_are_described(self):
-    arguments = {a.name: a for a in command_signature(('bro', 'show')).arguments}
-    assert arguments['name'].required is True
-    assert arguments['name'].kind == 'value'
-    assert arguments['name'].option is None
-    assert arguments['system_prompt'].kind == 'flag'
-    assert arguments['system_prompt'].option == '--system-prompt'
-    assert arguments['system_prompt'].required is False
+    positional = {a.name: a for a in command_signature(('bro', 'show')).arguments}['name']
+    assert positional.required is True
+    assert positional.kind == 'value'
+    assert positional.option is None
+    flag = {a.name: a for a in command_signature(('rewind', 'grep')).arguments}['ignore_case']
+    assert flag.kind == 'flag'
+    assert flag.option == '--ignore-case'
+    assert flag.required is False
 
   def test_choices_types_and_variadic_positionals_carry(self):
     arguments = {a.name: a for a in command_signature(('rewind', 'grep')).arguments}

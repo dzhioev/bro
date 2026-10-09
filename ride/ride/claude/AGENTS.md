@@ -10,8 +10,8 @@ Claude Code's own harness themed with the session's bro.
   the runner, Claude state mounts and env for a container, the private state dir and auth for a host runner env.
   Its `serve` mounts nothing, since Claude's own tools serve every group.
 - `assembly.py` — the Claude composition over core `BaseBro.assemble`:
-  a session selects the Claude harness, mounting the bro's servers and data sources beside Claude Code's own tools.
-  It contributes the `persona:` resolver through `bro.mcp.targets`.
+  a session selects the Claude harness, mounting the bro's servers and data sources beside Claude Code's own tools under the session's hold.
+  It contributes the `persona:` resolver through `bro.mcp.targets`, which reads that hold off `BRO_HOLD` and refuses to resolve outside a managed session.
 - `runner.py` — the Claude harness run under `ride/do_ride.py`:
   pinned absolute binary selection per isolation, the brash policy of a finite command list and the refusal of competing hooks before it,
   resume-id lookup, hold and kill wiring, session MCP server, recorder, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.

@@ -17,7 +17,7 @@ from bro.bro import BaseBro
 from bro.inbox import Inbox
 from bro.jobs import Registry
 from bro.llm.mcp import MCPServer, Tool
-from bro.mcp import HarnessLike
+from bro.mcp import HOLDS, HarnessLike
 from bro.registry import create_bro, declared_specs
 
 
@@ -31,7 +31,7 @@ class _NoRun:
 
 
 def _servers(bro: BaseBro, *, harness: HarnessLike = 'bro') -> list[MCPServer]:
-  return bro.assemble(harness=harness, include_raise=True, live_run=_NoRun())
+  return bro.assemble(harness=harness, hold='unattended', live_run=_NoRun())
 
 
 # (surface label, server-list builder) — the two assembly shapes a bro's
@@ -128,7 +128,8 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
 @pytest.mark.parametrize('name', sorted(declared_specs()))
 async def test_composed_prompts_leak_no_directives(name):
   bro = create_bro(name)
-  assert _DIRECTIVE_RE.search(bro.system_prompt) is None
+  for hold in HOLDS:
+    assert _DIRECTIVE_RE.search(bro.system_prompt_for(hold=hold)) is None
 
 
 class TestSummonRecovery:

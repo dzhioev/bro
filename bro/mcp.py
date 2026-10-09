@@ -34,9 +34,7 @@ def validate_segment(kind: str, value: str) -> None:
 type HarnessLike = Harness | str
 
 # the session's hold — its user-involvement level, ordered from no human
-# channel to human-driven. unlike the other facts it is supplied only when
-# rendering the hold text (`bro.prompts.hold_fragment`), so hold-neutral text —
-# spells, procedure docs — fails fast on a stray `#hold` directive.
+# channel to human-driven.
 Hold = Literal['unattended', 'detached', 'attended', 'guided']
 HOLDS: tuple[str, ...] = get_args(Hold)
 _HOLDS = frozenset(HOLDS)
@@ -68,8 +66,8 @@ def render_text(
   so a granted bro answers to the bros it derives from (`registry.lineage`) as
   well as to its own name, and the universe adds the installed persona names,
   so a granted-but-uninstalled target still tests), `talk` → `#talk` (the fixed
-  rights of this run's own quest), `hold` → `#hold` (hold text only — supplied
-  by `bro.prompts.hold_fragment`, no other call site). A fact
+  rights of this run's own quest), `hold` → `#hold` (the session's hold, one of
+  `HOLDS`). A fact
   left None defines no variable, so a directive referencing it raises. `extra`
   merges a caller-owned domain vocabulary next to the facts (same shape as
   `FunctionTool`'s `variables`); its names shadow same-named facts.

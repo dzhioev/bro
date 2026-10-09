@@ -18,9 +18,9 @@ load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
   `get_prompt` enforces "template ↔ kwargs" symmetry
   — passing kwargs to a non-template, or omitting kwargs for a template, raises
 
-Prompt content may carry `bro.base.template` directives over the surface facts (`#creds`, the harness's own facts, and session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
+Prompt content may carry `bro.base.template` directives over the surface facts (`#creds`, the harness's own facts, `#hold`, and session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
 every rendering surface renders its text once with its registered `Harness` object via `bro.mcp.render_text`
-— `BaseBro.__init__` for the bro-native prompt, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
+— `BaseBro.system_prompt_for` for the bro-native prompt, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
 — so a directive works in `shared/` and bro class prompts alike.
 `FileSource`-served docs are the exception:
 one rendering is read by every harness, so their bodies must be surface-neutral
@@ -68,7 +68,7 @@ Current reference docs:
 - `tool_names.md` — inserts the selected harness's `tool_name_rule` passage;
   one file serves every surface.
   Managed Claude sessions get the Claude harness's `ns::tool` → `mcp__ns__tool` rule, injected here;
-  bro-native LLM runs compose the bro harness's `ns::tool` → `ns__tool` rule into `BaseBro.system_prompt`.
+  bro-native LLM runs compose the bro harness's `ns::tool` → `ns__tool` rule into the prompt `BaseBro.system_prompt_for` composes.
   Deliberately no `FileSource`
 
 ## Session fragments
@@ -95,7 +95,7 @@ The concrete-Bro family's `watch` spell separately starts a persona-admitted com
 ### Summoned contract
 
 `summoned.md` (top level) states what a summoned run owes its summoner and when to deliver it.
-It renders only for a run `bro.summon.summoned()` reports as summoned, and hold-neutrally
+It renders only for a run `bro.summon.summoned()` reports as summoned, and its text does not branch on the hold
 — the duty comes with being summoned, so an attended or guided child carries the same text a spawned unattended one does.
 Its `#talk` branches admit only the quest's live moves:
 a speaking summoner reaches the child through the runtime-owned session watch.
@@ -120,13 +120,11 @@ Every session gets exactly one level's text, picked by the launching surface at 
 the three non-guided level files share `holds/authorization.md`, the full-authorization block, and the three interactive levels
 — detached, attended, guided
 — share `fragments/interaction.md`, the interaction policy.
-`bro.prompts.hold_fragment(hold, …facts)` is the one rendering path
-— `session_fragment` composes it, and `native/bro/fork.py` re-renders it to swap a resumed run's level —
-and it is the only call that supplies the `#hold` fact, so all other text stays hold-neutral mechanically:
-a stray `#hold` directive in a spell or procedure doc raises.
+`bro.prompts.hold_fragment(hold, …facts)` is the one rendering path, composed by `session_fragment`.
 
-The level files are the single place the levels differ:
-unattended carries the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the confirm-its-own-conclusions convention, guided the confirm-each-significant-step convention.
+The level files carry each level's session-wide conventions:
+unattended the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the confirm-its-own-conclusions convention, guided the confirm-each-significant-step convention.
+A passage of a persona prompt or a spell that applies at some levels only conditions on `#hold` where it stands (`bro/reference/conditions.md`, "Facts").
 
 ## Top-level one-shot prompts
 

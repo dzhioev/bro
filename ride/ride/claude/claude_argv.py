@@ -157,7 +157,7 @@ def build_claude_launch(
   argv = ['--model', llm.model]
   bro = create_bro(spec.bro)
   with contextlib.ExitStack() as server_stack:
-    servers = persona_servers(bro)
+    servers = persona_servers(bro, spec.hold)
     for server in servers:
       server_stack.callback(server.close)
     namespaces = list(dict.fromkeys(server.namespace for server in servers))
