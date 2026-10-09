@@ -29,7 +29,6 @@ from ride.claude.competing_hooks import find
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
-  pinned_claude,
 )
 from ride.claude.native_tools import COMMAND_TOOLS
 
@@ -66,7 +65,8 @@ class _Session:
   `probe` program on the session's PATH and a shell prefix recording each command
   string Claude's shell is handed."""
 
-  def __init__(self, root: Path, *, telemetry: bool = False) -> None:
+  def __init__(self, claude: Path, root: Path, *, telemetry: bool = False) -> None:
+    self.claude = claude
     self.root = root
     self.workspace = root / 'above' / 'workspace'
     self.workspace.mkdir(parents=True)
@@ -122,7 +122,7 @@ class _Session:
     message = {'type': 'user', 'message': {'role': 'user', 'content': prompt}}
     completed = subprocess.run(
       [
-        str(pinned_claude()),
+        str(self.claude),
         '--model',
         'haiku',
         '--dangerously-skip-permissions',
@@ -202,9 +202,9 @@ def _started_by_brash(start: dict[str, Any]) -> bool:
 
 
 def test_bash_lines_run_in_brash_untouched_and_a_refusal_reaches_the_model(
-  tmp_path: Path,
+  claude: Path, tmp_path: Path
 ) -> None:
-  session = _Session(tmp_path)
+  session = _Session(claude, tmp_path)
   policy = brash_policy.write(tmp_path, _REACH)
   assert policy is not None
 
@@ -228,8 +228,10 @@ def test_bash_lines_run_in_brash_untouched_and_a_refusal_reaches_the_model(
   assert "brash: refused 'cat'" in refusal
 
 
-def test_monitor_commands_run_in_brash_and_its_websocket_form_is_denied(tmp_path: Path) -> None:
-  session = _Session(tmp_path, telemetry=True)
+def test_monitor_commands_run_in_brash_and_its_websocket_form_is_denied(
+  claude: Path, tmp_path: Path
+) -> None:
+  session = _Session(claude, tmp_path, telemetry=True)
   policy = brash_policy.write(tmp_path, _REACH)
   assert policy is not None
   prompt = (
@@ -276,9 +278,9 @@ def _hooks(matcher: str, command: str) -> dict[str, Any]:
 
 
 def test_the_scanned_places_and_matcher_forms_are_where_the_release_loads_hooks(
-  tmp_path: Path,
+  claude: Path, tmp_path: Path
 ) -> None:
-  session = _Session(tmp_path)
+  session = _Session(claude, tmp_path)
   claude_folder = session.workspace / '.claude'
   claude_folder.mkdir()
   project_settings = claude_folder / 'settings.json'
@@ -373,9 +375,9 @@ def test_the_scanned_places_and_matcher_forms_are_where_the_release_loads_hooks(
 
 @pytest.mark.parametrize('managed', [False, True])
 def test_a_managed_policy_allowing_only_managed_hooks_turns_the_gate_off(
-  tmp_path: Path, managed: bool
+  claude: Path, tmp_path: Path, managed: bool
 ) -> None:
-  session = _Session(tmp_path)
+  session = _Session(claude, tmp_path)
   policy = brash_policy.write(tmp_path, _REACH)
   assert policy is not None
   arguments = _gated_arguments(policy)

@@ -15,8 +15,6 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from bro.trails.local import LocalStore
 from bro.trails.record.session import ManagedSession
 from ride.claude.claude_argv import STREAM_JSON_ARGS, watch_waiter_hooks
@@ -27,7 +25,6 @@ from ride.claude.live_claude_test_helper import (
   Feed,
   bounded,
   claude_token,
-  pinned_claude,
   watched_session,
 )
 from ride.claude.system_prompt import session_append_prompt
@@ -74,11 +71,6 @@ output = {{
 }}
 print(json.dumps(output))
 """
-
-
-@pytest.fixture(scope='module')
-def claude() -> Path:
-  return pinned_claude()
 
 
 def _environment(config: Path) -> dict[str, str]:

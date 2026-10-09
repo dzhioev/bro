@@ -110,7 +110,6 @@ def _environment(config: Path, session: Path) -> dict[str, str]:
     CLAUDE_CONFIG_DIR=str(config),
     DISABLE_AUTOUPDATER='1',
     RIDE_ISOLATION='unboxed',
-    RIDE_RUNTIME=str(config.parent / 'runtime'),
     RIDE_SESSION_DIR=str(session),
     TRAILS_DISABLED='1',
   )
@@ -133,7 +132,9 @@ def _session(prompt: str, activity_file: Path) -> SessionRun:
   )
 
 
-def test_silent_http_mcp_call_survives_the_native_idle_cut(tmp_path: Path, capfd) -> None:
+def test_silent_http_mcp_call_survives_the_native_idle_cut(
+  claude: Path, tmp_path: Path, capfd
+) -> None:
   config = tmp_path / 'config'
   config.mkdir()
   (config / '.claude.json').write_text(json.dumps({'hasCompletedOnboarding': True}))
@@ -173,6 +174,7 @@ def test_silent_http_mcp_call_survives_the_native_idle_cut(tmp_path: Path, capfd
     server.endpoint.port = 1
     with (
       patch.dict(os.environ, _environment(config, session), clear=True),
+      patch.object(runner, '_claude_binary', return_value=claude),
       patch.object(runner, 'claude_projects_dir', return_value=tmp_path / 'projects'),
       patch.object(runner, 'start_session_mcp_server', return_value=server),
       patch.object(runner, 'build_claude_launch', return_value=launch),

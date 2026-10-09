@@ -12,26 +12,18 @@ import json
 import os
 from pathlib import Path
 
-import pytest
-
 import ride.claude.interrupt as interrupt
 from ride.claude.claude_argv import STREAM_JSON_ARGS
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   bounded,
   claude_token,
-  pinned_claude,
   watched_session,
 )
 
 _SESSION_TIMEOUT_SECONDS = 300.0
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
-
-
-@pytest.fixture(scope='module')
-def claude() -> Path:
-  return pinned_claude()
 
 
 def _session_env(tmp_path: Path) -> dict[str, str]:

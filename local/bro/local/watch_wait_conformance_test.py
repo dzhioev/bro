@@ -9,9 +9,7 @@ that loop, so a session that has checked once must still end its turn after."""
 import secrets
 from pathlib import Path
 
-import pytest
-
-from bro.local.conformance_test_helper import data_home, harness_recipes, run_unattended
+from bro.local.conformance_test_helper import harness_matrix, run_unattended
 
 _PROBE = 'bro-watch-probe'
 _DELAY_SECONDS = 45
@@ -69,7 +67,7 @@ def _answered(after_wake: list[dict], line: str) -> bool:
 
 
 def _session(
-  harness: str, recipe: str, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, ask: str
+  harness: str, recipe: str, tmp_path: Path, data: Path, ask: str
 ) -> tuple[str, list[dict]]:
   """the line a fresh emitter prints after the delay, and the messages of an
   unattended session asked to `ask` about it, `{emitter}` naming its path."""
@@ -85,20 +83,20 @@ def _session(
     bro=_PROBE,
     prompt=ask.format(emitter=emitter),
     tree=tree,
-    data=data_home(tmp_path_factory),
+    data=data,
   )
   return line, messages
 
 
-@pytest.mark.parametrize(('harness', 'recipe'), harness_recipes())
+@harness_matrix()
 def test_a_session_waiting_on_a_watch_ends_its_turn_until_the_line_wakes_it(
-  harness: str, recipe: str, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+  harness: str, recipe: str, tmp_path: Path, conformance_data: Path
 ) -> None:
   line, messages = _session(
     harness,
     recipe,
     tmp_path,
-    tmp_path_factory,
+    conformance_data,
     '[[watch {emitter}]], and once the line it prints arrives, '
     'answer with that line and nothing else.',
   )
@@ -109,15 +107,15 @@ def test_a_session_waiting_on_a_watch_ends_its_turn_until_the_line_wakes_it(
   assert _answered(wait.after_wake, line)
 
 
-@pytest.mark.parametrize(('harness', 'recipe'), harness_recipes())
+@harness_matrix()
 def test_a_session_that_checked_once_still_ends_its_turn_until_the_line_wakes_it(
-  harness: str, recipe: str, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+  harness: str, recipe: str, tmp_path: Path, conformance_data: Path
 ) -> None:
   line, messages = _session(
     harness,
     recipe,
     tmp_path,
-    tmp_path_factory,
+    conformance_data,
     '[[watch {emitter}]]. Right after starting it, run `' + _SEED + '` once in the shell '
     'to give it a moment. Once the line it prints arrives, '
     'answer with that line and nothing else.',

@@ -1,9 +1,9 @@
-"""the Claude Code a live probe drives, the credential it signs in with, and the
-session state a ride runner would own around it.
+"""the credential a live probe signs Claude Code in with, and the session state a
+ride runner would own around it.
 
 A probe holds undocumented Claude Code behavior at the version managed sessions
-run, so it drives that pinned release rather than whichever `claude` the host has
-installed; the binary is downloaded once into pytest's cache."""
+run, so it drives that pinned release, the `claude` fixture, rather than whichever
+`claude` the host has installed."""
 
 import contextlib
 import os
@@ -19,9 +19,7 @@ from bro import watches
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
 from bro.monitor import SESSION_DIR_ENV
-from ride.claude import claude_release
 from ride.claude.waiter_state import WaiterState
-from ride.workspace.build_context import claude_code_version
 
 
 def claude_token() -> str | None:
@@ -32,11 +30,6 @@ def claude_token() -> str | None:
 REQUIRES_CLAUDE_CREDENTIAL = pytest.mark.skipif(
   claude_token() is None, reason='needs the claude_code credential'
 )
-
-
-def pinned_claude() -> Path:
-  """the pinned Claude Code binary for this host, from ride's release cache."""
-  return claude_release.cached_binary(claude_code_version(), claude_release.host_platform())
 
 
 @contextlib.contextmanager

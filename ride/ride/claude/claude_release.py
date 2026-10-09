@@ -162,17 +162,22 @@ def _removal_lock(version: str) -> Iterator[bool]:
       yield True
 
 
-def verified_binary(binary: Path) -> Path:
-  """verify an executable against the checksum record beside it."""
+def _recorded_digest(binary: Path) -> str:
   record = _checksum_record(binary)
-  if not binary.is_file():
-    raise ValueError(f'Claude Code binary is missing: {binary}')
   try:
     expected = record.read_text().strip()
   except OSError as error:
     raise ValueError(f'cannot read Claude Code checksum record {record}: {error}') from error
   if not _digest_valid(expected):
     raise ValueError(f'Claude Code checksum record {record} is malformed')
+  return expected
+
+
+def verified_binary(binary: Path) -> Path:
+  """verify an executable against the checksum record beside it."""
+  if not binary.is_file():
+    raise ValueError(f'Claude Code binary is missing: {binary}')
+  expected = _recorded_digest(binary)
   actual = _file_digest(binary)
   if actual != expected:
     raise ValueError(
@@ -196,6 +201,12 @@ def _record_checksum(binary: Path, expected: str, staging: Path) -> None:
   staged_record = staging / record.name
   staged_record.write_text(f'{expected}\n')
   staged_record.replace(record)
+
+
+def _install(staged_binary: Path, binary: Path, expected: str) -> None:
+  staged_binary.chmod(0o755)
+  staged_binary.replace(binary)
+  _record_checksum(binary, expected, staged_binary.parent)
 
 
 def cached_binary(version: str, platform_name: str) -> Path:
@@ -235,9 +246,33 @@ def cached_binary(version: str, platform_name: str) -> Path:
           f'Claude Code {version} for {platform_name} downloaded with digest {actual}, '
           f'the release manifest states {expected}'
         )
-      staged_binary.chmod(0o755)
-      staged_binary.replace(binary)
-      _record_checksum(binary, expected, staging)
+      _install(staged_binary, binary, expected)
+    return binary
+
+
+def seed_binary(source: Path, version: str, platform_name: str) -> Path:
+  """copy a checksum-recorded binary into this runtime's cache as `version` for
+  `platform_name`, so this runtime's sessions run it without reading the release
+  site, and return the cached copy while reserving its version for this process.
+  A verified cached copy is kept as it is."""
+  _reserve_version(version)
+  expected = _recorded_digest(source)
+  with _download_lock(version):
+    verified = _verified_cached_binary(version, platform_name)
+    if verified is not None:
+      return verified
+
+    binary = _binary(version, platform_name)
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='.seed-', dir=binary.parent) as directory:
+      staged_binary = Path(directory) / 'claude'
+      shutil.copyfile(source, staged_binary)
+      actual = _file_digest(staged_binary)
+      if actual != expected:
+        raise ValueError(
+          f'Claude Code binary {source} has digest {actual}, its checksum record states {expected}'
+        )
+      _install(staged_binary, binary, expected)
     return binary
 
 

@@ -15,9 +15,7 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
-from bro.local.conformance_test_helper import data_home, harness_recipes, run_unattended
+from bro.local.conformance_test_helper import harness_matrix, run_unattended
 from bro.monitor import workspace_session_dir
 from bro.workspace.paths import workspace_dir
 from ride.workspace.model import ACTIVITY_FILENAME
@@ -34,13 +32,12 @@ def _commands(messages: list[dict]) -> list[str]:
   ]
 
 
-@pytest.mark.parametrize(('harness', 'recipe'), harness_recipes())
+@harness_matrix()
 def test_a_working_session_marks_its_workspace_active_between_its_start_and_end(
-  harness: str, recipe: str, tmp_path: Path, tmp_path_factory: pytest.TempPathFactory
+  harness: str, recipe: str, tmp_path: Path, conformance_data: Path
 ) -> None:
-  data = data_home(tmp_path_factory)
   name = f'activity-probe-{secrets.token_hex(4)}'
-  with mock.patch.dict('os.environ', {'XDG_DATA_HOME': str(data)}):
+  with mock.patch.dict('os.environ', {'XDG_DATA_HOME': str(conformance_data)}):
     activity_file = workspace_session_dir(workspace_dir(name)) / ACTIVITY_FILENAME
   tree = tmp_path / 'tree'
   tree.mkdir()
@@ -63,7 +60,7 @@ def test_a_working_session_marks_its_workspace_active_between_its_start_and_end(
       'as a separate command. Then answer with done and nothing else.'
     ),
     tree=tree,
-    data=data,
+    data=conformance_data,
     workspace=name,
   )
 
