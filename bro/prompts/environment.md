@@ -80,5 +80,4 @@ Interpret them as follows:
    `FAILING` is a recorder that is erroring;
    `STOPPED` is one that is no longer running at all, so nothing will resume on its own.
    Don't swallow either:
-   tell the user up front and point at `claude/session-recorder.log` in the session state dir (`RIDE_SESSION_DIR`) for the cause.
-   A red statusLine warning also stays pinned for the user, but surface it in your first reply too.
+   tell the user in your first reply, and point them at what the line says to `see` for the cause.

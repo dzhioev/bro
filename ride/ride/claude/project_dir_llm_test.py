@@ -1,7 +1,7 @@
 """Live probe of the transcript directory the pinned Claude Code keeps for a
-working directory, held against `bro.monitor.encode_project_path`: a session's
-recorder and `ride resume` look for its transcripts there, and Claude documents
-no rule for the name it picks."""
+working directory, held against `ride.claude.claude_config.encode_project_path`:
+a session's recorder, usage publisher, and `ride resume` look for its
+transcripts there, and Claude documents no rule for the name it picks."""
 
 import json
 import os
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from bro.monitor import encode_project_path
+from ride.claude.claude_config import encode_project_path
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,

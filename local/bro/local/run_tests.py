@@ -306,6 +306,8 @@ PYTEST_FILES = [
   'bro/summon_test.py',
   'native/bro/trails/record/bro_test.py',
   'ride/ride/claude/trail_recorder_test.py',
+  'ride/ride/claude/transcripts_test.py',
+  'ride/ride/claude/usage_publisher_test.py',
   'bro/monitor/monitor_test.py',
   'bro/monitor/health_test.py',
   'bro/monitor/trail_pointer_test.py',

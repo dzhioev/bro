@@ -2,7 +2,8 @@
 
 It assumes its cwd is a prepared workspace tree under the session runtime environment.
 It owns everything that runs next to Claude:
-resume resolution, argv, the session-local MCP server, launch declarations, and the recorder daemon.
+resume resolution, argv, the session-local MCP server, launch declarations,
+the recorder daemon, and the usage publisher.
 The outer `ride solo|along` validates policy once, so this runner repeats no policy gates.
 """
 
@@ -15,26 +16,22 @@ from typing import TYPE_CHECKING, Optional
 
 from bro import brash_policy, watches
 from bro.base import log
-from bro.monitor import (
-  SESSION_DIR_ENV,
-  claude_config_dir,
-  claude_projects_dir,
-  harness_session_dir,
-  trail_pointer,
-)
+from bro.llm.usage import USAGE_FILE_VARIABLE
+from bro.monitor import SESSION_DIR_ENV, harness_session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
 from bro.workspace.paths import ISOLATION_ENV
 from ride.claude import claude_release, native_tools
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
-from ride.claude.claude_config import latest_jsonl
+from ride.claude.claude_config import claude_config_dir, claude_projects_dir, latest_jsonl
 from ride.claude.competing_hooks import find as find_competing_hooks
 from ride.claude.interrupt import Run, StreamedRun, run_interactive, run_streaming
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.recorder import start_session_recorder
 from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
+from ride.claude.usage_publisher import publishing_usage
 from ride.claude.waiter_state import WaiterState
 from ride.workspace.build_context import claude_code_version
 
@@ -251,6 +248,9 @@ def run_session(spec: 'SessionRun') -> int:
     waiters = WaiterState.for_session()
     waiters.reset()
     teardown.callback(waiters.stand_down)
+    usage_file = _claude_state_dir() / 'usage.json'
+    teardown.enter_context(publishing_usage(transcripts, usage_file))
+    os.environ[USAGE_FILE_VARIABLE] = str(usage_file)
     # session-local MCP serving: OS-assigned port published via a port file,
     # per-session bearer token. the server imports from the session runtime
     # selected by PATH — the snapshot on host, the runtime volume in a container.

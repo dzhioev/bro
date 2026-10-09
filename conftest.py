@@ -66,7 +66,6 @@ def _isolate_runtime_state(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def _drop_usage_source():
   os.environ.pop(usage.USAGE_FILE_VARIABLE, None)
-  os.environ.pop(usage.SESSION_ID_VARIABLE, None)
 
 
 @pytest.fixture(autouse=True)

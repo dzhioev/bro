@@ -216,6 +216,12 @@ the native runner publishes when its trail opens, and the Claude recorder republ
 it does not use the globally newest call or the bro class's current recipe.
 A session with trail recording disabled publishes no pointer and cannot be resumed.
 
+Each session also names its agent's cumulative LLM usage to the commands it runs, in the usage file `BRO_USAGE_FILE` points at (`bro.llm.usage`), which the commit footer reads:
+the native LLM loop writes a file of its own process after every API call,
+and the Claude runner exports `claude/usage.json` in the session state dir,
+which a runner thread keeps current from the session's newest transcript segment and the transcripts of the subagents it spawned,
+reading on every transcript write and billing each response once.
+
 `bro run <bro> <input>` and `bro chat <bro> [what]` are in-process surfaces:
 they use ambient credentials and create no workspace or scope.
 `bro chat --fork [TRAIL_ID] [--at N]` explicitly forks recorded history under the bro class's current recipe;
@@ -333,7 +339,7 @@ A directory under the store that records no workspace is ignored by enumeration,
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
     watch/                        the session's watch declarations, offsets, and output
-    claude/                       claude harness artifacts (recorder/projector logs, live statusLine projection, and the persistent Claude temp root)
+    claude/                       claude harness artifacts (recorder/projector logs, live statusLine projection, the usage file and its publisher lock, and the persistent Claude temp root)
   claude/             the claude harness's state dir ("Unboxed Claude-state isolation")
   party/<member>/     records for a session that joined this workspace's party:
     session/          the member's session records, with the same shape as above
@@ -1537,7 +1543,7 @@ A selected or present `trails` name must load like every other held credential;
 `--no-trails` removes the recording need and starts no recorder daemon.
 For local storage, the launch description binds the host's `<runtime-root>/trails` at `/var/ride/trails` inside the container, so the trail survives container removal and is visible to host-side `rewind` while the session runs.
 
-The recorder records one claude-harness *trail* per transcript segment and appends newly completed lines at its polling interval (`ride/ride/claude/trail_recorder.py` owns transcript acquisition;
+The recorder records one claude-harness *trail* per transcript segment and appends newly completed lines on every transcript write, and at its polling interval without one (`ride/ride/claude/trail_recorder.py` owns transcript acquisition;
 the core trails schema and Claude lineage verdict remain in `bro.trails`).
 A verified same-segment resume reopens that segment's trail where the previous lifetime stopped, so a process restart adds no edge;
 an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
@@ -1548,7 +1554,7 @@ The trail carries the launch recipe, plus the managed-session facts a bro-harnes
 and the recorder publishes its current trail id to the session's trail pointer,
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir;
-its durable signal is the health file it beats on every attempt (`bro/monitor/health.py`), which the statusLine and `ride banner` surface.
+its durable signal is the health file it beats on every attempt (`bro/monitor/health.py`), naming that log as where the cause is read, which the statusLine and `ride banner` surface.
 The beat carries the outcome and the age at which the reader must give the daemon up, so both a recorder that fails loudly and one that is simply gone
 — killed by a signal, OOM, a crashed container process
 — are reported while the session runs.

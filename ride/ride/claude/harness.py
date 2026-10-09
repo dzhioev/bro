@@ -11,13 +11,13 @@ from bro.harness import Harness, Service, SessionEndReason
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.mcp import Reach
-from bro.monitor import CLAUDE_CONFIG_DIR_ENV
 from bro.run_lifecycle import RunLifecycle
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
 from bro.workspace.session import terminate_session
 from ride.claude import claude_release
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import (
+  CLAUDE_CONFIG_DIR_ENV,
   container_claude_state,
   container_member_claude_state,
   latest_jsonl,

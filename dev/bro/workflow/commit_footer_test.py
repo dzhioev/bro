@@ -170,7 +170,7 @@ class TestAppend:
     return path
 
   def _agent_environment(self, monkeypatch, output=100):
-    monkeypatch.setenv(usage.SESSION_ID_VARIABLE, 'append-test-session')
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, '/nonexistent/append-test-usage.json')
     monkeypatch.setattr(
       usage,
       'current_usage',
@@ -179,20 +179,6 @@ class TestAppend:
 
   def test_no_usage_source_leaves_the_message(self, tmp_path, monkeypatch):
     monkeypatch.setattr(usage, 'current_usage', lambda: None)
-    path = self._message(tmp_path, 'subject\n')
-    state = State(tmp_path / 'state.json')
-    _append(path, state)
-    assert path.read_text() == 'subject\n'
-    assert state.staged == {}
-
-  def test_fallback_resolved_usage_without_env_marker_is_ignored(self, tmp_path, monkeypatch):
-    # a human's shell can resolve usage through the working-directory transcript
-    # fallback; only an env-keyed source marks an agent commit
-    monkeypatch.setattr(
-      usage,
-      'current_usage',
-      lambda: usage.Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=100)}),
-    )
     path = self._message(tmp_path, 'subject\n')
     state = State(tmp_path / 'state.json')
     _append(path, state)

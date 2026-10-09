@@ -58,7 +58,7 @@ TRAILER = 'Co-Authored-By: test <test@example.com>'
 
 
 def _interactive_session(monkeypatch) -> None:
-  monkeypatch.setenv(usage.SESSION_ID_VARIABLE, 'fold-test-session')
+  monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, '/nonexistent/fold-test-usage.json')
   monkeypatch.setenv(HOLD_VARIABLE, 'attended')
   monkeypatch.setenv(HUMAN_NAME_ENV, 'test')
   monkeypatch.setenv(HUMAN_EMAIL_ENV, 'test@example.com')

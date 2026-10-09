@@ -1,5 +1,4 @@
 #!/usr/bin/env python
-import json
 import os
 from pathlib import Path
 
@@ -7,7 +6,6 @@ import pytest
 
 import bro.llm.usage as usage
 from bro.llm.usage import Footer, Usage
-from bro.monitor import encode_project_path
 
 OPUS = 'claude-opus-4-8'
 HAIKU = 'claude-haiku-4-5-20251001'
@@ -126,167 +124,81 @@ class TestModelFamily:
 
 
 class TestUsageFile:
-  def test_publish_writes_env_pointed_file(self, tmp_path, monkeypatch):
-    pointer = tmp_path / 'usage.json'
-    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
-    usage.publish('bro//dev', {'gpt-5': C(input=10, cache_read=4, output=2)})
-    read = usage.read_usage_file(pointer)
-    assert read == Usage(agent='bro//dev', per_model={'gpt-5': C(input=10, cache_read=4, output=2)})
-
-  def test_publish_mints_pointer_when_absent(self, tmp_path, monkeypatch):
+  def test_publish_writes_the_processs_own_file_and_points_at_it(self, tmp_path, monkeypatch):
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
     monkeypatch.setattr('tempfile.gettempdir', lambda: str(tmp_path))
+    usage.publish('bro//dev', {'gpt-5': C(input=10, cache_read=4, output=2)})
+    published = Path(os.environ[usage.USAGE_FILE_VARIABLE])
+    assert published.parent == tmp_path
+    assert usage.read_usage_file(published) == Usage(
+      agent='bro//dev', per_model={'gpt-5': C(input=10, cache_read=4, output=2)}
+    )
+
+  def test_publish_leaves_an_inherited_pointers_file_alone(self, tmp_path, monkeypatch):
+    inherited = tmp_path / 'session-usage.json'
+    claude = Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=9)})
+    usage.write_usage_file(inherited, claude)
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(inherited))
+    monkeypatch.setattr('tempfile.gettempdir', lambda: str(tmp_path / 'tmp'))
+    (tmp_path / 'tmp').mkdir()
     usage.publish('bro//dev', {'gpt-5': C(output=1)})
-    minted = os.environ[usage.USAGE_FILE_VARIABLE]
-    assert minted.startswith(str(tmp_path))
-    assert usage.read_usage_file(Path(minted)).agent == 'bro//dev'
+    assert usage.read_usage_file(inherited) == claude
+    assert usage.current_usage() == Usage(agent='bro//dev', per_model={'gpt-5': C(output=1)})
 
   def test_publish_replaces_whole_snapshot(self, tmp_path, monkeypatch):
-    pointer = tmp_path / 'usage.json'
-    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
+    monkeypatch.setattr('tempfile.gettempdir', lambda: str(tmp_path))
     usage.publish('bro//dev', {'gpt-5': C(output=1)})
     usage.publish('bro//dev', {'gpt-5': C(output=5)})
-    assert usage.read_usage_file(pointer).per_model == {'gpt-5': C(output=5)}
-
-
-class TestTranscriptUsage:
-  def _write(self, path, rows):
-    path.write_text('\n'.join(json.dumps(r) for r in rows) + '\n')
-
-  def _msg(self, model, input=0, cache_write=0, cache_read=0, output=0):
-    return {
-      'message': {
-        'model': model,
-        'usage': {
-          'input_tokens': input,
-          'cache_creation_input_tokens': cache_write,
-          'cache_read_input_tokens': cache_read,
-          'output_tokens': output,
-        },
-      }
-    }
-
-  def test_sums_per_model_per_class(self, tmp_path):
-    p = tmp_path / 't.jsonl'
-    self._write(
-      p,
-      [
-        self._msg(OPUS, input=2, cache_write=3, cache_read=4, output=10),
-        self._msg(OPUS, input=1, cache_write=1, cache_read=1, output=5),
-        self._msg(HAIKU, output=3),
-      ],
-    )
-    assert usage.transcript_usage(p) == {
-      OPUS: C(input=3, cache_write=4, cache_read=5, output=15),
-      HAIKU: C(output=3),
-    }
-
-  def test_missing_fields_default_to_zero(self, tmp_path):
-    p = tmp_path / 't.jsonl'
-    # only output present in the usage block
-    p.write_text(json.dumps({'message': {'model': OPUS, 'usage': {'output_tokens': 7}}}) + '\n')
-    assert usage.transcript_usage(p) == {OPUS: C(output=7)}
-
-  def test_skips_synthetic(self, tmp_path):
-    p = tmp_path / 't.jsonl'
-    self._write(p, [self._msg(OPUS, output=10), self._msg('<synthetic>', output=999)])
-    assert usage.transcript_usage(p) == {OPUS: C(output=10)}
-
-  def test_all_synthetic_yields_empty(self, tmp_path):
-    p = tmp_path / 't.jsonl'
-    self._write(p, [self._msg('<synthetic>', output=12), self._msg('<synthetic>', output=7)])
-    assert usage.transcript_usage(p) == {}
-
-
-class TestSessionTranscripts:
-  SESSION = '786d6a80-6929-4c9b-aac7-4fdfbe98ec3c'
-
-  def _session(self, tmp_path, monkeypatch, *, subagents=()):
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'w' / 'claude'))
-    projects = tmp_path / 'w' / 'claude' / 'projects' / '-ws'
-    projects.mkdir(parents=True)
-    segment = projects / f'{self.SESSION}.jsonl'
-    segment.touch()
-    for name in subagents:
-      sidecar = projects / self.SESSION / 'subagents' / f'{name}.jsonl'
-      sidecar.parent.mkdir(parents=True, exist_ok=True)
-      sidecar.touch()
-    return segment
-
-  def test_session_id_resolves_the_segment_under_the_config_root(self, tmp_path, monkeypatch):
-    segment = self._session(tmp_path, monkeypatch)
-    monkeypatch.setenv(usage.SESSION_ID_VARIABLE, self.SESSION)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv('PWD', str(tmp_path))
-    assert usage.session_transcripts() == [segment]
-
-  def test_includes_subagent_sidecars(self, tmp_path, monkeypatch):
-    segment = self._session(tmp_path, monkeypatch, subagents=('agent-a', 'agent-b'))
-    monkeypatch.setenv(usage.SESSION_ID_VARIABLE, self.SESSION)
-    sidecars = segment.parent / self.SESSION / 'subagents'
-    assert usage.session_transcripts() == [
-      segment,
-      sidecars / 'agent-a.jsonl',
-      sidecars / 'agent-b.jsonl',
-    ]
-
-  def test_falls_back_to_the_working_directory_project(self, tmp_path, monkeypatch):
-    monkeypatch.delenv(usage.SESSION_ID_VARIABLE, raising=False)
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'config'))
-    workspace = tmp_path / 'ws'
-    workspace.mkdir()
-    projects = tmp_path / 'config' / 'projects' / encode_project_path(workspace)
-    projects.mkdir(parents=True)
-    (projects / 'older.jsonl').touch()
-    newest = projects / 'newest.jsonl'
-    newest.touch()
-    os.utime(projects / 'older.jsonl', (0, 0))
-    monkeypatch.chdir(workspace)
-    monkeypatch.setenv('PWD', str(workspace))
-    assert usage.session_transcripts() == [newest]
-
-  def test_no_transcript_yields_empty(self, tmp_path, monkeypatch):
-    monkeypatch.delenv(usage.SESSION_ID_VARIABLE, raising=False)
-    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'config'))
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv('PWD', str(tmp_path))
-    assert usage.session_transcripts() == []
+    assert usage.current_usage() == Usage(agent='bro//dev', per_model={'gpt-5': C(output=5)})
 
 
 class TestCurrentUsage:
-  def test_usage_file_pointer_wins(self, tmp_path, monkeypatch):
+  def test_reads_the_pointed_file(self, tmp_path, monkeypatch):
+    pointer = tmp_path / 'usage.json'
+    usage.write_usage_file(pointer, Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=3)}))
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
+    assert usage.current_usage() == Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=3)})
+    assert usage.agent_session()
+
+  def test_a_pending_record_is_an_agent_session_without_usage(self, tmp_path, monkeypatch):
     pointer = tmp_path / 'usage.json'
     monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
-    usage.publish('bro//dev', {'gpt-5': C(output=3)})
-    current = usage.current_usage()
-    assert current == Usage(agent='bro//dev', per_model={'gpt-5': C(output=3)})
+    with usage.holding_publisher_lock(pointer) as lock:
+      usage.write_usage_pending(pointer, lock)
+      assert usage.current_usage() is None
+      assert usage.agent_session()
+    with pytest.raises(usage.UsageUnavailable, match='no longer keeps it current'):
+      usage.current_usage()
 
-  def test_no_pointer_no_transcript_yields_none(self, monkeypatch):
+  def test_a_pointer_naming_no_file_fails_the_read(self, tmp_path, monkeypatch):
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(tmp_path / 'usage.json'))
+    with pytest.raises(usage.UsageUnavailable, match='no usage publisher has written it'):
+      usage.current_usage()
+
+  def test_a_failed_publisher_fails_the_read(self, tmp_path, monkeypatch):
+    pointer = tmp_path / 'usage.json'
+    usage.write_usage_file(pointer, Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=3)}))
+    usage.write_usage_failure(pointer, 'OSError: disk full')
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
+    with pytest.raises(usage.UsageUnavailable, match='disk full'):
+      usage.current_usage()
+
+  def test_a_snapshot_naming_a_lock_is_current_while_its_publisher_holds_it(
+    self, tmp_path, monkeypatch
+  ):
+    pointer = tmp_path / 'usage.json'
+    current = Usage(agent='Claude Code 2.1', per_model={OPUS: C(output=3)})
+    monkeypatch.setenv(usage.USAGE_FILE_VARIABLE, str(pointer))
+    with usage.holding_publisher_lock(pointer) as lock:
+      usage.write_usage_file(pointer, current, lock=lock)
+      assert usage.current_usage() == current
+    with pytest.raises(usage.UsageUnavailable, match='no longer keeps it current'):
+      usage.current_usage()
+
+  def test_without_a_pointer_there_is_no_agent_and_no_usage(self, monkeypatch):
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
-    monkeypatch.setattr(usage, 'session_transcripts', list)
     assert usage.current_usage() is None
-
-  def test_transcript_fallback_carries_claude_agent(self, tmp_path, monkeypatch):
-    monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
-    monkeypatch.setenv('AI_AGENT', 'claude-code_2-1-201_agent')
-    jsonl = tmp_path / 't.jsonl'
-    jsonl.write_text(json.dumps({'message': {'model': OPUS, 'usage': {'output_tokens': 7}}}) + '\n')
-    monkeypatch.setattr(usage, 'session_transcripts', lambda: [jsonl])
-    current = usage.current_usage()
-    assert current == Usage(agent='Claude Code 2.1.201', per_model={OPUS: C(output=7)})
-
-  def test_sums_the_segment_and_its_subagents(self, tmp_path, monkeypatch):
-    monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
-    monkeypatch.setenv('AI_AGENT', 'claude-code_2-1-201_agent')
-    transcripts = []
-    for name, output in (('segment', 7), ('agent-a', 11), ('agent-b', 5)):
-      jsonl = tmp_path / f'{name}.jsonl'
-      row = {'message': {'model': OPUS, 'usage': {'output_tokens': output}}}
-      jsonl.write_text(json.dumps(row) + '\n')
-      transcripts.append(jsonl)
-    monkeypatch.setattr(usage, 'session_transcripts', lambda: transcripts)
-    current = usage.current_usage()
-    assert current == Usage(agent='Claude Code 2.1.201', per_model={OPUS: C(output=23)})
+    assert not usage.agent_session()
 
 
 class TestToLabels:
@@ -302,22 +214,6 @@ class TestToLabels:
       }
     )
     assert out == {'Haiku 4.5': C(input=3, output=12)}
-
-
-class TestClaudeVersion:
-  def test_from_ai_agent(self, monkeypatch):
-    monkeypatch.setenv('AI_AGENT', 'claude-code_2-1-181_agent')
-    assert usage.claude_version() == '2.1.181'
-
-  def test_from_versioned_execpath(self, monkeypatch):
-    monkeypatch.delenv('AI_AGENT', raising=False)
-    monkeypatch.setenv('CLAUDE_CODE_EXECPATH', '/home/u/.local/versions/2.1.181/claude')
-    assert usage.claude_version() == '2.1.181'
-
-  def test_non_version_execpath_falls_back(self, monkeypatch):
-    monkeypatch.delenv('AI_AGENT', raising=False)
-    monkeypatch.setenv('CLAUDE_CODE_EXECPATH', '/usr/lib/node_modules/.../bin/claude.exe')
-    assert usage.claude_version() == 'unknown'
 
 
 class TestFormatFooter:

@@ -17,10 +17,10 @@ from ride.claude.trail_recorder import (
   _compose,
   _Position,
   _Progress,
-  _read_lines_after,
   _SegmentRecorder,
   _signature,
 )
+from ride.claude.transcripts import read_lines_after
 
 
 class _Store(LocalStore):
@@ -156,7 +156,7 @@ def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
     },
     body={'records': []},
   )
-  lines, byte_extent = _read_lines_after(path, 0)
+  lines, byte_extent = read_lines_after(path, 0)
   signature = _signature(path)
   assert signature is not None
   return _SegmentRecorder(
@@ -653,6 +653,9 @@ class TestClose:
     assert _trails(store) == []
 
 
+LOG = Path('/session/claude/session-recorder.log')
+
+
 def _fail() -> bool:
   raise RuntimeError('store is down')
 
@@ -669,25 +672,31 @@ def health_file(environment) -> Path:
 class TestHealthBeat:
   def test_a_quiet_attempt_beats_ok(self, environment, store, health_file):
     # an empty projects dir: the tick adopts nothing and advances no trail
-    _attempt(_recorder(environment, store, started_after=time.time()).tick, interval=3)
+    _attempt(
+      _recorder(environment, store, started_after=time.time()).tick, interval=3, log_path=LOG
+    )
 
     assert json.loads(health_file.read_text())['status'] == 'ok'
     assert health.problem() is None
 
   def test_a_raising_attempt_beats_the_error(self, health_file):
-    _attempt(_fail, interval=3)
+    _attempt(_fail, interval=3, log_path=LOG)
 
     assert json.loads(health_file.read_text())['error'].endswith('store is down')
-    assert health.problem() == health._FAILING
+    assert health.problem() == f'FAILING — see {LOG}'
 
   def test_a_quiet_attempt_clears_an_earlier_error(self, environment, store, health_file):
-    _attempt(_fail, interval=3)
-    _attempt(_recorder(environment, store, started_after=time.time()).tick, interval=3)
+    _attempt(_fail, interval=3, log_path=LOG)
+    _attempt(
+      _recorder(environment, store, started_after=time.time()).tick, interval=3, log_path=LOG
+    )
 
     assert json.loads(health_file.read_text())['status'] == 'ok'
     assert health.problem() is None
 
   def test_the_shutdown_attempt_promises_no_further_beat(self, environment, store, health_file):
-    _attempt(_recorder(environment, store, started_after=time.time()).finalize, interval=None)
+    _attempt(
+      _recorder(environment, store, started_after=time.time()).finalize, interval=None, log_path=LOG
+    )
 
     assert json.loads(health_file.read_text())['stale_after'] is None

@@ -197,6 +197,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'textual',
     'tree-sitter',
     'tree-sitter-bash',
+    'watchfiles',
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',

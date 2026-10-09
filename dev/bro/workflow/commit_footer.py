@@ -7,9 +7,9 @@ yields the true total for a range — and stays correct however the commits are
 later folded together.
 
 The four billed token classes, the footer line shape, and the cumulative-usage
-sources (a bro run's env-pointed usage file, the Claude Code session transcript)
-are owned by the `bro.llm.usage` module; this script owns the per-commit
-delta/baseline machinery on top of `usage.current_usage()`.
+source (the env-pointed usage file) are owned by the `bro.llm.usage` module;
+this script owns the per-commit delta/baseline machinery on top of
+`usage.current_usage()`.
 
 The footer is applied by git, not by the agent: `install_hooks` puts the two
 packaged hooks (`hooks/`) into a repository, and every commit made with an agent
@@ -17,9 +17,9 @@ usage source in the environment carries the footer with no session involvement.
 A process without a usage source — a human's shell — is a no-op for both hooks.
 
 Three CLI modes:
-- --append <msg-file>: run by the commit-msg git hook. No env-keyed usage source
-  (`BRO_USAGE_FILE` / `CLAUDE_CODE_SESSION_ID` — a human's shell carries
-  neither), an empty message, or a message already carrying a parseable footer
+- --append <msg-file>: run by the commit-msg git hook. No published usage (no
+  `BRO_USAGE_FILE` pointer — a human's shell carries none — or none billed
+  yet), an empty message, or a message already carrying a parseable footer
   (an amend, a reword — the commit keeps its original attribution) leaves the
   file untouched; otherwise the delta footer is appended and the new cumulative
   staged. A failure fails the commit, surfacing at the moment of the mistake.
@@ -179,8 +179,6 @@ def _emit_default(current: usage.Usage, state: State) -> str:
 
 
 def _append(message_path: Path, state: State) -> None:
-  if not usage.agent_session():
-    return
   current = usage.current_usage()
   if current is None:
     return
@@ -315,8 +313,7 @@ def main(argv: list[str]) -> Optional[int]:
   current = usage.current_usage()
   if current is None:
     print(
-      f'error: no usage source found (no {usage.USAGE_FILE_VARIABLE} pointer, '
-      'no Claude Code session transcript with usage)',
+      f'error: no usage published (no {usage.USAGE_FILE_VARIABLE} pointer, or none billed yet)',
       file=sys.stderr,
     )
     return 1

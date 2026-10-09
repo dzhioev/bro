@@ -39,7 +39,7 @@ from typing import Any, NamedTuple, Optional
 from bro.base import configs, credentials, log
 from bro.base.args import Parser
 from bro.launch.hold import session_hold
-from bro.monitor import SESSION_DIR_ENV, health, trail_pointer, working_projects_dir
+from bro.monitor import SESSION_DIR_ENV, health, trail_pointer
 from bro.summon import summoned_by_from_env
 from bro.trails.claude_format import CLAUDE_FORMAT
 from bro.trails.model import BlazeRequest, payload_sha256
@@ -47,6 +47,7 @@ from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.rows import project_messages
 from bro.trails.store import TrailsStore, default_store
+from ride.claude.transcripts import read_lines_after, watching
 
 # the bro service `raise` tool's wire name in a claude session's transcript
 _RAISE_TOOL = 'mcp__bro__raise'
@@ -120,17 +121,6 @@ def _fold_raise_reason(raised: Optional[str], messages: Iterable[dict]) -> Optio
     ):
       raised = None
   return raised
-
-
-def _read_lines_after(path: Path, byte_offset: int) -> tuple[list[str], int]:
-  with path.open('rb') as stream:
-    stream.seek(byte_offset)
-    payload = stream.read()
-  complete_size = payload.rfind(b'\n') + 1
-  if complete_size == 0:
-    return [], byte_offset
-  lines = payload[:complete_size].decode('utf-8').split('\n')[:-1]
-  return lines, byte_offset + complete_size
 
 
 def _record_uuid(raw: str) -> Optional[str]:
@@ -232,7 +222,7 @@ class _SegmentRecorder:
       return _Progress.REWOUND
     records, byte_extent = self._pending, self._position.byte_extent
     if signature != self._position.signature:
-      grown, byte_extent = _read_lines_after(self.path, byte_extent)
+      grown, byte_extent = read_lines_after(self.path, byte_extent)
       records = [*records, *grown]
     if len(records) == 0:
       self._position = _Position(signature, byte_extent)
@@ -360,7 +350,7 @@ class Recorder:
       # unchanged since the resolver declined it; ask again when it grows
       return False
     try:
-      file_lines, byte_extent = _read_lines_after(path, 0)
+      file_lines, byte_extent = read_lines_after(path, 0)
     except OSError:
       return False
     lines = _evidence_lines(file_lines)
@@ -494,42 +484,47 @@ def _exception_summary(exception: BaseException) -> str:
   return f'{type(exception).__name__}: {exception}'
 
 
-def _attempt(step: Callable[[], bool], *, interval: Optional[int]) -> None:
+def _attempt(step: Callable[[], bool], *, interval: Optional[int], log_path: Path) -> None:
   """run one recorder pass and beat the health file with its outcome, quiet
   passes included — a beat that stops arriving is how a killed daemon is seen."""
   try:
     step()
   except Exception as e:
     log.exception('recording failed')
-    health.write('error', _exception_summary(e), interval=interval)
+    health.write('error', _exception_summary(e), interval=interval, diagnostics=str(log_path))
     return
-  health.write('ok', interval=interval)
+  health.write('ok', interval=interval, diagnostics=str(log_path))
 
 
-def _watch(recorder: Recorder, interval: int) -> None:
+def _watch(recorder: Recorder, interval: int, log_path: Path) -> None:
+  """record on every transcript write and every `interval` seconds without one,
+  until SIGTERM or the parent's exit."""
   stop = threading.Event()
   parent_pid = os.getppid()
+  with watching(recorder.projects_dir) as changes:
 
-  def _handle_signal(signum, frame):
-    del signum, frame
-    stop.set()
+    def _handle_signal(signum, frame):
+      del signum, frame
+      stop.set()
+      changes.notify()
 
-  signal.signal(signal.SIGTERM, _handle_signal)
-  signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
-  while not stop.is_set():
-    if os.getppid() != parent_pid:
-      log.info('parent process exited, shutting down')
-      break
-    _attempt(recorder.tick, interval=interval)
-    stop.wait(interval)
+    while not stop.is_set():
+      if os.getppid() != parent_pid:
+        log.info('parent process exited, shutting down')
+        break
+      _attempt(recorder.tick, interval=interval, log_path=log_path)
+      changes.wait(interval)
 
-  _attempt(recorder.finalize, interval=None)
+  _attempt(recorder.finalize, interval=None, log_path=log_path)
 
 
 def record_session(
+  projects_dir: Path,
+  log_path: Path,
   interval: int = 3,
-  projects_dir: Optional[Path] = None,
   llm: Optional[str] = None,
 ) -> int:
   session = managed_session()
@@ -547,26 +542,36 @@ def record_session(
   except credentials.SecretNotFound:
     material_path = credentials.default_store().material_path('trails')
     log.error('config not found: trails (expected %s)', material_path)
-    health.write('error', 'config not found: trails', interval=None)
+    health.write('error', 'config not found: trails', interval=None, diagnostics=str(log_path))
     return 1
 
-  src = projects_dir if projects_dir is not None else working_projects_dir()
-  recorder = Recorder(src, client, llm=llm_recipe, session=session, started_after=time.time())
-  log.info('recording %s (interval=%ds, workspace=%s)', src, interval, session.workspace)
-  _watch(recorder, interval)
+  recorder = Recorder(
+    projects_dir, client, llm=llm_recipe, session=session, started_after=time.time()
+  )
+  log.info('recording %s (interval=%ds, workspace=%s)', projects_dir, interval, session.workspace)
+  _watch(recorder, interval, log_path)
   return 0
 
 
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='record a Claude Code session transcript to trails')
   parser.add_argument(
-    '--interval', type=int, default=3, help='poll interval in seconds (default: 3)'
+    '--interval',
+    type=int,
+    default=3,
+    help='seconds between records when no transcript write comes sooner (default: 3)',
   )
   parser.add_argument(
     '--projects-dir',
     type=Path,
-    default=None,
-    help='claude projects dir to record (default: derived from the config dir and cwd)',
+    required=True,
+    help='the claude projects dir holding the session transcripts to record',
+  )
+  parser.add_argument(
+    '--log-path',
+    type=Path,
+    required=True,
+    help="where the launcher sends this daemon's output, named in its health beats",
   )
   parser.add_argument(
     '--llm',
