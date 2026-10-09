@@ -139,8 +139,8 @@ A cut batch ends in a pending marker and the next batch starts after the watch t
 A line wider than the byte bound is delivered in successive pieces, with its first piece naming the whole line size.
 
 Where a persona declares shell reach, both harnesses mount `bro::watch(command)` and `bro::unwatch(command)`.
-The command must be admitted by the persona's brash command list, as `bro::job` requires;
-`unwatch` refuses the runtime-owned session watch.
+Under a finite command list a watch runs its line in brash under the session's brash policy, as the bro harness's jobs do, and under `brash(ANY)` in bash;
+`unwatch` stops the watch it names without checking the command list, and refuses the runtime-owned session watch.
 `do-ride` arms `quest watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
 Each joined party member has its own session directory and therefore its own store.
 The session watch reaches the model through the selected harness's delivery port without adding commands to the persona's tool reach.
@@ -195,6 +195,8 @@ Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
 
 The bro harness serves the `files` group with its own file and search tools under the `dev` namespace, only their read-only part for `files(write=False)`, and `brash(...)` with its job tools.
+Each job and watch starts its line under the job supervisor:
+in brash under a finite command list, with the brash policy the native runner writes from the bro's reach into a directory its run owns, and in bash under `brash(ANY)`.
 It leaves `web` and `delegation` unserved, which `bro show` marks.
 
 The native runner pumps each bounded batch from the session's watch store into the LLM inbox, taking the next only after the model drains the last.
@@ -1268,6 +1270,7 @@ While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the execut
 Harness-specific preparation lives in `SessionHarness.prepare_session`, followed by `run_session`, so the neutral executable compares no harness names.
 
 The Claude harness's runner (`ride/ride/claude/runner.py`) then, in order:
+under a finite command list, refuses a session whose own Claude configuration could take a call around the command gate, and writes the session's brash policy (both in "The claude argv" below);
 resolves a resume's Claude session id from its cwd's projects dir;
 starts the session-local MCP server and surfaces bro spells (both below);
 builds the Claude argv (below);
@@ -1292,8 +1295,20 @@ and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP in
 `ride/ride/claude/native_tools.py` names them per group on the pinned release.
 Every other native is off, a tool a Claude Code release adds included, until it is mapped.
 `files` brings `LSP`, the code intelligence of the pyright plugin every session enables, beside Claude's file tools.
-`brash(...)` brings `Monitor`, which the pinned release withholds while telemetry is off, as the session's settings keep it;
-under a finite command list a `PreToolUse` hook (`ride.claude.watch_guard`) gates `Bash` and `Monitor`, admitting a call whose command matches one entry exactly.
+`brash(...)` brings `Monitor`, which the pinned release withholds while telemetry is off, as the session's settings keep it.
+Under a finite command list a `PreToolUse` hook on `Bash` and `Monitor` (`ride.claude.command_gate`) rewrites each call's command through `updatedInput` into one argv:
+the runtime's `brash` by path with the session's brash policy, `-c`, and the model's line untouched, quoted so that Claude's shell reads only single-quoted words.
+It keeps the call's other fields, decides no permission, so a `guided` session still prompts, and denies a call that carries no command, `Monitor`'s WebSocket form.
+The runner writes the policy from the bro's reach into the session's `claude/` state dir and names it to the session-local MCP server, whose `bro::watch` starts lines under it.
+Before it writes the policy, the runner refuses to start a session whose own Claude configuration could take a call around the gate, naming each place (`ride.claude.competing_hooks`):
+a `PreToolUse` hook matching `Bash` or `Monitor`, as Claude's matcher reads it,
+in the working directory's project or local settings,
+in the frontmatter of a skill, command, or agent in the session's Claude folder or in a `.claude` folder at, above, or below the working directory,
+or in an installed plugin the settings enable;
+`disableAllHooks` in project or local settings;
+or a candidate it cannot read or parse.
+Managed settings stay outside the check (`bro/reference/extending.md`, "Brash command-list policy").
+`ride/ride/claude/command_gate_llm_test.py` holds the rewrite, those places, and the managed override against the pinned release.
 `delegation()` brings Claude's own agents, and a delegated agent gets at most the session's natives, since the allowlist withholds the rest from the whole session.
 `--tools` drops a name the pinned release does not serve without a word,
 so `ride/ride/claude/native_tools_llm_test.py` holds each registered persona's mapped natives against the pinned release's `init` event and a delegated agent's tools against the allowlist;

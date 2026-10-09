@@ -12,7 +12,6 @@ from bro.base import log, spawn
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
 from bro.base.text_window import DEFAULT_LIMIT
-from bro.brash import admit_exact
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
@@ -40,18 +39,21 @@ class _NativeRun(Protocol):
   @property
   def registry(self) -> Registry: ...
 
+  @property
+  def brash_policy(self) -> Optional[Path]: ...
+
 
 _JOB_WAIT_CAP_SECONDS = 3600.0
 _FOREGROUND_WAIT_SECONDS = 45.0
 
 _JOB_DESCRIPTION = (
-  'start a shell command as one supervised job (`bash -c`, merged stdout and stderr, '
-  'continuously spooled output). the command must match one entry in this persona’s finite command '
-  'list exactly; unrestricted personas may run any command. `fg` waits for exit and returns '
-  'tail-kept '
-  'output; if its timeout or other job news ends the wait first, the job becomes `bg` and the '
-  'result names its id and `poll` continuation. `bg` returns immediately and reports only its '
-  'exit through this run’s notifications. `timeout_seconds` is capped at '
+  'start a shell command line as one supervised job (merged stdout and stderr, continuously '
+  'spooled output). under this persona’s finite command list the line runs in brash, which starts '
+  'only the commands the list admits and stops at the first it refuses, exiting 126 with the '
+  'refusal in the output; unrestricted personas run it in `bash -c`. `fg` waits for exit and '
+  'returns tail-kept output; if its timeout or other job news ends the wait first, the job becomes '
+  '`bg` and the result names its id and `poll` continuation. `bg` returns immediately and reports '
+  'only its exit through this run’s notifications. `timeout_seconds` is capped at '
   f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
   'lines and the shared byte cap, with skipped/pending markers.'
 )
@@ -109,15 +111,11 @@ async def _wait_for_foreground_job(
   return result
 
 
-def _job_tools(
-  *,
-  live_run: _NativeRun,
-  commands: tuple[str, ...],
-  unrestricted: bool,
-) -> list[llm_mcp.Tool]:
+def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   def start(command: str, mode: str) -> Job:
-    admitted = admit_exact(command, entries=commands, unrestricted=unrestricted)
-    return live_run.registry.start(admitted, mode)  # type: ignore[arg-type]
+    if len(command.strip()) == 0:
+      raise ValueError('command must be non-empty')
+    return live_run.registry.start(command, mode, live_run.brash_policy)  # type: ignore[arg-type]
 
   async def job(
     command: str,
@@ -199,18 +197,11 @@ class BroHarness(Harness):
 
   def own_tools(self, bro: 'BaseBro', live_run: 'LiveRun | None') -> tuple[llm_mcp.Tool, ...]:
     tools = [spell_store.build_skill_tool()]
-    brash = bro.reach().brash
-    if brash is None:
+    if bro.reach().brash is None:
       return tuple(tools)
     if live_run is None:
       raise RuntimeError('job tools require a live run')
-    tools.extend(
-      _job_tools(
-        live_run=cast(_NativeRun, live_run),
-        commands=brash.commands,
-        unrestricted=brash.unrestricted,
-      )
-    )
+    tools.extend(_job_tools(cast(_NativeRun, live_run)))
     return tuple(tools)
 
   async def end_session(self, result: str, end_reason: SessionEndReason) -> str:

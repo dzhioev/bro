@@ -37,7 +37,7 @@ def state(owner) -> Generator[WaiterState]:
 
 def _seed(store: watches.Store, command: str, content: str) -> None:
   watch = watches.Watch(command, store.directory, watches.slug(command))
-  watch.command_file.write_text(f'{command}\n')
+  watch.command_file.write_text(command)
   watch.log.write_text(content)
 
 
@@ -170,7 +170,7 @@ class TestWait:
     assert state.rewakes() == 1
 
 
-def _run_hook(cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_hook(cwd: Path, **environment: str) -> subprocess.CompletedProcess[str]:
   """the waiter's settings command, run through a shell as claude runs it."""
   (hook,) = watch_waiter_hooks()['Stop'][0]['hooks']
   return subprocess.run(
@@ -178,7 +178,7 @@ def _run_hook(cwd: Path) -> subprocess.CompletedProcess[str]:
     shell=True,
     cwd=cwd,
     input=json.dumps({'hook_event_name': 'Stop'}),
-    env={**os.environ, 'RIDE_RUNNER_PID': str(os.getpid())},
+    env={**os.environ, 'RIDE_RUNNER_PID': str(os.getpid()), **environment},
     capture_output=True,
     text=True,
     timeout=30,
@@ -199,13 +199,13 @@ def test_the_hook_wakes_the_session_from_its_store(owner, state, tmp_path):
 
 def test_a_waiter_that_fails_to_start_still_reports_as_the_waiter(owner, state, tmp_path):
   del owner, state
-  # a package in the hook's cwd shadows ride for `python -m`, as a broken
-  # install would fail the waiter's import before any of its code runs
+  # a package on PYTHONPATH shadows ride, as a broken install would fail the
+  # waiter's import before any of its code runs
   shadow = tmp_path / 'ride'
   shadow.mkdir()
   (shadow / '__init__.py').write_text('raise ImportError("broken install")\n')
 
-  completed = _run_hook(tmp_path)
+  completed = _run_hook(tmp_path, PYTHONPATH=str(tmp_path))
 
   assert completed.returncode == 1
   assert 'broken install' in completed.stderr

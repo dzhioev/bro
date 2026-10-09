@@ -21,6 +21,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and prompt composition.
   `bro/jobs.py` and `bro/inbox.py` are native-owned modules under their public namespace paths:
   jobs supervise process groups through core's `bro.job_supervisor`, spool bounded output, and live in a lifetime-scoped registry, while the inbox wakes the model on job news and framework notices and drains their bounded notification slices.
+  A job or watch line runs in brash under the policy `Runner` writes from the bro's reach into a directory its lifetime owns, where the command list is finite, and in bash otherwise.
   OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
   interactive owners call `wake()` when the inbox reports news.
   In a managed session, `do-ride` owns the shared watch store and arms its `quest watch` producer;
