@@ -5,13 +5,14 @@ import codecs
 import contextlib
 import os
 import subprocess
-import sys
 import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
+from bro import brash_policy
 from bro.base import spawn
 from bro.base.text_window import DEFAULT_LIMIT, apply_limit, format_size, take_head
 
@@ -61,9 +62,11 @@ class Job:
     command: str,
     mode: JobMode = 'bg',
     *,
+    policy: Optional[Path] = None,
     inbox: Optional['Inbox'] = None,
     spool_memory_bytes: int = SPOOL_MEMORY_BYTES,
   ):
+    """start `command`: in brash under `policy`, or in bash where there is none."""
     if mode not in {'fg', 'bg'}:
       raise ValueError(f'unknown job mode {mode!r}')
     self.id = job_id
@@ -88,12 +91,10 @@ class Job:
     ):
       self.process = spawn.popen(
         [
-          sys.executable,
-          '-m',
-          'bro.job_supervisor',
+          *spawn.module_argv('bro.job_supervisor'),
           str(ready_write_fd),
           str(owner_read_fd),
-          command,
+          *brash_policy.line_argv(command, policy),
         ],
         pass_fds=(ready_write_fd, owner_read_fd),
         stdout=subprocess.PIPE,
@@ -348,12 +349,12 @@ class Registry:
     with self._lock:
       return self._closed
 
-  def start(self, command: str, mode: JobMode = 'bg') -> Job:
+  def start(self, command: str, mode: JobMode = 'bg', policy: Optional[Path] = None) -> Job:
     with self._lock:
       if self._closed:
         raise RuntimeError('job registry is closed')
       self._counter += 1
-      job = Job(f'job-{self._counter}', command, mode, inbox=self.inbox)
+      job = Job(f'job-{self._counter}', command, mode, policy=policy, inbox=self.inbox)
       self._jobs[job.id] = job
     return job
 

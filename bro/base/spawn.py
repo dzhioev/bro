@@ -15,7 +15,8 @@ signals only the direct child.
 
 `format_result` is the shared shape a finished child takes as agent-tool output.
 
-`console_script` names a child by path instead of by bare name, for the machinery
+`console_script` names a child by path instead of by bare name, and `module_argv`
+runs a module from the running interpreter's own environment, for the machinery
 a process spawns beside itself.
 """
 
@@ -186,3 +187,11 @@ def console_script(name: str) -> str:
       errno.ENOENT, f'no console script beside the running {sys.executable}', str(path)
     )
   return str(path)
+
+
+def module_argv(module: str) -> list[str]:
+  """the argv running `module` as `__main__` under the running interpreter, with
+  every import resolved from that interpreter's environment: `-P` keeps the
+  working directory, which may hold another checkout of the same packages, off
+  the import path."""
+  return [sys.executable, '-P', '-m', module]

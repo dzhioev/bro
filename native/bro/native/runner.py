@@ -1,14 +1,16 @@
 """the bro-native engine: runs a bro declaration as an in-process LLM loop."""
 
 import os
+import tempfile
 import threading
 import traceback
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
+from pathlib import Path
 from types import TracebackType
 from typing import Any, Optional, Self
 
-from bro import turn_end, watches
+from bro import brash_policy, turn_end, watches
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
@@ -87,6 +89,7 @@ class Runner:
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
     self._watch_owner: Optional[watches.Owner] = None
+    self._brash_policy: Optional[Path] = None
     self._lifetime_resources: Optional[ExitStack] = None
     self._watch_pump_cancelled = threading.Event()
     self._watch_delivery_lock = threading.Lock()
@@ -120,6 +123,14 @@ class Runner:
     if self._watch_owner is not None:
       return self._watch_owner.store
     return watches.session_store()
+
+  @property
+  def brash_policy(self) -> Optional[Path]:
+    """the brash policy this run's job and watch lines start under, written
+    when its lifetime starts; None where they run in bash."""
+    if not self._lifetime_active:
+      raise RuntimeError('a run has a brash policy only while its lifetime is active')
+    return self._brash_policy
 
   @contextmanager
   def _watch_pump(self) -> Generator[None, None, None]:
@@ -242,6 +253,8 @@ class Runner:
         self._watch_owner = resources.enter_context(
           watches.Owner.temporary(publish_environment=False)
         )
+      policy_directory = resources.enter_context(tempfile.TemporaryDirectory(prefix='bro-brash-'))
+      self._brash_policy = brash_policy.write(Path(policy_directory), self.bro.reach())
       resources.enter_context(self._watch_pump())
       self._lifetime_resources = resources.pop_all()
     self._lifetime_active = True
@@ -276,6 +289,7 @@ class Runner:
       raise RuntimeError('run lifetime has no resources')
     self._lifetime_resources = None
     self._watch_owner = None
+    self._brash_policy = None
     resources.close()
     self.bro.close()
     self._lifetime_active = False

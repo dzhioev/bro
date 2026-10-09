@@ -13,6 +13,7 @@ dependencies = [
   "certifi==2026.7.22",
   "humanize==4.16.0",
   "mcp==1.28.1",
+  "pyyaml==6.0.3",
   "rich==15.0.0",
   "tree-sitter==0.26.0",
   "tree-sitter-bash==0.25.1",
@@ -28,9 +29,9 @@ dependencies = [
 "ride" = "ride._entrypoints:ride_cli"
 "ride.ask" = "ride._entrypoints:ride_ask"
 "ride.call" = "ride._entrypoints:ride_call"
+"ride.claude.command-gate" = "ride._entrypoints:ride_claude_command_gate"
 "ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
 "ride.claude.trail-recorder" = "ride._entrypoints:ride_claude_trail_recorder"
-"ride.claude.watch-guard" = "ride._entrypoints:ride_claude_watch_guard"
 "ride.claude.watch-waiter" = "ride._entrypoints:ride_claude_watch_waiter"
 "ride.cli" = "ride._entrypoints:ride_cli"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"

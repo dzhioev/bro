@@ -192,6 +192,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'certifi',
     'humanize',
     'mcp',
+    'pyyaml',
     'rich',
     'textual',
     'tree-sitter',

@@ -1,4 +1,4 @@
-"""Start a detached, lifetime-owned producer for one watched shell command."""
+"""Start a detached, lifetime-owned producer for one watched command line."""
 
 import contextlib
 import os
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import bro.base.args as base_args
-from bro import job_supervisor, watches
+from bro import brash_policy, job_supervisor, watches
 from bro.base import log
 
 __cli_name__ = 'watch-run'
@@ -42,6 +42,8 @@ def _produce() -> int:
     directory=directory,
     slug=_required_environment(watches.PRODUCER_SLUG_ENV),
   )
+  policy_value = os.environ.get(watches.PRODUCER_POLICY_ENV)
+  policy = None if policy_value is None else Path(policy_value)
   identity = watches.ProcessIdentity.current()
   identity.write(watch.pid_file)
   owner_fd = os.open(owner_path, os.O_RDONLY | os.O_NONBLOCK)
@@ -63,7 +65,7 @@ def _produce() -> int:
         clear_identity()
 
       return job_supervisor.supervise(
-        watch.command,
+        brash_policy.line_argv(watch.command, policy),
         ready_fd,
         owner_fd,
         output=log_file,
