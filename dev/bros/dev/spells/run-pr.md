@@ -11,12 +11,10 @@ folds the branch into the commits master will carry so what is reviewed is what 
 opens the PR via `gh pr create`,
 then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events.
 On approval, chains into [[land]] for the merge step.
-Also the re-entry point for a PR that is already open
-— "resume PR <pr-url-or-number>", "resume the PR", "pick up the review"
-— checking out the PR's head branch, reconciling unaddressed feedback, and resuming the watch.
+A PR that is already open with nothing watching it is [[resume pr]]'s.
 
-parameters: {"base?": "base branch for the pull request instead of master", "pr?": "existing pull request URL or number to resume"}
-version: 7.11.0
+parameters: {"base?": "base branch for the pull request instead of master"}
+version: 8.0.0
 ---
 
 # run-pr
@@ -33,66 +31,13 @@ Passed values appear in the `# Arguments` section appended by the spell tool:
   Default `master`.
   A coordinator driving multi-stage work passes its integration branch here so each stage opens its PR into that branch rather than master.
   Below, `<base>` means this value.
-- `pr` — re-entry mode for an existing PR URL or number (typically after a previous session died mid-review).
-  Skip the normal workflow and follow "Re-entry: PR already open" below.
 
 ## Preconditions
-
-Normal flow only — re-entry has its own entry conditions:
 
 - You are in a managed workspace (under the runtime state root's `workspaces/` or otherwise on a non-master branch).
   Do NOT run this against the main checkout's working copy.
 - The work looks finished.
   If edits look WIP, a refactor is half-done, or the suite is known-red, confirm with the user before proceeding.
-
-## Re-entry: PR already open
-
-The `pr` argument carries the existing PR URL or number
-— e.g. `bro run <bro> '[[resume PR <pr-url>]]'` after the session that opened it died.
-Restore the state that session had, reconcile what happened while nobody watched, then rejoin the normal flow at the watcher (step 14).
-
-1. **Check out the PR's head branch first**:
-   `gh pr checkout <number-or-url>`.
-   A fresh clone sits on a `workspace-<name>` branch at the base ref
-   — the PR's head branch is not checked out locally;
-   `gh pr checkout` fetches it and sets up tracking so later pushes go to the right branch.
-2. **Recover the context** a fresh session lacks:
-   ```bash
-   gh pr view <number> --json number,url,state,baseRefName,title,body
-   ```
-   - The task link is the `Task:` line in the PR body
-     — use it for the task-logging steps (13, and [[land]]'s bookkeeping).
-     No `Task:` line → proceed without task logging.
-   - `<base>` is `baseRefName`.
-3. **Handle a terminal PR**:
-   `state: MERGED` → run [[land]]'s post-merge bookkeeping (`merged` comment, task closure) and stop;
-   `state: CLOSED` → report it and stop.
-4. **Reconcile unaddressed feedback from `gh` state
-   — never trust a lost watcher.**
-   The dead session may have died before, during, or after handling any event, and a restarted `poll-pr` baselines all existing events as already seen
-   — feedback left unhandled now would be silently skipped forever.
-   Pull the full review state:
-   ```bash
-   gh pr view <number> --json reviews,comments,reviewDecision
-   gh api repos/<owner>/<repo>/pulls/<number>/comments   # inline review comments
-   ```
-   Treat as actionable any repo-owner feedback per step 15's rules that has no later reply from the PR author and no later commit addressing it;
-   handle each per step 15.
-   If the latest owner review is APPROVED, nothing actionable is pending, and `reviewDecision` is `APPROVED` or `null`, retain that cleared review state against the current head and continue to the watcher.
-   Where that review's `commit` is the current head, retain it as step 15's owner's approval too:
-   the restarted watcher baselines it as seen.
-   Its first green edge clears the checks gate before landing;
-   watcher silence does not.{{when #may_summon contains eyebro}}
-   A reviewer's verdict does not survive the session that summoned it, and the PR is no substitute:
-   the quest id `bro::quest_check` needs died with that session, and an approval sitting on the PR says a review approved, not that the reviewer you delegated to did
-   — on a public repository any account can leave one.
-   Summon a reviewer again and read the answer off that summon.
-   A child that finds the head already approved reconciles it as a completed review and returns saying so without posting again, which is both the verdict you need and the reason waiting on the watcher here would wait forever.{{end}}
-   Any other `reviewDecision` is step 15's base gate reached with no event to carry it, and step 15's answers apply:
-   a `REVIEW_REQUIRED` leaves the PR owed a review its base counts, and a `CHANGES_REQUESTED` leaves a standing review asking for work
-   — resume watching and settle it rather than landing.
-5. **Resume watching**:
-   continue at step 14.
 
 ## Workflow
 
@@ -205,21 +150,8 @@ To verify a new test catches a bug (revert-and-rerun), use `git stash push <path
 git fetch origin <base> && git rebase origin/<base>
 ```
 
-Conflicts → resolve them yourself, in-band:
-merge each conflict, `git add` the resolved paths, `git rebase --continue`.
-Then record the resolution on the task (same conditions as step 13):
-`brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took
-— the gate (step 9) verifies the resolved result next.
-
-Escalate only when a resolution is not obvious
-— the two sides carry contradicting logic or intent that no merged version can honor both of:
-stop and ask when questions reach the user;
-raise with the contradiction spelled out when unattended.
-Never `--abort` or `--skip` silently.
-
-In an **unattended** session there is no user to stop for:
-when a conflict clears that escalation bar, rescue your commits per _Rescue committed work before a raise_ below (abort the rebase to restore them, push the branch, name the ref), then `raise` with the contradiction as the reason
-— the parked commits stay recoverable.
+When it stops on a conflict, call `rebase-conflicts-source::read` and follow it:
+resolving in-band, the escalation bar, and the task comment.
 
 ### 8. Fold the branch into what master will carry
 
@@ -444,10 +376,8 @@ poll-pr <owner>/<repo> <pr_number>
 How to run it:
 [[watch poll-pr <owner>/<repo> <pr_number>]], and react to every line per step 15.
 An exit of the watched command right after `merged`, `closed`, or `watch_failed` is terminal;
-an exit without one means the watcher died.
-Do not just start it again
-— a fresh `poll-pr` baselines all existing events as seen;
-reconcile first (re-entry step 4), then start the watch anew.
+an exit without one means the watcher died:
+[[resume pr]] with its number rather than starting the watch again.
 When chaining into [[land]], end the watch.
 
 **The watch loop is the rest of the run.**
@@ -619,13 +549,7 @@ Clear every gate retained for the previous head, including the reviewer verdict 
 — continuing from the stale head would discard their commits on your next force-with-lease push.
 
 **`conflicts` event**:
-rerun step 7 — the rebase, the in-band resolution default, the escalation bar, and the task comment all apply unchanged
-— then push the rebased branch:
-`git push --force-with-lease origin HEAD`
-— the PR branch, never the base.
-No local pass answers this one:
-what may have broken the branch is what landed on the base, which no diff of the branch's own changes points at, so step 9's selection is scoped to the wrong thing
-— the PR's CI on the pushed head runs every stage, and the merge is blocked on it.
+call `rebase-conflicts-source::read` and follow its section on this event.
 
 **`merged` / `closed`**:
 someone (the user, a [[land]] run, or external action) terminated the PR.
@@ -635,16 +559,13 @@ If `closed` without merge, log it and report to the user.
 
 **`watch_failed` event**:
 the watch is over and the PR is not
-— from here on nothing on the PR reaches you.
-The `reason` is typically a credential the watch cannot use for that source (`HTTP 403` / `HTTP 404` on `checks` means the token lacks `checks: read`) or GitHub being unreachable for minutes.
-Do not restart the watcher on the same credential and hope:
-reconcile the review state from `gh` (re-entry step 4) and handle whatever arrived, then report the failing source and reason to the user
-— stop and ask when questions reach the user;
-when unattended, `raise` with the source and reason as the reason.
+— [[resume pr]] with its number.
+{{when #hold = unattended}}
 
 ## Rescue committed work before a raise
 
 {{include fragments/rescue_before_raise.md}}
+{{end}}
 
 ## Safety rules
 
