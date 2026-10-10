@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 import ride.claude.interrupt as interrupt
-from bro import watches
+from bro import turn_end, watches
 from bro.monitor import SESSION_DIR_ENV
 from bro.workspace import session as workspace_session
 from ride.claude.fake_claude_test_helper import fake_claude_argv
@@ -305,6 +305,26 @@ class TestRunStreaming:
     run = _stream(tmp_path, script, store, waiters)
 
     assert (run.code, run.stopped) == (9, True)
+
+  def test_the_turn_a_stop_interrupts_settles_nothing(self, tmp_path, store, waiters, monkeypatch):
+    settled: list[turn_end.TurnEnd] = []
+    settle = turn_end.settle
+
+    def _settle(port: turn_end.TurnEnd) -> None:
+      settled.append(port)
+      settle(port)
+
+    monkeypatch.setattr(turn_end, 'settle', _settle)
+    script = (
+      'def interrupted(*_):\n  tasks("t2")\n  result("interrupted")\n  sys.exit(0)\n'
+      'signal.signal(signal.SIGINT, interrupted)\ntasks("t1")\nresult("started")\n'
+      'next_message()\nos.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n'
+    )
+
+    run = _stream(tmp_path, script, store, waiters)
+
+    assert run == interrupt.StreamedRun(code=0, stopped=True, results=('started', 'interrupted'))
+    assert len(settled) == 1
 
   def test_a_line_that_is_not_stream_json_fails_the_run(self, tmp_path, store, waiters):
     script = 'print("garbage")\nsys.stdout.flush()\nsys.stdin.read()\n'

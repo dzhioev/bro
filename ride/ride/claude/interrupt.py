@@ -99,9 +99,10 @@ def run_streaming(
 
   `prompt` goes in as the first user message. Claude then keeps the session
   alive as long as stdin is open, and a finished background task or a watch
-  waiter's rewake wakes it for a turn of its own. Each turn end is settled
-  through `bro.turn_end` over `store`, and an end closes stdin, which ends the
-  session. `on_result` sees each turn's reply as it lands.
+  waiter's rewake wakes it for a turn of its own. Each turn end before a stop is
+  settled through `bro.turn_end` over `store`; an end, or the first turn end
+  after a stop, closes stdin, which ends the session. `on_result` sees each
+  turn's reply as it lands.
   """
   process = subprocess.Popen(
     argv,
@@ -131,7 +132,10 @@ def run_streaming(
           results.append(reply)
           if on_result is not None:
             on_result(reply)
-          session.settle()
+          if stopped.is_set():
+            session.end()
+          else:
+            session.settle()
   return StreamedRun(process.returncode, stopped.is_set(), tuple(results))
 
 
