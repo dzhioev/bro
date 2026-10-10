@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from bro import brash_policy
 from bro.base import spawn
-from bro.base.text_window import DEFAULT_LIMIT, apply_limit, format_size, take_head
+from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, apply_limit, format_size, take_head
 
 if TYPE_CHECKING:
   from bro.inbox import Inbox
@@ -226,7 +226,7 @@ class Job:
         self._cursor = self._end_locked()
         if len(pending) == 0:
           return self._state_line_locked()
-        return f'{self._state_line_locked()}\n{apply_limit(pending, limit, keep="tail")}'
+        return f'{self._state_line_locked()}\n{apply_limit(pending, limit, keep="tail", byte_limit=BYTE_LIMIT)}'
       if len(pending) == 0:
         return self._state_line_locked()
       kept, clamp_note = take_head(pending, limit)
@@ -262,13 +262,17 @@ class Job:
         self._exit_consumed = True
         state = self._state_line_locked()
         result = (
-          state if len(section) == 0 else f'{state}\n{apply_limit(section, limit, keep="tail")}'
+          state
+          if len(section) == 0
+          else f'{state}\n{apply_limit(section, limit, keep="tail", byte_limit=BYTE_LIMIT)}'
         )
         return result, False
       self.mode = 'bg'
       self._condition.notify_all()
       result = (
-        'running' if len(section) == 0 else f'running\n{apply_limit(section, limit, keep="tail")}'
+        'running'
+        if len(section) == 0
+        else f'running\n{apply_limit(section, limit, keep="tail", byte_limit=BYTE_LIMIT)}'
       )
       return result, True
 
@@ -292,7 +296,7 @@ class Job:
         self.id,
         self.mode,
         self.command,
-        apply_limit(section, limit, keep='tail'),
+        apply_limit(section, limit, keep='tail', byte_limit=BYTE_LIMIT),
         exit_code=self._returncode,
       )
 

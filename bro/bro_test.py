@@ -15,7 +15,7 @@ import bro.bro as bro_module
 import bro.llm.llms.echo as llm_llms_echo
 import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
-from bro import brash_policy, watches
+from bro import brash_policy, results, watches
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, var, when
 from bro.brash import REFUSED_STATUS
@@ -47,6 +47,7 @@ class StubRun:
     self.trail_id = trail_id
     self.current_tool_step_id = tool_step
     self.watch_store: watches.Store = MagicMock(spec=watches.Store)
+    self.result_store: results.Store = MagicMock(spec=results.Store)
     self.brash_policy: Optional[Path] = None
 
 
@@ -63,11 +64,13 @@ def _native_servers(
 def _service_server(
   bro: BaseBro, *, run: Optional[StubRun] = None, harness: mcp.HarnessLike = 'bro'
 ) -> MCPServer:
+  live_run = run if run is not None else StubRun()
   return bro_module._build_service_server(
     bro,
     hold='unattended',
     harness=harness,
-    live_run=run if run is not None else StubRun(),
+    result_store=lambda: live_run.result_store,
+    live_run=live_run,
   )
 
 
@@ -1383,7 +1386,9 @@ class TestRaise:
 
 class TestAnswer:
   async def _names(self, harness: Harness) -> set[str]:
-    server = bro_module._build_service_server(EchoBro(), hold='attended', harness=harness)
+    server = bro_module._build_service_server(
+      EchoBro(), hold='attended', harness=harness, result_store=results.session_store
+    )
     return {tool.name for tool in await server.list_tools()}
 
   @pytest.mark.asyncio
@@ -1406,7 +1411,9 @@ class TestAnswer:
   async def _tool(self, harness: EndingHarness, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     monkeypatch.setenv('RIDE_SUMMONED', '1')
-    server = bro_module._build_service_server(EchoBro(), hold='attended', harness=harness)
+    server = bro_module._build_service_server(
+      EchoBro(), hold='attended', harness=harness, result_store=results.session_store
+    )
     for tool in await server.list_tools():
       if tool.name == 'answer':
         return tool
@@ -1847,7 +1854,11 @@ class TestWatchServiceTools:
     monkeypatch.setenv(brash_policy.POLICY_ENV, str(policy))
     with watches.Owner.for_session() as owner:
       server = bro_module._build_service_server(
-        declaration, hold='attended', harness='claude', live_run=None
+        declaration,
+        hold='attended',
+        harness='claude',
+        result_store=results.session_store,
+        live_run=None,
       )
       with contextlib.closing(server):
         tools = {tool.name: tool for tool in await server.list_tools()}

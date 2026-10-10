@@ -78,7 +78,7 @@ run those with `--help` for flags.
   — always capturing, and reaping the group when the await is cancelled as well as on timeout, so an interrupted tool call leaves no orphan.
   `kill_group` / `terminate_group` signal a child's whole group directly, for callers that manage lifetime themselves.
   `format_result` is the shape a finished child takes as agent-tool output
-  — exit code, then a `text_window` window over the captured streams.
+  — exit code, then the captured streams.
   Used by every agent shell-out.
   `console_script` resolves a console script beside the running interpreter, for machinery a process spawns beside itself rather than looks up on the PATH it was launched with;
   `module_argv` runs such machinery as a module of that interpreter's own environment, never of a checkout in the working directory.
@@ -133,10 +133,10 @@ run those with `--help` for flags.
   `bro/reference/template.md`;
   the consuming front (`render_text`) lives in `bro/mcp.py`.
 - `text_window.py` — windowed views over large text for tool output:
-  `apply_limit` caps to a line + byte budget (keeping head or tail) with inline `[...skipped before/after...]` markers and a fat-finger clamp;
-  `numbered_window` layers a cat -n-numbered partial read (0-based `offset`) on top;
+  `apply_limit` caps to a line budget, and to a byte budget its caller passes, keeping head or tail with inline `[...skipped before/after...]` markers and a fat-finger clamp;
+  `numbered_window` layers a cat -n-numbered partial read (0-based `offset`) on top, its after marker naming the offset that reads on, and `numbered` numbers a whole text;
   `take_head` returns the budget-bounded prefix raw, for callers that paginate over a cursor instead of dropping the excess.
-  `DEFAULT_LIMIT` / `MAX_LIMIT` cap the lines a caller asks for and `BYTE_LIMIT` caps the payload, whichever binds first.
+  `DEFAULT_LIMIT` / `MAX_LIMIT` cap the lines a caller asks for, and `BYTE_LIMIT` caps one tool reply and one batch of session news.
 - `source_root.py` — `SOURCE_ROOT`, the installed `bro` package directory, derived from the module's own location.
 - `yesno.py` — `yesno(question, default)` interactive y/n prompt.
 

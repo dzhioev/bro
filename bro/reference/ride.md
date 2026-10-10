@@ -341,6 +341,7 @@ A directory under the store that records no workspace is ignored by enumeration,
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
     watch/                        the session's watch declarations, offsets, and output
+    results/                      the session's kept tool results (`bro/AGENTS.md`, "Kept results")
     claude/                       claude harness artifacts (recorder/projector logs, live statusLine projection, the usage file and its publisher lock, and the persistent Claude temp root)
   claude/             the claude harness's state dir ("Unboxed Claude-state isolation")
   party/<member>/     records for a session that joined this workspace's party:

@@ -3,7 +3,7 @@ from typing import Annotated, Optional
 
 from pydantic import Field
 
-from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT, numbered_window
+from bro.base.text_window import numbered
 from bro.brog.model import Comment, Status, Task
 from bro.brog.system import System, default_system
 from bro.llm.mcp import Context
@@ -70,30 +70,16 @@ def get_task(
 
 
 @toolset.tool(
-  'read a window of the task description rendered as markdown, each line prefixed '
-  'with its 1-based line number (cat -n style). Content outside the window is '
-  'announced with [...skipped before/after: N lines...] markers. Line numbers are '
-  'orientation only, not part of the description — strip the "N<tab>" prefix before '
-  'reusing text. The comment stream is separate; use read_comments for it.'
+  'read the task description rendered as markdown, each line prefixed with its 1-based '
+  'line number (cat -n style). Line numbers are orientation only, not part of the '
+  'description — strip the "N<tab>" prefix before reusing text. The comment stream is '
+  'separate; use read_comments for it.'
 )
 def read_task(
   context: Context[System],
   task_id: Annotated[str, _TASK_ID_FIELD],
-  offset: Annotated[
-    int,
-    Field(description='0-based line index to start reading from', ge=0),
-  ] = 0,
-  limit: Annotated[
-    int,
-    Field(
-      description=(
-        f'max lines to return; values above {MAX_LIMIT:,} are clamped, with the clamp '
-        'announced inline'
-      ),
-    ),
-  ] = DEFAULT_LIMIT,
 ) -> str:
-  return numbered_window(context.state.get_task_description(task_id), offset, limit)
+  return numbered(context.state.get_task_description(task_id))
 
 
 @toolset.tool(

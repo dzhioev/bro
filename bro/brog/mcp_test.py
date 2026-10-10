@@ -5,7 +5,6 @@ import pytest
 from pydantic import ValidationError
 
 from bro.base import credentials
-from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT
 from bro.brog.mcp import toolset
 from bro.brog.model import Comment, Project, Task
 
@@ -109,34 +108,12 @@ class TestReadTask:
     fake_system.get_task_description.assert_called_once_with('tid')
 
   @pytest.mark.asyncio
-  async def test_offset_and_limit_window(self, fake_system):
-    fake_system.get_task_description.return_value = 'a\nb\nc\nd\ne'
-    result = await tool('read_task').call({'task_id': 'tid', 'offset': 2, 'limit': 2})
-    assert '    3\tc' in result
-    assert '    4\td' in result
-    assert '    5\t' not in result
-    assert 'skipped before: 2 lines' in result
-    assert 'skipped after: 1 lines' in result
-
-  @pytest.mark.asyncio
-  async def test_default_limit_caps_long_documents(self, fake_system):
-    fake_system.get_task_description.return_value = ''.join(
-      f'line {i}\n' for i in range(DEFAULT_LIMIT + 50)
-    )
+  async def test_returns_a_long_description_whole(self, fake_system):
+    description = ''.join(f'line {index}\n' for index in range(5_000))
+    fake_system.get_task_description.return_value = description
     result = await tool('read_task').call({'task_id': 'tid'})
-    assert 'skipped after: 50 lines' in result
-
-  @pytest.mark.asyncio
-  async def test_oversized_limit_clamped_with_note(self, fake_system):
-    fake_system.get_task_description.return_value = 'a\nb'
-    result = await tool('read_task').call({'task_id': 'tid', 'limit': MAX_LIMIT + 5})
-    assert f'limit {MAX_LIMIT + 5:,} clamped to {MAX_LIMIT:,}' in result
-
-  @pytest.mark.asyncio
-  async def test_negative_offset_rejected(self, fake_system):
-    with pytest.raises(ValidationError):
-      await tool('read_task').call({'task_id': 'tid', 'offset': -1})
-    fake_system.get_task_description.assert_not_called()
+    assert isinstance(result, str)
+    assert result.splitlines() == [f'{index + 1:>5}\tline {index}' for index in range(5_000)]
 
 
 class TestReadComments:

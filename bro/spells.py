@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, model_validator
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro.base import credentials
-from bro.base.text_window import window
 from bro.procedures import parse_frontmatter
 
 if TYPE_CHECKING:
@@ -19,7 +18,6 @@ if TYPE_CHECKING:
 
 NAMESPACE = 'spell'
 CAST_SECRET = 'openai'
-WINDOW_LIMIT = 1000
 _NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 
@@ -116,8 +114,6 @@ def _parse_parameters(raw: str, path: Path) -> tuple[Parameter, ...]:
     required = not declared_name.endswith('?')
     name = declared_name if required else declared_name[:-1]
     _validate_name('parameter name', name, path)
-    if name == 'offset':
-      raise ValueError(f'spell {path}: parameter name "offset" is reserved for output paging')
     if name in names:
       raise ValueError(f'spell {path}: duplicate parameter name {name!r}')
     names.add(name)
@@ -176,16 +172,14 @@ def _render_spell_call(
   *,
   harness: mcp.HarnessLike,
   hold: str,
-  offset: int = 0,
 ) -> str:
   body = bro.get_spell_body(spell.name, harness=harness, hold=hold)
-  return window(call_text(spell, body, arguments), offset=offset, limit=WINDOW_LIMIT)
+  return call_text(spell, body, arguments)
 
 
 def call_text(spell: Spell, body: str, arguments: Mapping[str, Any]) -> str:
-  """the instructions a call of `spell` returns before windowing: its rendered
-  `body`, then a `# Arguments` section listing the values passed for its
-  declared parameters."""
+  """the instructions a call of `spell` returns: its rendered `body`, then a
+  `# Arguments` section listing the values passed for its declared parameters."""
   passed = [
     f'{parameter.name}: {arguments[parameter.name]}'
     for parameter in spell.parameters
@@ -281,11 +275,6 @@ class SpellTool(llm_mcp.Tool):
       parameter.name: {'type': 'string', 'description': parameter.description}
       for parameter in spell.parameters
     }
-    properties['offset'] = {
-      'type': 'integer',
-      'description': '0-based line offset for paging through the spell body',
-      'default': 0,
-    }
     self._parameters = {
       'type': 'object',
       'properties': properties,
@@ -307,7 +296,7 @@ class SpellTool(llm_mcp.Tool):
 
   async def call(self, arguments: dict[str, Any]) -> str:
     parameter_names = {parameter.name for parameter in self._spell.parameters}
-    unknown = set(arguments) - parameter_names - {'offset'}
+    unknown = set(arguments) - parameter_names
     if len(unknown) > 0:
       raise ValueError(f'unknown arguments for spell {self.name!r}: {sorted(unknown)}')
     missing = [
@@ -320,12 +309,8 @@ class SpellTool(llm_mcp.Tool):
     for parameter in self._spell.parameters:
       if parameter.name in arguments and not isinstance(arguments[parameter.name], str):
         raise ValueError(f'spell argument {parameter.name!r} must be a string')
-
-    offset = arguments.get('offset', 0)
-    if isinstance(offset, bool) or not isinstance(offset, int):
-      raise ValueError('spell argument "offset" must be an integer')
     return _render_spell_call(
-      self._bro, self._spell, arguments, harness=self._harness, hold=self._hold, offset=offset
+      self._bro, self._spell, arguments, harness=self._harness, hold=self._hold
     )
 
 

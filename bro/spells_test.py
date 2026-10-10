@@ -8,13 +8,14 @@ import pytest
 
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
-from bro import bro as bro_module, spells as spell_store
+from bro import bro as bro_module, results, spells as spell_store
 from bro.base.condition import SetVariable
-from bro.base.text_window import window
+from bro.base.text_window import BYTE_LIMIT
 from bro.bro import BaseBro
 from bro.harness import get_harness, installed_harness_names
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
+from bro.monitor import SESSION_DIR_ENV
 from bro.prompts import get_prompt
 from bro.registry import create_bro, declared_specs
 from bro.spells import CAST_SECRET, NAMESPACE, load_spell
@@ -46,11 +47,22 @@ def fake_packages(tmp_path, monkeypatch):
   return make
 
 
+@pytest.fixture(autouse=True)
+def session_state(tmp_path, monkeypatch):
+  # a spell call's result is kept in the session's store
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path / 'session'))
+
+
 class _NoRun:
-  """the `LiveRun` a bro assembled outside a run has: no trail, no tool position."""
+  """the `LiveRun` a bro assembled outside a run has: no trail, no tool position,
+  and the session's result store."""
 
   trail_id = None
   current_tool_step_id = None
+
+  @property
+  def result_store(self) -> results.Store:
+    return results.session_store()
 
 
 def _servers(bro: BaseBro, *, hold: str = 'unattended') -> list[llm_mcp.MCPServer]:
@@ -69,7 +81,9 @@ def _service_server(bro: BaseBro, *, harness: mcp.HarnessLike = 'bro') -> llm_mc
   # built on its own rather than picked out of a full assembly: these tests read
   # service tools only, and materializing a bro's declared servers would demand
   # the credentials they hold.
-  return bro_module._build_service_server(bro, hold='unattended', harness=harness)
+  return bro_module._build_service_server(
+    bro, hold='unattended', harness=harness, result_store=results.session_store
+  )
 
 
 class TestSpellDeclaration:
@@ -196,7 +210,6 @@ class TestSpellValidation:
       ('real', '---\nname: wrong\ndescription: real\n---\nbody', 'disagrees'),
       ('real', '---\nname: real\n---\nbody', 'no description'),
       ('real', _spell(parameters={'bad.name': 'bad'}), 'parameter name'),
-      ('real', _spell(parameters={'offset': 'bad'}), 'output paging'),
       ('real', _spell(parameters={'?': 'bad'}), 'parameter name'),
       ('real', _spell(parameters={'same': 'one', 'same?': 'two'}), 'duplicate parameter'),
       ('real', '---\ndescription: real\nparameters: []\n---\nbody', 'JSON object'),
@@ -297,7 +310,7 @@ class TestSpellServer:
       'type': 'string',
       'description': 'extra context',
     }
-    assert tool.parameters['properties']['offset']['type'] == 'integer'
+    assert set(tool.parameters['properties']) == {'task', 'notes'}
     assert tool.parameters['additionalProperties'] is False
 
   @pytest.mark.asyncio
@@ -339,22 +352,16 @@ class TestSpellServer:
       await tool.call({'task': 1})
     with pytest.raises(ValueError, match='unknown arguments'):
       await tool.call({'task': 'T-1', 'extra': 'no'})
-    with pytest.raises(ValueError, match='must be an integer'):
-      await tool.call({'task': 'T-1', 'offset': True})
 
   @pytest.mark.asyncio
-  async def test_pages_plain_output_with_generous_window(self, fake_packages):
-    body = '\n'.join(f'line {index}' for index in range(1005))
-    package = fake_packages('_spell_window', {'do-work': _spell(body=body)})
+  async def test_a_long_body_is_kept_whole_and_paged(self, fake_packages):
+    body = '\n'.join(f'line {index}' for index in range(BYTE_LIMIT // 5))
+    package = fake_packages('_spell_long', {'do-work': _spell(body=body)})
     tool = (await _spell_server(package.bro_class()()).list_tools())[0]
-
-    result = await tool.call({'offset': 1000})
-    assert isinstance(result, str)
-    assert result.startswith('[...skipped before: 1,000 lines')
-    assert 'line 999' not in result
-    assert 'line 1000\nline 1001' in result
-    assert 'line 1004' in result
-    assert '\t' not in result
+    reply = await tool.call({})
+    (entry,) = results.session_store().entries()
+    assert results.session_store().read(entry.id)[1] == body
+    assert reply == results.window(entry.id, body, 0, BYTE_LIMIT)
 
 
 class TestCast:
@@ -620,7 +627,7 @@ class TestSpellToolNames:
 
 # room left for each declared parameter's value in a call's `# Arguments`
 # section — a URL, a branch, a short phrase; a spell whose call cannot carry
-# that much fails rather than truncating at cast time
+# that much in one reply fails rather than costing every run a page
 _ARGUMENT_ROOM = 200
 
 
@@ -649,7 +656,7 @@ def test_every_spell_call_fits_one_window(name, monkeypatch):
               extra={'features': SetVariable(enabled, universe=features.universe)},
             ).strip()
             text = spell_store.call_text(spell, body, arguments)
-            assert window(text, limit=spell_store.WINDOW_LIMIT) == text, (
+            assert len(text) <= BYTE_LIMIT, (
               f'spell::{spell_name} of {name} overflows one window on {harness_name} '
               f'at {hold} ({len(text):,} characters)'
             )

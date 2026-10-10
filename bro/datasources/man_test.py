@@ -1,5 +1,3 @@
-import re
-
 import pytest
 
 from bro.base.text_window import BYTE_LIMIT
@@ -42,28 +40,12 @@ def test_declaring_no_pages_raises():
     ManSource('man', summary='x', pages=[])
 
 
-def test_long_page_is_capped_and_resumed_at_the_offset_it_names(tmp_path):
+def test_reads_a_long_page_whole(tmp_path):
   page = tmp_path / 'long.md'
-  lines = [f'line {index} ' + 'x' * 100 for index in range(BYTE_LIMIT // 100)]
-  body = '\n'.join(lines)
+  body = '\n'.join(f'line {index} ' + 'x' * 100 for index in range(BYTE_LIMIT // 50))
   page.write_text(body)
   source = ManSource('man', summary='x', pages=[FileSource('long', summary='x', path=page)])
-
-  head = source.read('long')
-  assert 'line 0' in head
-  assert lines[-1] not in head
-  marker = re.search(r'read on with offset=(\d+)', head)
-  assert marker is not None
-  offset = int(marker.group(1))
-
-  tail = source.read('long', offset=offset)
-  # the two reads cover the page exactly — nothing dropped, nothing repeated
-  assert head[:offset] + tail == body
-
-
-def test_offset_past_the_page_raises(source):
-  with pytest.raises(ValueError, match='outside the first page'):
-    source.read('first', offset=10_000)
+  assert source.read('long') == body
 
 
 @pytest.mark.asyncio
@@ -82,13 +64,6 @@ async def test_read_tool_serves_the_roster(source):
 async def test_read_tool_returns_the_page(source):
   tool = (await source.as_mcp_server().list_tools())[0]
   assert await tool.call({'topic': 'first'}) == '# First\n\nfirst body\n'
-
-
-@pytest.mark.asyncio
-async def test_read_tool_rejects_a_non_integer_offset(source):
-  tool = (await source.as_mcp_server().list_tools())[0]
-  with pytest.raises(ValueError, match='offset'):
-    await tool.call({'topic': 'first', 'offset': '2'})
 
 
 def test_page_resolves_a_topic_of_the_repo_roster():

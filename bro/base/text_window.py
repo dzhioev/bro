@@ -1,22 +1,23 @@
 """Windowed views over large text for tool output.
 
-Four entry points share one cap policy: `apply_limit` caps free-form output
-(keeping the head or tail) and announces what was dropped via inline
-`[...skipped before/after...]` markers; `window` and `numbered_window` layer an
-oriented partial read on top — both skip `offset` lines and cap, while the
-numbered form also prefixes the rest with 1-based line numbers (cat -n style);
-`take_head` returns the budget-bounded prefix raw, for callers that paginate
-over a cursor instead of dropping the excess.
+`apply_limit` caps free-form output to a line budget, and to a byte budget where
+its caller passes one, keeping the head or tail and announcing what was dropped
+via inline `[...skipped before/after...]` markers; `numbered_window` layers a
+cat -n-numbered partial read on top, skipping `offset` lines and closing on the
+offset that reads on (`numbered` numbers a whole text); `take_head` returns the
+budget-bounded prefix raw, for callers that paginate over a cursor instead of
+dropping the excess.
 """
 
-from typing import Literal
+from typing import Literal, Optional
 
-# caps on tool output: at most `limit` lines (callers pass `limit=N` to extend,
-# up to MAX_LIMIT, silently clamped beyond) and at most BYTE_LIMIT bytes,
-# whichever binds first. ~30 KB is well under OpenAI's 10 MB per-tool-output
-# limit and cheap on input tokens across the agent loop.
+# callers pass `limit=N` lines to extend the default, up to MAX_LIMIT, clamped
+# beyond with the clamp announced.
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 2000
+# the cap on one tool reply and on one batch of session news. ~30 KB is well
+# under OpenAI's 10 MB per-tool-output limit and cheap on input tokens across
+# the agent loop.
 BYTE_LIMIT = 30_000
 
 
@@ -51,21 +52,27 @@ def _clamp(limit: int) -> tuple[int, str]:
   return limit, ''
 
 
-def _take(lines: list[str], effective: int) -> list[str]:
+def _take(lines: list[str], effective: int, byte_limit: Optional[int]) -> list[str]:
   kept: list[str] = []
   kept_bytes = 0
   for line in lines:
-    if len(kept) >= effective or kept_bytes + len(line) > BYTE_LIMIT:
+    if len(kept) >= effective:
+      break
+    if byte_limit is not None and kept_bytes + len(line) > byte_limit:
       break
     kept.append(line)
     kept_bytes += len(line)
   return kept
 
 
-def _cut(content: str, keep: Literal['head', 'tail']) -> str:
+def _cut(content: str, keep: Literal['head', 'tail'], byte_limit: int) -> str:
   """the widest slice of a line too wide to keep whole, so a window always
   carries content and a cursor always advances."""
-  return content[:BYTE_LIMIT] if keep == 'head' else content[-BYTE_LIMIT:]
+  return content[:byte_limit] if keep == 'head' else content[-byte_limit:]
+
+
+def _joined(*notes: str) -> str:
+  return '; '.join(note for note in notes if len(note) > 0)
 
 
 def apply_limit(
@@ -73,24 +80,28 @@ def apply_limit(
   limit: int,
   *,
   keep: Literal['head', 'tail'] = 'head',
+  byte_limit: Optional[int] = None,
   skipped_before_lines: int = 0,
   skipped_before_bytes: int = 0,
   skipped_after_lines: int = 0,
   skipped_after_bytes: int = 0,
+  after_note: str = '',
 ) -> str:
-  """cap content to `limit` lines and `BYTE_LIMIT` bytes, keeping the head or
-  tail. Wraps the kept slice with `[...skipped before/after...]` markers
-  reporting what was dropped at each end, including content a streaming caller
-  counted without retaining and supplies through the skipped arguments."""
+  """cap content to `limit` lines, and to `byte_limit` bytes when given, keeping
+  the head or tail. Wraps the kept slice with `[...skipped before/after...]`
+  markers reporting what was dropped at each end, including content a streaming
+  caller counted without retaining and supplies through the skipped arguments;
+  `after_note` rides the after marker when one renders."""
   effective, clamp_note = _clamp(limit)
   lines = content.splitlines(keepends=True)
   total_lines = len(lines)
   total_bytes = len(content)
 
   source = list(reversed(lines)) if keep == 'tail' else lines
-  kept = _take(source, effective)
+  kept = _take(source, effective, byte_limit)
   if len(kept) == 0 and len(content) > 0:
-    kept = [_cut(content, keep)]
+    assert byte_limit is not None  # only a byte budget can refuse the first line
+    kept = [_cut(content, keep, byte_limit)]
   kept_bytes = sum(len(line) for line in kept)
   if keep == 'tail':
     kept.reverse()
@@ -102,12 +113,12 @@ def apply_limit(
     before_lines, before_bytes = skipped_before_lines, skipped_before_bytes
     after_lines = dropped_lines + skipped_after_lines
     after_bytes = dropped_bytes + skipped_after_bytes
-    before_note, after_note = '', clamp_note
+    before_note, after_clamp_note = '', clamp_note
   else:
     before_lines = skipped_before_lines + dropped_lines
     before_bytes = skipped_before_bytes + dropped_bytes
     after_lines, after_bytes = skipped_after_lines, skipped_after_bytes
-    before_note, after_note = clamp_note, ''
+    before_note, after_clamp_note = clamp_note, ''
 
   pieces: list[str] = []
   if before_lines > 0 or before_bytes > 0 or len(before_note) > 0:
@@ -115,54 +126,48 @@ def apply_limit(
   body = ''.join(kept).rstrip('\n')
   if len(body) > 0:
     pieces.append(body)
-  if after_lines > 0 or after_bytes > 0 or len(after_note) > 0:
-    pieces.append(_marker('after', after_lines, after_bytes, note=after_note))
+  if after_lines > 0 or after_bytes > 0 or len(after_clamp_note) > 0:
+    dropped = after_lines > 0 or after_bytes > 0
+    after = _joined(after_clamp_note, after_note) if dropped else after_clamp_note
+    pieces.append(_marker('after', after_lines, after_bytes, note=after))
   return '\n'.join(pieces)
 
 
 def take_head(content: str, limit: int = MAX_LIMIT) -> tuple[str, str]:
-  """the head of `content` within the `limit` line + byte budget (clamped), returned
-  as a raw prefix for cursor-style pagination: the caller advances a cursor by the
-  returned length and serves the remainder on later calls, so unlike `apply_limit`
-  nothing is dropped. Keeps whole lines while they fit; when the first line alone
-  exceeds the byte budget it is cut mid-line so the cursor always makes progress.
-  Returns (kept_prefix, clamp_note)."""
+  """the head of `content` within the `limit` line and `BYTE_LIMIT` budget
+  (clamped), returned as a raw prefix for cursor-style pagination: the caller
+  advances a cursor by the returned length and serves the remainder on later
+  calls, so unlike `apply_limit` nothing is dropped. Keeps whole lines while they
+  fit; when the first line alone exceeds the byte budget it is cut mid-line so
+  the cursor always makes progress. Returns (kept_prefix, clamp_note)."""
   effective, clamp_note = _clamp(limit)
-  kept = _take(content.splitlines(keepends=True), effective)
+  kept = _take(content.splitlines(keepends=True), effective, BYTE_LIMIT)
   if len(kept) == 0 and len(content) > 0:
-    return (_cut(content, 'head'), clamp_note)
+    return (_cut(content, 'head', BYTE_LIMIT), clamp_note)
   return (''.join(kept), clamp_note)
 
 
-def window(content: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
-  """oriented partial read: skip `offset` lines (0-based) and cap via
-  `apply_limit` — the before marker reports the skipped prefix."""
-  all_lines = content.splitlines(keepends=True)
-  before_count = min(max(offset, 0), len(all_lines))
-  before_bytes = sum(len(line) for line in all_lines[:before_count])
-  return apply_limit(
-    ''.join(all_lines[before_count:]),
-    limit,
-    keep='head',
-    skipped_before_lines=before_count,
-    skipped_before_bytes=before_bytes,
+def numbered(content: str, *, start: int = 1) -> str:
+  """`content` with each line prefixed by its 1-based number (cat -n style),
+  counting from `start`."""
+  return ''.join(
+    f'{index:>5}\t{line}'
+    for index, line in enumerate(content.splitlines(keepends=True), start=start)
   )
 
 
 def numbered_window(content: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
-  """oriented partial read: skip `offset` lines (0-based), prefix the rest with
-  1-based line numbers (cat -n style), and cap via `apply_limit`."""
+  """oriented partial read: skip `offset` lines (0-based), number the rest, and
+  cap them to `limit` lines; the after marker names the offset that reads on."""
   all_lines = content.splitlines(keepends=True)
   before_count = min(max(offset, 0), len(all_lines))
   before_bytes = sum(len(line) for line in all_lines[:before_count])
-  visible = all_lines[before_count:]
-  numbered = ''.join(
-    f'{index:>5}\t{line}' for index, line in enumerate(visible, start=before_count + 1)
-  )
+  effective, _ = _clamp(limit)
   return apply_limit(
-    numbered,
+    numbered(''.join(all_lines[before_count:]), start=before_count + 1),
     limit,
     keep='head',
     skipped_before_lines=before_count,
     skipped_before_bytes=before_bytes,
+    after_note=f'read on with offset={before_count + effective}',
   )

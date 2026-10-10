@@ -25,23 +25,42 @@ def test_read_returns_a_numbered_window(tmp_path, monkeypatch):
   assert '    2\ttwo' in result
   assert '    3\tthree' in result
   assert 'skipped before: 1 lines' in result
-  assert 'skipped after: 1 lines' in result
+  assert 'skipped after: 1 lines / 11 B — read on with offset=3' in result
 
 
-def test_read_keeps_memory_bounded_for_a_large_line(tmp_path, monkeypatch):
+def test_read_returns_a_long_line_whole(tmp_path, monkeypatch):
   artifact = tmp_path / 'artifact.txt'
-  artifact.write_bytes(b'x' * 8_000_000)
+  artifact.write_text('x' * (BYTE_LIMIT * 3) + '\nshort\n')
+  _serve(monkeypatch, artifact)
+
+  assert artifact_mcp.read(REF, limit=1) == (
+    f'    1\t{"x" * (BYTE_LIMIT * 3)}\n[...skipped after: 1 lines / 12 B — read on with offset=1...]'
+  )
+
+
+def test_read_refuses_a_line_too_long_to_hold_with_bounded_memory(tmp_path, monkeypatch):
+  artifact = tmp_path / 'artifact.txt'
+  artifact.write_bytes(b'x' * (artifact_mcp.MAXIMUM_LINE_LENGTH * 8))
   _serve(monkeypatch, artifact)
 
   with ExitStack() as stack:
     tracemalloc.start()
     stack.callback(tracemalloc.stop)
-    result = artifact_mcp.read(REF, limit=1)
+    with pytest.raises(ValueError, match='read refuses to materialize it'):
+      artifact_mcp.read(REF, limit=1)
     _, peak = tracemalloc.get_traced_memory()
 
-  assert len(result) < BYTE_LIMIT + 100
-  assert 'skipped after' in result
-  assert peak < 2_000_000
+  assert peak < artifact_mcp.MAXIMUM_LINE_LENGTH * 3
+
+
+def test_read_counts_a_too_long_line_past_the_window(tmp_path, monkeypatch):
+  artifact = tmp_path / 'artifact.txt'
+  artifact.write_bytes(b'visible\n' + b'x' * (artifact_mcp.MAXIMUM_LINE_LENGTH + 1))
+  _serve(monkeypatch, artifact)
+
+  result = artifact_mcp.read(REF, limit=1)
+
+  assert result.startswith('    1\tvisible\n[...skipped after: 1 lines')
 
 
 def test_read_validates_text_after_the_visible_window(tmp_path, monkeypatch):
@@ -68,7 +87,7 @@ def test_grep_returns_matches_and_context_with_line_numbers(tmp_path, monkeypatc
 
 def test_grep_refuses_a_line_that_cannot_be_searched_with_bounded_memory(tmp_path, monkeypatch):
   artifact = tmp_path / 'artifact.txt'
-  artifact.write_bytes(b'x' * (BYTE_LIMIT + 1))
+  artifact.write_bytes(b'x' * (artifact_mcp.MAXIMUM_LINE_LENGTH + 1))
   _serve(monkeypatch, artifact)
 
   with pytest.raises(ValueError, match='grep cannot search it with bounded memory'):

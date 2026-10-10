@@ -12,6 +12,7 @@ import re
 
 import pytest
 
+from bro import results
 from bro.base.template import _DIRECTIVE_RE
 from bro.bro import BaseBro
 from bro.harness import installed_harness_names
@@ -23,12 +24,17 @@ from bro.registry import create_bro, declared_specs
 
 
 class _NoRun:
-  """the `LiveRun` a bro assembled outside a run has: no trail, no tool position."""
+  """the `LiveRun` a bro assembled outside a run has: no trail, no tool position,
+  and the session's result store."""
 
   trail_id = None
   current_tool_step_id = None
   inbox = Inbox()
   registry = Registry(inbox)
+
+  @property
+  def result_store(self) -> results.Store:
+    return results.session_store()
 
 
 def _servers(bro: BaseBro, *, harness: HarnessLike = 'bro') -> list[MCPServer]:
@@ -117,12 +123,7 @@ async def test_lead_exposes_the_rewind_read_surface_as_generated_commands():
     'rewind_grep',
     'rewind_tree',
   } <= set(tools)
-  assert set(tools['rewind_show'].parameters['properties']) == {
-    'trail_id',
-    'output_offset',
-    'output_limit',
-    'timeout_seconds',
-  }
+  assert set(tools['rewind_show'].parameters['properties']) == {'trail_id', 'timeout_seconds'}
 
 
 @pytest.mark.asyncio

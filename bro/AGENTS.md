@@ -21,6 +21,10 @@ A subpackage with a map of its own is pointed at, not described here.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `spells.py` — the spell store:
   validation of the files a bro's `spells` declaration names and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
+- `results.py` — the session's kept tool results:
+  the store, one file per result under `<tag>-<n>` ids, whose numbers processes sharing its directory claim by exclusive link;
+  the wrapper an assembly puts around every tool it serves;
+  and the `page` and `results` service tools reading kept results back ("Kept results" below).
 - `procedures.py` — `parse_frontmatter`, the flat frontmatter grammar a spell file opens with (`bro/reference/extending.md`, "Declaring a bro").
 - `registry.py` — process-wide registry of bro classes:
   `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
@@ -152,6 +156,15 @@ its append prompt injects `persona` beside the shared prompts with the registere
 `system_prompt_for(hold=…, harness=…)` adds the hold and session fragments to the selected harness's composed prompt:
 the fragments and hold text are described in `bro/prompts/AGENTS.md`, "Session fragments".
 
+### Kept results
+
+Every assembly wraps each tool it serves, `page` and `results` aside, so that its whole result is kept in the run's result store, a structured one as JSON text.
+A reply longer than `BYTE_LIMIT` characters returns its head, closing on the `bro::page` call that continues it, so paging never calls the producing tool again.
+A wrapped tool declares no output schema, since a structured result too long for one reply arrives as text.
+The store is the `LiveRun`'s:
+a `Runner` keeps results under the session state dir's `results/`, or in a temporary store outside a managed session.
+A process assembling without a run, the Claude session's tool server, keeps them under `results/` too, so they outlive a restart of that process.
+
 ### Service tools
 
 Every assembly (`assemble(harness=…, hold=…)`) receives the engine's registered `Harness` object and the session's hold, and appends the `bro` service server;
@@ -161,6 +174,8 @@ the spell tools and `cast` render spell bodies under that hold.
 - `banner`, always:
   the session facts of `ride banner --llm` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly since an in-process run's environment carries the launcher's;
   the playbook is `bro/prompts/environment.md`.
+- `page` and `results`, always:
+  `page` returns `char_limit` characters of a kept result from `char_offset`, and `results` lists the kept results newest first, those kept before `before` when given.
 - `raise`, at the unattended hold alone, on a harness whose `can_end_session()` holds
   — `Runner.run()`'s default, `bro run`, summoned children, and the Claude builds when `do-ride` exports `BRO_HOLD=unattended` with `RIDE_RUNNER_PID`:
   the agent aborts with a reason when the request cannot be fulfilled, through the selected harness's `end_session`.
