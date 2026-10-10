@@ -184,7 +184,8 @@ At each turn's `result` event the runner applies the shared end-of-turn rule (`b
 with Claude's background work read off the stream's last `background_tasks_changed` event, less the entries flagged `ambient`, which Claude marks as housekeeping rather than activity.
 A notice goes in as a user message on stdin;
 an end stands the waiter down and closes stdin, which ends the session without the up to 30 seconds Claude holds a closing print session for a pending async hook.
-A stop stands the waiter down before it interrupts Claude, which kills a pending waiter, so that kill never reads as the waiter failing.
+A stop stands the waiter down before it interrupts Claude, which kills a pending waiter, so that kill never reads as the waiter failing;
+the first `result` after a stop closes stdin rather than being settled.
 Claude drops a rewake that arrives after stdin closes, so the runner reads each waiter's exit off the stream's hook events
 and leaves a turn end unsettled while a batch a waiter took has not yet reached Claude's queue.
 The waiter's hook command prints a mark before the interpreter starts,
