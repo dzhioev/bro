@@ -23,7 +23,6 @@ from ride.claude.claude_config import (
   latest_jsonl,
   provision_unboxed_claude_dir,
   read_subject,
-  seed_session_plugins,
   workspace_projects_dir,
 )
 from ride.claude.provisioning import claude_code_version
@@ -152,18 +151,14 @@ class ClaudeHarness(Harness):
     isolation = os.environ.get(ISOLATION_ENV)
     if isolation not in ('boxed', 'unboxed'):
       raise RuntimeError(f'{ISOLATION_ENV} must be set to boxed or unboxed')
-    boxed = isolation == 'boxed'
-    config_value = os.environ.get(CLAUDE_CONFIG_DIR_ENV)
-    if config_value is None:
-      if boxed:
-        config_directory = Path.home() / '.claude'
-        config_directory.mkdir(parents=True, exist_ok=True)
-      else:
-        config_directory = provision_unboxed_claude_dir(workspace_dir(run.name), Path.cwd())
-      os.environ[CLAUDE_CONFIG_DIR_ENV] = str(config_directory)
+    if os.environ.get(CLAUDE_CONFIG_DIR_ENV) is not None:
+      return
+    if isolation == 'boxed':
+      config_directory = Path.home() / '.claude'
+      config_directory.mkdir(parents=True, exist_ok=True)
     else:
-      config_directory = Path(config_value)
-    seed_session_plugins(config_directory, container=boxed)
+      config_directory = provision_unboxed_claude_dir(workspace_dir(run.name), Path.cwd())
+    os.environ[CLAUDE_CONFIG_DIR_ENV] = str(config_directory)
 
   def clean_cache(self, *, dry_run: bool = False) -> None:
     removed, skipped = claude_release.clean_cached_releases(dry_run=dry_run)

@@ -42,7 +42,7 @@ provisioning.setup_harnesses()
 assert checks == ([] if name == 'bro' else ['checked'])
 entries, arguments = build_context.runtime_inputs()
 text = entries[build_context.DOCKERFILE_PATH][0].decode()
-assert ('claude plugin install' in text) == (name == 'claude')
+assert ('@anthropic-ai/claude-code' in text) == (name == 'claude')
 assert ('CLAUDE_CODE_VERSION' in arguments) == (name == 'claude')
 calls = []
 docker.subprocess.run = lambda argv, **kwargs: calls.append((argv, kwargs))

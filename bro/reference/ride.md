@@ -699,7 +699,7 @@ an external tree is never removed.
 #### Unboxed Claude-state isolation
 
 An unboxed Claude session points `CLAUDE_CONFIG_DIR` at the workspace's `claude/` directory.
-The directory carries only the constructed session settings, the setup-token auth, the workspace tree's trust entry, the session plugin seed, and the launcher's account identity when its host state provides one.
+The directory carries only the constructed session settings, the setup-token auth, the workspace tree's trust entry, and the launcher's account identity when its host state provides one.
 The launcher's settings, hooks, permissions, custom agents, and OAuth credentials file do not enter it.
 The bypass-permissions acceptance stays interactive because an unboxed session has no container boundary.
 
@@ -781,7 +781,7 @@ Inside the container, the entrypoint (running as root first):
    The workspace venv is not activated:
    PATH remains the pinned runtime shim farm plus system paths.
 5. Execs `do-ride`.
-   Credential hooks, the plugin seed, and the optional session broxy are per-session work owned by that executable rather than this per-workspace entrypoint.
+   Credential hooks and the optional session broxy are per-session work owned by that executable rather than this per-workspace entrypoint.
 
 Every root and spawned child goes through `ride.session.started_party_launch` with a `SessionSpec`, workspace, hydrated scope, runtime bundle, and requested isolation.
 The boxed result is one broker-free `ride.workspace.docker.Launch` carrying the full launch:
@@ -796,7 +796,7 @@ Container images are split:
 
 - **Runtime image** (`bro/ride-runtime:<hash>`) — Python-minor-matched Debian, system CLIs, the ride user, entrypoint, shell helpers, and each installed harness’s runtime contributions.
   Its identity includes the installed harness roster, Docker instructions, contributed files and build arguments.
-  The Claude harness contributes its pinned binary and plugin seed.
+  The Claude harness contributes its pinned binary.
   Its hash covers those assets, the Claude pin, and Python minor.
   It contains no Python distribution from the ride installation.
 - **Project image** (`<[tool.bro] image-repository>:<hash>`)
@@ -843,8 +843,9 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
 
 - `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`,
   `projects["/workspace"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt,
-  and `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't re-fetch the official plugin marketplace at startup
-  — it's baked into the image) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
+  `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't fetch the official plugin marketplace at startup,
+  and `lspRecommendationDisabled: true` so it doesn't offer a language-server plugin for the files a session opens
+  — sessions install no marketplace plugins, only Claude Code's built-in ones load) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
   Host machine state (project paths, trust history, usage counters, feature caches) is **not** copied.
   Missing identity is fatal
   — `ride` aborts asking you to log in on the launcher first.
@@ -865,15 +866,12 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
   Full sessions also carry `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK`, since claude resolves fast-mode availability from the credentials file they don't have
   — left to guess, it reports fast mode as disabled by an organization.
 - `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
-  an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself),
   a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,
   an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the pinned binary it runs)
   and its telemetry (`DISABLE_TELEMETRY`, which also leaves the feature flags Claude Code's server serves, fetched or cached, without effect, so a session runs the pinned release's own defaults;
   `ride/ride/claude/remote_flags_llm_test.py` holds that against the pinned release),
   and `skipDangerousModePermissionPrompt: true`
   — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (boxed sessions only; an unboxed clone keeps the dialog).
-  The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which `do-ride` copies into the bind-mounted `~/.claude/plugins` on first run
-  — enabling alone isn't enough, claude would otherwise prompt the "LSP Plugin Recommendation" on `.py` files.
   Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.
 - `<runtime-root>/workspaces/<name>/claude/` (host) → `/home/ride/.claude` (container).
   Per-workspace overlay of everything else.
@@ -1314,7 +1312,6 @@ and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP in
 `--tools` passes exactly the Claude natives the persona's tool groups map to, an allowlist, plus the loop tools every session gets;
 `ride/ride/claude/native_tools.py` names them per group on the pinned release.
 Every other native is off, a tool a Claude Code release adds included, until it is mapped.
-`files` brings `LSP`, the code intelligence of the pyright plugin every session enables, beside Claude's file tools.
 Without `files` a persona gets `Read` alone, behind a `PreToolUse` hook (`ride.claude.read_gate`) holding it to the two folders where Claude Code keeps what it hands the session back as files:
 `claude-<uid>/<project>/<session id>/` under the runner's `CLAUDE_CODE_TMPDIR`, where a backgrounded command writes its output,
 and the `<session id>/` folder beside the transcript, whose `tool-results/` holds the whole of a result too large to inline.

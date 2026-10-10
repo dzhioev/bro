@@ -1,9 +1,9 @@
 """per-session claude state, shared by both session modes.
 
 Owns the claude state dir a workspace's sessions run against — its path
-derivations, contents (the seeded `.claude.json`, the constructed
-`settings.json`, the plugin seed), and its readers (the projects dir, a
-session's subject line). Both session modes name the dir to claude through
+derivations, contents (the seeded `.claude.json` and the constructed
+`settings.json`), and its readers (the projects dir, a session's subject
+line). Both session modes name the dir to claude through
 `CLAUDE_CONFIG_DIR`; a container additionally bind-mounts it, since the dir
 lives host-side and the container is `--rm`'d at exit. Why sessions are
 isolated from the host `~/.claude` — and what the dir deliberately excludes —
@@ -12,7 +12,6 @@ is reference/ride.md, "Host claude-state isolation".
 
 import json
 import os
-import shutil
 from collections.abc import Sequence
 from pathlib import Path, PurePath
 from typing import Optional
@@ -24,7 +23,6 @@ from ride.workspace.model import Workspace
 CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR'
 
 _CONTAINER_CLAUDE_DIR = '/home/ride/.claude'
-_CONTAINER_PLUGIN_SEED = Path('/opt/claude-plugins-seed')
 
 
 def claude_config_dir() -> Path:
@@ -145,11 +143,6 @@ _SESSION_SETTINGS_JSON: dict = {
   'prefersReducedMotion': True,
   'feedbackSurveyRate': 0,
   'tui': 'fullscreen',
-  # enable the pyright-lsp Python language server. the plugin itself is provided
-  # by the session dir's plugin seed (image stage in a container, the host claude
-  # install's plugins dir on host); enabling alone is not enough (claude would
-  # prompt to install it on .py files).
-  'enabledPlugins': {'pyright-lsp@claude-plugins-official': True},
   # keep transcripts forever (no disable value exists); they back the
   # session recording
   'cleanupPeriodDays': 36500,
@@ -159,16 +152,16 @@ _SESSION_SETTINGS_JSON: dict = {
 }
 
 # the explicit per-session ~/.claude.json base: no onboarding prompts, no
-# marketplace re-fetch. per-mode fields (installMethod, the trusted project
+# marketplace plugins. per-mode fields (installMethod, the trusted project
 # entry) and the host account identity are layered on in _seed_claude_json.
 _SESSION_CLAUDE_JSON: dict = {
   'hasCompletedOnboarding': True,
-  # the official plugin marketplace is provisioned out of band (the plugin seed
-  # — image stage in a container, first-run copy of the host claude install's
-  # plugins on host), so claude must not re-run the auto-install network fetch
-  # at session start.
+  # sessions install no marketplace plugins: no fetch of the official
+  # marketplace at session start, and no offer to install a language-server
+  # plugin for the files a session opens
   'officialMarketplaceAutoInstallAttempted': True,
   'officialMarketplaceAutoInstalled': True,
+  'lspRecommendationDisabled': True,
 }
 # account-identity keys carried over from the host so the session starts logged
 # in (the OAuth bearer itself arrives via CLAUDE_CODE_OAUTH_TOKEN; these hold the
@@ -207,16 +200,6 @@ def _seed_claude_json(
         data[key] = host[key]
     seed.write_text(json.dumps(data))
     seed.chmod(0o600)
-
-
-def seed_session_plugins(claude_dir: Path, *, container: bool) -> None:
-  """Seed a session's plugin records once from its installation."""
-  if (claude_dir / 'plugins' / 'installed_plugins.json').is_file():
-    return
-  source = _CONTAINER_PLUGIN_SEED if container else Path.home() / '.claude' / 'plugins'
-  if not source.is_dir():
-    return
-  shutil.copytree(source, claude_dir / 'plugins', dirs_exist_ok=True)
 
 
 def _provision_session_claude_dir(

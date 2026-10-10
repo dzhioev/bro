@@ -211,7 +211,7 @@ def test_single_harness_image_starts_its_runtime(name, monkeypatch):
         command = (
           'test ! -e /opt/claude-code; bro --help'
           if name == 'bro'
-          else '/opt/claude-code/claude --version; test -d /opt/claude-plugins-seed'
+          else '/opt/claude-code/claude --version'
         )
         subprocess.run(
           [
