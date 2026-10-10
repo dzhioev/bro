@@ -16,9 +16,11 @@ Claude Code's own harness themed with the session's bro.
   pinned absolute binary selection per isolation, the brash policy of a finite command list and the refusal of competing hooks before it,
   resume-id lookup, hold and kill wiring, session MCP server, recorder, usage publisher, readiness gate, the Bash tool's shell prefix, MCP backstops, and Claude process lifetime.
 - `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a gated tool's call after its gate.
-- `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its in-flight turn reaches the transcript.
+- `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its last turn reaches the transcript.
   Print mode runs over stream-json as the harness's `bro.turn_end` port, settling each turn end and ended by SIGINT;
   a TUI runs on a runner-owned pty that proxies the session's terminal, ended by the interrupt keypress.
+  A session a service tool ended is not interrupted:
+  its stop waits for the turn the session-end hook stopped, which a print session's stream ends at and a TUI quits after.
   Either stop stands the watch waiter down first.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, and the append prompt;
@@ -49,14 +51,17 @@ Claude Code's own harness themed with the session's bro.
 - `claude_plugin.py` and `plugin/` — ride's own Claude Code plugin and the copy of it an interactive session loads;
   the plugin draws each line of a watch rewake's batch into the transcript.
   `claude_plugin_llm_test.py` holds it to the pinned release's validator, its own `*.test.ts`, and a live rewake.
-- `command_gate.py`, `read_gate.py`, and `watch_waiter.py`
+- `command_gate.py`, `read_gate.py`, `watch_waiter.py`, and `session_end.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`spawn.module_argv('ride.claude.<module>')`);
   the command gate rewrites each Bash and Monitor call of a finite command list into a brash call,
   the read gate holds the `Read` of a persona without files to the session's own Claude folders,
-  and the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch (`bro/reference/ride.md`, "Claude harness").
+  the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch,
+  and the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`bro/reference/ride.md`, "Claude harness").
 - `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
   the current waiter's registration, the record of the rewakes waiters began with the latest one's batch, the stand-down mark, the stdout mark that attributes a waiter's hook events,
   and the lock a waiter registers and takes a batch under and the runner settles a turn end under.
+- `session_end_state.py` — what the session-end hook and the runner share:
+  the service tools that end a session, and the mark naming the call whose turn the hook stopped and the transcript that turn lands in.
 
 ## Invariants
 

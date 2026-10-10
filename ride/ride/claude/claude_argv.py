@@ -22,6 +22,7 @@ from ride.claude import native_tools
 from ride.claude.assembly import persona_servers
 from ride.claude.harness import llm_spec
 from ride.claude.mcp import MCPEndpoint, http_mcp_config
+from ride.claude.session_end_state import ANSWER_TOOL, RAISE_TOOL
 from ride.claude.statusline import REFRESH_SECONDS, statusline_command
 from ride.claude.system_prompt import session_append_prompt
 from ride.claude.waiter_state import WAITER_EVENTS, WAITER_MARK
@@ -94,6 +95,12 @@ def watch_waiter_hooks() -> dict:
     'timeout': WAITER_TIMEOUT_SECONDS,
   }
   return {event: [{'hooks': [waiter]}] for event in WAITER_EVENTS}
+
+
+def session_end_hooks() -> dict:
+  """the `hooks` settings block stopping the turn of a call that ended the session."""
+  stop = {'type': 'command', 'command': _settings_command('ride.claude.session_end')}
+  return {'PostToolUse': [{'matcher': tool, 'hooks': [stop]} for tool in (ANSWER_TOOL, RAISE_TOOL)]}
 
 
 ACTIVITY_EVENTS = ('UserPromptSubmit', 'PostToolUse', 'Stop')
@@ -185,8 +192,9 @@ def build_claude_launch(
   if finite(reach) != (brash_policy is not None):
     raise ValueError(f'{spec.bro} needs a brash policy exactly where its command list is finite')
   hooks = {**watch_waiter_hooks(), **gate_hooks(reach, brash_policy)}
-  for event, entries in activity_hooks(activity_file).items():
-    hooks.setdefault(event, []).extend(entries)
+  for block in (session_end_hooks(), activity_hooks(activity_file)):
+    for event, entries in block.items():
+      hooks.setdefault(event, []).extend(entries)
   settings['hooks'] = hooks
   mcp_config = http_mcp_config(namespaces, port=endpoint.port, token=endpoint.token)
   argv += [

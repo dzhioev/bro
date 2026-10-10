@@ -47,10 +47,8 @@ from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.rows import project_messages
 from bro.trails.store import TrailsStore, default_store
+from ride.claude.session_end_state import RAISE_TOOL
 from ride.claude.transcripts import read_lines_after, watching
-
-# the bro service `raise` tool's wire name in a claude session's transcript
-_RAISE_TOOL = 'mcp__bro__raise'
 
 # one line of lineage evidence: the record's uuid when it carries one, and the
 # digest the stored row would hold
@@ -108,7 +106,7 @@ def _fold_raise_reason(raised: Optional[str], messages: Iterable[dict]) -> Optio
   """carry the terminal raise reason across a batch: a `raise` call sets it, and
   anything the human types afterwards clears it again."""
   for message in messages:
-    if message.get('type') == 'tool_call' and message.get('tool_name') == _RAISE_TOOL:
+    if message.get('type') == 'tool_call' and message.get('tool_name') == RAISE_TOOL:
       arguments = message.get('arguments')
       reason = arguments.get('reason') if isinstance(arguments, dict) else None
       raised = reason if isinstance(reason, str) else ''

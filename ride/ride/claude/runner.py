@@ -30,6 +30,7 @@ from ride.claude.interrupt import Run, StreamedRun, run_interactive, run_streami
 from ride.claude.mcp import start_session_mcp_server
 from ride.claude.provisioning import claude_code_version
 from ride.claude.recorder import start_session_recorder
+from ride.claude.session_end_state import StoppedCallMark
 from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
 from ride.claude.usage_publisher import publishing_usage
@@ -69,7 +70,13 @@ def _apply_mcp_backstops(environment: dict[str, str]) -> None:
 
 
 def _run_claude(binary: Path, argv: list[str], env: dict[str, str], transcripts: Path) -> Run:
-  return run_interactive([str(binary), *argv], env, transcripts, waiters=WaiterState.for_session())
+  return run_interactive(
+    [str(binary), *argv],
+    env,
+    transcripts,
+    waiters=WaiterState.for_session(),
+    stopped_calls=StoppedCallMark.for_session(),
+  )
 
 
 def _stream_claude(
@@ -248,6 +255,7 @@ def run_session(spec: 'SessionRun') -> int:
     waiters = WaiterState.for_session()
     waiters.reset()
     teardown.callback(waiters.stand_down)
+    StoppedCallMark.for_session().clear()
     usage_file = _claude_state_dir() / 'usage.json'
     teardown.enter_context(publishing_usage(transcripts, usage_file))
     os.environ[USAGE_FILE_VARIABLE] = str(usage_file)

@@ -15,6 +15,7 @@ from bro.mcp import ToolLayer, brash, files
 from ride.claude import native_tools
 from ride.claude.assembly import persona_servers
 from ride.claude.mcp import MCPEndpoint
+from ride.claude.session_end_state import ANSWER_TOOL, RAISE_TOOL
 from ride.claude.statusline import statusline_command
 from ride.session_test import _spec as _session_spec
 
@@ -185,11 +186,21 @@ class TestRideSessionLaunch:
       (command,) = [
         hook['command']
         for entry in _settings(argv)['hooks'][event]
+        if 'matcher' not in entry
         for hook in entry['hooks']
         if hook.get('asyncRewake') is None
       ]
       subprocess.run(['sh', '-c', command], check=True)
       assert activity_file.is_file()
+
+  def test_every_session_stops_the_turn_of_a_call_that_ended_it(self):
+    for spec in (_spec(), _spec(solo=True, hold='unattended', prompt='go')):
+      hooks = _settings(_ride_session_launch(spec).argv)['hooks']['PostToolUse']
+      stops = {entry['matcher']: entry['hooks'] for entry in hooks if 'matcher' in entry}
+      assert set(stops) == {ANSWER_TOOL, RAISE_TOOL}
+      for (hook,) in stops.values():
+        assert hook['type'] == 'command'
+        assert shlex.split(hook['command']) == module_argv('ride.claude.session_end')
 
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch, tmp_path):
     from bro.summon import LAUNCH_ENV, encode_launch

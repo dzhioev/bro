@@ -1,7 +1,9 @@
 import contextlib
 import fcntl
+import json
 import os
 import pty
+import shlex
 import signal
 import struct
 import subprocess
@@ -15,7 +17,10 @@ import pytest
 
 import ride.claude.interrupt as interrupt
 from bro import watches
+from bro.monitor import SESSION_DIR_ENV
+from bro.workspace import session as workspace_session
 from ride.claude.fake_claude_test_helper import fake_claude_argv
+from ride.claude.session_end_state import StoppedCall, StoppedCallMark
 from ride.claude.waiter_state import WAITER_MARK, WaiterState
 
 # a bash trap only runs between foreground commands, so a fake waiting for a
@@ -95,6 +100,30 @@ def waiters(tmp_path: Path) -> WaiterState:
   state = WaiterState(tmp_path / 'waiter')
   state.reset()
   return state
+
+
+@pytest.fixture
+def stopped_calls(tmp_path: Path) -> StoppedCallMark:
+  return StoppedCallMark(tmp_path / 'stopped-call')
+
+
+@pytest.fixture
+def ended_session(tmp_path: Path, monkeypatch) -> None:
+  """a session a service tool ended: the exit status it left before signaling its stop."""
+  session = tmp_path / 'session'
+  session.mkdir()
+  monkeypatch.setenv(SESSION_DIR_ENV, str(session))
+  (session / workspace_session.FILENAME).write_text('0')
+
+
+def _stop_record(call_id: str) -> str:
+  """claude's transcript record of the turn a `PostToolUse` hook stopped after `call_id`."""
+  return json.dumps(
+    {
+      'type': 'attachment',
+      'attachment': {'type': 'hook_stopped_continuation', 'toolUseID': call_id},
+    }
+  )
 
 
 def _stream(
@@ -250,6 +279,33 @@ class TestRunStreaming:
 
     assert (run.code, run.stopped) == (-signal.SIGTERM, True)
 
+  def test_a_session_that_ended_itself_ends_at_its_stopped_turn_uninterrupted(
+    self, tmp_path, store, waiters, ended_session
+  ):
+    script = (
+      'signal.signal(signal.SIGINT, lambda *_: sys.exit(9))\ntasks("t1")\n'
+      'os.kill(os.getppid(), signal.SIGTERM)\nresult("stopped")\n'
+      'result("stdin: " + repr(next_message()))\n'
+    )
+
+    run = _stream(tmp_path, script, store, waiters)
+
+    assert run == interrupt.StreamedRun(code=0, stopped=True, results=('stopped', 'stdin: None'))
+    assert waiters.stood_down()
+
+  def test_a_session_that_ended_itself_is_interrupted_when_its_turn_never_ends(
+    self, tmp_path, store, waiters, ended_session, monkeypatch
+  ):
+    monkeypatch.setattr(interrupt, '_STOPPED_TURN_TIMEOUT_SECONDS', 0.2)
+    script = (
+      'signal.signal(signal.SIGINT, lambda *_: sys.exit(9))\n'
+      'os.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n'
+    )
+
+    run = _stream(tmp_path, script, store, waiters)
+
+    assert (run.code, run.stopped) == (9, True)
+
   def test_a_line_that_is_not_stream_json_fails_the_run(self, tmp_path, store, waiters):
     script = 'print("garbage")\nsys.stdout.flush()\nsys.stdin.read()\n'
     with pytest.raises(RuntimeError, match='not stream-json'):
@@ -264,9 +320,17 @@ class TestRunStreaming:
       _stream(tmp_path, script, store, waiters)
 
 
+def _interactive(
+  argv: list[str], tmp_path: Path, waiters: WaiterState, stopped_calls: StoppedCallMark
+) -> interrupt.Run:
+  return interrupt.run_interactive(
+    argv, os.environ, tmp_path / 'projects', waiters=waiters, stopped_calls=stopped_calls
+  )
+
+
 class TestRunInteractive:
   def test_a_stop_arrives_as_the_interrupt_keypress_then_quits(
-    self, tmp_path, waiters, monkeypatch
+    self, tmp_path, waiters, stopped_calls, monkeypatch
   ):
     monkeypatch.setattr(interrupt, '_FLUSH_SETTLE_SECONDS', 0.05)
     seen_key = tmp_path / 'seen-key'
@@ -282,12 +346,14 @@ class TestRunInteractive:
       f'[ "$key" = 03 ] && echo interrupted > {seen_key}\n' + _IDLE,
     )
     with _session_terminal():
-      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects', waiters=waiters)
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
     assert (run.code, run.stopped) == (9, True)
     assert seen_key.read_text() == 'interrupted\n'
     assert waiters.stood_down()
 
-  def test_a_zero_exit_stop_remains_distinguishable(self, tmp_path, waiters, monkeypatch):
+  def test_a_zero_exit_stop_remains_distinguishable(
+    self, tmp_path, waiters, stopped_calls, monkeypatch
+  ):
     monkeypatch.setattr(interrupt, '_FLUSH_SETTLE_SECONDS', 0.05)
     argv = _fake_claude(
       tmp_path,
@@ -298,10 +364,53 @@ class TestRunInteractive:
       'dd bs=1 count=1 >/dev/null 2>&1\n' + _IDLE,
     )
     with _session_terminal():
-      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects', waiters=waiters)
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
     assert (run.code, run.stopped) == (0, True)
 
-  def test_keystrokes_and_output_cross_the_proxy(self, tmp_path, waiters):
+  def test_a_session_that_ended_itself_quits_once_its_stopped_turn_is_on_disk(
+    self, tmp_path, waiters, stopped_calls, ended_session, monkeypatch
+  ):
+    typed: list[bytes] = []
+    monkeypatch.setattr(interrupt._TerminalRun, 'type', lambda run, keys: typed.append(keys))
+    transcript = tmp_path / 'transcript.jsonl'
+    # an earlier stop in the same transcript, as a resumed session carries
+    transcript.write_text(_stop_record('toolu_earlier') + '\n')
+    stopped_calls.record(StoppedCall('toolu_ended', transcript))
+    written = tmp_path / 'written'
+    argv = _fake_claude(
+      tmp_path,
+      f"trap '[ -f {written} ] && exit 0 || exit 7' INT\n"
+      'kill -TERM $PPID\n'
+      'sleep 0.3\n'
+      f'touch {written}\n'
+      f'echo {shlex.quote(_stop_record("toolu_ended"))} >> {transcript}\n' + _IDLE,
+    )
+    with _session_terminal():
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
+    assert (run.code, run.stopped) == (0, True)
+    assert typed == []
+    assert waiters.stood_down()
+
+  def test_a_session_that_ended_itself_without_its_stopped_turn_is_interrupted(
+    self, tmp_path, waiters, stopped_calls, ended_session, monkeypatch
+  ):
+    monkeypatch.setattr(interrupt, '_STOPPED_TURN_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(interrupt, '_FLUSH_SETTLE_SECONDS', 0.05)
+    seen_key = tmp_path / 'seen-key'
+    argv = _fake_claude(
+      tmp_path,
+      'stty raw -echo\n'
+      "trap 'exit 9' INT\n"
+      'kill -TERM $PPID\n'
+      "key=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\n"
+      f'[ "$key" = 03 ] && echo interrupted > {seen_key}\n' + _IDLE,
+    )
+    with _session_terminal():
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
+    assert (run.code, run.stopped) == (9, True)
+    assert seen_key.read_text() == 'interrupted\n'
+
+  def test_keystrokes_and_output_cross_the_proxy(self, tmp_path, waiters, stopped_calls):
     argv = _fake_claude(
       tmp_path,
       'stty raw -echo\n'
@@ -319,17 +428,17 @@ class TestRunInteractive:
 
       driver = threading.Thread(target=_drive)
       driver.start()
-      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects', waiters=waiters)
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
       driver.join()
     assert (run.code, run.stopped) == (0, False)
     assert len(echoed) == 1
 
-  def test_the_pty_is_sized_like_the_session_terminal(self, tmp_path, waiters):
+  def test_the_pty_is_sized_like_the_session_terminal(self, tmp_path, waiters, stopped_calls):
     size = tmp_path / 'size'
     argv = _fake_claude(tmp_path, f'stty size > {size}\n')
     with _session_terminal() as terminal:
       fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', 31, 101, 0, 0))
-      run = interrupt.run_interactive(argv, os.environ, tmp_path / 'projects', waiters=waiters)
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
     assert (run.code, run.stopped) == (0, False)
     assert size.read_text().split() == ['31', '101']
 
