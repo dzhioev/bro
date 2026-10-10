@@ -142,7 +142,7 @@ def test_check_runtime_starts_the_sibling_native_command_without_path(monkeypatc
 
   bro_harness.BRO.check_runtime()
 
-  run.assert_called_once_with([str(executable), '--help'], check=True)
+  run.assert_called_once_with([str(executable), '--version'], check=True)
 
 
 class TestNativeArgv:

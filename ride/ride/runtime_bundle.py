@@ -1,3 +1,4 @@
+import base64
 import contextlib
 import errno
 import fcntl
@@ -24,6 +25,7 @@ from types import MappingProxyType
 import certifi
 
 from bro.base import log
+from bro.base.source_commit import RECORD_NAME, SourceCommit, checkout_commit
 from bro.workspace.paths import runtime_base
 
 _SESSION_COMMAND_GROUP = 'bro.session_commands'
@@ -546,6 +548,7 @@ def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
     output.mkdir()
     if distribution.source.suffix == '.whl':
       shutil.copyfile(distribution.source, output / distribution.source.name)
+      source_commit = None
     else:
       # built through the sdist: a leftover in the tree, such as a stale setuptools `build/lib`,
       # never reaches the wheel
@@ -553,6 +556,7 @@ def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
         ['uv', 'build', '--no-build-logs', '--out-dir', str(output), str(distribution.source)],
         description=f'cannot build local distribution {distribution.name}',
       )
+      source_commit = checkout_commit(distribution.source)
     candidates = list(output.glob('*.whl'))
     if len(candidates) != 1:
       raise RuntimeBundleError(
@@ -569,9 +573,36 @@ def _build_wheels(local: list[_LocalDistribution], wheels: Path) -> list[Path]:
     if wheel.name in names:
       raise RuntimeBundleError(f'duplicate built wheel filename: {wheel.name}')
     names.add(wheel.name)
+    if source_commit is not None:
+      _record_source_commit(wheel, source_commit)
     _normalize_wheel(wheel)
     built.append(wheel)
   return sorted(built, key=lambda path: path.name.casefold())
+
+
+def _record_source_commit(path: Path, commit: SourceCommit) -> None:
+  """add the commit the wheel was built from to its `.dist-info`, listed in its RECORD."""
+  data = commit.to_json().encode()
+  digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b'=').decode()
+  staged = path.with_suffix('.recording')
+  with zipfile.ZipFile(path) as source, zipfile.ZipFile(staged, 'w') as target:
+    records = [name for name in source.namelist() if name.endswith('.dist-info/RECORD')]
+    if len(records) != 1:
+      raise RuntimeBundleError(f'{path.name}: wheel has {len(records)} .dist-info/RECORD records')
+    [record] = records
+    entry_name = f'{record.rpartition("/")[0]}/{RECORD_NAME}'
+    if entry_name in source.namelist():
+      raise RuntimeBundleError(f'{path.name}: wheel already records a source commit')
+    for info in source.infolist():
+      content = source.read(info)
+      if info.filename == record:
+        listing = content.decode()
+        if not listing.endswith('\n'):
+          listing += '\n'
+        content = f'{listing}{entry_name},sha256={digest},{len(data)}\n'.encode()
+      target.writestr(info, content)
+    target.writestr(zipfile.ZipInfo(entry_name), data, compress_type=zipfile.ZIP_DEFLATED)
+  staged.replace(path)
 
 
 def _entry_order(info: zipfile.ZipInfo) -> tuple[bool, str]:

@@ -104,6 +104,23 @@ def _is_nargs_zero(action: argparse.Action) -> bool:
   return action.nargs == 0
 
 
+class _VersionAction(argparse.Action):
+  def __init__(
+    self,
+    option_strings,
+    version: Callable[[], str],
+    dest: str = SUPPRESS,
+    default: str = SUPPRESS,
+    help: Optional[str] = None,
+  ):
+    super().__init__(option_strings, dest=dest, default=default, nargs=0, help=help)
+    self._version = version
+
+  def __call__(self, parser, namespace, values, option_string=None):
+    print(self._version())
+    parser.exit()
+
+
 class _Formatter(argparse.HelpFormatter):
   _global_ids: frozenset[int] = frozenset()
 
@@ -193,6 +210,17 @@ class Parser(argparse.ArgumentParser):
       'action': action,
     }
     return action
+
+  def add_version(self, version: Callable[[], str]) -> None:
+    """register `--version` among the global options: it prints the line `version` returns,
+    called only when the flag is given, and exits."""
+    self._add_global_argument(
+      '--version',
+      action=_VersionAction,
+      version=version,
+      env=False,
+      help='print the version and exit',
+    )
 
   def add_exclusive_groups(self, *groups: list[str]) -> None:
     self._exclusive_groups.append(list(groups))

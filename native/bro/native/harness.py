@@ -285,7 +285,7 @@ class BroHarness(Harness):
     return ()
 
   def check_runtime(self) -> None:
-    subprocess.run([spawn.console_script('bro'), '--help'], check=True)
+    subprocess.run([spawn.console_script('bro'), '--version'], check=True)
 
   def run_session(self, spec: 'SessionRun') -> int:
     from ride.do_ride import run_agent

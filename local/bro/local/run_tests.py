@@ -143,6 +143,7 @@ PYTEST_FILES = [
   'bro/base/name_map_test.py',
   'bro/base/offload_test.py',
   'bro/base/retry_test.py',
+  'bro/base/source_commit_test.py',
   'bro/base/spawn_test.py',
   'bro/base/suite_environment_test.py',
   'bro/base/template_test.py',

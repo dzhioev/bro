@@ -181,6 +181,28 @@ class TestParser:
     assert current_cli_name() == 'rewind'
 
 
+class TestVersion:
+  def test_prints_the_supplied_line_and_exits(self, capsys):
+    parser = Parser()
+    parser.add_version(lambda: 'demo 1.0')
+
+    with pytest.raises(SystemExit) as exited:
+      parser.parse(['demo', '--version'])
+
+    assert exited.value.code == 0
+    assert capsys.readouterr().out == 'demo 1.0\n'
+
+  def test_computes_the_line_only_when_asked(self):
+    def version() -> str:
+      raise AssertionError('computed without --version')
+
+    parser = Parser()
+    parser.add_version(version)
+    parser.add_argument('--foo')
+
+    assert parser.parse(['demo', '--foo', 'bar']) == {'foo': 'bar'}
+
+
 class TestRunCli:
   def test_runs_the_named_module_under_its_canonical_name(self, tmp_path, monkeypatch):
     (tmp_path / 'package').mkdir()

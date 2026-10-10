@@ -261,8 +261,10 @@ version-control and remote-archive installations become direct-reference pins at
 local sources — a directory or an archive
 — are carried in the bundle as wheels built or copied from their current contents.
 A directory's wheel is built through its sdist, so a leftover in the tree, such as a stale setuptools `build/lib`, never reaches it.
+When the directory is in a git checkout, the wheel's `.dist-info` also records the checkout's commit and whether the tree differed from it,
+which is the commit `bro --version` names inside the bundle.
 Their entries are laid out in a fixed order and carry one fixed timestamp rather than the build time a backend may record,
-so an unchanged source tree keeps resolving to the bundle it already froze.
+so an unchanged source tree at an unchanged commit keeps resolving to the bundle it already froze.
 The Python major/minor joins the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`).
 Carrying local sources keeps the snapshot self-reproducing:
 re-resolving from a materialized bundle's own venv lands on the same hash.
