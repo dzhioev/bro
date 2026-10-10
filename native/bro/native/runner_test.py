@@ -807,7 +807,10 @@ class TestNativeTurnEnd:
   def test_watch_pump_keeps_only_one_batch_in_flight(self):
     class Store:
       def __init__(self):
-        self.batches = ['first', 'second']
+        self.batches = [
+          watches.Batch((watches.BatchLine(None, text, wakes=True, arrived=0.0),))
+          for text in ('first', 'second')
+        ]
         self.take_calls = 0
 
       def take(self):

@@ -50,6 +50,7 @@ def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
   kwargs.setdefault('endpoint', _ENDPOINT)
   kwargs.setdefault('brash_policy', None)
   kwargs.setdefault('activity_file', _ACTIVITY_FILE)
+  kwargs.setdefault('plugin_dir', None)
   with patch('ride.claude.claude_argv.session_append_prompt', return_value='append text'):
     return ride_claude_argv.build_claude_launch(spec, **kwargs)
 
@@ -168,6 +169,15 @@ class TestRideSessionLaunch:
         expected = [*module_argv('ride.claude.watch_waiter'), str(hook['timeout'])]
         assert shlex.split(hook['command'])[-len(expected) :] == expected
 
+  def test_a_session_given_a_plugin_copy_loads_it(self, tmp_path):
+    argv = _ride_session_launch(_spec(prompt='go'), plugin_dir=tmp_path / 'plugin').argv
+
+    assert argv[argv.index('--plugin-dir') + 1] == str(tmp_path / 'plugin')
+    assert argv[-2:] == ['--', 'go']
+
+  def test_a_session_given_no_plugin_loads_none(self):
+    assert '--plugin-dir' not in _ride_session_launch(_spec()).argv
+
   def test_every_turn_and_tool_call_touches_the_activity_file(self, tmp_path):
     for event in ride_claude_argv.ACTIVITY_EVENTS:
       activity_file = tmp_path / event
@@ -259,6 +269,7 @@ def test_unknown_bro_raises():
       endpoint=_ENDPOINT,
       brash_policy=None,
       activity_file=_ACTIVITY_FILE,
+      plugin_dir=None,
     )
 
 

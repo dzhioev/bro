@@ -70,6 +70,7 @@ wheel-exclude = [
   "**/*_test.py",
   "**/*_test_helper.py",
   "**/conftest.py",
+  "**/*.test.ts",
   "**/AGENTS.md",
   "**/*.egg-info",
   "ride/claude/image/bump-claude-code.sh",

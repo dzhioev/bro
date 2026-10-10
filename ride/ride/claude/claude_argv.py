@@ -89,7 +89,7 @@ def watch_waiter_hooks() -> dict:
     # reports as the waiter too
     'command': f'echo {shlex.quote(WAITER_MARK)}; exec {waiter_command}',
     'asyncRewake': True,
-    'rewakeSummary': 'watch lines',
+    'rewakeSummary': 'watch wake',
     'rewakeMessage': "New lines from this session's watches:",
     'timeout': WAITER_TIMEOUT_SECONDS,
   }
@@ -147,6 +147,7 @@ def build_claude_launch(
   endpoint: MCPEndpoint,
   brash_policy: Optional[Path],
   activity_file: Path,
+  plugin_dir: Optional[Path],
 ) -> ClaudeLaunch:
   """build the claude argv for a session.
 
@@ -157,7 +158,8 @@ def build_claude_launch(
   `brash_policy` is the policy file the caller wrote for the bro's finite command
   list, which the command gate runs each line under; None where the bro declares
   no shell or an unrestricted one. `activity_file` is the session's activity mark
-  its hooks touch.
+  its hooks touch. `plugin_dir` is the session's copy of ride's Claude plugin
+  (`ride.claude.claude_plugin`); None for a session that loads none.
   """
   from bro.registry import create_bro
 
@@ -196,6 +198,8 @@ def build_claude_launch(
     '--append-system-prompt',
     session_append_prompt(spec.hold, spec.bro),
   ]
+  if plugin_dir is not None:
+    argv += ['--plugin-dir', str(plugin_dir)]
   if spec.hold != 'guided':
     argv.append('--dangerously-skip-permissions')
   if llm.effort is not None:

@@ -11,11 +11,17 @@ _WEBVIEW_MODULE_PATHS = (
   'bro/webview/worker.py',
   'bro/webview/container/Dockerfile',
 )
+_RIDE_CLAUDE_PLUGIN_PATHS = (
+  'ride/claude/plugin/.claude-plugin/plugin.json',
+  'ride/claude/plugin/hooks/hooks.json',
+  'ride/claude/plugin/hooks/register.ts',
+  'ride/claude/plugin/types/index.d.ts',
+)
 
 
 def test_repository_packaging_policy():
   assert_packaging_policy(
     Path(__file__).resolve().parents[3],
     siblings=[project.directory for project in PROJECTS],
-    required_modules=(_REBUILD_MODULE_PATH, *_WEBVIEW_MODULE_PATHS),
+    required_modules=(_REBUILD_MODULE_PATH, *_WEBVIEW_MODULE_PATHS, *_RIDE_CLAUDE_PLUGIN_PATHS),
   )

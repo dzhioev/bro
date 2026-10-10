@@ -35,10 +35,16 @@ def state(owner) -> Generator[WaiterState]:
   waiter_state.stand_down()
 
 
-def _seed(store: watches.Store, command: str, content: str) -> None:
+def _seed(store: watches.Store, command: str, content: str) -> watches.Watch:
   watch = watches.Watch(command, store.directory, watches.slug(command))
   watch.command_file.write_text(command)
-  watch.log.write_text(content)
+  with watches.LineLog.open(watch) as line_log:
+    line_log.write(content.encode())
+  return watch
+
+
+def _batch(text: str) -> watches.Batch:
+  return watches.Batch((watches.BatchLine(None, text, wakes=True, arrived=0.0),))
 
 
 class _PolledStore(watches.Store):
@@ -60,10 +66,10 @@ class _BlockingStore(watches.Store):
     self.taking = threading.Event()
     self.release = threading.Event()
 
-  def take(self) -> str:
+  def take(self) -> watches.Batch:
     self.taking.set()
     assert self.release.wait(10), 'the test never released the batch'
-    return '[held] line'
+    return _batch('[held] line')
 
 
 class _RegistrationSpy(WaiterState):
@@ -106,15 +112,45 @@ def _polling(state: WaiterState) -> tuple[concurrent.futures.Future[int], io.Str
 
 
 class TestWait:
-  def test_a_batch_wakes_the_session_and_counts_the_rewake(self, owner, state):
-    _seed(owner.store, 'printf lines', 'hello\n')
+  def test_a_batch_wakes_the_session_and_records_the_rewake(self, owner, state):
+    watch = _seed(owner.store, 'printf lines', f'{watches.quiet("held")}\nhello\n')
 
     future, out = _waiting(state, owner.store)
 
     assert future.result(timeout=10) == REWAKE_STATUS
-    assert out.getvalue() == '\n[printf lines] hello\n'
-    assert state.rewakes() == 1
+    assert out.getvalue() == '\n[printf lines] held\n[printf lines] hello\n'
+    # the record's shape is what the session's Claude plugin reads
+    assert json.loads(state.rewake_record.read_text()) == {
+      'count': 1,
+      'lines': [
+        {
+          'command': 'printf lines',
+          'content': 'held',
+          'wakes': False,
+          'arrived': watch.arrival(0),
+        },
+        {
+          'command': 'printf lines',
+          'content': 'hello',
+          'wakes': True,
+          'arrived': watch.arrival(len(watches.quiet('held')) + 1),
+        },
+      ],
+      'pending': False,
+    }
     assert not owner.store.has_waking_lines()
+
+  def test_a_later_rewake_records_its_own_batch(self, owner, state):
+    with state.locked():
+      state.record_rewake(_batch('[earlier] line'))
+    _seed(owner.store, 'printf lines', 'hello\n')
+
+    future, _ = _waiting(state, owner.store)
+
+    assert future.result(timeout=10) == REWAKE_STATUS
+    record = json.loads(state.rewake_record.read_text())
+    assert record['count'] == 2
+    assert [line['content'] for line in record['lines']] == ['hello']
 
   def test_a_superseded_waiter_stands_aside(self, state):
     future, out = _polling(state)
@@ -215,7 +251,7 @@ def test_a_waiter_that_fails_to_start_still_reports_as_the_waiter(owner, state, 
 def test_a_reset_forgets_an_earlier_session(state):
   state.stand_down()
   with state.locked():
-    state.count_rewake()
+    state.record_rewake(_batch('[w] line'))
 
   state.reset()
 

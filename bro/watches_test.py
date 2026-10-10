@@ -1,5 +1,6 @@
 import concurrent.futures
 import contextlib
+import os
 import shlex
 import subprocess
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from bro import watches
+from bro import watch_run, watches
 from bro.base.liveness_test_helper import Liveness
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT
 from bro.brash import REFUSED_STATUS, Policy
@@ -22,11 +23,23 @@ def owner(monkeypatch, tmp_path):
     yield watch_owner
 
 
-def _seed(store: watches.Store, command: str, content: str) -> watches.Watch:
+def _seed(store: watches.Store, command: str, content: str | bytes) -> watches.Watch:
   watch = watches.Watch(command, store.directory, watches.slug(command))
   watch.command_file.write_text(command)
-  watch.log.write_text(content)
+  _append(watch, content)
   return watch
+
+
+def _append(watch: watches.Watch, content: str | bytes) -> None:
+  """append `content` to the watch's log as its producer does."""
+  with watches.LineLog.open(watch) as line_log:
+    line_log.write(content.encode() if isinstance(content, str) else content)
+
+
+def _taken(store: watches.Store) -> str | None:
+  """the next batch's text as the model reads it."""
+  batch = store.take()
+  return None if batch is None else batch.text()
 
 
 def _process_is_running(process_id: int) -> bool:
@@ -58,17 +71,148 @@ def _wait_for_nonempty_file(path: Path) -> str:
     time.sleep(0.01)
 
 
+class _Clock:
+  """the time module, its epoch clock reading `instants` in turn, in seconds."""
+
+  def __init__(self, *instants: int) -> None:
+    self._instants = iter(instants)
+
+  def time_ns(self) -> int:
+    return next(self._instants) * 1_000_000_000
+
+  def __getattr__(self, name: str) -> object:
+    return getattr(time, name)
+
+
+class TestArrivals:
+  def test_a_line_arrives_when_its_first_byte_does(self, owner, monkeypatch):
+    monkeypatch.setattr(watches, 'time', _Clock(1, 2))
+    watch = _seed(owner.store, 'producer', 'par')
+    _append(watch, f'tial\n{watches.quiet("next")}\n')
+
+    batch = owner.store.take()
+
+    assert batch is not None
+    assert batch.lines == (
+      watches.BatchLine('producer', 'partial', wakes=True, arrived=1.0),
+      watches.BatchLine('producer', 'next', wakes=False, arrived=2.0),
+    )
+
+  def test_a_line_split_across_batches_keeps_its_arrival(self, owner, monkeypatch):
+    monkeypatch.setattr(watches, 'time', _Clock(5))
+    _seed(owner.store, 'wide', f'{"x" * (BYTE_LIMIT * 2)}\n')
+
+    first = owner.store.take()
+    second = owner.store.take()
+
+    assert first is not None and second is not None
+    assert {line.arrived for line in first.lines + second.lines} == {5.0}
+
+  def test_a_quiet_line_wakes_the_session_only_where_its_watch_wakes_on_quiet(self, owner):
+    _seed(owner.store, 'quiet', f'{watches.quiet("held")}\n')
+    _seed(owner.store, 'loud', f'{watches.quiet("woke")}\n')
+    owner.store.set_wake_on_quiet('loud', True)
+
+    batch = owner.store.take()
+
+    assert batch is not None
+    assert {line.content: line.wakes for line in batch.lines} == {'held': False, 'woke': True}
+
+  def test_a_line_without_its_arrival_fails_the_take(self, owner):
+    watch = watches.Watch('raw', owner.store.directory, watches.slug('raw'))
+    watch.command_file.write_text('raw')
+    watch.log.write_text('written past the producer\n')
+
+    with pytest.raises(watches.WatchError, match='no arrival time'):
+      owner.store.take()
+
+
+class TestCopier:
+  def test_a_head_is_published_once_the_output_sent_before_it_is_in_the_log(
+    self, tmp_path, monkeypatch
+  ):
+    published: dict[int, bytes] = {}
+
+    def publish(watch: watches.Watch, head: int) -> None:
+      published[head] = watch.log.read_bytes()
+
+    monkeypatch.setattr(watches.Watch, 'publish_journal_head', publish)
+    # in-process, a failed copy would end the test runner's own process group
+    monkeypatch.setattr(watch_run.job_supervisor, 'end_group', lambda: None)
+    watch = watches.Watch('producer', tmp_path, watches.slug('producer'))
+    output_read, output_write = os.pipe()
+    journal_read, journal_write = os.pipe()
+    # both are queued before the copy starts, the head after the output
+    os.write(output_write, b'before\n')
+    os.write(journal_write, b'7\n')
+
+    with (
+      watches.LineLog.open(watch) as line_log,
+      os.fdopen(output_read, 'rb', 0) as output,
+      os.fdopen(journal_read, 'rb', 0) as journal,
+      os.fdopen(journal_write, 'wb', 0),
+    ):
+      copier = watch_run._Copier(watch, line_log, output.fileno(), journal.fileno())
+      os.close(output_write)
+      copier.finish()
+
+    assert published == {7: b'before\n'}
+
+  def test_a_head_is_published_while_later_output_keeps_coming(self, tmp_path, monkeypatch):
+    # the writes after which the output stops coming
+    refill_limit = 100
+    refills = 0
+    published: dict[int, int] = {}
+
+    def publish(watch: watches.Watch, head: int) -> None:
+      published[head] = refills
+
+    class Refilling(watches.LineLog):
+      """a log each write to which is followed by more output"""
+
+      def write(self, data: bytes) -> None:
+        nonlocal refills
+        super().write(data)
+        if refills < refill_limit:
+          refills += 1
+          os.write(output_write, b'later\n')
+
+    monkeypatch.setattr(watches.Watch, 'publish_journal_head', publish)
+    # in-process, a failed copy would end the test runner's own process group
+    monkeypatch.setattr(watch_run.job_supervisor, 'end_group', lambda: None)
+    watch = watches.Watch('producer', tmp_path, watches.slug('producer'))
+    output_read, output_write = os.pipe()
+    journal_read, journal_write = os.pipe()
+    os.write(output_write, b'before\n')
+    os.write(journal_write, b'7\n')
+
+    with (
+      Refilling.open(watch) as line_log,
+      os.fdopen(output_read, 'rb', 0) as output,
+      os.fdopen(journal_read, 'rb', 0) as journal,
+      os.fdopen(journal_write, 'wb', 0),
+    ):
+      copier = watch_run._Copier(watch, line_log, output.fileno(), journal.fileno())
+      deadline = time.monotonic() + 10
+      while refills < refill_limit:
+        assert time.monotonic() < deadline, 'the copy stopped copying the output'
+        time.sleep(0.01)
+      os.close(output_write)
+      copier.finish()
+
+    assert published[7] < refill_limit
+
+
 class TestStore:
   def test_take_tags_complete_lines_and_commits_offsets(self, owner):
     watch = _seed(owner.store, 'printf lines', 'one\ntwo\npartial')
 
-    assert owner.store.take() == '[printf lines] one\n[printf lines] two'
+    assert _taken(owner.store) == '[printf lines] one\n[printf lines] two'
     assert watch.saved_offset() == len('one\ntwo\n')
-    assert owner.store.take() is None
+    assert _taken(owner.store) is None
 
-    with watch.log.open('a') as log_file:
-      log_file.write('\n')
-    assert owner.store.take() == '[printf lines] partial'
+    _append(watch, '\n')
+    assert _taken(owner.store) == '[printf lines] partial'
     assert watch.saved_offset() == len('one\ntwo\npartial\n')
 
   def test_pending_observation_does_not_commit_and_the_last_line_is_complete(self, owner):
@@ -78,7 +222,7 @@ class TestStore:
     assert watch.saved_offset() == 0
     assert watch.last_complete_line() == 'complete'
 
-    assert owner.store.take() == '[producer] complete'
+    assert _taken(owner.store) == '[producer] complete'
     assert not owner.store.has_waking_lines()
     assert watch.last_complete_line() == 'complete'
 
@@ -86,21 +230,20 @@ class TestStore:
     watch = _seed(owner.store, 'producer', f'{watches.quiet("first")}\n{watches.quiet("second")}\n')
 
     assert not owner.store.has_waking_lines()
-    assert owner.store.take() is None
+    assert _taken(owner.store) is None
     assert watch.saved_offset() == 0
     assert watch.last_complete_line() == 'second'
 
-    with watch.log.open('a') as log_file:
-      log_file.write('third\n')
+    _append(watch, 'third\n')
     assert owner.store.has_waking_lines()
-    assert owner.store.take() == '[producer] first\n[producer] second\n[producer] third'
+    assert _taken(owner.store) == '[producer] first\n[producer] second\n[producer] third'
     assert not owner.store.has_waking_lines()
 
   def test_a_waking_line_carries_the_quiet_lines_of_every_watch(self, owner):
     _seed(owner.store, 'a', f'{watches.quiet("quiet")}\n')
     _seed(owner.store, 'b', 'wake\n')
 
-    batch = owner.store.take()
+    batch = _taken(owner.store)
 
     assert batch is not None
     assert sorted(batch.splitlines()) == ['[a] quiet', '[b] wake']
@@ -110,14 +253,13 @@ class TestStore:
     size_marker = f'[line: {(len(content) / 1_000):.1f} KB] '
     watch = _seed(owner.store, 'wide', f'wake\n{watches.quiet(content)}\n')
 
-    first = owner.store.take()
+    first = _taken(owner.store)
     assert first is not None and first.startswith('[wide] wake\n')
     assert '[...pending watch lines...]' not in first
-    assert owner.store.take() is None
+    assert _taken(owner.store) is None
 
-    with watch.log.open('a') as log_file:
-      log_file.write('later\n')
-    second = owner.store.take()
+    _append(watch, 'later\n')
+    second = _taken(owner.store)
     assert second is not None and second.endswith('\n[wide] later')
     delivered = ''.join(
       line.removeprefix('[wide] ').removeprefix(size_marker)
@@ -133,24 +275,30 @@ class TestStore:
     owner.store.set_wake_on_quiet('producer', True)
     assert owner.store.has_waking_lines()
     owner.store.set_wake_on_quiet('producer', False)
-    assert owner.store.take() is None
+    assert _taken(owner.store) is None
     owner.store.set_wake_on_quiet('producer', True)
-    assert owner.store.take() == '[producer] quiet'
+    assert _taken(owner.store) == '[producer] quiet'
 
     with pytest.raises(watches.WatchError, match='no watch runs'):
       owner.store.set_wake_on_quiet('absent', True)
 
-  def test_stream_head_and_notice_memory_are_session_state(self, owner, monkeypatch):
-    watch = owner.store.start('sleep 30')
-    monkeypatch.setenv(watches.PRODUCER_JOURNAL_HEAD_ENV, str(watch.journal_head_file))
-    monkeypatch.setenv(watches.PRODUCER_JOURNAL_WAKE_ENV, str(watch.journal_wake_file))
+  def test_a_published_journal_head_certifies_the_output_written_before_it(self, owner):
+    # output wider than the pipe holds, so the copy is still behind when the
+    # command publishes its head
+    script = (
+      'import sys, time; from bro import watches; '
+      f'sys.stdout.write("x" * {BYTE_LIMIT * 4} + "\\n"); sys.stdout.write("last\\n"); '
+      'sys.stdout.flush(); watches.publish_journal_head(12); time.sleep(30)'
+    )
+    command = shlex.join([sys.executable, '-c', script])
+    watch = owner.store.start(command)
 
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-      caught_up = executor.submit(owner.store.wait_for_journal_head, 'sleep 30', 12)
-      watches.publish_journal_head(12)
-      assert caught_up.result(timeout=10)
+    assert owner.store.wait_for_journal_head(command, 12)
 
     assert watch.journal_head() == 12
+    assert watch.last_complete_line() == 'last'
+
+  def test_notice_memory_is_session_state(self, owner):
     assert owner.store.mark_notified(frozenset({'mission:M1'}))
     assert not owner.store.mark_notified(frozenset({'mission:M1'}))
     assert owner.store.mark_notified(frozenset({'mission:M2'}))
@@ -158,13 +306,13 @@ class TestStore:
   def test_take_stays_within_the_shared_bounds_and_marks_pending(self, owner):
     _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(150)))
 
-    first = owner.store.take()
+    first = _taken(owner.store)
     assert first is not None
     assert len(first.splitlines()) == DEFAULT_LIMIT
     assert len(first.encode()) <= BYTE_LIMIT
     assert first.splitlines()[-1] == '[...pending watch lines...]'
 
-    second = owner.store.take()
+    second = _taken(owner.store)
     assert second is not None
     delivered = [
       int(line.removeprefix('[seq] '))
@@ -178,7 +326,7 @@ class TestStore:
     _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(180)))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-      batches = list(executor.map(lambda _index: owner.store.take(), range(2)))
+      batches = list(executor.map(lambda _index: _taken(owner.store), range(2)))
 
     delivered = [
       int(line.removeprefix('[seq] '))
@@ -194,10 +342,9 @@ class TestStore:
     a = _seed(owner.store, 'a', ''.join(f'a{number}\n' for number in range(99)))
     _seed(owner.store, 'b', 'b0\n')
 
-    first = owner.store.take()
-    with a.log.open('a') as log_file:
-      log_file.write(''.join(f'a{number}\n' for number in range(99, 198)))
-    second = owner.store.take()
+    first = _taken(owner.store)
+    _append(a, ''.join(f'a{number}\n' for number in range(99, 198)))
+    second = _taken(owner.store)
 
     assert first is not None and first.startswith('[a] a0\n')
     assert second is not None and second.startswith('[b] b0\n')
@@ -206,8 +353,8 @@ class TestStore:
     content = 'x' * (BYTE_LIMIT + 500)
     _seed(owner.store, 'wide', f'{content}\n')
 
-    first = owner.store.take()
-    second = owner.store.take()
+    first = _taken(owner.store)
+    second = _taken(owner.store)
 
     assert first is not None and second is not None
     assert f'[line: {(len(content) / 1_000):.1f} KB]' in first
@@ -221,13 +368,11 @@ class TestStore:
     assert delivered == content
 
   def test_invalid_utf8_expansion_stays_bounded_and_advances(self, owner):
-    watch = watches.Watch('binary', owner.store.directory, watches.slug('binary'))
-    watch.command_file.write_text('binary')
-    watch.log.write_bytes(b'\xff' * BYTE_LIMIT + b'\n')
+    watch = _seed(owner.store, 'binary', b'\xff' * BYTE_LIMIT + b'\n')
 
     batches = []
     while watch.saved_offset() < BYTE_LIMIT + 1:
-      batch = owner.store.take()
+      batch = _taken(owner.store)
       assert batch is not None
       batches.append(batch)
       assert len(batch.encode()) <= BYTE_LIMIT
@@ -237,11 +382,9 @@ class TestStore:
     assert watch.saved_offset() == BYTE_LIMIT + 1
 
   def test_a_replacement_does_not_commit_the_next_buffered_lead_byte(self, owner):
-    watch = watches.Watch('binary', owner.store.directory, watches.slug('binary'))
-    watch.command_file.write_text('binary')
-    watch.log.write_bytes(b'\xc2\xc2\n')
+    watch = _seed(owner.store, 'binary', b'\xc2\xc2\n')
 
-    assert owner.store.take() == '[binary] ��'
+    assert _taken(owner.store) == '[binary] ��'
     assert watch.saved_offset() == 3
 
   def test_multiline_and_oversized_commands_have_single_bounded_tags(self, owner):
@@ -249,7 +392,7 @@ class TestStore:
     oversized_command = 'x' * (BYTE_LIMIT + 1)
     oversized = _seed(owner.store, oversized_command, 'line\n')
 
-    batch = owner.store.take()
+    batch = _taken(owner.store)
 
     assert batch is not None
     lines = batch.splitlines()
@@ -266,7 +409,7 @@ class TestStore:
     offsets = []
 
     while watch.saved_offset() < len(content) + 1:
-      batch = owner.store.take()
+      batch = _taken(owner.store)
       assert batch is not None
       offsets.append(watch.saved_offset())
 
@@ -309,6 +452,7 @@ class TestProducers:
       watch.log,
       watch.offset_file,
       watch.pid_file,
+      watch.journal_file,
       watch.journal_head_file,
       watch.journal_wake_file,
       watch.wake_on_quiet_file,
@@ -324,7 +468,7 @@ class TestProducers:
     while watch.producer_alive():
       assert time.monotonic() < deadline, 'watch producer did not exit'
       time.sleep(0.01)
-    batch = owner.store.take()
+    batch = _taken(owner.store)
 
     assert batch is not None
     assert f'[{command}] one' in batch
@@ -341,14 +485,14 @@ class TestProducers:
       assert time.monotonic() < deadline, 'watch producer did not exit'
       time.sleep(0.01)
 
-    assert owner.store.take() == f'[{command}] quiet\n[{command}] [watch-run] exited 7'
+    assert _taken(owner.store) == f'[{command}] quiet\n[{command}] [watch-run] exited 7'
 
   def test_a_producer_started_to_wake_on_quiet_lines_wakes_on_them(self, owner):
     command = 'printf "\\037quiet\\n"; sleep 30'
     watch = owner.store.start(command, wake_on_quiet=True)
 
     deadline = time.monotonic() + 10
-    while (batch := owner.store.take()) is None:
+    while (batch := _taken(owner.store)) is None:
       assert time.monotonic() < deadline, 'the quiet line never woke the store'
       time.sleep(0.01)
     owner.store.stop(command)
@@ -366,7 +510,7 @@ class TestProducers:
     while watch.producer_alive():
       assert time.monotonic() < deadline, 'watch producer did not exit'
       time.sleep(0.01)
-    batch = owner.store.take()
+    batch = _taken(owner.store)
 
     assert batch is not None
     refusal, exit_line = batch.splitlines()
@@ -385,7 +529,7 @@ class TestProducers:
       time.sleep(0.01)
 
     assert [declared.command for declared in owner.store.declared()] == [command]
-    assert owner.store.take() == f'[{command}] <x >\n[{command}] [watch-run] exited 0'
+    assert _taken(owner.store) == f'[{command}] <x >\n[{command}] [watch-run] exited 0'
 
   def test_a_watch_runs_the_runtimes_producer_whatever_its_directory_holds(
     self, owner, tmp_path, monkeypatch
@@ -402,7 +546,28 @@ class TestProducers:
       assert time.monotonic() < deadline, 'watch producer did not exit'
       time.sleep(0.01)
 
-    assert owner.store.take() == '[echo produced] produced\n[echo produced] [watch-run] exited 0'
+    assert _taken(owner.store) == '[echo produced] produced\n[echo produced] [watch-run] exited 0'
+
+  def test_a_failed_copy_ends_the_producers_group(self, owner, monkeypatch, tmp_path):
+    # a producer whose log can grow no further than this many bytes
+    limit = 65_536
+    launch = (
+      f'import resource, runpy; resource.setrlimit(resource.RLIMIT_FSIZE, ({limit}, {limit})); '
+      'runpy.run_module("bro.watch_run", run_name="__main__", alter_sys=True)'
+    )
+    monkeypatch.setattr(watches.spawn, 'module_argv', lambda module: [sys.executable, '-c', launch])
+    command_pid = tmp_path / 'command.pid'
+    watch = owner.store.start(f'echo $$ > {shlex.quote(str(command_pid))}; exec yes')
+
+    deadline = time.monotonic() + 30
+    while watch.producer_alive() or not command_pid.exists():
+      assert time.monotonic() < deadline, 'a producer whose copy failed kept running'
+      time.sleep(0.05)
+    while _process_is_running(int(command_pid.read_text())):
+      assert time.monotonic() < deadline, 'the command outlived its failed copy'
+      time.sleep(0.05)
+
+    assert not watch.pid_file.exists()
 
   def test_stopping_a_watch_ends_its_whole_process_group(self, owner, tmp_path):
     child_path = tmp_path / 'child'
@@ -477,7 +642,7 @@ class TestOwner:
 
     with watches.Owner.for_session() as resumed:
       assert resumed.store.declared() == []
-      assert resumed.store.take() is None
+      assert _taken(resumed.store) is None
 
   def test_party_members_use_their_own_session_store(self, tmp_path):
     root_directory = tmp_path / 'root' / watches.WATCH_DIRNAME
@@ -489,8 +654,8 @@ class TestOwner:
     _seed(root, 'root command', 'root\n')
     _seed(member, 'member command', 'member\n')
 
-    assert root.take() == '[root command] root'
-    assert member.take() == '[member command] member'
+    assert _taken(root) == '[root command] root'
+    assert _taken(member) == '[member command] member'
 
 
 @pytest.mark.parametrize(

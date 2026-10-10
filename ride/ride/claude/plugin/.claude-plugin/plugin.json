@@ -1,0 +1,6 @@
+{
+  "name": "ride",
+  "version": "0.1.0",
+  "description": "A ride session's own lines in Claude Code: what each watch rewake brought",
+  "types": "./types/index.d.ts"
+}

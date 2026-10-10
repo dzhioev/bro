@@ -1,9 +1,10 @@
 """The session's watch waiter as its waiters and the runner share it:
-which waiter is current, how many rewakes waiters have begun, and the runner's
+which waiter is current, the rewakes waiters have begun, and the runner's
 stand-down mark."""
 
 import contextlib
 import fcntl
+import json
 import os
 import shutil
 import uuid
@@ -11,6 +12,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Self
 
+from bro import watches
 from bro.monitor import SESSION_DIR_ENV, harness_session_dir
 
 # the hook events Claude Code runs the waiter on
@@ -23,7 +25,7 @@ WAITER_MARK = 'ride.claude.watch_waiter'
 
 _CURRENT_FILENAME = 'current'
 _STOOD_DOWN_FILENAME = 'stood-down'
-_REWAKES_FILENAME = 'rewakes'
+_REWAKE_FILENAME = 'rewake'
 _LOCK_FILENAME = '.lock'
 
 
@@ -70,18 +72,40 @@ class WaiterState:
   def stood_down(self) -> bool:
     return (self.directory / _STOOD_DOWN_FILENAME).exists()
 
-  def count_rewake(self) -> None:
-    """Record a rewake a waiter begins; called under `locked`."""
-    self._replace(_REWAKES_FILENAME, str(self.rewakes() + 1))
+  @property
+  def rewake_record(self) -> Path:
+    """The JSON record of the rewakes waiters have begun: their `count`, and the
+    batch the latest one wakes the model with, its `lines` and whether more are
+    `pending`."""
+    return self.directory / _REWAKE_FILENAME
+
+  def record_rewake(self, batch: watches.Batch) -> None:
+    """Record a rewake a waiter begins with `batch`; called under `locked`."""
+    lines = [
+      {
+        'command': line.command,
+        'content': line.content,
+        'wakes': line.wakes,
+        'arrived': line.arrived,
+      }
+      for line in batch.lines
+    ]
+    record = {'count': self.rewakes() + 1, 'lines': lines, 'pending': batch.pending}
+    self._replace(_REWAKE_FILENAME, json.dumps(record))
 
   def rewakes(self) -> int:
     try:
-      raw = (self.directory / _REWAKES_FILENAME).read_text()
+      raw = self.rewake_record.read_text()
     except FileNotFoundError:
       return 0
-    if not raw.isdigit():
-      raise RuntimeError(f'{self.directory / _REWAKES_FILENAME} carries a malformed count')
-    return int(raw)
+    try:
+      record = json.loads(raw)
+    except json.JSONDecodeError as error:
+      raise RuntimeError(f'{self.rewake_record} carries a malformed record') from error
+    count = record.get('count') if isinstance(record, dict) else None
+    if type(count) is not int or count < 1 or not isinstance(record.get('lines'), list):
+      raise RuntimeError(f'{self.rewake_record} carries a malformed record')
+    return count
 
   def _replace(self, filename: str, content: str) -> None:
     path = self.directory / filename

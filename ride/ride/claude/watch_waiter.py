@@ -26,8 +26,9 @@ def _alive(process_id: int) -> bool:
   return True
 
 
-def _bound_notice(bound_seconds: float) -> str:
-  return f'No watch line arrived for {bound_seconds / 3600:g} hours; ending the turn keeps waiting.'
+def _bound_notice(bound_seconds: float) -> watches.Batch:
+  text = f'No watch line arrived for {bound_seconds / 3600:g} hours; ending the turn keeps waiting.'
+  return watches.Batch((watches.BatchLine(None, text, True, time.time()),))
 
 
 def wait(
@@ -50,8 +51,8 @@ def wait(
       if batch is None and time.monotonic() >= deadline:
         batch = _bound_notice(bound_seconds)
       if batch is not None:
-        state.count_rewake()
-        out.write(f'\n{batch}\n')
+        state.record_rewake(batch)
+        out.write(f'\n{batch.text()}\n')
         out.flush()
         return REWAKE_STATUS
     time.sleep(POLL_SECONDS)

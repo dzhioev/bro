@@ -9,9 +9,13 @@ from pathlib import Path
 
 TEST_MODULE_NAMES = ('conftest',)
 TEST_MODULE_SUFFIXES = ('_test', '_test_helper')
+# the tests `claude plugin test` runs in a Claude Code plugin
+PLUGIN_TEST_SUFFIXES = ('.test.ts', '.test.tsx')
 
 
 def is_test_module(path: str) -> bool:
+  if path.endswith(PLUGIN_TEST_SUFFIXES):
+    return True
   if not path.endswith('.py'):
     return False
   module = path.rsplit('/', 1)[-1].removesuffix('.py')

@@ -13,7 +13,7 @@ from types import FrameType
 from typing import IO, Optional
 
 _PR_SET_CHILD_SUBREAPER = 36
-_OWNER_TERM_GRACE_SECONDS = 5.0
+_TERM_GRACE_SECONDS = 5.0
 
 
 def _become_subreaper() -> bool:
@@ -54,18 +54,24 @@ def _wait_for_descendants(subreaper: bool) -> None:
     time.sleep(0.05)
 
 
-def _watch_owner(owner_fd: int) -> None:
-  with os.fdopen(owner_fd, 'rb') as owner:
-    while owner.read(1) != b'':
-      pass
+def end_group() -> None:
+  """End this supervisor's process group: terminate it, then kill whatever
+  outlives the grace period."""
   with contextlib.suppress(ProcessLookupError):
     os.killpg(os.getpgrp(), signal.SIGTERM)
-  deadline = time.monotonic() + _OWNER_TERM_GRACE_SECONDS
+  deadline = time.monotonic() + _TERM_GRACE_SECONDS
   while _group_has_other_processes() and time.monotonic() < deadline:
     time.sleep(0.05)
   if _group_has_other_processes():
     with contextlib.suppress(ProcessLookupError):
       os.killpg(os.getpgrp(), signal.SIGKILL)
+
+
+def _watch_owner(owner_fd: int) -> None:
+  with os.fdopen(owner_fd, 'rb') as owner:
+    while owner.read(1) != b'':
+      pass
+  end_group()
 
 
 def supervise(

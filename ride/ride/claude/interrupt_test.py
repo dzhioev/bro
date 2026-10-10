@@ -161,7 +161,7 @@ class TestRunStreaming:
     self, tmp_path, store, waiters
   ):
     with waiters.locked():
-      waiters.count_rewake()
+      waiters.record_rewake(watches.Batch((watches.BatchLine(None, '[w] line', True, 0.0),)))
     script = (
       f'tasks("t1")\nresult("first")\nhook("Stop", 2, "[w] line", {_WAITER_STDOUT})\ntasks()\n'
       'result("rewoken")\nresult("stdin: " + repr(next_message()))\n'
@@ -185,7 +185,7 @@ class TestRunStreaming:
 
   def test_another_stop_hooks_exit_is_no_rewake_of_the_waiter(self, tmp_path, store, waiters):
     with waiters.locked():
-      waiters.count_rewake()
+      waiters.record_rewake(watches.Batch((watches.BatchLine(None, '[w] line', True, 0.0),)))
     script = (
       'tasks("t1")\nresult("first")\nhook("Stop", 2, "project feedback")\nresult("second")\n'
       f'hook("Stop", 2, "[w] line", {_WAITER_STDOUT})\ntasks()\nresult("rewoken")\n'
