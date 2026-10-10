@@ -89,6 +89,7 @@ A subpackage with a map of its own is pointed at, not described here.
   `__init__.py` holds the `Harness` interface and the `bro.harnesses` registry:
   Installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
   Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
+  `owned_environment()` names the environment variables carrying its session state.
   `Harness.serve(reach)` returns a `Service`:
   the server specs the harness mounts for the reach's tool groups, and the groups it leaves unserved, which `bro show` marks.
   The tools a harness serves a group with on its own, Claude's natives or the bro harness's job tools, are its own code, built from the same reach.

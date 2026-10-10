@@ -1,10 +1,10 @@
 """no pytest run in this repository inherits the session that launched it.
 
-`rebuild_environment` clears the framework's own namespaces, and holds only
-while every variable the framework reads lives in one of those namespaces and
-nothing makes a new one land there — so one test walks the sources and fails on
-a name that is neither swept nor declared external below, leaving whoever
-invents it to decide which it is.
+`rebuild_environment` clears the framework's own namespaces and each installed
+harness's, and holds only while every variable the framework reads lives in one
+of those namespaces and nothing makes a new one land there — so one test walks
+the sources and fails on a name that is neither swept nor declared external
+below, leaving whoever invents it to decide which it is.
 
 The rebuild reaches a run only through the conftest at its pytest root, and this
 repository has more than one such root — a project that ships from here without
@@ -24,11 +24,7 @@ import tomllib
 from pathlib import Path
 
 from bro.base import credentials
-from bro.base.suite_environment import (
-  SESSION_NAMESPACES,
-  SESSION_VARIABLES,
-  rebuild_environment,
-)
+from bro.base.suite_environment import rebuild_environment, session_environment
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SOURCES = ('bench', 'benchmark', 'bro', 'bros', 'dev', 'local', 'native', 'ride')
@@ -36,16 +32,13 @@ _SOURCES = ('bench', 'benchmark', 'bro', 'bros', 'dev', 'local', 'native', 'ride
 _REBUILD = rebuild_environment.__name__
 _REBUILD_MODULE = rebuild_environment.__module__
 _REBUILD_SOURCE = Path(inspect.getfile(rebuild_environment)).resolve()
+_SESSION = session_environment()
 
 # what the environment brings that is nobody's session state
 _EXTERNAL = frozenset({'NO_COLOR', 'PAGER', 'XDG_DATA_HOME'})
 
 _ENV_READERS = ('environ', 'getenv')
 _ENV_CONSTANT_SUFFIXES = ('_ENV', '_VARIABLE')
-
-
-def _swept(name: str) -> bool:
-  return name.startswith(SESSION_NAMESPACES) or name in SESSION_VARIABLES
 
 
 def _named_by(node: ast.AST) -> list[str]:
@@ -98,7 +91,7 @@ def test_every_read_variable_is_swept_or_external():
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
       for name in _named_by(node):
-        if _swept(name) or name in _EXTERNAL:
+        if _SESSION.owns(name) or name in _EXTERNAL:
           continue
         undeclared.setdefault(name, []).append(str(path.relative_to(_ROOT)))
   assert undeclared == {}, (

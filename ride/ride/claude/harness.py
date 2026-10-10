@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 from bro.base import credentials, log
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
-from bro.harness import Harness, Service, SessionEndReason
+from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
 from bro.llm.llms.claude_code import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.mcp import Reach
@@ -88,6 +88,19 @@ class ClaudeHarness(Harness):
 
   def can_end_session(self) -> bool:
     return os.environ.get('RIDE_RUNNER_PID') is not None
+
+  def owned_environment(self) -> OwnedEnvironment:
+    return OwnedEnvironment(
+      namespaces=('ANTHROPIC_', 'CLAUDE_'),
+      # `CLAUDECODE` is Claude Code's own mark on the processes it spawns
+      variables=(
+        'CLAUDECODE',
+        'DISABLE_AUTOUPDATER',
+        'DISABLE_INSTALLATION_CHECKS',
+        'DISABLE_TELEMETRY',
+        'MCP_TOOL_TIMEOUT',
+      ),
+    )
 
   def serve(self, reach: Reach) -> Service:
     # every group maps onto Claude's own tools (`ride.claude.native_tools`)
