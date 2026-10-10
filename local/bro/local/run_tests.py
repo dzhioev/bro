@@ -419,6 +419,7 @@ LLM_PYTEST_FILES = [
   'ride/ride/claude/native_tools_llm_test.py',
   'ride/ride/claude/command_gate_llm_test.py',
   'ride/ride/claude/read_gate_llm_test.py',
+  'ride/ride/claude/remote_flags_llm_test.py',
 ]
 # conformance probes: each launches real sessions on every installed harness under
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like

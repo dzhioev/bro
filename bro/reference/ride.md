@@ -864,7 +864,9 @@ Instead, the launch provisions a container-private `.claude.json` in the workspa
 - `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
   an explicit `enabledPlugins` opt-in for the `pyright-lsp` Python language server (the host plugin set no longer leaks in, so the container enables it itself),
   a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,
-  an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the pinned binary it runs),
+  an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the pinned binary it runs)
+  and its telemetry (`DISABLE_TELEMETRY`, which also leaves the feature flags Claude Code's server serves, fetched or cached, without effect, so a session runs the pinned release's own defaults;
+  `ride/ride/claude/remote_flags_llm_test.py` holds that against the pinned release),
   and `skipDangerousModePermissionPrompt: true`
   — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (boxed sessions only; an unboxed clone keeps the dialog).
   The plugin is *installed* at image-build time (`ride/ride/setup/container/Dockerfile`) and staged at `/opt/claude-plugins-seed`, which `do-ride` copies into the bind-mounted `~/.claude/plugins` on first run
