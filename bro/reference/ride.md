@@ -125,10 +125,15 @@ An in-process `bro run|chat` outside ride uses a temporary store owned by its `R
 A producer runs its shell command under the same process-group supervisor as a job.
 It is detached from the process that requested it, but exits when its session owner's liveness handle closes;
 stopping it terminates the whole process group.
+It copies the command's output into the watch's log as it arrives, recording when each line's first byte arrived,
+and publishes each journal head the command sends once the output the command wrote before it is in the log.
+If the copy fails, the producer ends the command's whole process group.
 A job carries the same backstop from the process that started it.
 
 `take()` is the store's single reader.
 Under an exclusive lock it commits complete output past each watch's offset and returns at most the shared 100-line and 30 KB bounds, with every line tagged by command.
+Each line of the batch also carries its arrival time and whether it wakes the session, for a harness to show its human;
+the model reads the tagged lines alone.
 A cut batch ends in a pending marker when a line that wakes the session remains, and the next batch starts after the watch that was cut, so a busy producer cannot exclude another.
 A line wider than the byte bound is delivered in successive pieces, with its first piece naming the whole line size.
 
@@ -166,6 +171,10 @@ Every session's settings wire `ride.claude.watch_waiter` as its `Stop` and `Stop
 each turn end, one that ends in an API error included, starts a waiter in the background, which registers as the session's current one and polls the watch store.
 On a batch it exits 2 with the lines on stderr,
 which Claude hands the model under the hook's `rewakeSummary` and `rewakeMessage`, after the next tool result of a running turn or as a turn of its own.
+It also records the batch in the session's Claude state dir, where ride's own Claude Code plugin reads it.
+An interactive session loads that plugin from a copy laid in its state dir at launch,
+and the plugin draws a dim transcript row for each line of the batch as Claude delivers it:
+the line's arrival time on the session's Claude clock, its watch's command shortened and marked `*` when the line woke the session, then the line.
 A waiter exits 0 once a later waiter supersedes it, the runner stands it down, or `do-ride` is gone;
 shortly before its hook timeout it wakes the session with a line saying no watch line arrived and that ending the turn keeps waiting.
 

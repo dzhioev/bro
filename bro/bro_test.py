@@ -1799,7 +1799,7 @@ def _exited_batch(store: watches.Store, command: str) -> list[str]:
     time.sleep(0.01)
   batch = store.take()
   assert batch is not None
-  return batch.splitlines()
+  return batch.text().splitlines()
 
 
 class _ListedBro(BaseBro):
@@ -1952,7 +1952,8 @@ class TestWatchServiceTools:
         watches.slug(watches.SESSION_WATCH_COMMAND),
       )
       session_watch.command_file.write_text(f'{watches.SESSION_WATCH_COMMAND}\n')
-      session_watch.log.write_text(f'{watches.quiet("summon started (quest Q1 to reviewer)")}\n')
+      with watches.LineLog.open(session_watch) as line_log:
+        line_log.write(f'{watches.quiet("summon started (quest Q1 to reviewer)")}\n'.encode())
       run = StubRun()
       run.watch_store = owner.store
       server = _service_server(EchoBro(), run=run)

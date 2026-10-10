@@ -12,6 +12,7 @@ import select
 import shlex
 import shutil
 import signal
+import struct
 import subprocess
 import tempfile
 import threading
@@ -19,7 +20,7 @@ import time
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Self
+from typing import BinaryIO, Optional, Self
 
 from bro.base import spawn
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, format_size
@@ -34,15 +35,16 @@ PRODUCER_DIRECTORY_ENV = 'BRO_WATCH_DIRECTORY'
 PRODUCER_SLUG_ENV = 'BRO_WATCH_SLUG'
 PRODUCER_COMMAND_ENV = 'BRO_WATCH_COMMAND'
 PRODUCER_POLICY_ENV = 'BRO_WATCH_BRASH_POLICY'
-PRODUCER_JOURNAL_HEAD_ENV = 'BRO_WATCH_JOURNAL_HEAD'
-PRODUCER_JOURNAL_WAKE_ENV = 'BRO_WATCH_JOURNAL_WAKE'
+PRODUCER_JOURNAL_ENV = 'BRO_WATCH_JOURNAL'
 SESSION_WATCH_COMMAND = 'quest watch'
 _QUIET_MARK = b'\x1f'
 _PENDING_MARKER = '[...pending watch lines...]'
 _COMMAND_SUFFIX = '.command'
 _LOG_SUFFIX = '.log'
+_TIMES_SUFFIX = '.times'
 _OFFSET_SUFFIX = '.offset'
 _PID_SUFFIX = '.pid'
+_JOURNAL_SUFFIX = '.journal'
 _JOURNAL_HEAD_SUFFIX = '.journal-head'
 _JOURNAL_WAKE_SUFFIX = '.journal-wake'
 _WAKE_ON_QUIET_SUFFIX = '.wake-on-quiet'
@@ -54,6 +56,9 @@ _TERM_GRACE_SECONDS = 5.0
 _COMMAND_TAG_BYTES = 1_024
 _READ_CHUNK_BYTES = 65_536
 _LAST_LINE_BYTES = 4_096
+# one record of a watch's `.times` file: the offset in its log a line starts at,
+# and when the line's first byte arrived, in epoch milliseconds
+_ARRIVAL = struct.Struct('<QQ')
 _LINE_BREAK_ESCAPES = {
   '\n': r'\n',
   '\r': r'\r',
@@ -70,6 +75,22 @@ _LINE_BREAK_ESCAPES = {
 
 class WatchError(Exception):
   """A watch cannot be declared, found, or controlled."""
+
+
+def _visible(text: str) -> str:
+  return ''.join(_LINE_BREAK_ESCAPES.get(character, character) for character in text)
+
+
+def _command_tag(command: str) -> str:
+  visible = _visible(command)
+  encoded = visible.encode()
+  if len(encoded) <= _COMMAND_TAG_BYTES:
+    return f'[{visible}] '
+  digest = hashlib.sha256(encoded).hexdigest()[:12]
+  suffix = f' [...{format_size(len(encoded))}; sha256:{digest}]'
+  prefix_bytes = encoded[: _COMMAND_TAG_BYTES - len(suffix.encode())]
+  prefix = prefix_bytes.decode(errors='ignore')
+  return f'[{prefix}{suffix}] '
 
 
 def quiet(line: str) -> str:
@@ -169,6 +190,8 @@ class Cursor:
   line_size: Optional[int] = None
   line_remaining: Optional[int] = None
   quiet: bool = False
+  # when the line the cursor stands inside arrived, in epoch seconds
+  arrived: Optional[float] = None
 
   @classmethod
   def read(cls, path: Path) -> Self:
@@ -181,25 +204,29 @@ class Cursor:
     line_size = value.get('line_size')
     line_remaining = value.get('line_remaining')
     quiet = value.get('quiet', False)
-    if (line_size is None) != (line_remaining is None):
+    arrived = value.get('arrived')
+    if not (line_size is None) == (line_remaining is None) == (arrived is None):
       raise WatchError(f'{path} carries a malformed watch offset')
     if not isinstance(quiet, bool) or (quiet and line_size is None):
       raise WatchError(f'{path} carries a malformed watch offset')
     if line_size is not None and (
       not isinstance(line_size, int)
       or not isinstance(line_remaining, int)
+      or not isinstance(arrived, float)
       or line_size <= 0
       or line_remaining <= 0
     ):
       raise WatchError(f'{path} carries a malformed watch offset')
-    return cls(value['offset'], line_size, line_remaining, quiet)
+    return cls(value['offset'], line_size, line_remaining, quiet, arrived)
 
   def write(self, path: Path) -> None:
     staging = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-    value: dict[str, int] = {'offset': self.offset}
+    value: dict[str, int | float] = {'offset': self.offset}
     if self.line_size is not None:
-      assert self.line_remaining is not None
-      value.update(line_size=self.line_size, line_remaining=self.line_remaining)
+      assert self.line_remaining is not None and self.arrived is not None
+      value.update(
+        line_size=self.line_size, line_remaining=self.line_remaining, arrived=self.arrived
+      )
       if self.quiet:
         value['quiet'] = True
     staging.write_text(json.dumps(value))
@@ -213,6 +240,40 @@ class Line:
   remaining: int
   start: int
   quiet: bool
+  arrived: float
+
+
+@dataclass(frozen=True)
+class BatchLine:
+  """One line of a batch: the command of the watch that produced it, with its
+  line breaks escaped, None for a line no watch produced; what the line says;
+  whether it wakes the session; and when its first byte arrived, in epoch
+  seconds."""
+
+  command: Optional[str]
+  content: str
+  wakes: bool
+  arrived: float
+
+  @property
+  def text(self) -> str:
+    """The line as the model reads it, tagged with its command."""
+    return self.content if self.command is None else f'{_command_tag(self.command)}{self.content}'
+
+
+@dataclass(frozen=True)
+class Batch:
+  """The lines one wake delivers, and whether complete lines wait past them."""
+
+  lines: tuple[BatchLine, ...]
+  pending: bool = False
+
+  def text(self) -> str:
+    """The batch as the model reads it."""
+    rendered = [line.text for line in self.lines]
+    if self.pending:
+      rendered.append(_PENDING_MARKER)
+    return '\n'.join(rendered)
 
 
 @dataclass(frozen=True)
@@ -230,12 +291,21 @@ class Watch:
     return self.directory / f'{self.slug}{_LOG_SUFFIX}'
 
   @property
+  def times(self) -> Path:
+    return self.directory / f'{self.slug}{_TIMES_SUFFIX}'
+
+  @property
   def offset_file(self) -> Path:
     return self.directory / f'{self.slug}{_OFFSET_SUFFIX}'
 
   @property
   def pid_file(self) -> Path:
     return self.directory / f'{self.slug}{_PID_SUFFIX}'
+
+  @property
+  def journal_file(self) -> Path:
+    """The FIFO its command publishes journal heads through to its producer."""
+    return self.directory / f'{self.slug}{_JOURNAL_SUFFIX}'
 
   @property
   def journal_head_file(self) -> Path:
@@ -278,6 +348,13 @@ class Watch:
   def signal_journal_change(self) -> None:
     _signal_journal_change(self.journal_wake_file)
 
+  def publish_journal_head(self, head: int) -> None:
+    """Publish the journal head the watch's log has caught up with."""
+    staging = self.journal_head_file.with_name(f'{self.journal_head_file.name}.{os.getpid()}.tmp')
+    staging.write_text(f'{head}\n')
+    os.replace(staging, self.journal_head_file)
+    self.signal_journal_change()
+
   def last_complete_line(self) -> Optional[str]:
     """Return the bounded final complete line, or None when it is absent or wider."""
     try:
@@ -300,17 +377,81 @@ class Watch:
       return None
     return line.removeprefix(_QUIET_MARK).decode(errors='replace')
 
+  def arrival(self, offset: int) -> float:
+    """When the log line starting at `offset` began to arrive, in epoch seconds."""
+    try:
+      with self.times.open('rb') as records:
+        low, high = 0, records.seek(0, os.SEEK_END) // _ARRIVAL.size
+        while low < high:
+          middle = (low + high) // 2
+          records.seek(middle * _ARRIVAL.size)
+          start, milliseconds = _ARRIVAL.unpack(records.read(_ARRIVAL.size))
+          if start == offset:
+            return milliseconds / 1000
+          if start < offset:
+            low = middle + 1
+          else:
+            high = middle
+    except FileNotFoundError:
+      pass
+    raise WatchError(f'`{self.command}` log has no arrival time for its line at {offset}')
+
   def clear(self) -> None:
     for path in (
       self.command_file,
       self.log,
+      self.times,
       self.offset_file,
       self.pid_file,
+      self.journal_file,
       self.journal_head_file,
       self.journal_wake_file,
       self.wake_on_quiet_file,
     ):
       path.unlink(missing_ok=True)
+
+
+class LineLog:
+  """A producer's writer of its watch's log: what the command prints, each line's
+  arrival recorded in the watch's `.times` before its first byte reaches the log."""
+
+  def __init__(self, log: BinaryIO, records: BinaryIO) -> None:
+    self._log = log
+    self._records = records
+    self._offset = log.seek(0, os.SEEK_END)
+    self._at_line_start = self._offset == 0
+    if not self._at_line_start:
+      log.seek(self._offset - 1)
+      self._at_line_start = log.read(1) == b'\n'
+
+  @classmethod
+  @contextlib.contextmanager
+  def open(cls, watch: Watch) -> Generator[Self]:
+    with (
+      watch.log.open('a+b', buffering=0) as log,
+      watch.times.open('ab', buffering=0) as records,
+    ):
+      yield cls(log, records)
+
+  def write(self, data: bytes) -> None:
+    position = 0
+    while position < len(data):
+      if self._at_line_start:
+        self._records.write(_ARRIVAL.pack(self._offset, time.time_ns() // 1_000_000))
+        self._at_line_start = False
+      newline = data.find(b'\n', position)
+      end = len(data) if newline < 0 else newline + 1
+      piece = memoryview(data)[position:end]
+      while len(piece) > 0:
+        piece = piece[self._log.write(piece) :]
+      self._offset += end - position
+      self._at_line_start = newline >= 0
+      position = end
+
+  def end_line(self) -> None:
+    """Close the line the command left without its line break, if it did."""
+    if not self._at_line_start:
+      self.write(b'\n')
 
 
 class Store:
@@ -429,6 +570,7 @@ class Store:
       watch.command_file.write_text(watch.command)
       if wake_on_quiet:
         watch.wake_on_quiet_file.touch()
+      os.mkfifo(watch.journal_file)
       os.mkfifo(watch.journal_wake_file)
       ready_read_fd, ready_write_fd = os.pipe()
       environment = {
@@ -439,8 +581,7 @@ class Store:
         PRODUCER_DIRECTORY_ENV: str(self.directory),
         PRODUCER_SLUG_ENV: watch.slug,
         PRODUCER_COMMAND_ENV: watch.command,
-        PRODUCER_JOURNAL_HEAD_ENV: str(watch.journal_head_file),
-        PRODUCER_JOURNAL_WAKE_ENV: str(watch.journal_wake_file),
+        PRODUCER_JOURNAL_ENV: str(watch.journal_file),
       }
       if policy is None:
         environment.pop(PRODUCER_POLICY_ENV, None)
@@ -562,7 +703,15 @@ class Store:
             raise WatchError(f'`{watch.command}` log was truncated behind its committed offset')
           if cursor.line_remaining == read_size and log_file.read(1) != b'\n':
             raise WatchError(f'`{watch.command}` log changed behind its committed offset')
-          return Line(data, cursor.line_size, cursor.line_remaining, cursor.offset, cursor.quiet)
+          assert cursor.arrived is not None
+          return Line(
+            data,
+            cursor.line_size,
+            cursor.line_remaining,
+            cursor.offset,
+            cursor.quiet,
+            cursor.arrived,
+          )
 
         retained = bytearray()
         size = 0
@@ -577,18 +726,15 @@ class Store:
             keep = min(len(content), BYTE_LIMIT + 4 - len(retained))
             retained.extend(content[:keep])
           if newline >= 0:
+            arrived = watch.arrival(cursor.offset)
             if retained.startswith(_QUIET_MARK):
               mark_size = len(_QUIET_MARK)
               data = bytes(retained[mark_size:])
               remaining = size - mark_size
-              return Line(data, remaining, remaining, cursor.offset + mark_size, True)
-            return Line(bytes(retained), size, size, cursor.offset, False)
+              return Line(data, remaining, remaining, cursor.offset + mark_size, True, arrived)
+            return Line(bytes(retained), size, size, cursor.offset, False, arrived)
     except FileNotFoundError:
       return None
-
-  @staticmethod
-  def _visible(text: str) -> str:
-    return ''.join(_LINE_BREAK_ESCAPES.get(character, character) for character in text)
 
   @classmethod
   def _decoded_prefix(cls, data: bytes, limit: int, *, final: bool) -> tuple[str, int]:
@@ -601,7 +747,7 @@ class Store:
       decoded = decoder.decode(bytes((byte,)), final=False)
       if len(decoded) == 0:
         continue
-      visible = cls._visible(decoded)
+      visible = _visible(decoded)
       size = len(visible.encode())
       if used_bytes + size > limit:
         return ''.join(parts), pending_start
@@ -611,24 +757,12 @@ class Store:
       consumed = index + 1 - buffered_bytes
       pending_start = consumed
     if final and pending_start < len(data):
-      visible = cls._visible(decoder.decode(b'', final=True))
+      visible = _visible(decoder.decode(b'', final=True))
       size = len(visible.encode())
       if used_bytes + size <= limit:
         parts.append(visible)
         consumed = len(data)
     return ''.join(parts), consumed
-
-  @classmethod
-  def _command_tag(cls, command: str) -> str:
-    visible = cls._visible(command)
-    encoded = visible.encode()
-    if len(encoded) <= _COMMAND_TAG_BYTES:
-      return f'[{visible}] '
-    digest = hashlib.sha256(encoded).hexdigest()[:12]
-    suffix = f' [...{format_size(len(encoded))}; sha256:{digest}]'
-    prefix_bytes = encoded[: _COMMAND_TAG_BYTES - len(suffix.encode())]
-    prefix = prefix_bytes.decode(errors='ignore')
-    return f'[{prefix}{suffix}] '
 
   @classmethod
   def _line_fits(cls, line: Line, fixed: str, available: int) -> bool:
@@ -694,13 +828,14 @@ class Store:
       for candidate in ordered[watch_index + 1 :]
     )
 
-  def take(self) -> Optional[str]:
+  def take(self) -> Optional[Batch]:
     """Commit and return the next bounded, fair batch, or None while no complete
     line that wakes the session waits."""
     marker_bytes = len(f'{_PENDING_MARKER}\n'.encode())
     byte_budget = BYTE_LIMIT - marker_bytes
     line_budget = DEFAULT_LIMIT - 1
-    pieces: list[str] = []
+    pieces: list[BatchLine] = []
+    pending = False
     used_bytes = 0
     cut_watch: Optional[Watch] = None
     last_served_watch: Optional[Watch] = None
@@ -720,7 +855,7 @@ class Store:
           if line is None:
             break
 
-          tag = self._command_tag(watch.command)
+          tag = _command_tag(watch.command)
           continuing = cursor.line_remaining is not None
           wide = continuing or not self._line_fits(line, tag, byte_budget)
           size_marker = f'[line: {format_size(line.size)}] ' if wide and not continuing else ''
@@ -748,10 +883,13 @@ class Store:
           if remaining == 0:
             next_cursor = Cursor(line.start + content_consumed + 1)
           else:
-            next_cursor = Cursor(line.start + content_consumed, line.size, remaining, line.quiet)
-          rendered = f'{fixed}{text}\n'
-          pieces.append(rendered)
-          used_bytes += len(rendered.encode())
+            next_cursor = Cursor(
+              line.start + content_consumed, line.size, remaining, line.quiet, line.arrived
+            )
+          content = f'{size_marker}{text}'
+          wakes = not line.quiet or watch.wakes_on_quiet()
+          pieces.append(BatchLine(_visible(watch.command), content, wakes, line.arrived))
+          used_bytes += len(f'{tag}{content}'.encode()) + 1
           cursor = next_cursor
           cursor.write(watch.offset_file)
           last_served_watch = watch
@@ -765,15 +903,15 @@ class Store:
 
       if cut_watch is not None:
         (self.directory / _TURN_FILENAME).write_text(f'{cut_watch.slug}\n')
-        if self._has_waking_line_locked(ordered):
-          pieces.append(f'{_PENDING_MARKER}\n')
+        pending = self._has_waking_line_locked(ordered)
 
     if len(pieces) == 0:
       return None
-    result = ''.join(pieces).rstrip('\n')
-    if len(result.splitlines()) > DEFAULT_LIMIT or len(result.encode()) > BYTE_LIMIT:
+    batch = Batch(tuple(pieces), pending)
+    text = batch.text()
+    if len(text.splitlines()) > DEFAULT_LIMIT or len(text.encode()) > BYTE_LIMIT:
       raise RuntimeError('watch batch exceeded the shared output bounds')
-    return result
+    return batch
 
 
 class Owner:
@@ -856,20 +994,19 @@ def watch_dir() -> Path:
 
 
 def publish_journal_head(head: int) -> None:
-  """Publish the ordered journal head after a watched stream emitted through it."""
+  """Publish the ordered journal head after a watched stream emitted through it.
+
+  The head goes to the stream's producer, which publishes it once the output
+  written before it is in the watch's log."""
   if not isinstance(head, int) or isinstance(head, bool) or head < 0:
     raise ValueError('journal head must be a non-negative integer')
-  raw_path = os.environ.get(PRODUCER_JOURNAL_HEAD_ENV)
-  raw_wake = os.environ.get(PRODUCER_JOURNAL_WAKE_ENV)
-  if raw_path is None and raw_wake is None:
+  raw_path = os.environ.get(PRODUCER_JOURNAL_ENV)
+  if raw_path is None:
     return
-  if raw_path is None or raw_wake is None:
-    raise WatchError('watch producer published an incomplete journal synchronization environment')
-  path = Path(raw_path)
-  staging = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-  staging.write_text(f'{head}\n')
-  os.replace(staging, path)
-  _signal_journal_change(Path(raw_wake))
+  journal = os.open(raw_path, os.O_WRONLY | os.O_NONBLOCK)
+  with os.fdopen(journal, 'wb', buffering=0) as writer:
+    os.set_blocking(journal, True)
+    writer.write(f'{head}\n'.encode())
 
 
 def session_watch_admitted(

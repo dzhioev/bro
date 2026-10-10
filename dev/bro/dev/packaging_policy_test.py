@@ -39,12 +39,15 @@ def test_finds_every_test_module_convention(tmp_path):
     'thing/liveness_test_helper.py',
     'thing/run_tests.py',
     'thing/data/api_test.json',
+    'thing/plugin/hooks/register.ts',
+    'thing/plugin/hooks/register.test.ts',
   )
 
   assert shipped_test_modules(wheel) == [
     'thing/api_test.py',
     'thing/conftest.py',
     'thing/liveness_test_helper.py',
+    'thing/plugin/hooks/register.test.ts',
   ]
 
 

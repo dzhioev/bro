@@ -160,7 +160,7 @@ class Runner:
           batch = self.watch_store.take()
           self._watch_delivery_pending = batch is not None
         if batch is not None:
-          self.deliver(batch)
+          self.deliver(batch.text())
         else:
           self._watch_pump_cancelled.wait(_WATCH_POLL_SECONDS)
     except BaseException as error:

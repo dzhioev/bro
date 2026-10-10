@@ -143,6 +143,7 @@ _SESSION_SETTINGS_JSON: dict = {
   'prefersReducedMotion': True,
   'feedbackSurveyRate': 0,
   'tui': 'fullscreen',
+  'timeFormat': '24-hour',
   # keep transcripts forever (no disable value exists); they back the
   # session recording
   'cleanupPeriodDays': 36500,

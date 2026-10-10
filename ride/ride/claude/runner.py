@@ -21,7 +21,7 @@ from bro.monitor import SESSION_DIR_ENV, harness_session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
 from bro.workspace.paths import ISOLATION_ENV
-from ride.claude import claude_release, native_tools
+from ride.claude import claude_plugin, claude_release, native_tools
 from ride.claude.claude_argv import build_claude_launch
 from ride.claude.claude_auth import apply_claude_auth
 from ride.claude.claude_config import claude_config_dir, claude_projects_dir, latest_jsonl
@@ -272,6 +272,7 @@ def run_session(spec: 'SessionRun') -> int:
       endpoint=server.endpoint,
       brash_policy=policy,
       activity_file=spec.activity_file,
+      plugin_dir=None if spec.solo else claude_plugin.provision(_claude_state_dir()),
     )
     if os.environ.get('TRAILS_DISABLED') is None:
       try:
@@ -303,6 +304,7 @@ def run_session(spec: 'SessionRun') -> int:
 
     env = {**os.environ}
     env['CLAUDE_CODE_TMPDIR'] = str(_claude_temp_dir())
+    env[claude_plugin.REWAKE_RECORD_ENV] = str(waiters.rewake_record)
     _apply_mcp_backstops(env)
     # claude resolves fast-mode availability from a stored OAuth credentials
     # file, and left to guess without one reports it disabled by an organization

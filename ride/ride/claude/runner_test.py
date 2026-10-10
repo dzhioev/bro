@@ -21,6 +21,7 @@ from bro.mcp import ANY, brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import RUNTIME_ENV, SUMMONED_ENV
 from ride.claude.claude_argv import ClaudeLaunch
+from ride.claude.claude_plugin import REWAKE_RECORD_ENV
 from ride.claude.fake_claude_test_helper import fake_claude_env
 from ride.claude.interrupt import StreamedRun
 from ride.claude.mcp import MCPEndpoint
@@ -436,6 +437,27 @@ class TestSessionRun:
       assert prefix.parent == h.session_dir / 'claude'
       assert os.access(prefix, os.X_OK)
       assert env['PATH'] in prefix.read_text()
+
+  def test_an_interactive_session_loads_its_own_copy_of_the_ride_plugin(
+    self, monkeypatch, tmp_path
+  ):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      assert ride_runner.run_session(_spec()) == 0
+      plugin_dir = h.build.call_args.kwargs['plugin_dir']
+      assert plugin_dir.parent == h.session_dir / 'claude'
+      assert (plugin_dir / '.claude-plugin' / 'plugin.json').is_file()
+      environment = h.run_claude.call_args.args[2]
+      assert environment[REWAKE_RECORD_ENV] == str(WaiterState.for_session().rewake_record)
+
+  def test_a_solo_session_loads_no_plugin(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with (
+      _Harness(tmp_path) as h,
+      patch('ride.claude.runner._run_claude_root_solo', return_value=0),
+    ):
+      assert ride_runner.run_session(_spec(solo=True, hold='unattended', prompt='go')) == 0
+      assert h.build.call_args.kwargs['plugin_dir'] is None
 
   def test_the_session_skips_claudes_fast_mode_org_check(self, monkeypatch, tmp_path):
     # pins the name claude itself reads
