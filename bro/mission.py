@@ -898,21 +898,24 @@ class WatchGap:
 WatchItem = WatchEvent | WatchGap
 
 
-def _event_head(client: 'Client', *, rearm: bool = False) -> int:
+def _read_head(client: 'Client', field: str, action: str) -> int:
   from bro.broker.dispatcher import EVENTS
 
   value = _read_value(client, EVENTS, {}, timeout=ACCEPT_TIMEOUT)
-  head = value.get('head')
+  head = value.get(field)
   if not isinstance(head, int) or isinstance(head, bool) or head < 0:
-    action = 're-arm' if rearm else 'arm'
-    raise MissionError(f'events {action} returned a malformed head')
+    raise MissionError(f'events {action} returned a malformed {field}')
   return head
 
 
-def event_head() -> int:
-  """Read the current ordered journal head for this session."""
+def _event_head(client: 'Client', *, rearm: bool = False) -> int:
+  return _read_head(client, 'head', 're-arm' if rearm else 'arm')
+
+
+def visible_event_head() -> int:
+  """Read the newest journal event this session's stream can be handed, 0 when none."""
   with open_client() as client:
-    return _event_head(client)
+    return _read_head(client, 'visible_head', 'head read')
 
 
 def _stream_event_relevant(
