@@ -81,3 +81,56 @@ async def test_claude_harness_terminates_when_raise_delivery_fails(monkeypatch):
     await claude_harness.CLAUDE.end_session('broker down', 'raised')
 
   terminate_session.assert_called_once_with(status=RAISE_EXIT_STATUS)
+
+
+def test_claude_resolution_refuses_an_api_recipe():
+  from bro.llm.providers import LLMSelectionError
+
+  with pytest.raises(LLMSelectionError, match='not openai'):
+    claude_harness.CLAUDE.resolve_llm('openai:', 'bro')
+
+
+def test_claude_resolution_keeps_its_default_recipe():
+  from bro.llm.llms.claude_code import LLMSpec
+
+  assert claude_harness.CLAUDE.resolve_llm(None, 'bro') == LLMSpec()
+
+
+def test_claude_bundle_provisioning_copies_a_verified_executable(monkeypatch, tmp_path):
+  import hashlib
+
+  from ride.claude import provisioning
+
+  binary = tmp_path / 'cached'
+  binary.write_bytes(b'engine')
+  binary.chmod(0o755)
+  binary.with_suffix('.sha256').write_text(hashlib.sha256(binary.read_bytes()).hexdigest())
+  requests = []
+
+  def cached(version, platform):
+    requests.append((version, platform))
+    return binary
+
+  monkeypatch.setattr(provisioning.claude_release, 'cached_binary', cached)
+  root = tmp_path / 'bundle'
+  root.mkdir()
+
+  files = claude_harness.CLAUDE.provision_bundle(root, ('linux', 'x86_64', 'glibc'))
+  carried = provisioning.claude_release.verified_binary(root / 'claude' / 'claude')
+  assert carried.read_bytes() == binary.read_bytes()
+  assert set(files) == {
+    str(path.relative_to(root)) for path in (carried, carried.with_suffix('.sha256'))
+  }
+  assert requests == [(provisioning.claude_code_version(), 'linux-x64')]
+
+
+def test_claude_bootstrap_does_not_download_inside_the_provisioned_image(monkeypatch):
+  probe = MagicMock()
+  monkeypatch.setattr(claude_harness.CLAUDE, 'check_runtime', probe)
+  monkeypatch.setenv('RIDE_IN_CONTAINER', '1')
+
+  claude_harness.CLAUDE.setup_runtime()
+  probe.assert_not_called()
+  monkeypatch.delenv('RIDE_IN_CONTAINER')
+  claude_harness.CLAUDE.setup_runtime()
+  probe.assert_called_once_with()

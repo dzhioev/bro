@@ -247,29 +247,16 @@ def find_container_id(session: Path) -> Optional[str]:
   return None if len(ids) == 0 else ids[0]
 
 
-def _hash_files(inputs: list[tuple[str, Path]], seed: str = '') -> str:
-  digest = hashlib.sha256(seed.encode())
-  for label, path in inputs:
-    if not path.is_file():
-      continue
-    digest.update(label.encode())
-    digest.update(b'\0')
-    digest.update(path.read_bytes())
-  return digest.hexdigest()[:12]
-
-
 def runtime_image_tag(python_version: Optional[str] = None) -> str:
   version = python_version or f'{sys.version_info.major}.{sys.version_info.minor}'
-  inputs = [(name, path) for name, path in sorted(build_context.RUNTIME_FILES.items())]
-  inputs.append(('project.Dockerfile', CONTAINER_DIR / 'project.Dockerfile'))
-  inputs.extend(
-    (
-      ('claude-code-version', build_context.CLAUDE_CODE_VERSION_FILE),
-      ('uv-version', build_context.UV_VERSION_FILE),
-    )
-  )
-  seed = '\0'.join([version, *(f'{name}={value}' for name, value in sorted(IMAGE_ENV.items()))])
-  return f'{_RUNTIME_IMAGE_REPOSITORY}:{_hash_files(inputs, seed=seed)}'
+  entries, arguments = build_context.runtime_inputs()
+  arguments.update({f'IMAGE_{name}': value for name, value in IMAGE_ENV.items()})
+  seed = '\0'.join([version, *(f'{name}={value}' for name, value in sorted(arguments.items()))])
+  digest = hashlib.sha256(seed.encode())
+  digest.update(build_context.UV_VERSION_FILE.read_bytes())
+  digest.update((CONTAINER_DIR / 'project.Dockerfile').read_bytes())
+  digest.update(build_context.assemble_runtime(entries))
+  return f'{_RUNTIME_IMAGE_REPOSITORY}:{digest.hexdigest()[:12]}'
 
 
 def project_image_tag(runtime_image: str, project: Repository | Path) -> Optional[str]:
@@ -314,15 +301,16 @@ def prune_superseded_images(current: str) -> None:
 
 
 def build_runtime_image(tag: str, python_version: str) -> None:
-  claude_version = build_context.claude_code_version()
   uv_version = build_context.UV_VERSION_FILE.read_text().strip()
-  log.info(
-    'building runtime image %s (python %s, claude-code %s, uv %s)',
-    tag,
-    python_version,
-    claude_version,
-    uv_version,
+  entries, arguments = build_context.runtime_inputs()
+  arguments.update(
+    {
+      'PYTHON_VERSION': python_version,
+      'UV_VERSION': uv_version,
+      **{f'IMAGE_{name}': value for name, value in IMAGE_ENV.items()},
+    }
   )
+  log.info('building runtime image %s (python %s, uv %s)', tag, python_version, uv_version)
   subprocess.run(
     [
       'docker',
@@ -331,20 +319,14 @@ def build_runtime_image(tag: str, python_version: str) -> None:
       tag,
       '-f',
       build_context.DOCKERFILE_PATH,
-      '--build-arg',
-      f'PYTHON_VERSION={python_version}',
-      '--build-arg',
-      f'CLAUDE_CODE_VERSION={claude_version}',
-      '--build-arg',
-      f'UV_VERSION={uv_version}',
       *(
         argument
-        for name, value in IMAGE_ENV.items()
-        for argument in ('--build-arg', f'IMAGE_{name}={value}')
+        for name, value in sorted(arguments.items())
+        for argument in ('--build-arg', f'{name}={value}')
       ),
       '-',
     ],
-    input=build_context.assemble_runtime(),
+    input=build_context.assemble_runtime(entries),
     check=True,
   )
 

@@ -19,8 +19,6 @@ from bro.base import host_config
 from bro.base.args import Parser
 
 if TYPE_CHECKING:
-  from bro.llm.llm import NativeLLMSpec
-  from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
   from bro.llm.providers import LLMSelection
 
 # the flags `--llm` speaks for, and so cannot be combined with.
@@ -145,41 +143,6 @@ def with_host_defaults(
       ) from error
     selection = selection.over(parsed)
   return selection
-
-
-def resolve_native(base: 'NativeLLMSpec', selection: 'LLMSelection') -> 'NativeLLMSpec':
-  """the recipe a bro-native launcher runs: `selection` over the bro's own spec.
-
-  A selection naming a harness that drives its own loop is refused rather than
-  taken as a request to launch on that harness — these flags choose a model.
-  """
-  from bro.llm.llm import NativeLLMSpec
-  from bro.llm.providers import LLMSelectionError, resolve
-
-  spec = resolve(base, selection)
-  if not isinstance(spec, NativeLLMSpec):
-    raise LLMSelectionError(
-      f'{spec.TYPE} runs its own agent loop, so a bro cannot be launched against it here; '
-      f'run the bro under that harness with `ride solo|along --harness claude --llm {selection.format()}`'
-    )
-  return spec
-
-
-def resolve_claude(selection: 'LLMSelection') -> 'ClaudeCodeSpec':
-  """the recipe a claude session runs: `selection` over Claude Code's own default.
-
-  A selection naming another provider is refused — the session is Claude Code.
-  """
-  from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
-  from bro.llm.providers import LLMSelectionError, resolve
-
-  spec = resolve(ClaudeCodeSpec(), selection)
-  if not isinstance(spec, ClaudeCodeSpec):
-    raise LLMSelectionError(
-      f'a claude session runs Claude Code, not {spec.TYPE}; run a bro against it with '
-      f'`bro run <bro> --llm {selection.format()}`'
-    )
-  return spec
 
 
 def canonicalize(args: dict, selection: 'LLMSelection') -> Optional[str]:

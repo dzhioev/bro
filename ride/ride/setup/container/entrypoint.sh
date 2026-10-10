@@ -7,14 +7,12 @@ source /usr/local/lib/bro-shell/prelude.sh
 if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
   TARGET_UID="$(stat -c '%u' /workspace)"
   TARGET_GID="$(stat -c '%g' /workspace)"
-  # skip remapping when detected uid is 0 — on Docker for Mac, virtiofs reports
-  # bind mounts as root-owned but handles permissions transparently; remapping to
-  # uid 0 would make claude refuse --dangerously-skip-permissions
+  # Docker for Mac reports root-owned mounts but handles permissions transparently.
   if [ "$TARGET_UID" != "0" ]; then
     if [ "$(id -u ride)" != "$TARGET_UID" ] || [ "$(id -g ride)" != "$TARGET_GID" ]; then
       groupmod -o -g "$TARGET_GID" ride
       usermod -o -u "$TARGET_UID" -g "$TARGET_GID" ride
-      chown ride:ride /home/ride /home/ride/.claude
+      chown -R ride:ride /home/ride
     fi
   fi
   # the scoped credential store is `docker cp`'d into /home/ride/.bro before start

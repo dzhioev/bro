@@ -1,16 +1,18 @@
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 from bro.harness import get_harness as load_harness, installed_harness_names
 from bro.llm.llm import LLMSpec
 from ride.scope import ScopeRecipe
-from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
+  from ride.workspace.model import Workspace
 
 
 @dataclass(frozen=True)
@@ -19,6 +21,15 @@ class ContainerExtras:
 
   env: dict[str, str]
   mounts: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RuntimeImage:
+  """Instructions and assets added to the shared runtime image."""
+
+  dockerfile: str = ''
+  files: dict[str, bytes] = field(default_factory=dict)
+  build_arguments: dict[str, str] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -31,7 +42,7 @@ class SessionHarness(Protocol):
 
   def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec: ...
 
-  def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]: ...
+  def preflight_auth(self, spec: SessionSpec, scoped: ScopedSecrets) -> Optional[str]: ...
 
   def session_exists(self, workspace: Workspace) -> bool: ...
 
@@ -39,26 +50,32 @@ class SessionHarness(Protocol):
 
   def read_subject(self, workspace: Workspace) -> str | None: ...
 
-  def prepare_session(self, run: 'SessionRun') -> None: ...
+  def prepare_session(self, run: SessionRun) -> None: ...
 
   def check_runtime(self) -> None: ...
+
+  def setup_runtime(self) -> None: ...
+
+  def runtime_image(self) -> RuntimeImage: ...
+
+  def provision_bundle(self, root: Path, target: tuple[str, ...]) -> tuple[str, ...]: ...
 
   def clean_cache(self, *, dry_run: bool = False) -> None:
     """Remove unused host-wide caches and report what was removed or retained."""
     ...
 
-  def run_session(self, spec: 'SessionRun') -> int: ...
+  def run_session(self, spec: SessionRun) -> int: ...
 
   def container_extras(
-    self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
+    self, spec: SessionSpec, workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras: ...
 
   def prepare_unboxed_env(
-    self, spec: 'SessionSpec', records: Path, tree: Path, env: dict[str, str]
+    self, spec: SessionSpec, records: Path, tree: Path, env: dict[str, str]
   ) -> None: ...
 
   def prepare_boxed_member_env(
-    self, spec: 'SessionSpec', records: Path, member_root: PurePath, env: dict[str, str]
+    self, spec: SessionSpec, records: Path, member_root: PurePath, env: dict[str, str]
   ) -> None: ...
 
 

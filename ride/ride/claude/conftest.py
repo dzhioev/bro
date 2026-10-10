@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from ride.claude import claude_release
-from ride.workspace.build_context import claude_code_version
+from ride.claude.provisioning import claude_code_version
 
 
 @pytest.fixture(scope='session')

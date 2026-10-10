@@ -8,13 +8,15 @@ import tempfile
 import tomllib
 from pathlib import Path, PurePosixPath
 
+from bro.harness import installed_harness_names
 from bro.shell import shell_dir
 from bro.workspace.project import project_config
+from ride.harness import get_harness
+from ride.provisioning import relative_file
 from ride.repository import Repository, as_repository
 
 SETUP_DIR = Path(__file__).resolve().parent.parent / 'setup'
 CONTAINER_DIR = SETUP_DIR / 'container'
-CLAUDE_CODE_VERSION_FILE = CONTAINER_DIR / 'claude-code-version'
 SHELL_DIR = shell_dir()
 UV_VERSION_FILE = SHELL_DIR / 'uv-version'
 SHELL_HELPERS = ('prelude.sh', 'log.sh', 'strict.sh', 'install_awscli.sh')
@@ -32,11 +34,6 @@ PROJECT_FILES = {DOCKERFILE_PATH: CONTAINER_DIR / 'project.Dockerfile'}
 
 _FIXED_MTIME = 0
 _INJECTED_MODE = 0o644
-
-
-def claude_code_version() -> str:
-  """the Claude Code version every managed session runs."""
-  return CLAUDE_CODE_VERSION_FILE.read_text().strip()
 
 
 def _local_member_directories(project: Path) -> list[Path]:
@@ -183,10 +180,28 @@ def _archive(entries: dict[str, tuple[bytes, int]]) -> bytes:
   return buffer.getvalue()
 
 
-def assemble_runtime() -> bytes:
-  return _archive(
-    {name: (path.read_bytes(), _INJECTED_MODE) for name, path in RUNTIME_FILES.items()}
-  )
+def runtime_inputs() -> tuple[dict[str, tuple[bytes, int]], dict[str, str]]:
+  entries = {name: (path.read_bytes(), _INJECTED_MODE) for name, path in RUNTIME_FILES.items()}
+  arguments = {}
+  dockerfile = entries[DOCKERFILE_PATH][0].decode()
+  for name in installed_harness_names():
+    image = get_harness(name).runtime_image()
+    dockerfile += f'\n# harness: {name}\n{image.dockerfile}\n'
+    for relative, content in image.files.items():
+      relative_file(relative)
+      entries[f'{INJECTED_PREFIX}/harnesses/{name}/{relative}'] = (content, _INJECTED_MODE)
+    for key, value in image.build_arguments.items():
+      if key in arguments or key in ('PYTHON_VERSION', 'UV_VERSION') or key.startswith('IMAGE_'):
+        raise ValueError(f'harness image build argument claimed twice: {key}')
+      arguments[key] = value
+  entries[DOCKERFILE_PATH] = (dockerfile.encode(), _INJECTED_MODE)
+  return entries, arguments
+
+
+def assemble_runtime(entries: dict[str, tuple[bytes, int]] | None = None) -> bytes:
+  if entries is None:
+    entries, _arguments = runtime_inputs()
+  return _archive(entries)
 
 
 def assemble_project(project: Repository | Path) -> bytes:

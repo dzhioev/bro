@@ -244,7 +244,9 @@ def test_runtime_build_passes_the_packaged_uv_pin(monkeypatch):
     'run',
     lambda arguments, **keywords: calls.append((arguments, keywords)) or _FakeProc(),
   )
-  monkeypatch.setattr(workspace_docker.build_context, 'assemble_runtime', lambda: b'context')
+  monkeypatch.setattr(
+    workspace_docker.build_context, 'assemble_runtime', lambda entries=None: b'context'
+  )
 
   workspace_docker.build_runtime_image('runtime:test', '3.12')
 
@@ -263,7 +265,9 @@ def test_runtime_build_passes_the_image_environment(monkeypatch):
     'run',
     lambda arguments, **keywords: calls.append((arguments, keywords)) or _FakeProc(),
   )
-  monkeypatch.setattr(workspace_docker.build_context, 'assemble_runtime', lambda: b'context')
+  monkeypatch.setattr(
+    workspace_docker.build_context, 'assemble_runtime', lambda entries=None: b'context'
+  )
 
   workspace_docker.build_runtime_image('runtime:test', '3.12')
 
