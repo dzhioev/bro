@@ -413,3 +413,43 @@ def test_own_quest_event_visibility_is_limited_to_chat_transitions():
   assert [event['transition'] for event in events] == ['listening', 'message', 'refused']
   assert journal.visible_by_id('child-peer', child, {'child-peer': 'child'})
   assert not journal.visible('child-peer', child, {'child-peer': 'child'})
+
+
+def test_the_visible_head_is_the_newest_event_the_caller_is_handed():
+  journal = Journal()
+  root = journal.open('root', 'root', None, None, {}, type='bro')
+  journal.bind(root, 'root-peer')
+  child = journal.open(
+    'child', 'summon', 'root', 'root-peer', {}, talk=frozenset({'worker.say'}), type='bro'
+  )
+  journal.bind(child, 'child-peer')
+  workers = {'root-peer': 'root', 'child-peer': 'child'}
+  assert journal.visible_head('child-peer', workers) == 0
+
+  journal.started(child)
+  journal.listening(child)
+  journal.open('sibling', 'summon', 'root', 'root-peer', {}, type='bro')
+  journal.end(child, {'outcome': 'ok'})
+
+  _, events = journal.events_after(0, 'child-peer', workers)
+  assert journal.visible_head('child-peer', workers) == events[-1]['seq'] < journal.head
+  assert journal.visible_head('root-peer', workers) == journal.head
+
+
+def test_the_visible_head_outlives_the_event_ring(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_EVENTS', 2)
+  journal = Journal()
+  root = journal.open('root', 'root', None, None, {}, type='bro')
+  journal.bind(root, 'root-peer')
+  child = journal.open('child', 'summon', 'root', 'root-peer', {}, type='bro')
+  sibling = journal.open('sibling', 'summon', 'root', 'root-peer', {}, type='bro')
+  journal.bind(sibling, 'sibling-peer')
+  journal.end(child, {'outcome': 'ok'})
+  ended = journal.head
+  nephew = journal.open('nephew', 'summon', 'sibling', 'sibling-peer', {}, type='bro')
+  journal.started(nephew)
+  workers = {'root-peer': 'root', 'sibling-peer': 'sibling'}
+
+  _, retained = journal.events_after(0, 'root-peer', workers)
+  assert retained == []
+  assert journal.visible_head('root-peer', workers) == ended

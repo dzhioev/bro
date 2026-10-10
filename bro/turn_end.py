@@ -90,8 +90,9 @@ def _live_work(port: TurnEnd) -> LiveWork:
   missions = tuple(mission.live_missions()) if has_broker else ()
   reply_awaited = session_watch_alive and has_broker and _reply_awaited()
   # read after every broker state read above, so whatever changed since them
-  # is an event the session watch must publish before a verdict
-  journal_head = mission.event_head() if has_broker and session_watch_alive else None
+  # that this session can see is an event the session watch must publish
+  # before a verdict
+  journal_head = mission.visible_event_head() if has_broker and session_watch_alive else None
   published_head = (
     session_watch.journal_head() if session_watch is not None and session_watch_alive else None
   )

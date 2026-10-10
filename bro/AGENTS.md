@@ -54,7 +54,7 @@ A subpackage with a map of its own is pointed at, not described here.
   `watch-run` executes each command line under `job_supervisor`, in brash under the policy its starter names or else in bash, detached from its starter but held by an owner-liveness handle.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
 - `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered waking lines, harness background work, and live session traffic.
-  Settlement blocks on the store's journal signal until the session watch has emitted through the snapshot it reads.
+  Settlement blocks on the store's journal signal until the session watch has emitted through the newest event the session can see in the snapshot it reads.
   A distinct live set receives at most one shared notice;
   a second end with uncovered work ends the run, while covered work and work with a wake route keep it waiting.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;

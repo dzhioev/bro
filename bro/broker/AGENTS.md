@@ -99,6 +99,7 @@ Args share one bounded-head implementation for memory and audit.
 Trail ids and terminal reasons use a bounded journal projection measured by the same encoded cost.
 A caller sees the missions it owns and nothing beneath them.
 It may query the mission its worker undertakes by id and see that mission's chat transitions, but it cannot list that mission or see its lifecycle transitions.
+A bare `events {}` read answers the root's `head` beside the caller's `visible_head`, the newest event visible to it whether or not the event ring still retains it, or 0.
 
 ## Dispatcher invariants
 

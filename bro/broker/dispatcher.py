@@ -692,7 +692,11 @@ class Dispatcher:
       self.reply(peer, {'outcome': 'denied', 'error': error})
       return
     if 'after' not in args and 'wait' not in args:
-      self.reply(peer, {'outcome': 'ok', 'value': {'head': self.journal.head, 'events': []}})
+      heads = {
+        'head': self.journal.head,
+        'visible_head': self.journal.visible_head(peer, self.workers),
+      }
+      self.reply(peer, {'outcome': 'ok', 'value': {**heads, 'events': []}})
       return
     after = int(args.get('after', self.journal.head))
     try:

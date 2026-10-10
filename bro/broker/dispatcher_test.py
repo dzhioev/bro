@@ -982,12 +982,15 @@ def test_events_from_now_and_retained_history():
   dispatcher.on_message('requester', _request(EVENTS, {}, 'now'))
   assert runtime.sent[-1][1].payload['value'] == {
     'head': dispatcher.journal.head,
+    'visible_head': 0,
     'events': [],
   }
   dispatcher.journal.open('child', 'summon', 'root-quest', 'requester', {}, type='bro')
   dispatcher.on_message('requester', _request(EVENTS, {'after': 0}, 'history'))
   history = runtime.sent[-1][1].payload['value']['events']
   assert [event['mission'] for event in history] == ['child']
+  dispatcher.on_message('requester', _request(EVENTS, {}, 'visible'))
+  assert runtime.sent[-1][1].payload['value']['visible_head'] == history[-1]['seq']
 
 
 def test_events_pages_every_visible_event_inside_the_frame_cap():

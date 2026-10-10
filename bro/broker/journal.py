@@ -155,6 +155,7 @@ class Journal:
     self.records: OrderedDict[str, Record] = OrderedDict()
     self.lineage: dict[str, Lineage] = {}
     self._events: deque[Event] = deque(maxlen=MAX_EVENTS)
+    self._visible_heads: dict[str, int] = {}
     self._subscribers: list[Subscriber] = []
     self._seq = 0
     self._order = 0
@@ -440,6 +441,12 @@ class Journal:
         break
     return self.head, visible
 
+  def visible_head(self, caller: Peer, workers: dict[Peer, str]) -> int:
+    """the newest event visible to `caller`, whether or not the event ring still
+    retains it; 0 when there is none."""
+    caller_quest = workers.get(caller)
+    return self._visible_heads.get(caller_quest, 0) if caller_quest is not None else 0
+
   def change_event(self) -> asyncio.Event:
     return self._changed
 
@@ -464,6 +471,10 @@ class Journal:
       payload,
     )
     self._events.append(event)
+    if record.parent is not None:
+      self._visible_heads[record.parent] = event.seq
+    if transition in CHAT_TRANSITIONS:
+      self._visible_heads[record.mission_id] = event.seq
     changed = self._changed
     self._changed = asyncio.Event()
     changed.set()

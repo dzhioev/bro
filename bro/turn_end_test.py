@@ -13,6 +13,7 @@ from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
 from bro.broker.transport import connect
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.quest_test_helper import TIMEOUT, SpawnedEndpoint, running_live_broker
+from bro.run_lifecycle import RunLifecycle
 
 
 @dataclass
@@ -81,7 +82,6 @@ def live_facts(monkeypatch):
   monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: False)
   monkeypatch.setattr(turn_end.summon, 'talk', lambda: ())
-  monkeypatch.setattr(turn_end.mission, 'event_head', lambda: 0)
 
 
 def _mission(mission_id: str, worker_type: str = 'bro') -> mission.LiveMission:
@@ -93,6 +93,7 @@ def _with_broker(monkeypatch, *missions: mission.LiveMission, reply_awaited: boo
   monkeypatch.setenv(BROKER_CHANNEL, 'unused')
   monkeypatch.setattr(turn_end.mission, 'live_missions', lambda: list(missions))
   monkeypatch.setattr(turn_end, '_reply_awaited', lambda: reply_awaited)
+  monkeypatch.setattr(turn_end.mission, 'visible_event_head', lambda: 0)
 
 
 @pytest.mark.parametrize(
@@ -116,7 +117,7 @@ def test_silent_wait_verdict_precedes_background_work(monkeypatch, store, missio
 
 def test_settlement_waits_for_the_session_watch_journal_head(monkeypatch):
   _with_broker(monkeypatch)
-  monkeypatch.setattr(turn_end.mission, 'event_head', lambda: 7)
+  monkeypatch.setattr(turn_end.mission, 'visible_event_head', lambda: 7)
   watch = FakeWatch(watches.SESSION_WATCH_COMMAND, head=6)
   port = FakePort(FakeStore([watch]))
 
@@ -290,7 +291,42 @@ async def test_a_reply_landing_after_the_journal_head_read_keeps_the_turn_waitin
       _chat_past(session.quest, asked_at)
       return 0
 
-    monkeypatch.setattr(turn_end.mission, 'event_head', head_read_before_the_reply)
+    monkeypatch.setattr(turn_end.mission, 'visible_event_head', head_read_before_the_reply)
     await asyncio.to_thread(turn_end.settle, port)
 
   assert (port.notifications, port.ends) == ([], 0)
+
+
+def _answer(text: str) -> None:
+  lifecycle = RunLifecycle.from_env()
+  assert lifecycle is not None
+  lifecycle.completed(text, 'ok')
+  lifecycle.close()
+
+
+def _ended(quest_id: str) -> None:
+  with mission.open_client() as client:
+    record = mission.query_mission(client, quest_id, wait_seconds=TIMEOUT)
+  assert record['state'] == 'ended', record
+
+
+def _journal_head() -> int:
+  with mission.open_client() as client:
+    return mission._event_head(client)
+
+
+@pytest.mark.asyncio
+async def test_the_sessions_own_end_is_no_event_its_turn_end_waits_for(monkeypatch):
+  # the session watch armed at the journal head, as `quest watch` does, and the
+  # end the session's answer journals is its summoner's to see
+  watch = FakeWatch(watches.SESSION_WATCH_COMMAND)
+  port = FakePort(FakeStore([watch]))
+  async with _summoned_session(monkeypatch, ('worker.say',)) as (_, session):
+    watch.head = await asyncio.to_thread(_journal_head)
+    await asyncio.to_thread(_answer, 'done')
+    await asyncio.to_thread(_ended, session.quest)
+
+    await asyncio.to_thread(turn_end.settle, port)
+
+  assert cast(FakeStore, port.watch_store).waited_for == []
+  assert port.ends == 1
