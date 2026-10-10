@@ -8,6 +8,16 @@ from bro.llm.llm import EFFORT_LEVELS, LLMSpec
 from bro.llm.llms import claude_code
 
 
+def _rates(value: str) -> dict[str, str]:
+  return {
+    'input': value,
+    'cache_write_5m': value,
+    'cache_write_1h': value,
+    'cache_read': value,
+    'output': value,
+  }
+
+
 class TestSpec:
   def test_defaults_carry_the_sessions_model_and_effort(self):
     spec = claude_code.LLMSpec()
@@ -104,3 +114,57 @@ class TestPricing:
     assert claude_code.PRICE_TABLE.as_of <= date.today()
     assert claude_code.PRICE_TABLE_SHA256 == claude_code.PRICE_TABLE.sha256
     assert re.fullmatch(r'[0-9a-f]{64}', claude_code.PRICE_TABLE_SHA256)
+
+
+class TestLongContextPricing:
+  # the serialized shape retention manifests persist (`benchmark/bro/benchmark/retention.py`)
+  TABLE = claude_code.price_table_from_content(
+    'https://example.com/pricing',
+    date.today().isoformat(),
+    {
+      'flat': _rates('1'),
+      'tiered': {**_rates('1'), 'long_context': {'threshold': 10, 'rates': _rates('2')}},
+    },
+  )
+
+  @staticmethod
+  def _usage(*, input_tokens: int, cache_write: int, cache_read: int) -> dict:
+    return {
+      'input_tokens': input_tokens,
+      'cache_creation_input_tokens': cache_write,
+      'cache_creation': {'ephemeral_5m_input_tokens': cache_write},
+      'cache_read_input_tokens': cache_read,
+      'output_tokens': 5,
+    }
+
+  def test_a_prompt_over_the_threshold_pays_the_long_rates_on_every_class(self):
+    usage = self._usage(input_tokens=4, cache_write=3, cache_read=4)
+    assert claude_code.price('tiered', usage, None, self.TABLE) == Decimal(32) / 1_000_000
+
+  def test_a_prompt_at_the_threshold_pays_the_base_rates(self):
+    usage = self._usage(input_tokens=4, cache_write=3, cache_read=3)
+    assert claude_code.price('tiered', usage, None, self.TABLE) == Decimal(15) / 1_000_000
+
+  def test_a_model_without_a_tier_pays_its_rates_at_any_length(self):
+    usage = self._usage(input_tokens=4, cache_write=3, cache_read=4)
+    assert claude_code.price('flat', usage, None, self.TABLE) == Decimal(16) / 1_000_000
+
+  def test_a_tiered_model_survives_a_serialized_snapshot(self):
+    current = claude_code.PRICE_TABLE
+    snapshot = claude_code.price_table_from_content(
+      current.source,
+      current.as_of.isoformat(),
+      {'claude-haiku-5-5': current.models['claude-haiku-5-5'].content()},
+    )
+    usage = {'input_tokens': 100_001, 'output_tokens': 1}
+
+    assert claude_code.price('claude-haiku-5-5', usage, None, snapshot) == claude_code.price(
+      'claude-haiku-5-5', usage, None, current
+    )
+
+  def test_a_long_context_tier_requires_its_threshold(self):
+    tier = {'rates': _rates('2')}
+    with pytest.raises(ValueError, match='threshold and rates'):
+      claude_code.price_table_from_content(
+        'https://example.com', '2026-01-01', {'model': {**_rates('1'), 'long_context': tier}}
+      )

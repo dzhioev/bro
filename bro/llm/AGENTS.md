@@ -72,7 +72,7 @@ The bro-native engine and provider clients live in `bro.native`.
   - `openai.py` — the OpenAI `NativeLLMSpec` plus standard and priority Responses pricing over raw token details and context bands;
     the recipe carries model, reasoning effort, service tier, and compact threshold, with `needed_secrets` → `openai`, `.fast()` → priority tier, and every shared effort level mapped through.
     The live Responses client is `bro.native.llms.openai`.
-  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client, plus Anthropic list pricing over transcript cache-write TTLs;
+  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client, plus Anthropic list pricing over transcript cache-write TTLs and a model's long-context tier;
     session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags.
   - `echo.py` — the dependency-free native recipe used by tests and the native LLM diagnostic CLI;
     its empty table prices no call, and its client is `bro.native.llms.echo`.
