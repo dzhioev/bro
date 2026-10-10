@@ -138,8 +138,8 @@ def test_a_backgrounded_commands_output_and_an_oversized_result_read_back_throug
     '1. Run the command `echo background-marker-41c7` with the Bash tool, with '
     'run_in_background set to true. Its result names the file its output is written to.\n'
     '2. Read that output file with the Read tool.\n'
-    "3. Run the command `head -c 60000 /dev/zero | tr '\\0' x; echo; echo "
-    'oversized-marker-8e95` with the Bash tool, in the foreground. Its output is too large '
+    "3. Run the command `echo oversized-marker-8e95; head -c 60000 /dev/zero | tr '\\0' x; "
+    'echo` with the Bash tool, in the foreground. Its output is too large '
     'to show whole, so its result names the file the whole output was saved to.\n'
     '4. Read that saved file with the Read tool.\n'
     'Then reply with the single word done.'

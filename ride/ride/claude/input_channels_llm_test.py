@@ -94,14 +94,12 @@ def _fixture_files(root: Path) -> tuple[Path, Path]:
   return server, hook
 
 
-def _claude_config(config: Path, repository: Path, *, agents_flag: bool) -> None:
+def _claude_config(config: Path, repository: Path) -> None:
   config.mkdir()
-  state: dict[str, Any] = {
+  state = {
     'hasCompletedOnboarding': True,
     'projects': {str(repository): {'hasTrustDialogAccepted': True}},
   }
-  if agents_flag:
-    state['cachedGrowthBookFeatures'] = {'tengu_agents_md_mod': True}
   (config / '.claude.json').write_text(json.dumps(state))
   (config / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
 
@@ -113,7 +111,6 @@ def _recorded_messages(
   instruction_name: str,
   instruction_text: str,
   prompt: str,
-  agents_flag: bool,
   watch_line: str | None = None,
 ) -> list[dict]:
   """record a print session, handing it `watch_line` through a watch at its
@@ -123,7 +120,7 @@ def _recorded_messages(
   subprocess.run(['git', 'init', '-q'], cwd=repository, check=True)
   (repository / instruction_name).write_text(instruction_text)
   config = root / 'config'
-  _claude_config(config, repository, agents_flag=agents_flag)
+  _claude_config(config, repository)
   server, hook = _fixture_files(root)
   hook_settings = {
     'hooks': {
@@ -251,7 +248,6 @@ def test_claude_trail_records_every_model_input_channel(tmp_path: Path, claude: 
     instruction_name='CLAUDE.md',
     instruction_text=_CLAUDE_INSTRUCTIONS,
     prompt=_USER_INPUT,
-    agents_flag=False,
     watch_line=_WATCH_LINE,
   )
 
@@ -318,7 +314,7 @@ def _strings(value: Any) -> Iterable[str]:
       yield from _strings(item)
 
 
-def test_disabled_remote_flags_keep_agents_md_out_of_model_input(
+def test_claude_trail_records_agents_md_loaded_in_place_of_claude_md(
   tmp_path: Path, claude: Path
 ) -> None:
   messages = _recorded_messages(
@@ -327,8 +323,6 @@ def test_disabled_remote_flags_keep_agents_md_out_of_model_input(
     instruction_name='AGENTS.md',
     instruction_text=_AGENTS_INSTRUCTIONS,
     prompt='Reply exactly AGENTS-PROBE-DONE without using a tool.',
-    agents_flag=True,
   )
 
-  instruction_notices = [message for message in messages if message.get('event') == 'instructions']
-  assert not any(_contains(message, _AGENTS_INSTRUCTIONS) for message in instruction_notices)
+  assert _contains(_notice(messages, 'instructions'), _AGENTS_INSTRUCTIONS)
