@@ -14,6 +14,7 @@ run those with `--help` for flags.
   per-flag env-var overrides,
   mutually-exclusive group declarations,
   `dispatch()` for subcommand handlers registered via `set_handler`,
+  `add_version()` for a `--version` line computed only when asked for,
   and `reconstruct()` (namespace → canonical argv).
   `parse(argv)` is the entry every CLI calls and records `Path(argv[0]).name` for lazy ambient credential selection
   — see the "CLI relationship" below.
@@ -45,6 +46,9 @@ run those with `--help` for flags.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
+- `source_commit.py` — `installed_commit(distribution)`, the commit an installed distribution runs:
+  the record its wheel carries in `.dist-info`, else the commit its version-control installation resolved, else the live checkout its editable installation runs from;
+  `checkout_commit(directory)` reads a checkout's `HEAD` and whether its tree under `directory` differs from it.
 - `scope.py` — the unified credential / `@bro` / `:launch.…` grant grammar, including credential-instance pass rights, retired-name checks, project-layer refusal of pass rights, and idempotent scope layers;
   it also renders a `launch` section back to grant spelling.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):

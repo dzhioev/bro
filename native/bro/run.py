@@ -23,6 +23,19 @@ def _command_show(name: str, system_prompt: Optional[str]) -> None:
   print(card, end='')
 
 
+def _version() -> str:
+  import importlib.metadata
+
+  from bro.base import configs
+  from bro.base.source_commit import installed_commit
+
+  line = f'{configs.DISTRIBUTION} {configs.VERSION}'
+  commit = installed_commit(importlib.metadata.distribution(configs.DISTRIBUTION))
+  if commit is None:
+    return line
+  return f'{line} ({commit.commit}, modified)' if commit.modified else f'{line} ({commit.commit})'
+
+
 def _launcher_invocation(argv: list[str]) -> Optional[tuple[str, list[str]]]:
   command_index = 1
   while command_index < len(argv) and argv[command_index].startswith('-'):
@@ -44,6 +57,7 @@ def main(argv: list[str]) -> Optional[int]:
     return chat_main(launcher[1], program=['bro', 'chat'])
 
   parser = base_args.Parser(description='inspect and launch bro agents')
+  parser.add_version(_version)
   subparser = parser.add_subparsers(dest='command')
   subparser.add_parser('run', help='run a bro on a single input')
   subparser.add_parser('chat', help='open an interactive session with a bro')

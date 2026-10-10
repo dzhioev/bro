@@ -1,5 +1,7 @@
+import base64
 import errno
 import fcntl
+import hashlib
 import importlib.metadata
 import io
 import json
@@ -14,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import ride.runtime_bundle as runtime_bundle
+from bro.base.source_commit import RECORD_NAME, SourceCommit, installed_commit
 
 _discover_distributions = importlib.metadata.distributions
 
@@ -380,6 +383,20 @@ def test_a_host_snapshot_reresolves_to_its_own_bundle(monkeypatch, probe, tmp_pa
       assert snapshot.hash == bundle.hash
 
 
+def test_a_checkout_carried_in_a_bundle_keeps_its_commit(monkeypatch, probe, tmp_path):
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
+  _read_installation(monkeypatch, probe.site_packages['editable'])
+
+  with runtime_bundle.resolve_runtime_bundle() as bundle:
+    bundle.materialize_host()
+    [carried] = _discover_distributions(name='demo', path=[str(_site_packages(bundle.host_venv))])
+
+  assert installed_commit(carried) == SourceCommit(probe.commit, modified=False)
+  [listed] = [file for file in carried.files or [] if file.name == RECORD_NAME]
+  digest = base64.urlsafe_b64encode(hashlib.sha256(listed.read_binary()).digest())
+  assert listed.hash is not None and listed.hash.value == digest.rstrip(b'=').decode()
+
+
 def test_a_stamped_or_reordered_rebuild_freezes_one_bundle(monkeypatch, tmp_path):
   builds = iter([((2026, 8, 23, 23, 57, 12), False), ((2026, 8, 23, 23, 57, 14), True)])
 
@@ -391,6 +408,7 @@ def test_a_stamped_or_reordered_rebuild_freezes_one_bundle(monkeypatch, tmp_path
     return subprocess.CompletedProcess(command, 0, '', '')
 
   monkeypatch.setattr(runtime_bundle, '_run', build)
+  (tmp_path / 'source').mkdir()
   local = [runtime_bundle._LocalDistribution('demo', tmp_path / 'source')]
   frozen = []
   for attempt in ('first', 'second'):
