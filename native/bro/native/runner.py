@@ -10,7 +10,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Optional, Self
 
-from bro import brash_policy, turn_end, watches
+from bro import brash_policy, results, turn_end, watches
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
@@ -90,6 +90,7 @@ class Runner:
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
     self._watch_owner: Optional[watches.Owner] = None
+    self._result_store: Optional[results.Store] = None
     self._brash_policy: Optional[Path] = None
     self._lifetime_resources: Optional[ExitStack] = None
     self._watch_pump_cancelled = threading.Event()
@@ -124,6 +125,12 @@ class Runner:
     if self._watch_owner is not None:
       return self._watch_owner.store
     return watches.session_store()
+
+  @property
+  def result_store(self) -> results.Store:
+    if self._result_store is not None:
+      return self._result_store
+    return results.session_store()
 
   @property
   def brash_policy(self) -> Optional[Path]:
@@ -254,6 +261,8 @@ class Runner:
         self._watch_owner = resources.enter_context(
           watches.Owner.temporary(publish_environment=False)
         )
+      if session_dir() is None:
+        self._result_store = resources.enter_context(results.temporary_store())
       policy_directory = resources.enter_context(tempfile.TemporaryDirectory(prefix='bro-brash-'))
       self._brash_policy = brash_policy.write(Path(policy_directory), self.bro.reach())
       resources.enter_context(self._watch_pump())
@@ -290,6 +299,7 @@ class Runner:
       raise RuntimeError('run lifetime has no resources')
     self._lifetime_resources = None
     self._watch_owner = None
+    self._result_store = None
     self._brash_policy = None
     resources.close()
     self.bro.close()

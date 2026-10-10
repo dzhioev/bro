@@ -10,11 +10,13 @@ Tools that return variable-length output (`read_file`, `grep`, and `glob`) take 
 - **Default:** 100 lines, enough for most useful results without wasting tokens.
 - **Maximum:** 2,000 lines;
   larger values are silently clamped.
-- Every call is capped at about 30 KB too, whichever bound is reached first.
-  A few very long lines therefore stop on bytes, and raising `limit` does not bypass that bound.
 
-If a result exceeds the budget, the rest is dropped and announced inline.
+Lines past the limit are dropped and announced inline.
 To get more, raise `limit` up to 2,000 or narrow the query with an offset, path, or pattern.
+
+The lines within the limit arrive whole, however long they are.
+A reply longer than 30,000 characters arrives cut, closing on a marker that names the `bro::page` call returning the rest of that same reply;
+it reads the reply as the tool produced it, without running the tool again.
 
 ## Skipped-content markers
 
@@ -23,10 +25,11 @@ Truncation markers report the dropped line and byte counts:
 ```
 [...skipped before: 3,420 lines / 412.0 KB...]
 ... kept content ...
-[...skipped after: 127 lines / 18.0 KB...]
+[...skipped after: 127 lines / 18.0 KB — read on with offset=3520...]
 ```
 
-These tools keep the head of their result, so dropped content normally appears in an `after` marker.
+These tools keep the head of their result, so dropped content normally appears in an `after` marker;
+`read_file`'s names the `offset` that reads on.
 An offset can additionally produce a `before` marker.
 
 ## Timeout (`timeout_seconds`)

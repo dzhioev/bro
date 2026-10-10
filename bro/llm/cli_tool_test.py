@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from bro.base.args import Argument, CommandSignature
-from bro.llm.cli_tool import LIMIT, OFFSET, TIMEOUT, _CommandTool, build_server
+from bro.llm.cli_tool import TIMEOUT, _CommandTool, build_server
 from bro.mcp import Cli, cli
 
 
@@ -70,7 +70,7 @@ class TestDeclaration:
 class TestGeneratedSurface:
   def test_globals_are_not_arguments(self):
     tool = _tool('bro list')
-    assert set(tool.parameters['properties']) == {OFFSET, LIMIT, TIMEOUT}
+    assert set(tool.parameters['properties']) == {TIMEOUT}
     assert tool.parameters['required'] == []
 
   def test_description_carries_the_command_summary(self):
@@ -94,12 +94,11 @@ class TestGeneratedSurface:
 
   def test_exposure_narrows_to_the_named_arguments(self):
     properties = _tool('bro show', 'name').parameters['properties']
-    assert set(properties) == {'name', OFFSET, LIMIT, TIMEOUT}
+    assert set(properties) == {'name', TIMEOUT}
 
-  @pytest.mark.parametrize('name', [OFFSET, LIMIT, TIMEOUT])
-  def test_exposing_a_tool_parameter_name_raises(self, name):
+  def test_exposing_a_tool_parameter_name_raises(self):
     with pytest.raises(ValueError, match='reserves for its own parameters'):
-      _synthetic(_argument(name))
+      _synthetic(_argument(TIMEOUT))
 
   def test_exposure_keeps_the_commands_own_argument_order(self):
     tool = _tool('rewind grep', 'trails', 'color', 'pattern')
@@ -177,7 +176,7 @@ class TestArgv:
 
   def test_tool_parameters_stay_out_of_the_argv(self):
     tool = _synthetic(_argument('limit'))
-    values = {'limit': 5, OFFSET: 2, LIMIT: 3, TIMEOUT: 4}
+    values = {'limit': 5, TIMEOUT: 4}
     assert tool._argv(values) == ['tool', 'sub', '--limit=5']
 
 
@@ -192,23 +191,13 @@ class TestCall:
     result = asyncio.run(_tool('bro show').call({'name': 'lead'}))
     assert result.startswith('exit_code: 0\n# lead')
 
-  def test_output_window_pages_the_command_output(self):
-    lines = asyncio.run(_printing(300).call({OFFSET: 20, LIMIT: 250})).splitlines()
-    assert 'skipped before' in lines[1]
-    assert lines[2:-1] == [str(index) for index in range(20, 270)]
-    assert 'skipped after' in lines[-1]
+  def test_returns_the_whole_command_output(self):
+    lines = asyncio.run(_printing(3_000).call({})).splitlines()
+    assert lines == ['exit_code: 0', *(str(index) for index in range(3_000))]
 
-  def test_output_without_a_window_is_still_bounded(self):
-    result = asyncio.run(_printing(300).call({}))
-    assert '[...skipped after' in result.splitlines()[-1]
-
-  def test_negative_offset_raises(self):
-    with pytest.raises(ValueError, match='must be non-negative'):
-      asyncio.run(_printing(1).call({OFFSET: -1}))
-
-  def test_non_integer_window_raises(self):
+  def test_non_integer_timeout_raises(self):
     with pytest.raises(ValueError, match='takes an integer'):
-      asyncio.run(_printing(1).call({LIMIT: '5'}))
+      asyncio.run(_printing(1).call({TIMEOUT: '5'}))
 
   def test_command_outliving_its_timeout_is_killed(self):
     blocked = _running('import threading; threading.Event().wait()')

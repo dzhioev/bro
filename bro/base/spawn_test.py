@@ -177,23 +177,20 @@ class TestFormatResult:
     return subprocess.CompletedProcess(['cmd'], returncode, stdout, stderr)
 
   def test_exit_code_leads_the_output(self) -> None:
-    formatted = spawn.format_result(self._result('one\ntwo\n'), offset=0, limit=10)
+    formatted = spawn.format_result(self._result('one\ntwo\n'))
     assert formatted == 'exit_code: 0\none\ntwo'
 
   def test_silent_command_reports_only_its_exit_code(self) -> None:
-    formatted = spawn.format_result(self._result('', returncode=3), offset=0, limit=10)
+    formatted = spawn.format_result(self._result('', returncode=3))
     assert formatted == 'exit_code: 3'
 
   def test_stderr_follows_a_divider(self) -> None:
-    formatted = spawn.format_result(self._result('out\n', 'bad\n'), offset=0, limit=10)
+    formatted = spawn.format_result(self._result('out\n', 'bad\n'))
     assert formatted == 'exit_code: 0\nout\n\n--- stderr ---\nbad'
 
-  def test_output_is_windowed_from_the_offset(self) -> None:
-    content = ''.join(f'line {index}\n' for index in range(50))
-    lines = spawn.format_result(self._result(content), offset=10, limit=3).splitlines()
-    assert lines[2:5] == ['line 10', 'line 11', 'line 12']
-    assert 'skipped before' in lines[1]
-    assert 'skipped after' in lines[5]
+  def test_output_arrives_whole(self) -> None:
+    content = ''.join(f'line {index}\n' for index in range(5_000))
+    assert spawn.format_result(self._result(content)) == f'exit_code: 0\n{content.rstrip()}'
 
 
 class TestConsoleScript:

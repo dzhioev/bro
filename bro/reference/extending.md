@@ -67,8 +67,8 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 - `cli('bro list')` serves one installed CLI command as a generated tool in the `cli` namespace (`cli::bro_list`).
   The command is a program name and any subcommands;
   trailing names narrow what the tool exposes (`cli('bro show', 'name')` withholds `--system-prompt`).
-  Every generated tool also takes `output_offset` / `output_limit`, a window over the command's output, and `timeout_seconds`, after which the command is killed,
-  so a command argument of any of these names must be withheld.
+  Every generated tool also takes `timeout_seconds`, after which the command is killed,
+  so a command argument of that name must be withheld.
   Nothing is read at declaration:
   the signature is derived at build from the command's own argument declarations, so a command that cannot be read
   — not an installed CLI, a dispatcher rather than a leaf, an argument shape that cannot be described
@@ -131,7 +131,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   A frontmatter value is either inline after the key or, where a bare `key:` is followed by a blank line, the block of lines under it up to the next blank line or the closing fence
   — folded into one paragraph on single spaces, so a long description breaks semantically in the file (one clause per line, for reviewable diffs) and still reaches the tool as one paragraph.
   The filename stem is the spell's name, canonical and validated against `name:`;
-  spell and parameter names must fit the wire charset, parameter name `offset` is reserved, and malformed declarations fail at load;
+  spell and parameter names must fit the wire charset, and malformed declarations fail at load;
   an entry naming no file, one escaping the directory, or two entries sharing a stem fails the bro's construction.
   Spell names are imperative verb phrases (`fix`, `land`, `run-pr`, `orchestrate`), kebab-cased when multi-word.
   Prose that refers to *running* one

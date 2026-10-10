@@ -7,7 +7,6 @@ from bro.base.text_window import (
   apply_limit,
   numbered_window,
   take_head,
-  window,
 )
 
 # ─── apply_limit / _marker / _clamp ──────────────────────────────────────────
@@ -53,18 +52,34 @@ def test_apply_limit_skipped_after_param_carries_into_marker():
   assert out == 'kept\n[...skipped after: 42 lines / 900 B...]'
 
 
+def test_apply_limit_keeps_long_lines_whole_without_a_byte_limit():
+  huge = 'x' * (BYTE_LIMIT + 5_000) + '\n'
+  assert apply_limit(huge, limit=DEFAULT_LIMIT) == huge.rstrip('\n')
+
+
 def test_apply_limit_cuts_one_huge_line_mid_line():
   huge = 'x' * (BYTE_LIMIT + 5_000) + '\n'
-  body, _, marker = apply_limit(huge, limit=DEFAULT_LIMIT, keep='head').partition('\n[...')
+  body, _, marker = apply_limit(
+    huge, limit=DEFAULT_LIMIT, keep='head', byte_limit=BYTE_LIMIT
+  ).partition('\n[...')
   assert body == 'x' * BYTE_LIMIT
   assert 'skipped after: 5.0 KB' in marker
 
 
 def test_apply_limit_cuts_one_huge_line_mid_line_keeping_the_tail():
   huge = 'x' * (BYTE_LIMIT + 5_000) + '\n'
-  marker, _, body = apply_limit(huge, limit=DEFAULT_LIMIT, keep='tail').partition('...]\n')
+  marker, _, body = apply_limit(
+    huge, limit=DEFAULT_LIMIT, keep='tail', byte_limit=BYTE_LIMIT
+  ).partition('...]\n')
   assert body == 'x' * (BYTE_LIMIT - 1)
   assert 'skipped before: 5.0 KB' in marker
+
+
+def test_apply_limit_after_note_rides_only_a_rendered_after_marker():
+  assert apply_limit('a\nb\n', limit=1, after_note='read on') == (
+    'a\n[...skipped after: 1 lines / 2 B — read on...]'
+  )
+  assert apply_limit('a\n', limit=1, after_note='read on') == 'a'
 
 
 def test_byte_cap_is_independent_of_the_line_limit():
@@ -154,23 +169,7 @@ def test_take_head_empty_content():
   assert take_head('', limit=10) == ('', '')
 
 
-# ─── window / numbered_window ────────────────────────────────────────────────
-
-
-def test_window_returns_plain_lines_with_offset_markers():
-  out = window('one\ntwo\nthree\nfour\n', offset=1, limit=2)
-  assert (
-    out == '[...skipped before: 1 lines / 4 B...]\ntwo\nthree\n[...skipped after: 1 lines / 5 B...]'
-  )
-  assert '\t' not in out
-
-
-def test_window_offset_beyond_end_reports_whole_content_skipped():
-  assert window('a\nb\n', offset=10) == '[...skipped before: 2 lines / 4 B...]'
-
-
-def test_window_negative_offset_reads_from_start():
-  assert window('a\nb\n', offset=-2) == 'a\nb'
+# ─── numbered_window ─────────────────────────────────────────────────────────
 
 
 def test_numbered_window_numbers_lines_one_based():
@@ -193,7 +192,7 @@ def test_numbered_window_offset_skips_and_keeps_absolute_numbers():
   assert '    4\t4' in out
   assert '    5\t' not in out
   assert 'skipped before: 2 lines' in out
-  assert 'skipped after: 1 lines' in out
+  assert 'skipped after: 1 lines / 8 B — read on with offset=4' in out
 
 
 def test_numbered_window_offset_beyond_end_reports_whole_content_skipped():
@@ -212,7 +211,7 @@ def test_numbered_window_limit_caps_and_reports_after():
   content = ''.join(f'line {i}\n' for i in range(DEFAULT_LIMIT + 50))
   out = numbered_window(content)
   assert 'skipped before' not in out
-  assert 'skipped after: 50 lines' in out
+  assert f'skipped after: 50 lines / 750 B — read on with offset={DEFAULT_LIMIT}' in out
   assert '    1\tline 0' in out
   assert f'{DEFAULT_LIMIT:>5}\tline {DEFAULT_LIMIT - 1}' in out
   assert f'{DEFAULT_LIMIT + 1:>5}\t' not in out
@@ -226,3 +225,8 @@ def test_numbered_window_clamps_oversized_limit():
 
 def test_numbered_window_empty_content_returns_empty():
   assert numbered_window('') == ''
+
+
+def test_numbered_window_keeps_long_lines_whole():
+  long_line = 'x' * (BYTE_LIMIT + 5_000)
+  assert numbered_window(f'{long_line}\nshort\n') == f'    1\t{long_line}\n    2\tshort'

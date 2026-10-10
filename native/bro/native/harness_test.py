@@ -12,7 +12,7 @@ import pytest
 import bro.mcp as mcp
 import bro.native.harness as bro_harness
 import ride.session as ride_session
-from bro import brash_policy
+from bro import brash_policy, results
 from bro.brash import REFUSED_STATUS
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.inbox import Inbox
@@ -455,6 +455,7 @@ class _NativeRun:
     self.current_tool_step_id = None
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
+    self.result_store: results.Store = MagicMock(spec=results.Store)
     self.brash_policy = brash_policy
 
 

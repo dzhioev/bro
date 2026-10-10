@@ -8,7 +8,7 @@ from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
 import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
-from bro import brash_policy, spells as spell_store, summon, watches
+from bro import brash_policy, results, spells as spell_store, summon, watches
 from bro.base import credentials, log
 from bro.base.condition import (
   Condition,
@@ -97,15 +97,20 @@ def _render_spells(*, include_cast: bool) -> str:
 
 class LiveRun(Protocol):
   """the in-flight run the service tools report against, implemented by whatever
-  drives the bro in this process. Both facts are read at call time: the trail
-  opens after the service server is built, and the tool position moves with
-  every call. A process that assembles a bro without running one has none."""
+  drives the bro in this process. Every fact is read at call time: the trail
+  opens after the service server is built, the tool position moves with every
+  call, and the result store lives as long as the run. A process that assembles
+  a bro without running one has none, and keeps its results in the session's
+  store."""
 
   @property
   def trail_id(self) -> Optional[str]: ...
 
   @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
+
+  @property
+  def result_store(self) -> results.Store: ...
 
 
 class WatchRun(LiveRun, Protocol):
@@ -578,6 +583,8 @@ def _watch_tools(
 # `#tools` universe with the selected harness's own tools.
 _CORE_SERVICE_TOOL_NAMES = (
   'banner',
+  results.PAGE_TOOL,
+  results.LIST_TOOL,
   'cast',
   'raise',
   'answer',
@@ -600,15 +607,17 @@ def _build_service_server(
   *,
   hold: str,
   harness: mcp.HarnessLike,
+  result_store: results.StoreSource,
   live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
   # built only on the paths that serve a bro, never at construction: deriving the
   # FunctionTool schemas below pulls the mcp/fastmcp stack (~1s), which metadata
   # surfaces (credential scoping, prompt composition, `bro show`) must not pay.
   # the core roster is decided by the caller's surface and local process state:
-  # `banner` is unconditional; `cast` needs spells and its optional secret;
-  # `raise` only makes sense unattended (a caller to abort to, where an attended
-  # session reports to its human) and on a harness able to end this session;
+  # `banner`, `page` and `results` are unconditional; `cast` needs spells and its
+  # optional secret; `raise` only makes sense unattended (a caller to abort to,
+  # where an attended session reports to its human) and on a harness able to end
+  # this session;
   # `answer` is the summoned run's delivery surface — it needs the summoned mark,
   # broker intent, and a harness able to end this session; the summon tools need
   # the same intent. The harness contributes the tools it serves itself. The
@@ -636,7 +645,7 @@ def _build_service_server(
       f'harness {session_harness.name!r} owns duplicate service tools: {sorted(duplicate_names)}'
     )
 
-  mounted = ['banner']
+  mounted = ['banner', results.PAGE_TOOL, results.LIST_TOOL]
   if has_cast:
     mounted.append('cast')
   if has_raise:
@@ -667,7 +676,10 @@ def _build_service_server(
     'tools': SetVariable(frozenset(mounted), universe=frozenset(tool_universe)),
   }
 
-  tools: list[llm_mcp.Tool] = [_banner_tool(bro, live_run, variables)]
+  tools: list[llm_mcp.Tool] = [
+    _banner_tool(bro, live_run, variables),
+    *results.store_tools(result_store),
+  ]
   if has_cast:
     tools.append(spell_store.build_cast_tool(bro, harness=harness, hold=hold))
   if has_raise:
@@ -698,6 +710,12 @@ def _build_service_server(
   server = llm_mcp.InProcessMCPServer('bro', tools)
   server.tool_universe = tool_universe
   return server
+
+
+def _result_store(live_run: Optional[LiveRun]) -> results.StoreSource:
+  if live_run is None:
+    return results.session_store
+  return lambda: live_run.result_store
 
 
 def _harness_object(harness: mcp.HarnessLike) -> Harness:
@@ -1277,10 +1295,17 @@ class BaseBro(ABC):
     live_run: Optional[LiveRun] = None,
   ) -> list[llm_mcp.MCPServer]:
     """materialize this declaration for one consuming surface, in a session
-    under `hold`."""
+    under `hold`, every tool's result kept in the run's result store."""
+    result_store = _result_store(live_run)
     servers = list(self._live_mcp_servers(harness))
-    servers.append(_build_service_server(self, hold=hold, harness=harness, live_run=live_run))
-    return self._servers_with_spell_tools(servers, harness=harness, hold=hold)
+    servers.append(
+      _build_service_server(
+        self, hold=hold, harness=harness, result_store=result_store, live_run=live_run
+      )
+    )
+    return results.kept(
+      self._servers_with_spell_tools(servers, harness=harness, hold=hold), result_store
+    )
 
   def system_prompt_for(self, *, hold: str, harness: mcp.HarnessLike) -> str:
     """The selected harness's composed prompt plus the session fragments."""

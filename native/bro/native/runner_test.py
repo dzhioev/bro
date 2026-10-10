@@ -8,7 +8,7 @@ import pytest
 
 import bro.mcp as mcp
 import bro.native.runner as native_runner
-from bro import watches
+from bro import results, watches
 from bro.base import credentials
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.broker.brotocol import Message
@@ -29,7 +29,7 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import NullTracker, Tracker
 from bro.mcp import MCPServerSpec
-from bro.monitor import trail_pointer
+from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
 from bro.run_lifecycle import RunLifecycle
@@ -508,6 +508,30 @@ class TestLifetime:
     assert first_identity is not None and second_identity is not None
     assert not first_identity.alive()
     assert not second_identity.alive()
+
+  def test_a_run_outside_a_managed_session_keeps_results_for_its_lifetime(self, monkeypatch):
+    monkeypatch.delenv(SESSION_DIR_ENV, raising=False)
+    runner = StubRunner()
+    directory = None
+    with runner:
+      store = runner.result_store
+      directory = store.directory
+      result_id = store.keep('a::b', {}, 'kept')
+      assert store.read(result_id)[1] == 'kept'
+
+    assert directory is not None and not directory.exists()
+
+  def test_a_run_in_a_managed_session_keeps_results_in_the_session_store(
+    self, monkeypatch, tmp_path
+  ):
+    monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+    runner = StubRunner()
+    result_id = None
+    with runner:
+      result_id = runner.result_store.keep('a::b', {}, 'kept')
+
+    assert result_id is not None
+    assert results.session_store().read(result_id)[1] == 'kept'
 
   @pytest.mark.asyncio
   async def test_context_ends_one_interactive_conversation(self):

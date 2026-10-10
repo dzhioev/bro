@@ -177,6 +177,7 @@ PYTEST_FILES = [
   'native/bro/native/dev_mcp_test.py',
   'bro/roster_test.py',
   'bro/spells_test.py',
+  'bro/results_test.py',
   'bro/procedures_test.py',
   'bro/watches_test.py',
   'bro/datasources/current_time_test.py',

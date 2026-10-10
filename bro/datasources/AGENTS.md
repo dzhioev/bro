@@ -31,10 +31,9 @@ How to add a source of either shape: `bro/reference/extending.md`, "Adding a dat
   Use for canonical docs the bro consults on demand;
   the ready-made instances live in `references.py`
 - `man.py` — `ManSource(name, summary, pages)`:
-  a roster of `FileSource` pages served as one `read(topic, offset=0)` tool (wire `<name>-source__read`), the unix `man` shape
+  a roster of `FileSource` pages served as one `read(topic)` tool (wire `<name>-source__read`), the unix `man` shape
   — a doc is declared once and served either as its own dedicated tool or as a topic here.
   `bro.mcp.man('<topic>')` is the declaration-side entry a bro lists in `tools`, one per topic;
   `BaseBro` folds every page it resolves into a single `ManSource` via `manual(...)`, so classes across an MRO contribute pages to one manual instead of colliding on its namespace.
   The tool description carries the roster with each page's summary and the `topic` parameter its enum, so a surface seeing only the tool listing knows what can be read;
   lookup is case- and whitespace-tolerant and a miss raises with the topics listed.
-  Output is capped at `PAGE_LIMIT` lines, so a page longer than that is read across successive `offset`s

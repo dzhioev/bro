@@ -2,7 +2,6 @@ from collections.abc import Sequence
 from typing import Any
 
 from bro.base.name_map import NameMap
-from bro.base.text_window import format_size, take_head
 from bro.datasources.base import DataSource
 from bro.datasources.file import FileSource
 from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
@@ -20,11 +19,6 @@ class ManSource(DataSource):
   and its summaries ride the tool description, so a surface that sees only the
   tool listing still knows what can be read; a topic that matches nothing
   raises with the roster listed.
-
-  Output is capped at one window's worth of bytes (`bro.base.text_window`), so
-  an ordinary page arrives whole; a longer reference closes on the `offset` to
-  resume at and is walked across successive calls with nothing dropped and no
-  counting to do.
   """
 
   def __init__(self, name: str, summary: str, pages: Sequence[FileSource]):
@@ -35,18 +29,8 @@ class ManSource(DataSource):
     self.pages = list(pages)
     self._by_topic = NameMap({page.name: page for page in pages})
 
-  def read(self, topic: str, offset: int = 0) -> str:
-    page = self._by_topic.resolve(topic)
-    body = page.read()
-    if not 0 <= offset <= len(body):
-      raise ValueError(f'offset {offset} is outside the {page.name} page (0..{len(body)})')
-    kept, _ = take_head(body[offset:])
-    remaining = len(body) - offset - len(kept)
-    if remaining == 0:
-      return kept
-    return (
-      f'{kept}\n\n[...{format_size(remaining)} left — read on with offset={offset + len(kept)}...]'
-    )
+  def read(self, topic: str) -> str:
+    return self._by_topic.resolve(topic).read()
 
   def as_mcp_server(self) -> MCPServer:
     return InProcessMCPServer(self.namespace, [_ReadTool(self)])
@@ -73,11 +57,6 @@ class _ReadTool(Tool):
       'Topics:',
     ]
     lines.extend(f'- `{page.name}` — {page.rendered_summary()}' for page in self._source.pages)
-    lines.append('')
-    lines.append(
-      'A page too long to return at once closes on a marker naming the `offset` to resume '
-      'at; call again with it for the rest.'
-    )
     return '\n'.join(lines)
 
   @property
@@ -90,18 +69,9 @@ class _ReadTool(Tool):
           'enum': [page.name for page in self._source.pages],
           'description': 'the page to return',
         },
-        'offset': {
-          'type': 'integer',
-          'default': 0,
-          'description': 'where to resume a page a previous call could not return whole — '
-          "the value that call's closing marker named",
-        },
       },
       'required': ['topic'],
     }
 
   async def call(self, arguments: dict[str, Any]) -> str:
-    offset = arguments.get('offset', 0)
-    if isinstance(offset, bool) or not isinstance(offset, int):
-      raise ValueError('"offset" must be an integer')
-    return self._source.read(arguments['topic'], offset=offset)
+    return self._source.read(arguments['topic'])

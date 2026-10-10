@@ -7,7 +7,7 @@ fixed argv — the program and its subcommands come from the declaration, never
 from the model, and no shell interprets it — so a tool reaches the one command
 it was declared for and nothing else. Whether that command is read-only is the
 declaration's business; nothing here constrains it. Beside the command's own
-arguments, every tool takes a window over the command's output and a timeout.
+arguments, every tool takes a timeout.
 """
 
 import subprocess
@@ -15,31 +15,15 @@ from typing import Any
 
 from bro.base import spawn
 from bro.base.args import Argument, CommandSignature, command_signature
-from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, MAX_LIMIT, format_size
 from bro.llm.mcp import InProcessMCPServer, Tool
 
 NAMESPACE = 'cli'
 
 DEFAULT_TIMEOUT_SECONDS = 60
 
-OFFSET = 'output_offset'
-LIMIT = 'output_limit'
 TIMEOUT = 'timeout_seconds'
 
 _TOOL_SCHEMA: dict[str, dict[str, Any]] = {
-  OFFSET: {
-    'type': 'integer',
-    'minimum': 0,
-    'description': 'output lines to skip before the window (default 0)',
-  },
-  LIMIT: {
-    'type': 'integer',
-    'description': (
-      f'max output lines to return (default {DEFAULT_LIMIT}); values above {MAX_LIMIT:,} '
-      f'are clamped, with the clamp announced inline, and a window also stops at '
-      f'{format_size(BYTE_LIMIT)}'
-    ),
-  },
   TIMEOUT: {
     'type': 'integer',
     'minimum': 1,
@@ -48,15 +32,12 @@ _TOOL_SCHEMA: dict[str, dict[str, Any]] = {
 }
 
 
-def _description(signature: CommandSignature, arguments: tuple[Argument, ...]) -> str:
+def _description(signature: CommandSignature) -> str:
   spelled = ' '.join(signature.command)
-  narrowing = ', or narrow it with the command arguments' if len(arguments) > 0 else ''
   return (
     f'{signature.description}\n\n'
     f'runs `{spelled}` and returns its exit code with the command output (stderr '
-    f'under a `--- stderr ---` divider). Output past the `{LIMIT}` window is trimmed '
-    f'with a skipped-content marker; page through it with `{OFFSET}`{narrowing}. '
-    f'The command is killed after `{TIMEOUT}`.'
+    f'under a `--- stderr ---` divider). The command is killed after `{TIMEOUT}`.'
   )
 
 
@@ -99,7 +80,7 @@ class _CommandTool(Tool):
     self._command = signature.command
     self._arguments = arguments
     self._name = name
-    self._description = _description(signature, arguments)
+    self._description = _description(signature)
     self._parameters = {
       'type': 'object',
       'properties': {
@@ -162,10 +143,6 @@ class _CommandTool(Tool):
 
   async def call(self, arguments: dict[str, Any]) -> str:
     argv = self._argv(arguments)
-    offset = _integer_value(arguments, OFFSET, 0)
-    if offset < 0:
-      raise ValueError(f'{OFFSET!r} must be non-negative, got {offset}')
-    limit = _integer_value(arguments, LIMIT, DEFAULT_LIMIT)
     timeout = _integer_value(arguments, TIMEOUT, DEFAULT_TIMEOUT_SECONDS)
     if timeout < 1:
       raise ValueError(f'{TIMEOUT!r} must be positive, got {timeout}')
@@ -176,7 +153,7 @@ class _CommandTool(Tool):
         f'TIMED OUT after {timeout}s — killed. Re-run with a larger {TIMEOUT} if the '
         'command needs more time.'
       )
-    return spawn.format_result(process, offset=offset, limit=limit)
+    return spawn.format_result(process)
 
 
 def _exposed(signature: CommandSignature, names: tuple[str, ...]) -> tuple[Argument, ...]:
