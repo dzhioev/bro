@@ -56,7 +56,8 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   and runtime assets installed by the bundle’s own registered harnesses.
   Its manifest records those inputs plus each harness’s files and checksums and gives the bundle a content-derived identity.
   `Bundle` is the layout a consumer addresses — interpreter, scripts, shim farm, manifest, and identity;
-  `built(root)` reports an absent, incomplete, or malformed bundle rather than building one behind the caller's back
+  `built(root)` reports a stale, incomplete, or malformed bundle rather than building one behind the caller's back;
+  `cached(workspace, root)` builds a stale one first and refuses the rest
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
   Its Harbor version is the uploaded bundle's identity, and its recorded name carries the bro and, off the default, the harness.
   `install()` has the uploaded bundle's own framework hydrate a trial store from the host store's defaults, rooted at the LLM credential and including any preserved-reference dependencies, then uploads both and runs
@@ -84,7 +85,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   docker host
 - `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
   Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and step/final metrics priced through caller-supplied provider tables
-- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor against a known concrete job directory and adds the run's provenance to that raw result:
+- `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor on the `cached` bundle against a known concrete job directory and adds the run's provenance to that raw result:
   the built bundle's manifest, and the presets record its config carries
 - `bro/benchmark/retention.py` (`benchmark retain`) — resolves one raw job from an artifact ref or local path.
   It derives the manifest's trial rows from Harbor records and local trail stores.
