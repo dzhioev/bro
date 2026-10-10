@@ -1313,7 +1313,7 @@ Without `files` a persona gets `Read` alone, behind a `PreToolUse` hook (`ride.c
 and the `<session id>/` folder beside the transcript, whose `tool-results/` holds the whole of a result too large to inline.
 The gate names both from its hook input, with the transcript's folder as the project, and admits only an absolute path that resolves, symlinks followed, inside one of them;
 it denies every other path, and blocks the call when it cannot read its input.
-Such a persona thus reads its own output whole and no workspace file through a tool, while the repository's `CLAUDE.md` and project skills still load as its instructions.
+Such a persona thus reads its own output whole and no workspace file through a tool, while the repository's `CLAUDE.md`, or its `AGENTS.md` where it has none, and project skills still load as its instructions.
 `ride/ride/claude/read_gate_llm_test.py` holds both folders and the denials against the pinned release.
 `brash(...)` brings `Monitor`, which the pinned release withholds while telemetry is off, as the session's settings keep it.
 Under a finite command list a `PreToolUse` hook on `Bash` and `Monitor` (`ride.claude.command_gate`) rewrites each call's command through `updatedInput` into one argv:
