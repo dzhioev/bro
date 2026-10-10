@@ -27,4 +27,5 @@ fi
 
 # shellcheck source=/dev/null
 source "$DIR/.venv/bin/activate"
+python -m ride.provisioning
 bro.dev.install

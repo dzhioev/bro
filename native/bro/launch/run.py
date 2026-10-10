@@ -12,12 +12,12 @@ from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
   add_llm_flags,
-  resolve_native,
   selection_from_args,
 )
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
+from bro.native.harness import resolve_native
 from bro.native.runner import Runner
 from bro.trails.display.config import OutputRoute, PresetName, preset
 from bro.trails.display.core import DisplaySession

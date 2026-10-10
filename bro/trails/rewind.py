@@ -332,7 +332,7 @@ def main(argv: list[str]) -> Optional[int]:
   subparsers = parser.add_subparsers(dest='command')
 
   list_parser = subparsers.add_parser('list', help='list trail headers, newest first')
-  list_parser.add_argument('--harness', help='filter by harness (bro, claude)')
+  list_parser.add_argument('--harness', help='filter by recorded harness name')
   list_parser.add_argument('--bro', help='filter by bro name')
   list_parser.add_argument('--since', help='ISO timestamp lower bound on started_at')
   list_parser.add_argument('--until', help='ISO timestamp upper bound on started_at')

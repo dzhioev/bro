@@ -27,6 +27,9 @@ Claude Code's own harness themed with the session's bro.
 - `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, the gated `Read` of a persona without files, and the command tools a finite command list gates;
   `native_tools_llm_test.py` holds them against that release (`bro/reference/ride.md`, "The claude argv").
 - `claude_auth.py` — the setup-token environment.
+- `provisioning.py` and `image/` — the Claude Code pin, Docker instructions for the binary and plugin seed, and standalone binary/checksum installation into a relocatable runtime.
+  Moving the pin includes `run-tests --only llm`, which probes the model-input channels Claude Code records.
+  `image/bump-claude-code.sh` updates the pin and remains checkout-only.
 - `claude_release.py` — the host-wide standalone-release cache:
   a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, seeding from another checksum-recorded copy, and cleanup.
 - `shell_prefix.py` — the shell claude's Bash commands run in, pinned, and the prefix script through which each of them gets the session's PATH.

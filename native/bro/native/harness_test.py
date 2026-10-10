@@ -638,3 +638,21 @@ class TestNativeServiceTools:
         await call
       [job] = run.registry.values()
       assert job.mode == 'bg'
+
+
+class TestRecipeResolution:
+  def test_native_resolution_refuses_a_self_driving_recipe(self):
+    from bro.llm.llms import openai
+    from bro.llm.providers import LLMSelection, LLMSelectionError
+    from bro.native.harness import resolve_native
+
+    with pytest.raises(LLMSelectionError, match='compatible driving harness'):
+      resolve_native(openai.LLMSpec(), LLMSelection(model='fable5'))
+
+  def test_native_selection_keeps_provider_knobs(self):
+    from bro.llm.llms import openai
+    from bro.llm.providers import LLMSelection
+    from bro.native.harness import resolve_native
+
+    resolved = resolve_native(openai.LLMSpec(), LLMSelection(effort='high', fast=True))
+    assert resolved == openai.LLMSpec().with_effort('high').fast()

@@ -44,7 +44,7 @@ def _pin_host(
 def _manifest(**overrides: object) -> dict[str, object]:
   manifest: dict[str, object] = {
     'format': MANIFEST_FORMAT,
-    'claude_code': {'version': '2.1.258', 'sha256': '3' * 64},
+    'harness_files': {'bro': {}, 'claude': {'engine/binary': hashlib.sha256(b'').hexdigest()}},
     'cpython': CPYTHON_VERSION,
     'harnesses': ['bro', 'claude'],
     'requirements': 'certifi==1\n',
@@ -68,10 +68,9 @@ def _fake_bundle(root: Path) -> Bundle:
   ride.chmod(0o755)
   bundle.shims.mkdir()
   (bundle.shims / 'ride').symlink_to(Path('..') / 'venv' / 'bin' / 'ride')
-  bundle.claude_dir.mkdir()
-  bundle.claude.write_text('')
-  bundle.claude.chmod(0o755)
-  bundle.claude_checksum.write_text(f'{hashlib.sha256(b"").hexdigest()}\n')
+  asset = root / 'engine' / 'binary'
+  asset.parent.mkdir()
+  asset.write_bytes(b'')
   bundle.manifest.write_text(json.dumps(_manifest()))
   return bundle
 
@@ -83,8 +82,6 @@ def test_layout_hangs_off_the_root(tmp_path):
   assert bundle.interpreter == tmp_path / 'bundle' / 'venv' / 'bin' / 'python3'
   assert bundle.script('ride') == tmp_path / 'bundle' / 'venv' / 'bin' / 'ride'
   assert bundle.shims == tmp_path / 'bundle' / 'bin'
-  assert bundle.claude == tmp_path / 'bundle' / 'claude' / 'claude'
-  assert bundle.claude_checksum == tmp_path / 'bundle' / 'claude' / 'claude.sha256'
   assert bundle.manifest == tmp_path / 'bundle' / 'bundle.json'
 
 
@@ -95,19 +92,19 @@ def test_built_names_the_build_command_for_an_absent_bundle(tmp_path):
 
 def test_built_reports_every_missing_part(tmp_path):
   bundle = _fake_bundle(tmp_path / 'bundle')
-  bundle.claude.unlink()
+  asset = bundle.root / 'engine' / 'binary'
+  asset.unlink()
 
-  assert bundle.missing() == (bundle.claude,)
-  with pytest.raises(FileNotFoundError, match='claude'):
+  assert bundle.missing() == (asset,)
+  with pytest.raises(FileNotFoundError, match='engine/binary'):
     built(bundle.root)
 
 
-def test_built_requires_the_claude_checksum_record(tmp_path):
+def test_built_checks_harness_asset_contents(tmp_path):
   bundle = _fake_bundle(tmp_path / 'bundle')
-  bundle.claude_checksum.unlink()
+  (bundle.root / 'engine' / 'binary').write_bytes(b'corrupted')
 
-  assert bundle.missing() == (bundle.claude_checksum,)
-  with pytest.raises(FileNotFoundError, match='claude.sha256'):
+  with pytest.raises(ValueError, match='checksum mismatch'):
     built(bundle.root)
 
 
@@ -133,11 +130,11 @@ def test_the_bundle_identity_changes_with_its_framework_wheels(tmp_path):
   assert bundle.identity != first
 
 
-def test_the_bundle_identity_changes_with_its_claude_code(tmp_path):
+def test_the_bundle_identity_changes_with_its_harness_assets(tmp_path):
   bundle = _fake_bundle(tmp_path / 'bundle')
   first = bundle.identity
   bundle.manifest.write_text(
-    json.dumps(_manifest(claude_code={'version': '2.1.259', 'sha256': '4' * 64}))
+    json.dumps(_manifest(harness_files={'bro': {}, 'claude': {'engine/binary': '4' * 64}}))
   )
 
   assert bundle.identity != first
@@ -155,8 +152,8 @@ def test_built_refuses_a_malformed_manifest(tmp_path):
   'manifest',
   [
     _manifest(format=2),
-    _manifest(claude_code={'version': '', 'sha256': '3' * 64}),
-    _manifest(claude_code={'version': '2.1.258'}),
+    _manifest(harness_files={'bro': {}, 'claude': {'engine/binary': 'bad'}}),
+    _manifest(harness_files={'bro': {}}),
   ],
 )
 def test_built_refuses_a_manifest_off_the_format(tmp_path, manifest):
@@ -309,3 +306,67 @@ def test_the_shim_farm_is_relative_to_the_bundle(tmp_path):
   bundle = _fake_bundle(tmp_path / 'bundle')
 
   assert not Path(os.readlink(bundle.shims / 'ride')).is_absolute()
+
+
+def test_a_single_harness_bundle_requires_no_other_harness_assets(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  (bundle.root / 'engine' / 'binary').unlink()
+  bundle.manifest.write_text(json.dumps(_manifest(harnesses=['bro'], harness_files={'bro': {}})))
+
+  assert built(bundle.root).harnesses == ('bro',)
+
+
+def test_provisioning_runs_the_bundled_registry(monkeypatch, tmp_path):
+  bundle = Bundle(tmp_path)
+  calls = []
+
+  def capture(command):
+    calls.append(command)
+    if '-c' in command:
+      return '["third-party"]'
+    return '{"third-party": {}}'
+
+  monkeypatch.setattr(bundle_module, '_capture', capture)
+
+  assert bundle_module._provision_harnesses(bundle) == {'third-party': {}}
+  assert calls[0][:3] == [str(bundle.interpreter), '-m', 'ride.provisioning']
+  assert calls[0][3:] == ['--bundle', str(tmp_path), '--target', *TARGET]
+
+
+@pytest.mark.parametrize('path', ['/absolute', '../outside', 'venv/config', 'bin/tool'])
+def test_manifest_refuses_harness_files_outside_the_asset_tree(tmp_path, path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  bundle.manifest.write_text(
+    json.dumps(_manifest(harness_files={'bro': {}, 'claude': {path: '3' * 64}}))
+  )
+  with pytest.raises(ValueError, match='harness asset'):
+    built(bundle.root)
+
+
+@pytest.mark.parametrize('parent', [False, True])
+@pytest.mark.parametrize('absolute', [False, True])
+def test_built_refuses_non_regular_harness_assets_before_relocation(tmp_path, parent, absolute):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  payload = bundle.root / 'engine'
+  alias = bundle.root / 'alias'
+  target = payload if parent else payload / 'binary'
+  alias.symlink_to(target if absolute else target.relative_to(bundle.root))
+  relative = 'alias/binary' if parent else 'alias'
+  bundle.manifest.write_text(
+    json.dumps(
+      _manifest(harness_files={'bro': {}, 'claude': {relative: hashlib.sha256(b'').hexdigest()}})
+    )
+  )
+
+  with pytest.raises(ValueError, match='symbolic links'):
+    built(bundle.root)
+
+
+def test_regular_harness_assets_survive_bundle_relocation(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  original_identity = built(bundle.root).identity
+  moved = tmp_path / 'uploaded'
+  bundle.root.rename(moved)
+
+  assert built(moved).identity == original_identity
+  assert (moved / 'engine' / 'binary').read_bytes() == b''

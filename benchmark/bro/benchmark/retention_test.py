@@ -64,7 +64,7 @@ class FakeS3:
 def _bundle_manifest(job_directory: Path) -> str:
   manifest = {
     'format': MANIFEST_FORMAT,
-    'claude_code': {'version': '2.1.258', 'sha256': '3' * 64},
+    'harness_files': {'bro': {}, 'claude': {'engine/binary': '3' * 64}},
     'cpython': '3.12.14',
     'harnesses': ['bro', 'claude'],
     'requirements': 'bro==0.1\n',

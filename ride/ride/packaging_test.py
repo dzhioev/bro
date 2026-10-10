@@ -8,11 +8,12 @@ _PROJECT = Path(__file__).resolve().parents[1]
 _SHIPPED_SETUP_FILES = {
   'ride/setup/container/Dockerfile',
   'ride/setup/container/project.Dockerfile',
-  'ride/setup/container/claude-code-version',
+  'ride/claude/image/claude-code-version',
+  'ride/claude/image/Dockerfile',
   'ride/setup/container/entrypoint.sh',
 }
 _NOT_SHIPPED = {
-  'ride/setup/container/bump-claude-code.sh',
+  'ride/claude/image/bump-claude-code.sh',
   'ride/setup/container/test_smoke.sh',
 }
 

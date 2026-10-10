@@ -44,3 +44,7 @@ def ride_dive_in():
 
 def ride_do_ride():
   return run_cli('ride.do_ride', sys.argv)
+
+
+def ride_provisioning():
+  return run_cli('ride.provisioning', sys.argv)

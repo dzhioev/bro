@@ -7,9 +7,7 @@ The shell prelude remains in the framework's `bro/setup/` directory and is resol
 
 - `container/Dockerfile` — the shared runtime image:
   platform tools,
-  pinned Claude Code,
   the ride user,
-  plugin seed,
   entrypoint,
   and shell helpers.
 - `container/project.Dockerfile` — the optional project dependency bake layered on the runtime image.
@@ -21,4 +19,5 @@ The runtime image contains no Python distribution from the ride installation.
 A frozen runtime bundle is materialized into a named volume and mounted read-only at `/var/ride/runtime`;
 an optional project image contributes `/opt/project-venv` and its staged manifest set.
 `test_smoke.sh` is the host-only image/entrypoint check, including detached and consumer-shaped launches;
-it and `bump-claude-code.sh` are checkout-only and excluded from the wheel.
+it is checkout-only and excluded from the wheel.
+Harness-specific image assets belong to their harness implementations.

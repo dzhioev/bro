@@ -191,3 +191,39 @@ def test_the_workspace_mount_carries_an_independent_clone(launched: Launched) ->
   assert not (launched.workspace / '.git' / 'objects' / 'info' / 'alternates').exists(), (
     launched.output
   )
+
+
+@pytest.mark.parametrize('name', ['bro', 'claude'])
+def test_single_harness_image_starts_its_runtime(name, monkeypatch):
+  import bro.harness as registry
+
+  entries = tuple(entry for entry in registry._entry_points() if entry.name == name)
+  assert len(entries) == 1
+  monkeypatch.setattr(registry, '_entry_points', lambda: entries)
+  monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/single-harness-smoke')
+  with host_docker.scratch_root('single-harness') as root:
+    monkeypatch.setenv('XDG_DATA_HOME', str(root))
+    with resolve_runtime_bundle() as bundle:
+      tag = workspace_docker.runtime_image_tag(bundle.python_version)
+      with _cold_image(tag):
+        workspace_docker.ensure_runtime_image(tag, bundle.python_version, prune=False)
+        bundle.materialize_container(tag, preflight=lambda: workspace_docker._preflight_daemon(tag))
+        command = (
+          'test ! -e /opt/claude-code; bro --help'
+          if name == 'bro'
+          else '/opt/claude-code/claude --version; test -d /opt/claude-plugins-seed'
+        )
+        subprocess.run(
+          [
+            'docker',
+            'run',
+            '--rm',
+            '-v',
+            f'{bundle.container_volume}:/var/ride/runtime:ro',
+            tag,
+            'bash',
+            '-ec',
+            command,
+          ],
+          check=True,
+        )

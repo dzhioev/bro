@@ -21,14 +21,16 @@ and several carry neither Python nor a CA store, so the agent brings its own.
 — `bro`, `bro-native`, `bro-dev` and `bro-ride`, resolved from the framework's lock
 — installed into its own site-packages, every console script relocated to find that interpreter beside itself;
 `bin/`, the shim farm over the session commands, which leads a session's `PATH` and keeps the bundled `python3` off it;
-and `claude/`, the standalone Claude Code binary at the version ride pins with the release manifest's checksum recorded beside it:
+and runtime assets provisioned by the harnesses registered inside that installation:
 
 ```
 uv run --project benchmark benchmark bundle
 ```
 
-It lands in `var/benchmark/bundle` unless `--output` says otherwise, and the downloaded binary is kept in ride's host release cache under `<runtime-root>/claude-code/` for the next build.
-Its `bundle.json` manifest identifies the source commit, exact framework wheels, dependency pins, interpreter, target, and Claude Code binary that produced it.
+It lands in `var/benchmark/bundle` unless `--output` says otherwise.
+Each harness owns provisioning its runtime assets; the Claude harness reuses its host release cache between builds.
+Its `bundle.json` manifest identifies the source commit, exact framework wheels, dependency pins, interpreter, target, installed harnesses, and their runtime files and checksums.
+A bundle with an older manifest format is refused; rebuild it with `benchmark bundle`.
 The canonical manifest digest is the bundle identity Harbor records as `agent_info.version` for every trial.
 Copying the directory somewhere is the whole installation:
 
