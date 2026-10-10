@@ -22,6 +22,10 @@ def ride_claude_read_gate():
   return run_cli('ride.claude.read_gate', sys.argv)
 
 
+def ride_claude_session_end():
+  return run_cli('ride.claude.session_end', sys.argv)
+
+
 def ride_claude_statusline():
   return run_cli('ride.claude.statusline', sys.argv)
 

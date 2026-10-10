@@ -1,12 +1,13 @@
-"""ending a claude process so its in-flight turn reaches the transcript.
+"""ending a claude process so its last turn reaches the transcript.
 
 Claude Code persists an assistant message only once every tool call it carries
-resolves, and the terminating service tools (`answer`, `raise`) deliberately
-never resolve their own — so the turn holding one is written only when claude is
-interrupted: it then writes the assistant `tool_use` blocks with a rejected
-`tool_result` for each unresolved call, and stops working. A TUI killed instead
-takes the whole turn down with it — the terminal payload and the sibling calls
-batched beside it.
+resolves. A session a service tool ended (`answer`, `raise`) signals its stop
+while that call is in flight, and `ride.claude.session_end` stops the turn right
+after the call resolves, so its stop waits for the stopped turn to land rather
+than cutting it short. Any other stop interrupts claude, which then writes the
+assistant `tool_use` blocks with a rejected `tool_result` for each unresolved
+call, and stops working. A TUI killed instead takes the whole turn down with it
+— the calls in flight and the sibling calls batched beside them.
 
 Reaching that interrupt from outside the session takes a different mechanism per
 flavor. Print-mode claude runs on pipes, its reply parsed off stdout, takes SIGINT
@@ -35,7 +36,10 @@ from typing import IO
 
 from bro import turn_end, watches
 from bro.base import log
+from bro.workspace.session import requested_exit_status
 from ride.claude.claude_config import latest_jsonl
+from ride.claude.session_end_state import StoppedCallMark
+from ride.claude.transcripts import read_lines_after
 from ride.claude.waiter_state import REWAKE_STATUS, WAITER_EVENTS, WAITER_MARK, WaiterState
 from ride.do_ride import stopped_on_sigterm
 
@@ -60,6 +64,10 @@ _FLUSH_SETTLE_SECONDS = 0.5
 _FLUSH_TIMEOUT_SECONDS = 15.0
 # how long claude is given to go on its own before the stop turns into a kill
 _EXIT_TIMEOUT_SECONDS = 10.0
+# how long a session that ended itself is given to finish its stopped turn —
+# every call batched beside the ending one resolves first — before it is
+# interrupted instead
+_STOPPED_TURN_TIMEOUT_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -106,7 +114,7 @@ def run_streaming(
   assert process.stdin is not None and process.stdout is not None
   results: list[str] = []
   with (
-    stopped_on_sigterm(lambda: _interrupt_printing(process, waiters)) as stopped,
+    stopped_on_sigterm(lambda: _stop_printing(process, waiters)) as stopped,
     _ended(process),
   ):
     with contextlib.closing(process.stdin) as stdin:
@@ -163,8 +171,12 @@ class _StreamSession:
 
   def settle(self) -> None:
     """settle a turn end, unless the session already ended or a waiter's
-    rewake, begun but not yet in claude's queue, will start another turn."""
+    rewake, begun but not yet in claude's queue, will start another turn; the
+    turn of a session that ended itself is its last."""
     if self._stdin.closed:
+      return
+    if requested_exit_status() is not None:
+      self.end()
       return
     with self._waiters.locked():
       if self._waiters.rewakes() > self._rewakes_seen:
@@ -240,34 +252,83 @@ def _is_task(task: object) -> bool:
 
 
 def run_interactive(
-  argv: list[str], env: Mapping[str, str], transcripts: Path, *, waiters: WaiterState
+  argv: list[str],
+  env: Mapping[str, str],
+  transcripts: Path,
+  *,
+  waiters: WaiterState,
+  stopped_calls: StoppedCallMark,
 ) -> Run:
   """run claude's TUI on a pty proxying the session's terminal.
 
   `transcripts` is the projects dir the interrupted turn lands in."""
   with _terminal_run(argv, env) as run:
-    with stopped_on_sigterm(lambda: _interrupt_interactive(run, transcripts, waiters)) as stopped:
+    with stopped_on_sigterm(
+      lambda: _stop_interactive(run, transcripts, waiters, stopped_calls)
+    ) as stopped:
       code = run.process.wait()
   return Run(code, stopped.is_set())
 
 
-def _interrupt_printing(process: subprocess.Popen, waiters: WaiterState) -> None:
+def _stop_printing(process: subprocess.Popen, waiters: WaiterState) -> None:
   # claude kills a pending waiter on the interrupt, which reads as the waiter
   # failing unless it was stood down first
   waiters.stand_down()
+  # the stream session ends a session that ended itself at its stopped turn's `result`
+  if requested_exit_status() is not None:
+    if _exited_within(process, _STOPPED_TURN_TIMEOUT_SECONDS):
+      return
+    log.warning(
+      'claude did not end its stopped turn within %.0fs; interrupting',
+      _STOPPED_TURN_TIMEOUT_SECONDS,
+    )
   process.send_signal(signal.SIGINT)
   _await_exit(process)
 
 
-def _interrupt_interactive(run: '_TerminalRun', transcripts: Path, waiters: WaiterState) -> None:
+def _stop_interactive(
+  run: '_TerminalRun', transcripts: Path, waiters: WaiterState, stopped_calls: StoppedCallMark
+) -> None:
   waiters.stand_down()
-  run.type(_INTERRUPT_KEY)
   try:
-    _await_flush(transcripts)
+    if requested_exit_status() is None or not _await_stopped_turn(stopped_calls):
+      run.type(_INTERRUPT_KEY)
+      _await_flush(transcripts)
   finally:
-    # the TUI's own quit, taken once the flushed turn is on disk
+    # the TUI's own quit, taken once its last turn is on disk
     run.process.send_signal(signal.SIGINT)
     _await_exit(run.process)
+
+
+def _await_stopped_turn(stopped_calls: StoppedCallMark) -> bool:
+  """wait for the turn `ride.claude.session_end` stopped to reach its
+  transcript; False when it did not within the bound."""
+  deadline = time.monotonic() + _STOPPED_TURN_TIMEOUT_SECONDS
+  offset = 0
+  while time.monotonic() < deadline:
+    call = stopped_calls.read()
+    if call is not None:
+      lines, offset = read_lines_after(call.transcript, offset)
+      if any(_stops(line, call.call_id) for line in lines):
+        return True
+    time.sleep(_POLL_SECONDS)
+  log.warning(
+    'claude did not write its stopped turn within %.0fs; interrupting',
+    _STOPPED_TURN_TIMEOUT_SECONDS,
+  )
+  return False
+
+
+def _stops(line: str, call_id: str) -> bool:
+  """whether the transcript line is claude's record of the turn stopped after `call_id`."""
+  if call_id not in line:
+    return False
+  attachment = json.loads(line).get('attachment')
+  return (
+    isinstance(attachment, dict)
+    and attachment.get('type') == 'hook_stopped_continuation'
+    and attachment.get('toolUseID') == call_id
+  )
 
 
 def _await_flush(transcripts: Path) -> None:
@@ -284,13 +345,19 @@ def _await_flush(transcripts: Path) -> None:
 
 def _await_exit(process: subprocess.Popen) -> None:
   """give claude the grace to go on its own, then take it down."""
-  deadline = time.monotonic() + _EXIT_TIMEOUT_SECONDS
-  while time.monotonic() < deadline:
-    if process.poll() is not None:
-      return
-    time.sleep(_POLL_SECONDS)
+  if _exited_within(process, _EXIT_TIMEOUT_SECONDS):
+    return
   log.warning('claude did not exit %.0fs after the interrupt; terminating', _EXIT_TIMEOUT_SECONDS)
   process.terminate()
+
+
+def _exited_within(process: subprocess.Popen, seconds: float) -> bool:
+  deadline = time.monotonic() + seconds
+  while time.monotonic() < deadline:
+    if process.poll() is not None:
+      return True
+    time.sleep(_POLL_SECONDS)
+  return False
 
 
 class _TerminalRun:

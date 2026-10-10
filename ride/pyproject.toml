@@ -32,6 +32,7 @@ dependencies = [
 "ride.call" = "ride._entrypoints:ride_call"
 "ride.claude.command-gate" = "ride._entrypoints:ride_claude_command_gate"
 "ride.claude.read-gate" = "ride._entrypoints:ride_claude_read_gate"
+"ride.claude.session-end" = "ride._entrypoints:ride_claude_session_end"
 "ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
 "ride.claude.trail-recorder" = "ride._entrypoints:ride_claude_trail_recorder"
 "ride.claude.watch-waiter" = "ride._entrypoints:ride_claude_watch_waiter"

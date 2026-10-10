@@ -192,6 +192,14 @@ which tells the waiter's hook events, a failed start's among them, from those of
 a waiter that fails fails the solo run.
 `ride/ride/claude/watch_waiter_llm_test.py` probes the hooks, the events, and the exit live against the Claude Code release every managed session runs.
 
+Every session's settings also wire `ride.claude.session_end` as the `PostToolUse` hook of the `answer` and `raise` service tools.
+Such a call signals the session's stop while it is in flight, leaving the session's exit status first;
+the hook then answers it with `continue: false`, so Claude keeps the call's own result, makes no further model call, and writes the stopped turn with a `hook_stopped_continuation` record.
+The stop waits for that turn rather than interrupting Claude, which would record the call as one the user rejected:
+a print session ends at the stopped turn's `result`, and a TUI quits once the record of the stopped call is in its transcript.
+A turn that does not stop within a bound is interrupted after all.
+`ride/ride/claude/session_end_llm_test.py` holds that live against the pinned release.
+
 Claude Code runs a Bash command in a login shell whenever its startup shell snapshot is missing, and a login profile that resets PATH there, Debian's `/etc/profile` or the user's own, drops the session commands.
 The runner therefore pins the shell through `CLAUDE_CODE_SHELL` and routes every command through a `CLAUDE_CODE_SHELL_PREFIX` script (`ride.claude.shell_prefix`) that restores the session's PATH first;
 `ride/ride/claude/shell_prefix_llm_test.py` holds that fallback live against the pinned release.
@@ -1304,7 +1312,8 @@ builds the Claude argv (below);
 starts the session recorder daemon (see "Session recording");
 gates on the server's `/health`;
 then runs the isolation's pinned Claude binary by absolute path and waits.
-A SIGTERM aimed at `do-ride` (`docker stop`, kill, a terminating service tool) reaches it as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before Claude goes.
+A SIGTERM aimed at `do-ride` (`docker stop`, kill) reaches it as the interrupt a user issues rather than as a signal, so the turn in flight reaches the transcript before Claude goes;
+one a terminating service tool sent waits instead for the turn the session-end hook stopped (see "Claude harness").
 `ride/ride/claude/interrupt.py` owns that per-flavor split.
 After Claude exits the runner stops the server and recorder (the stop is the recorder's final append and trail end).
 The bro harness's runner resolves a resume's trail from the session's current-trail pointer and spawns the native `bro run|chat …` argv.
