@@ -1,20 +1,22 @@
 """the rebuild that makes a pytest run hermetic against the session it starts in.
 
 The environment is rebuilt rather than patched: every variable in the
-framework's own namespaces is cleared before collection, and a test needing one
-sets it itself. A suite launched from inside a managed session would otherwise
-inherit the running session's broker channel, hold, credential scope, workspace,
-claude config and state dir — and through the state dir, write it: the
-terminating service tools leave the status their session is to report there
-(`bro/workspace/session.py`), so a test exercising them would decide the exit
-status of the session running the suite. Clearing by namespace rather than by
-name is what keeps the next variable the framework invents from having to be
-discovered the same way.
+framework's own namespaces and in each installed harness's is cleared before
+collection, and a test needing one sets it itself. A suite launched from inside
+a managed session would otherwise inherit the running session's broker channel,
+hold, credential scope, workspace, harness state and state dir — and through
+the state dir, write it: the terminating service tools leave the status their
+session is to report there (`bro/workspace/session.py`), so a test exercising
+them would decide the exit status of the session running the suite. Clearing by
+namespace rather than by name is what keeps the next variable the framework
+invents from having to be discovered the same way.
 
 One fixed variable carries session state without living in those namespaces and is
 named on its own: `MCP_SERVER_BEARER_TOKEN`, the session-local MCP server's own credential.
 Credential install hooks may export variables in a tool's own namespace;
 the rebuild discovers those declarations from the installed registry and clears them too.
+A harness names the environment its sessions carry its state in through its
+`owned_environment()`, and the rebuild loads every installed harness to clear it.
 
 The credential resolver's exclusive directory is session state no sweep can
 reach once `bro.base.configs` has captured `BRO_STORE`.
@@ -47,20 +49,11 @@ import time
 from collections.abc import Iterator
 
 from bro.base import configs, credentials, log
-
-SESSION_NAMESPACES = (
-  'ANTHROPIC_',
-  'BROKER_',
-  'BRO_',
-  'CLAUDE_',
-  'CREDENTIALS_',
-  'RIDE_',
-  'TRAILS_',
-)
+from bro.harness import OwnedEnvironment, get_harness, installed_harness_names
 
 
-def _credential_install_variables() -> frozenset[str]:
-  return frozenset(
+def _credential_install_variables() -> tuple[str, ...]:
+  return tuple(
     variable
     for secret in credentials.default_registry().values()
     if secret.install is not None
@@ -68,19 +61,31 @@ def _credential_install_variables() -> frozenset[str]:
   )
 
 
-SESSION_VARIABLES = frozenset({'MCP_SERVER_BEARER_TOKEN'}) | (_credential_install_variables())
+FRAMEWORK_ENVIRONMENT = OwnedEnvironment(
+  namespaces=('BROKER_', 'BRO_', 'CREDENTIALS_', 'RIDE_', 'TRAILS_'),
+  variables=('MCP_SERVER_BEARER_TOKEN', *_credential_install_variables()),
+)
 TIMEZONE = 'Asia/Kolkata'
 
 # The absent exclusive store a suite resolves against.
 ABSENT_CREDENTIAL_STORE = os.path.join(tempfile.gettempdir(), 'bro-suite-absent-credential-store')
 
 
-def _carries_session_state(name: str) -> bool:
-  return name.startswith(SESSION_NAMESPACES) or name in SESSION_VARIABLES
+def session_environment() -> OwnedEnvironment:
+  """every variable carrying session state: the framework's own and each installed harness's."""
+  owners = [
+    FRAMEWORK_ENVIRONMENT,
+    *(get_harness(name).owned_environment() for name in installed_harness_names()),
+  ]
+  return OwnedEnvironment(
+    namespaces=tuple(namespace for owner in owners for namespace in owner.namespaces),
+    variables=tuple(variable for owner in owners for variable in owner.variables),
+  )
 
 
 def rebuild_environment() -> None:
-  for name in [name for name in os.environ if _carries_session_state(name)]:
+  session = session_environment()
+  for name in [name for name in os.environ if session.owns(name)]:
     del os.environ[name]
   credentials.STORE_DIR = ABSENT_CREDENTIAL_STORE
   credentials._default_store = None

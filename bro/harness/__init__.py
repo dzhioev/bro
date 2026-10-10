@@ -28,6 +28,18 @@ class Service:
   unserved: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class OwnedEnvironment:
+  """Environment variables carrying session state:
+  every name under its namespaces, and the variables named outside them."""
+
+  namespaces: tuple[str, ...] = ()
+  variables: tuple[str, ...] = ()
+
+  def owns(self, name: str) -> bool:
+    return name.startswith(self.namespaces) or name in self.variables
+
+
 class Harness:
   """The framework-visible interface of one driving harness."""
 
@@ -50,6 +62,10 @@ class Harness:
   def can_end_session(self) -> bool:
     """Whether this harness can end its current session."""
     return False
+
+  def owned_environment(self) -> OwnedEnvironment:
+    """The environment variables this harness's sessions carry its state in."""
+    return OwnedEnvironment()
 
   def serve(self, reach: 'Reach') -> Service:
     """How this harness serves `reach`; a harness serving no group leaves each unserved."""
