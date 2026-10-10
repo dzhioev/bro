@@ -51,6 +51,11 @@ _SCRIPT_PRELUDE = """\
 _LONG_SHEBANG_CLOSE = b"' '''"
 
 
+class StaleBundleError(ValueError):
+  """a bundle that has to be built again before this checkout can read it: none
+  was finished at its root, or it was built in another manifest format."""
+
+
 def _manifest_bytes(manifest: dict[str, object]) -> bytes:
   return json.dumps(manifest, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode()
 
@@ -92,9 +97,12 @@ def _load_manifest(path: Path) -> dict[str, object]:
     raise ValueError(f'invalid bundle manifest at {path}: {error}') from error
   if not isinstance(manifest, dict):
     raise ValueError(f'invalid bundle manifest at {path}: expected an object')
-  if manifest.get('format') != MANIFEST_FORMAT:
-    raise ValueError(
-      f'bundle manifest at {path} uses an unsupported format; rebuild it with benchmark bundle'
+  declared = manifest.get('format')
+  if type(declared) is not int:
+    raise ValueError(f'invalid bundle manifest at {path}: malformed format {declared!r}')
+  if declared != MANIFEST_FORMAT:
+    raise StaleBundleError(
+      f'bundle manifest at {path} uses format {declared}, not {MANIFEST_FORMAT}'
     )
   if set(manifest) != {
     'format',
@@ -230,13 +238,15 @@ def _bundle_manifest(
 
 
 def built(root: Path) -> Bundle:
-  """the bundle at `root`, refusing one never built or left incomplete."""
+  """the bundle at `root`, refusing one stale, incomplete, or damaged."""
   bundle = Bundle(root)
+  if not bundle.manifest.is_file():
+    raise StaleBundleError(f'no bundle was built at {root}')
   missing = bundle.missing()
   if len(missing) > 0:
     absent = ', '.join(str(part) for part in missing)
     raise FileNotFoundError(
-      f'no bundle at {root} ({absent} absent); build it with benchmark bundle'
+      f'incomplete bundle at {root} ({absent} absent); rebuild it with benchmark bundle'
     )
   manifest = _load_manifest(bundle.manifest)
   files = manifest['harness_files']
@@ -491,6 +501,15 @@ def build(workspace: Path, root: Path) -> Bundle:
     )
     bundle.manifest.write_bytes(_manifest_bytes(manifest) + b'\n')
   return built(root)
+
+
+def cached(workspace: Path, root: Path) -> Bundle:
+  """the bundle at `root`, built from `workspace` first when it is stale."""
+  try:
+    return built(root)
+  except StaleBundleError as error:
+    log.info('rebuilding the bundle: %s', error)
+  return build(workspace, root)
 
 
 def command(output: Optional[str]) -> Optional[int]:

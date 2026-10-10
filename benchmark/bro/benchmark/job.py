@@ -13,7 +13,7 @@ import bro.base.args as base_args
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.bench.presets import PRESETS_KEY, presets_of
-from bro.benchmark.harbor_agent import benchmark_bundle
+from bro.benchmark.bundle import cached, default_root, workspace_root
 
 __cli_name__ = 'benchmark-harbor-job'
 
@@ -64,8 +64,9 @@ def unknown_fields(config: dict[str, Any]) -> list[str]:
 
 
 def run_job(config: Path, jobs_directory: Path, job_name: Optional[str] = None) -> Path:
-  """Run Harbor, then add the run's provenance to its job directory: the trial
-  bundle's manifest and the presets the config was composed from."""
+  """Run Harbor on the cached bundle, then add the run's provenance to its job
+  directory: the trial bundle's manifest and the presets the config was composed
+  from."""
   content = load_config_source(config)
   presets = presets_of(content)
   dropped = unknown_fields(content)
@@ -74,7 +75,8 @@ def run_job(config: Path, jobs_directory: Path, job_name: Optional[str] = None) 
   resolved_jobs_directory = jobs_directory.resolve()
   selected_job_name = job_name if job_name is not None else lulid()
   job_directory = _job_directory(resolved_jobs_directory, selected_job_name)
-  bundle_manifest = benchmark_bundle().manifest.read_bytes()
+  workspace = workspace_root()
+  bundle_manifest = cached(workspace, default_root(workspace)).manifest.read_bytes()
   command = [
     'harbor',
     'job',

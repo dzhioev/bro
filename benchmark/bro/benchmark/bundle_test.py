@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -15,8 +16,10 @@ from bro.benchmark.bundle import (
   TARGET,
   WHEEL_PACKAGES,
   Bundle,
+  StaleBundleError,
   build,
   built,
+  cached,
   default_root,
   export_command,
   host_mismatch,
@@ -85,8 +88,8 @@ def test_layout_hangs_off_the_root(tmp_path):
   assert bundle.manifest == tmp_path / 'bundle' / 'bundle.json'
 
 
-def test_built_names_the_build_command_for_an_absent_bundle(tmp_path):
-  with pytest.raises(FileNotFoundError, match='benchmark bundle'):
+def test_built_refuses_an_absent_bundle_as_stale(tmp_path):
+  with pytest.raises(StaleBundleError, match='no bundle was built'):
     built(tmp_path / 'absent')
 
 
@@ -148,10 +151,17 @@ def test_built_refuses_a_malformed_manifest(tmp_path):
     built(bundle.root)
 
 
+def test_built_refuses_a_manifest_in_another_format_as_stale(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  bundle.manifest.write_text(json.dumps(_manifest(format=MANIFEST_FORMAT - 1)))
+
+  with pytest.raises(StaleBundleError, match='uses format'):
+    built(bundle.root)
+
+
 @pytest.mark.parametrize(
   'manifest',
   [
-    _manifest(format=2),
     _manifest(harness_files={'bro': {}, 'claude': {'engine/binary': 'bad'}}),
     _manifest(harness_files={'bro': {}}),
   ],
@@ -160,8 +170,82 @@ def test_built_refuses_a_manifest_off_the_format(tmp_path, manifest):
   bundle = _fake_bundle(tmp_path / 'bundle')
   bundle.manifest.write_text(json.dumps(manifest))
 
-  with pytest.raises(ValueError, match='malformed values|unexpected fields|benchmark bundle'):
+  with pytest.raises(ValueError, match='malformed values|unexpected fields') as refused:
     built(bundle.root)
+  assert not isinstance(refused.value, StaleBundleError)
+
+
+def _record_builds(monkeypatch, workspace: Path) -> list[Path]:
+  """stand a fake bundle in for every build from `workspace`, answering with
+  the roots built."""
+  roots: list[Path] = []
+
+  def fake_build(source: Path, root: Path) -> Bundle:
+    assert source == workspace
+    roots.append(root)
+    if root.exists():
+      shutil.rmtree(root)
+    return _fake_bundle(root)
+
+  monkeypatch.setattr(bundle_module, 'build', fake_build)
+  return roots
+
+
+def test_cached_reuses_a_readable_bundle(tmp_path, monkeypatch):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  roots = _record_builds(monkeypatch, tmp_path / 'checkout')
+
+  assert cached(tmp_path / 'checkout', bundle.root) == bundle
+  assert roots == []
+
+
+def test_cached_builds_an_absent_bundle(tmp_path, monkeypatch):
+  root = tmp_path / 'bundle'
+  roots = _record_builds(monkeypatch, tmp_path / 'checkout')
+
+  assert cached(tmp_path / 'checkout', root) == Bundle(root)
+  assert roots == [root]
+
+
+def test_cached_rebuilds_a_bundle_in_another_manifest_format(tmp_path, monkeypatch):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  bundle.manifest.write_text(json.dumps(_manifest(format=MANIFEST_FORMAT - 1)))
+  roots = _record_builds(monkeypatch, tmp_path / 'checkout')
+
+  assert cached(tmp_path / 'checkout', bundle.root) == bundle
+  assert roots == [bundle.root]
+
+
+def test_cached_refuses_a_damaged_bundle_without_rebuilding_it(tmp_path, monkeypatch):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  (bundle.root / 'engine' / 'binary').write_bytes(b'corrupted')
+  roots = _record_builds(monkeypatch, tmp_path / 'checkout')
+
+  with pytest.raises(ValueError, match='checksum mismatch'):
+    cached(tmp_path / 'checkout', bundle.root)
+  assert roots == []
+
+
+@pytest.mark.parametrize(
+  'manifest',
+  [
+    {key: value for key, value in _manifest().items() if key != 'format'},
+    _manifest(format=None),
+    _manifest(format='broken'),
+    _manifest(format={}),
+    _manifest(format=True),
+  ],
+)
+def test_cached_refuses_a_malformed_format_declaration_without_rebuilding_it(
+  tmp_path, monkeypatch, manifest
+):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  bundle.manifest.write_text(json.dumps(manifest))
+  roots = _record_builds(monkeypatch, tmp_path / 'checkout')
+
+  with pytest.raises(ValueError, match='malformed format'):
+    cached(tmp_path / 'checkout', bundle.root)
+  assert roots == []
 
 
 def test_a_relocated_script_runs_on_the_interpreter_beside_it(tmp_path):

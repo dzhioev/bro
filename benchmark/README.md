@@ -30,7 +30,8 @@ uv run --project benchmark benchmark bundle
 It lands in `var/benchmark/bundle` unless `--output` says otherwise.
 Each harness owns provisioning its runtime assets; the Claude harness reuses its host release cache between builds.
 Its `bundle.json` manifest identifies the source commit, exact framework wheels, dependency pins, interpreter, target, installed harnesses, and their runtime files and checksums.
-A bundle with an older manifest format is refused; rebuild it with `benchmark bundle`.
+A job builds the bundle at `var/benchmark/bundle` first when none was finished there or its manifest is in a format this checkout does not read;
+one that is incomplete or fails its checksums is refused.
 The canonical manifest digest is the bundle identity Harbor records as `agent_info.version` for every trial.
 Copying the directory somewhere is the whole installation:
 

@@ -37,7 +37,7 @@ def test_run_job_starts_harbor_then_records_the_bundle_and_presets(
     events.append(tuple(command))
     job_directory.mkdir(parents=True)
 
-  monkeypatch.setattr(job, 'benchmark_bundle', lambda: bundle)
+  monkeypatch.setattr(job, 'cached', lambda workspace, root: bundle)
   monkeypatch.setattr(job.subprocess, 'run', run)
 
   result = job.run_job(config, jobs_directory, job_name='chosen-name')
@@ -135,7 +135,7 @@ def test_cli_refuses_the_removed_upload_option(capsys):
 def test_harbor_failure_is_reported_without_post_processing(
   tmp_path, monkeypatch, bundle, config, caplog
 ):
-  monkeypatch.setattr(job, 'benchmark_bundle', lambda: bundle)
+  monkeypatch.setattr(job, 'cached', lambda workspace, root: bundle)
 
   def fail(command, check):
     raise subprocess.CalledProcessError(1, command)

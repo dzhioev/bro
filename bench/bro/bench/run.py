@@ -279,7 +279,8 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--keep-bundle',
     action='store_true',
-    help='run the bundle already in var/benchmark instead of rebuilding it',
+    help='run the bundle already in var/benchmark instead of rebuilding it; the job still '
+    'builds one that is stale',
   )
   parser.add_argument(
     '--jobs-dir',
