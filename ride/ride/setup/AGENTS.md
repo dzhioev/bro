@@ -13,7 +13,7 @@ The shell prelude remains in the framework's `bro/setup/` directory and is resol
 - `container/project.Dockerfile` — the optional project dependency bake layered on the runtime image.
 - `container/entrypoint.sh` — in-container workspace setup:
   user remapping, git safety, the project-venv link, `setup.sh`, then exec of the supplied `do-ride` command.
-  Credential hooks, Claude plugin seeding, and the session broxy belong to `do-ride`.
+  Credential hooks and the session broxy belong to `do-ride`.
 
 The runtime image contains no Python distribution from the ride installation.
 A frozen runtime bundle is materialized into a named volume and mounted read-only at `/var/ride/runtime`;

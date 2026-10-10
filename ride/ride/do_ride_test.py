@@ -340,19 +340,13 @@ class TestCredentialHooks:
 
 
 class TestClaudeState:
-  def test_preprovisioned_state_only_needs_the_installations_plugin_seed(
-    self, monkeypatch, tmp_path
-  ):
+  def test_preprovisioned_state_is_used_as_it_is(self, monkeypatch, tmp_path):
     config = tmp_path / 'claude'
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
-    monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
-    with (
-      patch('ride.claude.harness.provision_unboxed_claude_dir') as provision,
-      patch('ride.claude.harness.seed_session_plugins') as seed,
-    ):
+    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
+    with patch('ride.claude.harness.provision_unboxed_claude_dir') as provision:
       get_harness('claude').prepare_session(MagicMock(name='w'))
     provision.assert_not_called()
-    seed.assert_called_once_with(config, container=True)
 
 
 class TestRequestedExitStatus:

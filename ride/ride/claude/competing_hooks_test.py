@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from ride.claude.claude_config import _SESSION_SETTINGS_JSON
 from ride.claude.competing_hooks import find
 from ride.claude.native_tools import COMMAND_TOOLS, GATED_READ
 
@@ -189,8 +190,5 @@ class TestUnreadable:
 
 
 def test_a_session_configured_as_ride_configures_it_has_nothing_to_report(project, config):
-  # ride's own settings enable the pyright plugin, which ships no hooks
-  root = _plugin(config, config / 'plugins' / 'cache' / 'pyright', key='pyright-lsp@official')
-  _write(root / 'README.md', '# pyright\n')
-  _write(config / 'settings.json', json.dumps({'enabledPlugins': {'pyright-lsp@official': True}}))
+  _write(config / 'settings.json', json.dumps(_SESSION_SETTINGS_JSON))
   assert find(project, config, (*COMMAND_TOOLS, GATED_READ)) == []

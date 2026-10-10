@@ -11,7 +11,7 @@ stays off until mapped here.
 from bro.brash_policy import finite
 from bro.mcp import Reach
 
-READ = ('Read', 'Glob', 'Grep', 'LSP')
+READ = ('Read', 'Glob', 'Grep')
 WRITE = ('Write', 'Edit', 'NotebookEdit')
 SHELL = ('Bash', 'TaskStop', 'Monitor')
 WEB = ('WebFetch', 'WebSearch')

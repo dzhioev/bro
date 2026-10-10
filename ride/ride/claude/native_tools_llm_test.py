@@ -20,7 +20,7 @@ from bro import mcp
 from bro.registry import create_bro, declared_specs
 from ride.claude import native_tools
 from ride.claude.claude_argv import STREAM_JSON_ARGS, reach_arguments
-from ride.claude.claude_config import _SESSION_SETTINGS_JSON, seed_session_plugins
+from ride.claude.claude_config import _SESSION_SETTINGS_JSON
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   claude_token,
@@ -33,7 +33,7 @@ _REPORTED_NAMES = {'Agent': 'Task'}
 
 def _session(tmp_path: Path, *, token: str | None) -> tuple[Path, dict[str, str]]:
   """a workspace carrying a project `.mcp.json`, and the environment of a session
-  over the session's own settings and plugins."""
+  over the session's own settings."""
   workspace = tmp_path / 'workspace'
   workspace.mkdir()
   (workspace / '.mcp.json').write_text(
@@ -43,7 +43,6 @@ def _session(tmp_path: Path, *, token: str | None) -> tuple[Path, dict[str, str]
   config.mkdir()
   (config / '.claude.json').write_text(json.dumps({'hasCompletedOnboarding': True}))
   (config / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
-  seed_session_plugins(config, container=True)
   env = {
     name: value
     for name, value in os.environ.items()
@@ -92,14 +91,9 @@ def test_init_holds_the_personas_mapped_natives_and_no_project_server(
   init = _init_event(claude, reach, tmp_path)
 
   # the release withholds Monitor while telemetry is off, as the session's
-  # settings keep it, and LSP wherever no language-server plugin loaded
-  withheld = {'Monitor'}
-  if not any(plugin['name'] == 'pyright-lsp' for plugin in init['plugins']):
-    withheld.add('LSP')
+  # settings keep it
   expected = {
-    _REPORTED_NAMES.get(name, name)
-    for name in native_tools.allowlist(reach)
-    if name not in withheld
+    _REPORTED_NAMES.get(name, name) for name in native_tools.allowlist(reach) if name != 'Monitor'
   }
   assert set(init['tools']) == expected
   assert init['mcp_servers'] == []

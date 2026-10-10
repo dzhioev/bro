@@ -5,7 +5,6 @@ from typing import Optional
 import pytest
 
 import ride.claude.claude_config as ride_claude_config
-from ride.claude.harness import CLAUDE
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -132,25 +131,6 @@ class TestProvisionHostClaudeDir:
     settings = json.loads((claude_dir / 'settings.json').read_text())
     assert settings == ride_claude_config._SESSION_SETTINGS_JSON
 
-  def test_seeds_host_plugins_once(self, home):
-    host_plugins = home / '.claude' / 'plugins'
-    (host_plugins / 'marketplaces').mkdir(parents=True)
-    (host_plugins / 'installed_plugins.json').write_text('{"pyright-lsp": {}}')
-    claude_dir, _ = self._provision(home)
-    ride_claude_config.seed_session_plugins(claude_dir, container=False)
-    seeded = claude_dir / 'plugins' / 'installed_plugins.json'
-    assert json.loads(seeded.read_text()) == {'pyright-lsp': {}}
-    assert not seeded.is_symlink()
-    # first-run only: session-local plugin state is kept on later provisions
-    seeded.write_text('{"session": "state"}')
-    ride_claude_config.seed_session_plugins(claude_dir, container=False)
-    assert json.loads(seeded.read_text()) == {'session': 'state'}
-
-  def test_no_host_plugins_is_fine(self, home):
-    claude_dir, _ = self._provision(home)
-    ride_claude_config.seed_session_plugins(claude_dir, container=False)
-    assert not (claude_dir / 'plugins').exists()
-
   def test_idempotent(self, home):
     first, _ = self._provision(home)
     (first / '.claude.json').write_text('{"session": "state"}')
@@ -181,28 +161,6 @@ class TestContainerClaudeState:
     settings_file = tmp_path / 'ws' / 'claude' / 'settings.json'
     settings = json.loads(settings_file.read_text())
     assert settings['skipDangerousModePermissionPrompt'] is True
-
-
-class TestPluginSeedContract:
-  def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
-    plugin = next(iter(ride_claude_config._SESSION_SETTINGS_JSON['enabledPlugins']))
-    dockerfile = CLAUDE.runtime_image().dockerfile
-    assert f'claude plugin install {plugin}' in dockerfile
-    assert str(ride_claude_config._CONTAINER_PLUGIN_SEED) in dockerfile
-
-  def test_session_seed_copies_the_container_stage_once(self, monkeypatch, tmp_path):
-    source = tmp_path / 'seed'
-    source.mkdir()
-    (source / 'installed_plugins.json').write_text('{"pyright-lsp": {}}')
-    destination = tmp_path / 'claude'
-    monkeypatch.setattr(ride_claude_config, '_CONTAINER_PLUGIN_SEED', source)
-
-    ride_claude_config.seed_session_plugins(destination, container=True)
-    installed = destination / 'plugins' / 'installed_plugins.json'
-    assert json.loads(installed.read_text()) == {'pyright-lsp': {}}
-    installed.write_text('{"session": {}}')
-    ride_claude_config.seed_session_plugins(destination, container=True)
-    assert json.loads(installed.read_text()) == {'session': {}}
 
 
 class TestWorkspaceProjectsDir:
