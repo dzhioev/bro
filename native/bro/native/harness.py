@@ -15,12 +15,11 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.launch.llm_flags import resolve_native
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
 from bro.native import dev_mcp
-from ride.harness import ContainerExtras
+from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -30,6 +29,24 @@ if TYPE_CHECKING:
   from bro.mcp import Reach
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
+
+
+def resolve_native(base: 'NativeLLMSpec', selection: 'LLMSelection') -> 'NativeLLMSpec':
+  """the recipe a bro-native launcher runs: `selection` over the bro's own spec.
+
+  A selection naming a harness that drives its own loop is refused rather than
+  taken as a request to launch on that harness — these flags choose a model.
+  """
+  from bro.llm.llm import NativeLLMSpec
+  from bro.llm.providers import LLMSelectionError, resolve
+
+  spec = resolve(base, selection)
+  if not isinstance(spec, NativeLLMSpec):
+    raise LLMSelectionError(
+      f'{spec.TYPE} runs its own agent loop, so a bro cannot be launched against it here; '
+      'select a compatible driving harness with `ride solo|along --harness NAME`'
+    )
+  return spec
 
 
 class _NativeRun(Protocol):
@@ -256,6 +273,16 @@ class BroHarness(Harness):
 
   def clean_cache(self, *, dry_run: bool = False) -> None:
     del dry_run
+
+  def setup_runtime(self) -> None:
+    pass
+
+  def runtime_image(self) -> RuntimeImage:
+    return RuntimeImage()
+
+  def provision_bundle(self, root: Path, target: tuple[str, ...]) -> tuple[str, ...]:
+    del root, target
+    return ()
 
   def check_runtime(self) -> None:
     subprocess.run([spawn.console_script('bro'), '--help'], check=True)

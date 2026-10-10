@@ -26,9 +26,9 @@ from ride.claude.claude_config import (
   seed_session_plugins,
   workspace_projects_dir,
 )
-from ride.harness import ContainerExtras
+from ride.claude.provisioning import claude_code_version
+from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe, credential_store
-from ride.workspace.build_context import claude_code_version
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
@@ -156,6 +156,20 @@ class ClaudeHarness(Harness):
     removed, skipped = claude_release.clean_cached_releases(dry_run=dry_run)
     action = 'would clean' if dry_run else 'cleaned'
     log.info('%s %d Claude Code release(s), skipped %d active', action, removed, skipped)
+
+  def setup_runtime(self) -> None:
+    if os.environ.get('RIDE_IN_CONTAINER') != '1':
+      self.check_runtime()
+
+  def runtime_image(self) -> RuntimeImage:
+    from ride.claude.provisioning import runtime_image
+
+    return runtime_image()
+
+  def provision_bundle(self, root: Path, target: tuple[str, ...]) -> tuple[str, ...]:
+    from ride.claude.provisioning import provision_bundle
+
+    return provision_bundle(root, target)
 
   def check_runtime(self) -> None:
     carried = Path(sys.prefix).parent / 'claude' / 'claude'

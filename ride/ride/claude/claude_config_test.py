@@ -5,7 +5,7 @@ from typing import Optional
 import pytest
 
 import ride.claude.claude_config as ride_claude_config
-import ride.workspace.docker as workspace_docker
+from ride.claude.harness import CLAUDE
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -184,17 +184,11 @@ class TestContainerClaudeState:
 
 
 class TestPluginSeedContract:
-  # the enabled plugin must also be installed: settings.json enables it (ride/claude_config.py),
-  # the Dockerfile installs + stages it, and the entrypoint copies the stage into
-  # the bind-mounted ~/.claude/plugins. enabling without installing is exactly the
-  # regression that reintroduced the "LSP Plugin Recommendation" prompt.
-  _SEED_DIR = '/opt/claude-plugins-seed'
-
   def test_dockerfile_installs_and_stages_the_enabled_plugin(self):
     plugin = next(iter(ride_claude_config._SESSION_SETTINGS_JSON['enabledPlugins']))
-    dockerfile = (workspace_docker.CONTAINER_DIR / 'Dockerfile').read_text()
+    dockerfile = CLAUDE.runtime_image().dockerfile
     assert f'claude plugin install {plugin}' in dockerfile
-    assert self._SEED_DIR in dockerfile
+    assert str(ride_claude_config._CONTAINER_PLUGIN_SEED) in dockerfile
 
   def test_session_seed_copies_the_container_stage_once(self, monkeypatch, tmp_path):
     source = tmp_path / 'seed'

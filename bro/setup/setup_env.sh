@@ -172,34 +172,6 @@ install_tmux() {
   fi
 }
 
-check_claude_code() {
-  if ! command -v claude &> /dev/null; then
-    echo "Claude Code CLI is not installed."
-    return 1
-  fi
-
-  CLAUDE_PATH=$(command -v claude)
-
-  # Check if it's a node script (npm-installed) rather than a native binary
-  if head -1 "$CLAUDE_PATH" 2>/dev/null | grep -q "node"; then
-    echo "Claude Code CLI is installed via npm, but native installation is required."
-    return 1
-  fi
-
-  CLAUDE_VERSION=$(claude --version 2>/dev/null | head -n1)
-  echo "Claude Code CLI: $CLAUDE_VERSION (native, $CLAUDE_PATH)"
-  return 0
-}
-
-install_claude_code() {
-  if check_claude_code; then
-    return
-  fi
-
-  echo "Installing Claude Code CLI (native) via npx..."
-  npx @anthropic-ai/claude-code install
-}
-
 # the compose plugin ships separately from the engine, and benchmark jobs drive
 # every task container through it
 check_docker_compose() {
@@ -326,7 +298,6 @@ install_uv() {
   fi
 }
 
-install_claude_code
 install_docker
 install_uv
 if [ "$PROFILE" = "full" ]; then

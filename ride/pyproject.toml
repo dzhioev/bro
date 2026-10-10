@@ -38,6 +38,7 @@ dependencies = [
 "ride.cli" = "ride._entrypoints:ride_cli"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"
 "ride.do-ride" = "ride._entrypoints:ride_do_ride"
+"ride.provisioning" = "ride._entrypoints:ride_provisioning"
 
 [project.entry-points."bro.session_commands"]
 "do-ride" = "ride._entrypoints:ride_do_ride"
@@ -71,6 +72,6 @@ wheel-exclude = [
   "**/conftest.py",
   "**/AGENTS.md",
   "**/*.egg-info",
-  "ride/setup/container/bump-claude-code.sh",
+  "ride/claude/image/bump-claude-code.sh",
   "ride/setup/container/test_smoke.sh",
 ]

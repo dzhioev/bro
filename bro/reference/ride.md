@@ -104,7 +104,7 @@ It prepares either a container `Launch` or an explicit process launch, and a ses
 
 - its `ScopeRecipe`, the auth preflight, and LLM resolution;
 - session preparation and the run under `do-ride` inside the prepared workspace, consumed by both isolations;
-- a runtime probe for `ride check-harness`;
+- a runtime probe for `ride check-harness`, host setup, runtime-image contributions, and relocatable-bundle assets;
 - session existence with its resume-refusal wording and the subject read;
 - the boxed extras (env, mounts) and the unboxed runner-env preparation.
 
@@ -149,7 +149,7 @@ The session watch reaches the model through the selected harness's delivery port
 
 A Claude session runs Claude Code with the natives the selected bro's tool groups map to, Claude's own skills and base prompt, and the bro's persona, spells, and MCP namespaces.
 It requires the `claude_code` setup token.
-Every managed session runs the version pinned in `ride/ride/setup/container/claude-code-version` by absolute path:
+Every managed Claude session runs the version pinned in `ride/ride/claude/image/claude-code-version` by absolute path:
 the runtime image's install in boxed isolation, and a verified standalone release in unboxed isolation.
 An ordinary unboxed runtime caches it under `<runtime-root>/claude-code/<version>/<platform>/`;
 a materialized `--runtime-bundle` may instead carry `claude/claude` and its checksum record as part of its self-contained installation.
@@ -791,7 +791,9 @@ An unboxed root defers image and volume resolution until its first boxed summon.
 
 Container images are split:
 
-- **Runtime image** (`bro/ride-runtime:<hash>`) — Python-minor-matched Debian, system CLIs, pinned Claude Code, the ride user, plugin seed, entrypoint, and shell helpers.
+- **Runtime image** (`bro/ride-runtime:<hash>`) — Python-minor-matched Debian, system CLIs, the ride user, entrypoint, shell helpers, and each installed harness’s runtime contributions.
+  Its identity includes the installed harness roster, Docker instructions, contributed files and build arguments.
+  The Claude harness contributes its pinned binary and plugin seed.
   Its hash covers those assets, the Claude pin, and Python minor.
   It contains no Python distribution from the ride installation.
 - **Project image** (`<[tool.bro] image-repository>:<hash>`)

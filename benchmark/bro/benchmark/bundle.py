@@ -4,12 +4,12 @@
 The bundle is self-contained: a pinned standalone CPython carrying the framework
 distributions a ride runs from, resolved against the workspace lock, laid out as
 the materialized `venv/` + `bin/` runtime `ride --runtime-bundle` takes, plus the
-standalone Claude Code binary at the version ride pins. Copying the directory
+harness-owned runtime assets. Copying the directory
 anywhere on a linux/x86_64 glibc machine is the whole installation — nothing
 outside it is read.
 
 What the bundle contains is decided by the pinned interpreter version here, the
-workspace `uv.lock`, and the Claude Code release manifest, so two builds of one
+workspace `uv.lock`, and the installed harnesses’ runtime assets, so two builds of one
 commit carry the same code.
 """
 
@@ -29,18 +29,15 @@ from typing import Optional
 from bro.base import log, spawn
 from bro.base.args import Parser
 from bro.base.source_root import SOURCE_ROOT
-from ride.claude import claude_release
+from ride.provisioning import bundle_asset, bundle_file
 from ride.runtime_bundle import link_session_commands, validate_materialized_runtime
-from ride.workspace.build_context import claude_code_version
 
 CPYTHON_VERSION = '3.12.14'
 # core, the engine that runs a bro, the distribution every persona but the
 # minimal `bro` one ships from, and the launcher a trial rides under
 WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev', 'bro-ride')
 TARGET = ('linux', 'x86_64', 'glibc')
-# `TARGET`, as the Claude Code release manifest names it
-CLAUDE_CODE_PLATFORM = 'linux-x64'
-MANIFEST_FORMAT = 4
+MANIFEST_FORMAT = 5
 
 # a console script that finds its interpreter beside itself wherever the bundle
 # is copied: sh reads the second line as an `exec`, python as a string
@@ -66,14 +63,26 @@ def _digest_valid(value: object) -> bool:
   )
 
 
-def _claude_code_valid(value: object) -> bool:
-  return (
-    isinstance(value, dict)
-    and set(value) == {'version', 'sha256'}
-    and isinstance(value['version'], str)
-    and value['version'] != ''
-    and _digest_valid(value['sha256'])
-  )
+def _harness_files_valid(value: object, harnesses: object) -> bool:
+  if (
+    not isinstance(value, dict)
+    or not isinstance(harnesses, list)
+    or not all(isinstance(name, str) for name in harnesses)
+    or set(value) != set(harnesses)
+  ):
+    return False
+  claimed: set[str] = set()
+  for files in value.values():
+    if not isinstance(files, dict):
+      return False
+    for relative, digest in files.items():
+      if not isinstance(relative, str) or not _digest_valid(digest):
+        return False
+      bundle_file(relative)
+      if relative in claimed:
+        return False
+      claimed.add(relative)
+  return True
 
 
 def _load_manifest(path: Path) -> dict[str, object]:
@@ -89,7 +98,7 @@ def _load_manifest(path: Path) -> dict[str, object]:
     )
   if set(manifest) != {
     'format',
-    'claude_code',
+    'harness_files',
     'cpython',
     'harnesses',
     'requirements',
@@ -102,7 +111,7 @@ def _load_manifest(path: Path) -> dict[str, object]:
   target = manifest['target']
   wheels = manifest['wheels']
   if (
-    not _claude_code_valid(manifest['claude_code'])
+    not _harness_files_valid(manifest['harness_files'], harnesses)
     or not isinstance(manifest['cpython'], str)
     or manifest['cpython'] == ''
     or not isinstance(harnesses, list)
@@ -154,19 +163,6 @@ class Bundle:
     return self.venv / 'bin' / name
 
   @property
-  def claude_dir(self) -> Path:
-    """the directory holding the `claude` binary, for a PATH entry of its own."""
-    return self.root / 'claude'
-
-  @property
-  def claude(self) -> Path:
-    return self.claude_dir / 'claude'
-
-  @property
-  def claude_checksum(self) -> Path:
-    return self.claude.with_suffix('.sha256')
-
-  @property
   def manifest(self) -> Path:
     return self.root / 'bundle.json'
 
@@ -190,11 +186,20 @@ class Bundle:
       self.interpreter,
       self.script('ride'),
       self.shims,
-      self.claude,
-      self.claude_checksum,
       self.manifest,
     )
-    return tuple(part for part in parts if not part.exists())
+    missing = [part for part in parts if not part.exists()]
+    if self.manifest.is_file():
+      manifest = _load_manifest(self.manifest)
+      files = manifest['harness_files']
+      assert isinstance(files, dict)
+      missing.extend(
+        bundle_asset(self.root, relative)
+        for assets in files.values()
+        for relative in assets
+        if not bundle_asset(self.root, relative).is_file()
+      )
+    return tuple(missing)
 
 
 def _file_digest(path: Path) -> str:
@@ -209,12 +214,12 @@ def _bundle_manifest(
   requirements: str,
   wheels: list[Path],
   source_commit: str,
-  claude_code: dict[str, str],
+  harness_files: dict[str, dict[str, str]],
   harnesses: tuple[str, ...],
 ) -> dict[str, object]:
   return {
     'format': MANIFEST_FORMAT,
-    'claude_code': claude_code,
+    'harness_files': harness_files,
     'cpython': CPYTHON_VERSION,
     'harnesses': list(harnesses),
     'requirements': requirements,
@@ -233,7 +238,14 @@ def built(root: Path) -> Bundle:
     raise FileNotFoundError(
       f'no bundle at {root} ({absent} absent); build it with benchmark bundle'
     )
-  _ = bundle.identity
+  manifest = _load_manifest(bundle.manifest)
+  files = manifest['harness_files']
+  assert isinstance(files, dict)
+  for assets in files.values():
+    for relative, expected in assets.items():
+      path = bundle_asset(bundle.root, relative)
+      if _file_digest(path) != expected:
+        raise ValueError(f'harness asset checksum mismatch: {path}; rebuild with benchmark bundle')
   return bundle
 
 
@@ -402,15 +414,24 @@ def _relocate_scripts(bundle: Bundle) -> None:
   log.verbose('relocated %d console scripts', len(relocated))
 
 
-def _install_claude_code(bundle: Bundle) -> dict[str, str]:
-  version = claude_code_version()
-  binary = claude_release.cached_binary(version, CLAUDE_CODE_PLATFORM)
-  bundle.claude_dir.mkdir()
-  shutil.copyfile(binary, bundle.claude)
-  bundle.claude.chmod(0o755)
-  digest = _file_digest(bundle.claude)
-  bundle.claude_checksum.write_text(f'{digest}\n')
-  return {'version': version, 'sha256': digest}
+def _provision_harnesses(bundle: Bundle) -> dict[str, dict[str, str]]:
+  value = json.loads(
+    _capture(
+      [
+        str(bundle.interpreter),
+        '-m',
+        'ride.provisioning',
+        '--bundle',
+        str(bundle.root),
+        '--target',
+        *TARGET,
+      ]
+    )
+  )
+  harnesses = _installed_harnesses(bundle)
+  if not _harness_files_valid(value, list(harnesses)):
+    raise ValueError('the bundled harnesses returned malformed asset records')
+  return value
 
 
 @contextlib.contextmanager
@@ -463,10 +484,10 @@ def build(workspace: Path, root: Path) -> Bundle:
     _run(install_command(bundle, requirements, wheels))
     _relocate_scripts(bundle)
     link_session_commands(bundle.root)
-    claude_code = _install_claude_code(bundle)
+    harness_files = _provision_harnesses(bundle)
     validate_materialized_runtime(bundle.root)
     manifest = _bundle_manifest(
-      requirements_text, wheels, source_commit, claude_code, _installed_harnesses(bundle)
+      requirements_text, wheels, source_commit, harness_files, _installed_harnesses(bundle)
     )
     bundle.manifest.write_bytes(_manifest_bytes(manifest) + b'\n')
   return built(root)

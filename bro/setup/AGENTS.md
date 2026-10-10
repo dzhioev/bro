@@ -14,6 +14,7 @@ In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifest
 
 The framework checkout's own bring-up is `./setup.sh` (root `AGENTS.md`, "Development");
 its prerequisites are documented in `README.md`.
+After syncing, it dispatches installed harness runtime setup through `python -m ride.provisioning`.
 
 ### Worktrees
 

@@ -27,14 +27,7 @@ COPY .bro-container/prelude.sh .bro-container/log.sh .bro-container/strict.sh \
 RUN bash -e /tmp/bro-shell/install_awscli.sh \
  && rm -rf /tmp/bro-shell
 
-ARG CLAUDE_CODE_VERSION
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
- && mkdir -p /opt/claude-code \
- && ln -s "$(command -v claude)" /opt/claude-code/claude
-
-RUN useradd -m -u 1000 -s /bin/bash ride \
- && mkdir -p /home/ride/.claude \
- && chown ride:ride /home/ride/.claude
+RUN useradd -m -u 1000 -s /bin/bash ride
 
 # Interactive `ride exec` shells show the session banner once the runtime volume
 # puts `ride` on PATH.
@@ -45,17 +38,6 @@ if [ -z "${RIDE_BANNER_SHOWN:-}" ] && command -v ride >/dev/null 2>&1; then
   ride banner || true
 fi
 EOF
-
-# Claude's settings enable pyright-lsp, but each fresh mounted config also needs
-# the matching installation records to avoid an interactive recommendation.
-RUN mkdir -p /opt/claude-plugins-seed && chown ride:ride /opt/claude-plugins-seed
-RUN gosu ride bash -ec '\
-      export CLAUDE_CONFIG_DIR=/home/ride/.claude; \
-      printf "%s" "{\"hasCompletedOnboarding\":true,\"installMethod\":\"global\"}" > "$CLAUDE_CONFIG_DIR/.claude.json"; \
-      claude plugin marketplace add anthropics/claude-plugins-official; \
-      claude plugin install pyright-lsp@claude-plugins-official; \
-      cp -r "$CLAUDE_CONFIG_DIR/plugins/." /opt/claude-plugins-seed/; \
-      rm -rf "$CLAUDE_CONFIG_DIR/plugins" "$CLAUDE_CONFIG_DIR/.claude.json" "$CLAUDE_CONFIG_DIR/backups"'
 
 # The base image ships no bytecode, and a session's container is thrown away, so
 # whatever its interpreters compile at run time dies with it.
