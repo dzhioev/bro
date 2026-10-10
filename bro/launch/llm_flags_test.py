@@ -5,7 +5,6 @@ import pytest
 from bro.base import host_config
 from bro.base.args import Parser
 from bro.launch import llm_flags
-from bro.llm.llms import claude_code, openai as openai_llm
 from bro.llm.providers import LLMSelection, LLMSelectionError
 from bro.workspace.project import ProjectConfig
 
@@ -157,16 +156,3 @@ class TestHostDefaults:
       LLMSelectionError, match="bros.eyebro.llm '::ludicrous' \\(project-path-bro\\)"
     ):
       llm_flags.with_host_defaults(LLMSelection(), self.attachment, 'eyebro')
-
-
-class TestSurfaceGuards:
-  def test_a_native_launcher_refuses_a_self_driving_harness(self):
-    with pytest.raises(LLMSelectionError, match='ride solo\\|along --harness claude'):
-      llm_flags.resolve_native(openai_llm.LLMSpec(), LLMSelection(model='fable5'))
-
-  def test_a_claude_session_refuses_an_api_provider(self):
-    with pytest.raises(LLMSelectionError, match='bro run'):
-      llm_flags.resolve_claude(LLMSelection(provider='openai'))
-
-  def test_a_claude_session_defaults_to_claude_codes_own_recipe(self):
-    assert llm_flags.resolve_claude(LLMSelection()) == claude_code.LLMSpec()

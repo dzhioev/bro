@@ -6,7 +6,7 @@ Core owns the launch vocabulary every harness uses
 `bro-native` owns the public in-process `bro run` / `bro chat` surfaces under `native/bro/launch/`;
 they execute the selected bro in the calling process with ambient credentials.
 Managed workspaces belong to `bro-ride`.
-Nothing in core or `bro-native` imports `ride`.
+Core imports no other workspace member.
 
 ## In-process CLIs
 
@@ -26,7 +26,8 @@ The following modules ship from `bro-native`:
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
 
-Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, canonicalization, and per-harness resolution.
+Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, canonicalization, and host defaults.
+Recipe resolution belongs to each harness implementation.
 `bro-native`'s `bro/run.py` is the lightweight dispatcher;
 it imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
 
@@ -59,7 +60,7 @@ A managed launch first lays its selection over the host's per-bro default for th
 — so the value it canonicalizes is the settled recipe and the inner run reads no host config.
 A surface canonicalizes the selection once before forwarding or recording it.
 
-`resolve_native` puts the selection over the bro's declared `llm_spec`;
+`native/bro/native/harness.py:resolve_native` puts the selection over the bro's declared `llm_spec`;
 a provider driven by another harness errors and points at `ride --harness`.
 Harness flags choose a recipe within the selected harness and never silently switch execution shape.
 

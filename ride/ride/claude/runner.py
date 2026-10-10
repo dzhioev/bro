@@ -28,12 +28,12 @@ from ride.claude.claude_config import claude_config_dir, claude_projects_dir, la
 from ride.claude.competing_hooks import find as find_competing_hooks
 from ride.claude.interrupt import Run, StreamedRun, run_interactive, run_streaming
 from ride.claude.mcp import start_session_mcp_server
+from ride.claude.provisioning import claude_code_version
 from ride.claude.recorder import start_session_recorder
 from ride.claude.shell_prefix import apply_shell_prefix
 from ride.claude.statusline import start_statusline_projector
 from ride.claude.usage_publisher import publishing_usage
 from ride.claude.waiter_state import WaiterState
-from ride.workspace.build_context import claude_code_version
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun

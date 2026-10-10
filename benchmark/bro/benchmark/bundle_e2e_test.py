@@ -13,7 +13,6 @@ roster:
 """
 
 import contextlib
-import json
 import subprocess
 from collections.abc import Generator
 
@@ -64,7 +63,9 @@ def _in(container: str, *command: str) -> str:
 def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
   workspace = workspace_root()
   bundle = build(workspace, tmp_path / 'bundle')
-  claude_code = json.loads(bundle.manifest.read_text())['claude_code']
+  from ride.claude.provisioning import claude_code_version
+
+  version = claude_code_version()
 
   with _container() as container:
     absent = _in(container, 'sh', '-c', 'command -v python3 python || true')
@@ -95,6 +96,6 @@ def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
 
   assert 'terminal: ' in listed
   assert card.startswith('# terminal')
-  assert claude_version.startswith(claude_code['version'])
+  assert claude_version.startswith(version)
   assert trails.strip() == '1'
   assert workspaces.strip() == '1'
