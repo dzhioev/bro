@@ -26,10 +26,12 @@ MODELS: dict[str, str] = {
   'opus5': 'claude-opus-5',
   'opus55': 'claude-opus-5-5',
   'sonnet5': 'claude-sonnet-5',
+  'sonnet55': 'claude-sonnet-5-5',
   'fable': 'fable',
   'fable5': 'claude-fable-5',
   'fable51': 'claude-fable-5-1',
   'haiku45': 'claude-haiku-4-5-20251001',
+  'haiku55': 'claude-haiku-5-5',
 }
 
 # the harness drives its own loop and surfaces failures as session output, not
@@ -62,10 +64,41 @@ class TokenRates:
 
 
 @dataclass(frozen=True)
+class LongContextRates:
+  """the rates every usage class of a call pays once its prompt — fresh input,
+  cache writes, and cache reads together — is over `threshold` tokens."""
+
+  threshold: int
+  rates: TokenRates
+
+  def content(self) -> dict[str, Any]:
+    return {'threshold': self.threshold, 'rates': self.rates.content()}
+
+
+@dataclass(frozen=True)
+class ModelRates:
+  """a model's rates, with the long-context tier of a model priced by prompt length."""
+
+  rates: TokenRates
+  long_context: Optional[LongContextRates] = None
+
+  def content(self) -> dict[str, Any]:
+    content: dict[str, Any] = self.rates.content()
+    if self.long_context is not None:
+      content['long_context'] = self.long_context.content()
+    return content
+
+  def for_prompt(self, prompt_tokens: int) -> TokenRates:
+    if self.long_context is not None and prompt_tokens > self.long_context.threshold:
+      return self.long_context.rates
+    return self.rates
+
+
+@dataclass(frozen=True)
 class PriceTable:
   source: str
   as_of: date
-  models: Mapping[str, TokenRates]
+  models: Mapping[str, ModelRates]
 
   @property
   def sha256(self) -> str:
@@ -96,6 +129,30 @@ def _content_decimal(value: Any, field: str) -> Decimal:
   return decimal
 
 
+def _content_token_rates(content: Mapping[str, Any], field: str) -> TokenRates:
+  expected = {'input', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'output'}
+  if set(content) != expected:
+    raise ValueError(f'{field} must contain exactly {sorted(expected)}')
+  return TokenRates(
+    input=_content_decimal(content['input'], f'{field}.input'),
+    cache_write_5m=_content_decimal(content['cache_write_5m'], f'{field}.cache_write_5m'),
+    cache_write_1h=_content_decimal(content['cache_write_1h'], f'{field}.cache_write_1h'),
+    cache_read=_content_decimal(content['cache_read'], f'{field}.cache_read'),
+    output=_content_decimal(content['output'], f'{field}.output'),
+  )
+
+
+def _content_long_context(value: Any, field: str) -> LongContextRates:
+  content = _content_mapping(value, field)
+  if set(content) != {'threshold', 'rates'}:
+    raise ValueError(f'{field} must contain exactly threshold and rates')
+  threshold = content['threshold']
+  if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 0:
+    raise ValueError(f'{field}.threshold must be a non-negative int')
+  rates = _content_mapping(content['rates'], f'{field}.rates')
+  return LongContextRates(threshold, _content_token_rates(rates, f'{field}.rates'))
+
+
 def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any]) -> PriceTable:
   """Reconstruct an immutable table from this provider's serialized vocabulary."""
   if source == '' or source.strip() != source:
@@ -104,25 +161,19 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
     effective_date = date.fromisoformat(as_of)
   except ValueError as error:
     raise ValueError('price table as_of must be an ISO date') from error
-  expected = {'input', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'output'}
-  parsed_models: dict[str, TokenRates] = {}
+  parsed_models: dict[str, ModelRates] = {}
   for model, raw_rates in models.items():
     if not isinstance(model, str) or model == '':
       raise ValueError('price table model names must be non-empty strings')
-    rates = _content_mapping(raw_rates, f'price table model {model}')
-    if set(rates) != expected:
-      raise ValueError(f'price table model {model} must contain exactly {sorted(expected)}')
-    parsed_models[model] = TokenRates(
-      input=_content_decimal(rates['input'], f'price table model {model}.input'),
-      cache_write_5m=_content_decimal(
-        rates['cache_write_5m'], f'price table model {model}.cache_write_5m'
-      ),
-      cache_write_1h=_content_decimal(
-        rates['cache_write_1h'], f'price table model {model}.cache_write_1h'
-      ),
-      cache_read=_content_decimal(rates['cache_read'], f'price table model {model}.cache_read'),
-      output=_content_decimal(rates['output'], f'price table model {model}.output'),
+    field = f'price table model {model}'
+    content = _content_mapping(raw_rates, field)
+    rates = {name: value for name, value in content.items() if name != 'long_context'}
+    long_context = (
+      _content_long_context(content['long_context'], f'{field}.long_context')
+      if 'long_context' in content
+      else None
     )
+    parsed_models[model] = ModelRates(_content_token_rates(rates, field), long_context)
   return PriceTable(source, effective_date, MappingProxyType(parsed_models))
 
 
@@ -130,50 +181,90 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 # with this date. Pricing never fetches vendor data at run time.
 PRICE_TABLE = PriceTable(
   source='https://platform.claude.com/docs/en/about-claude/pricing',
-  as_of=date(2026, 9, 22),
+  as_of=date(2026, 10, 10),
   models=MappingProxyType(
     {
-      'claude-opus-5-5': TokenRates(
-        input=Decimal('4.00'),
-        cache_write_5m=Decimal('5.00'),
-        cache_write_1h=Decimal('8.00'),
-        cache_read=Decimal('0.20'),
-        output=Decimal('20.00'),
+      'claude-opus-5-5': ModelRates(
+        TokenRates(
+          input=Decimal('4.00'),
+          cache_write_5m=Decimal('5.00'),
+          cache_write_1h=Decimal('8.00'),
+          cache_read=Decimal('0.20'),
+          output=Decimal('20.00'),
+        )
       ),
-      'claude-opus-5': TokenRates(
-        input=Decimal('5.00'),
-        cache_write_5m=Decimal('6.25'),
-        cache_write_1h=Decimal('10.00'),
-        cache_read=Decimal('0.50'),
-        output=Decimal('25.00'),
+      'claude-opus-5': ModelRates(
+        TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        )
       ),
-      'claude-sonnet-5': TokenRates(
-        input=Decimal('2.00'),
-        cache_write_5m=Decimal('2.50'),
-        cache_write_1h=Decimal('4.00'),
-        cache_read=Decimal('0.20'),
-        output=Decimal('10.00'),
+      'claude-sonnet-5-5': ModelRates(
+        TokenRates(
+          input=Decimal('2.00'),
+          cache_write_5m=Decimal('2.50'),
+          cache_write_1h=Decimal('4.00'),
+          cache_read=Decimal('0.10'),
+          output=Decimal('10.00'),
+        )
       ),
-      'claude-fable-5': TokenRates(
-        input=Decimal('10.00'),
-        cache_write_5m=Decimal('12.50'),
-        cache_write_1h=Decimal('20.00'),
-        cache_read=Decimal('1.00'),
-        output=Decimal('50.00'),
+      'claude-sonnet-5': ModelRates(
+        TokenRates(
+          input=Decimal('2.00'),
+          cache_write_5m=Decimal('2.50'),
+          cache_write_1h=Decimal('4.00'),
+          cache_read=Decimal('0.20'),
+          output=Decimal('10.00'),
+        )
       ),
-      'claude-fable-5-1': TokenRates(
-        input=Decimal('10.00'),
-        cache_write_5m=Decimal('12.50'),
-        cache_write_1h=Decimal('20.00'),
-        cache_read=Decimal('0.25'),
-        output=Decimal('50.00'),
+      'claude-fable-5': ModelRates(
+        TokenRates(
+          input=Decimal('10.00'),
+          cache_write_5m=Decimal('12.50'),
+          cache_write_1h=Decimal('20.00'),
+          cache_read=Decimal('1.00'),
+          output=Decimal('50.00'),
+        )
       ),
-      'claude-haiku-4-5-20251001': TokenRates(
-        input=Decimal('1.00'),
-        cache_write_5m=Decimal('1.25'),
-        cache_write_1h=Decimal('2.00'),
-        cache_read=Decimal('0.10'),
-        output=Decimal('5.00'),
+      'claude-fable-5-1': ModelRates(
+        TokenRates(
+          input=Decimal('10.00'),
+          cache_write_5m=Decimal('12.50'),
+          cache_write_1h=Decimal('20.00'),
+          cache_read=Decimal('0.25'),
+          output=Decimal('50.00'),
+        )
+      ),
+      'claude-haiku-5-5': ModelRates(
+        TokenRates(
+          input=Decimal('0.10'),
+          cache_write_5m=Decimal('0.125'),
+          cache_write_1h=Decimal('0.20'),
+          cache_read=Decimal('0.01'),
+          output=Decimal('0.50'),
+        ),
+        long_context=LongContextRates(
+          threshold=100_000,
+          rates=TokenRates(
+            input=Decimal('0.50'),
+            cache_write_5m=Decimal('0.625'),
+            cache_write_1h=Decimal('1.00'),
+            cache_read=Decimal('0.05'),
+            output=Decimal('2.50'),
+          ),
+        ),
+      ),
+      'claude-haiku-4-5-20251001': ModelRates(
+        TokenRates(
+          input=Decimal('1.00'),
+          cache_write_5m=Decimal('1.25'),
+          cache_write_1h=Decimal('2.00'),
+          cache_read=Decimal('0.10'),
+          output=Decimal('5.00'),
+        )
       ),
     }
   ),
@@ -197,8 +288,8 @@ def price(
   if service_tier is not None:
     raise ValueError('claude-code usage has no service tier')
   selected = PRICE_TABLE if table is None else table
-  rates = selected.models.get(model)
-  if rates is None:
+  model_rates = selected.models.get(model)
+  if model_rates is None:
     return None
   pricing.warn_if_stale('claude-code', selected.as_of)
 
@@ -228,6 +319,7 @@ def price(
     if cache_write_5m_tokens + cache_write_1h_tokens != cache_creation_tokens:
       raise ValueError('cache_creation breakdown does not equal cache_creation_input_tokens')
 
+  rates = model_rates.for_prompt(input_tokens + cache_creation_tokens + cache_read_tokens)
   return (
     Decimal(input_tokens) * rates.input
     + Decimal(cache_write_5m_tokens) * rates.cache_write_5m
