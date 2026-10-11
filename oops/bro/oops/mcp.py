@@ -1,13 +1,14 @@
 import contextlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import threading
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from bro.base import log, spawn
@@ -30,6 +31,8 @@ _MAX_OUTPUT_LINES = 400
 _AWS_TIMEOUT = 60
 _PROBE_TIMEOUT = 20
 _COMMAND_TIMEOUT = 900
+
+_REPOSITORY_ENVIRONMENT = ('uv', 'run', '-q')
 
 
 @dataclass
@@ -95,6 +98,10 @@ def _probe_spec(name: str, target: DeployTarget) -> HTTPProbe:
   return target.probe
 
 
+def _invocation(path: str, spec: Command) -> list[str]:
+  return [*_REPOSITORY_ENVIRONMENT, path, *spec.arguments]
+
+
 def _command(root: Path, spec: Command) -> list[str]:
   root = root.resolve()
   executable = (root / spec.path).resolve()
@@ -106,7 +113,7 @@ def _command(root: Path, spec: Command) -> list[str]:
     raise ValueError(f'command does not exist: {spec.path!r}')
   if not os.access(executable, os.X_OK):
     raise ValueError(f'command is not executable: {spec.path!r}')
-  return [str(executable), *spec.arguments]
+  return _invocation(str(executable), spec)
 
 
 def _timeout_result(command: object, timeout_seconds: float) -> dict[str, Any]:
@@ -152,12 +159,9 @@ def _watchdog(timeout_seconds: float, on_timeout: Callable[[], None]) -> Generat
 
 
 def _run_streaming(command: list[str], timeout_seconds: float, cwd: Path) -> dict[str, Any]:
-  environment = dict(os.environ)
-  environment['PATH'] = f'{Path(sys.executable).parent}{os.pathsep}{environment["PATH"]}'
   process = spawn.popen(
     command,
     cwd=cwd,
-    env=environment,
     stdout=subprocess.PIPE,
     stderr=subprocess.STDOUT,
     text=True,
@@ -295,8 +299,8 @@ def _verify(
   return _wait_and_probe(target_name, target, timeout_seconds)
 
 
-def _command_summary(command: Command) -> str:
-  return ' '.join((command.path, *command.arguments))
+def _command_line(command: Command) -> str:
+  return shlex.join(_invocation(f'./{PurePosixPath(command.path)}', command))
 
 
 def _auth_kind(probe: HTTPProbe) -> str:
@@ -308,16 +312,16 @@ def _auth_kind(probe: HTTPProbe) -> str:
 
 
 @toolset.tool(
-  'list the repository-declared deploy targets with their commands, ECS service, probe, '
-  'changed-path hints, and notes.'
+  'list the repository-declared deploy targets with their commands, each a shell line to run '
+  'from the repository root, ECS service, probe, changed-path hints, and notes.'
 )
 def list_targets(context: Context[OperationsState]) -> str:
   result = {}
   for name, target in context.state.targets.items():
     result[name] = {
-      'deploy': _command_summary(target.deploy),
-      'plan': None if target.plan is None else _command_summary(target.plan),
-      'verify': None if target.verify is None else _command_summary(target.verify),
+      'deploy': _command_line(target.deploy),
+      'plan': None if target.plan is None else _command_line(target.plan),
+      'verify': None if target.verify is None else _command_line(target.verify),
       'ecs': (
         None
         if target.ecs is None

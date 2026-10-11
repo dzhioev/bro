@@ -9,7 +9,7 @@ runs each target's declared plan before any live resource changes,
 then its deploy command as a backgrounded shell job followed by its declared `infra::verify`,
 and treats dry-run as an explicit opt-in that stops after the plan.
 
-version: 3.0.0
+version: 3.1.0
 ---
 
 # Deploy
@@ -67,7 +67,8 @@ Run targets sequentially in registry order.
 For each target:
 
 1. Take the target's `deploy` command and its `plan` entry from the `infra::list_targets` roster.
-   The deploy command is repository-relative; run it from the repository root.
+   The deploy command is a complete shell line, the environment it runs in included:
+   run it verbatim from the repository root.
 2. When the target declares a plan, call `infra::plan(target)`.
    `outcome: unsafe` names live resources the plan cannot certify survive the deploy:
    report those lines and stop, and deploy past them only when the user says so explicitly.
