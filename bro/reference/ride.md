@@ -618,8 +618,8 @@ A `[tool.bro.<name>]` sub-table is carried verbatim and interpreted by whoever d
 — the launch layer validates that its own keys are known and reads no further:
 
 ```toml
-[tool.bro.analyst]
-reports = "docs/analyses"            # repo-relative directory the analyst commits its analyses into
+[tool.bro.devoops]
+target-registry = "acme.targets:registry"  # the module:attribute devoops loads its deploy targets from
 
 [tool.bro.llm]
 sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it stands for
@@ -641,7 +641,6 @@ A URL attachment evaluates a build-context command in a temporary extraction of 
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
 A bro's default recipe on a project is likewise the host's to set:
 a `projects.<identity>.bros.<bro>.llm` entry fills what the launch flags leave unnamed, for ride launches and summons alike (`bro/setup/AGENTS.md`, "Host config").
-`[tool.bro.analyst] reports` is what an analyst session resolves its output directory from.
 A missing pyproject, table, or default
 — or an unknown key
 — fails the launch.

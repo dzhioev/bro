@@ -236,7 +236,6 @@ PYTEST_FILES = [
   'dev/bros/eyebro/eyebro_test.py',
   'dev/bros/lead/lead_test.py',
   'dev/bros/terminal/terminal_test.py',
-  'dev/bros/analyst/scripts/trails_usage_test.py',
   'bro/launch/broxy_test.py',
   'native/bro/native/harness_test.py',
   'ride/ride/harness_test.py',

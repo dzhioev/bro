@@ -61,9 +61,12 @@ no shell and patch nothing. Read issues through the `issues::` tools; search
 the web when a report names a library you do not know.
 {{when #features contains brog}}
 A confirmed bug gets a task (`brog::create_task`) before it is handed on.
-{{end}}{{when #may_summon contains analyst}}
-Before you label a report, [[ask analyst whether a recorded run already worked on it]],
-and read the run it names.
+{{end}}{{when #may_summon contains browser}}
+Before you label a report that cites a page, [[ask browser to reproduce it]],
+and read what it saw.
+{{end}}{{when #may_summon contains devoops}}
+When a report says the deployed service misbehaves, [[ask devoops to probe it]]
+before you call it a bug.
 {{end}}{{when #may_summon contains fixer}}
 Hand a confirmed bug to `fixer` with [[ask]]: one self-contained prompt with the
 issue number, what you read, and the task.
@@ -75,7 +78,7 @@ class Triage(Bro):
   description = 'reads and labels incoming issues, hands confirmed bugs on'
   llm_spec = openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
   features = {'brog': creds.contains('brog')}
-  may_summon = ('analyst',)
+  may_summon = ('browser', 'devoops')
   tools = [
     mount(issues.toolset),
     when(feature('brog'), mount(brog_mcp.toolset, 'create_task', 'add_comment')),
@@ -132,7 +135,7 @@ bro run triage 'is #128 a duplicate of #97?'
 
 ## Hand the bug on
 
-On its own authority `triage` may consult the analyst and nobody else;
+On its own authority `triage` may consult the browser and devoops and nobody else;
 the helpers that change code are granted at launch.
 Grant it both for this session:
 
@@ -165,13 +168,13 @@ Read the class line by line and nothing is left to configure elsewhere:
   Nothing it does not declare reaches it:
   triage holds no shell and no subagents, so delegation goes through summons, inside the boundary.
 - `cli('bro show', 'name')` and `cli('rewind show', 'trail_id')` are the two commands it may run, each served as a tool:
-  the card of a bro it is about to hand work to, and the run the analyst names.
+  the card of a bro it is about to hand work to, and the run a report cites.
   How a command becomes a tool is below.
 - `source(WebSearch())` and `man('environment')` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
 - `llm_spec` is the model it runs on by default;
   any launch may name another.
-- `may_summon = ('analyst',)` is whom it may summon on its own authority:
-  the built-in analyst, which answers from the recorded runs.
+- `may_summon = ('browser', 'devoops')` is whom it may summon on its own authority:
+  the built-in browser, which reproduces a report on the live page, and devoops, which probes the deployed service.
   Every other delegate is a launch grant, and a `{{when #may_summon contains …}}` paragraph shows only in a session that may.
 - `spells = ('triage.md',)` names its procedure, `bros/triage/spells/triage.md` beside the class, served as the `spell::triage` tool.
 
@@ -416,7 +419,7 @@ the container's network is unrestricted, and `--unboxed` runs as the launching u
 - **Tasks.**
   `dive-in -t 77` opens a session on a tracker task, and the built-in `dev` persona carries the task → PR → land workflow as spells.
 - **Personas.**
-  `dev`, `eyebro`, `lead`, `terminal`, `analyst`, `devoops`, and `browser` ship ready to derive from;
+  `dev`, `eyebro`, `lead`, `terminal`, `devoops`, and `browser` ship ready to derive from;
   `browser` is the semantic interface to webview missions.
 - **Artifacts.**
   Peers pass files by content-addressed reference, and reach follows the launch tree.

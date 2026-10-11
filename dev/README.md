@@ -4,7 +4,7 @@
 
 - repository utilities and commit-accounting workflow (`bro.dev`, `bro.workflow`)
 - the `poll-pr` GitHub review watcher
-- the `dev`, `eyebro`, `lead`, `terminal`, and `analyst` personas and their spells
+- the `dev`, `eyebro`, `lead`, and `terminal` personas and their spells
 - the development style reference mounted by Dev and Eyebro
 
 Install it in a repository's development dependency group and run `uv sync`.

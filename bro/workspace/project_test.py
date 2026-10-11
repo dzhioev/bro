@@ -43,9 +43,9 @@ class TestProjectConfig:
 
   def test_a_sub_table_is_carried_verbatim(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "foo"\n\n[tool.bro.analyst]\nreports = "docs/analyses"\n'
+      '[tool.bro]\ndefault = "foo"\n\n[tool.bro.devoops]\ntarget-registry = "acme.targets:registry"\n'
     )
-    assert project_config().sections == {'analyst': {'reports': 'docs/analyses'}}
+    assert project_config().sections == {'devoops': {'target-registry': 'acme.targets:registry'}}
 
   def test_a_sub_table_key_is_not_a_launch_key(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(

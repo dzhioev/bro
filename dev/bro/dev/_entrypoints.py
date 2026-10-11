@@ -44,7 +44,3 @@ def bro_workflow_fold_branch():
 
 def bro_workflow_land_pr():
   return run_cli('bro.workflow.land_pr', sys.argv)
-
-
-def bros_analyst_scripts_trails_usage():
-  return run_cli('bros.analyst.scripts.trails_usage', sys.argv)

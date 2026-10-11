@@ -137,9 +137,6 @@ brog = "bro.brog.mcp:toolset"
 [tool.bro]
 default = "bro-dev"
 
-[tool.bro.analyst]
-reports = "dev/bros/analyst/reports"
-
 [tool.bro.devoops]
 target-registry = "oops.deploy_targets:registry"
 

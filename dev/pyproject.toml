@@ -34,8 +34,6 @@ dependencies = [
 "pr-state" = "bro.dev._entrypoints:bro_extra_github_pr_state"
 "sync-scripts" = "bro.dev._entrypoints:bro_dev_sync_scripts"
 "usage-report" = "bro.dev._entrypoints:bro_dev_usage_report"
-# bros
-"bros.analyst.scripts.trails-usage" = "bro.dev._entrypoints:bros_analyst_scripts_trails_usage"
 
 [project.entry-points."bro.session_commands"]
 "bro.dev.git-golc" = "bro.dev._entrypoints:bro_dev_git_golc"
@@ -46,7 +44,6 @@ dependencies = [
 "pr-state" = "bro.dev._entrypoints:bro_extra_github_pr_state"
 
 [project.entry-points.bro]
-analyst = "bros.analyst:Analyst"
 dev = "bros.dev:Dev"
 eyebro = "bros.eyebro:Eyebro"
 lead = "bros.lead:Lead"
@@ -65,7 +62,6 @@ module-name = [
   "bro.extra.github",
   "bro.prompts.dev",
   "bro.workflow",
-  "bros.analyst",
   "bros.dev",
   "bros.eyebro",
   "bros.lead",
@@ -79,5 +75,4 @@ wheel-exclude = [
   "**/conftest.py",
   "**/AGENTS.md",
   "**/*.egg-info",
-  "bros/analyst/reports",
 ]
