@@ -31,6 +31,8 @@ Its credential manifest is the union of the active target registry, the optional
 
 Each consuming repository points `[tool.bro.devoops].target-registry` at a `module:attribute` holding a `TargetRegistry`.
 The registry declares its credential requirements and lazily produces named `DeployTarget` values with repository-relative deploy, plan, and verification commands.
+Each runs in the repository's own environment, through `uv run` from the repository root, so a command reaches the console scripts that environment installs, such as `bro-oops-dir`;
+`infra::list_targets` reports each command as that shell line.
 A plan reports what deploying the target would change in the live account, and its exit status carries the verdict:
 a change it judges unsafe exits with `bro.oops.targets.PLAN_UNSAFE_EXIT_CODE`, and any other non-zero status means the plan never reached a verdict at all.
 The deploy spell runs it before every deploy and stops on either, so a target's plan command is where the veto over a destructive change lives.

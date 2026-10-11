@@ -31,11 +31,30 @@ def _state(tmp_path: Path, target: DeployTarget) -> mcp.OperationsState:
   return mcp.OperationsState(root=tmp_path, registry=registry)
 
 
-def _command(tmp_path: Path, name: str) -> Command:
+def _command(tmp_path: Path, name: str, *arguments: str, body: str = '') -> Command:
   path = tmp_path / name
-  path.write_text('#!/usr/bin/env bash\n')
+  path.write_text(f'#!/usr/bin/env bash\n{body}')
   path.chmod(0o755)
-  return Command(name)
+  return Command(name, arguments)
+
+
+def _repository_environment(tmp_path: Path, monkeypatch) -> None:
+  (tmp_path / 'pyproject.toml').write_text(
+    '[project]\nname = "probe"\nversion = "0"\nrequires-python = ">=3.12"\n'
+  )
+  monkeypatch.setenv('UV_PYTHON', sys.executable)
+
+
+def _record_streaming(monkeypatch, output: str) -> list[tuple[list[str], Path]]:
+  calls = []
+  monkeypatch.setattr(
+    mcp,
+    '_run_streaming',
+    lambda command, timeout_seconds, cwd: (
+      calls.append((command, cwd)) or {'command': 'stub', 'exit_code': 0, 'output': output}
+    ),
+  )
+  return calls
 
 
 def test_repository_registry_declares_trails_server_from_infra_config(monkeypatch):
@@ -64,12 +83,27 @@ def test_toolset_manifest_follows_the_project_registry():
   assert mcp.toolset.manifest().needed_secrets == registry.needed_secrets
 
 
-def test_roster_reports_a_repository_relative_command_and_a_null_plan(tmp_path):
-  target = DeployTarget(deploy=Command('oops/trails/server/deploy.sh', ('--flag',)))
+def test_the_roster_deploy_line_runs_what_the_server_runs_and_a_null_plan(tmp_path, monkeypatch):
+  _repository_environment(tmp_path, monkeypatch)
+  body = 'command -v python3\nprintf "%s\\n" "$@"\n'
+  target = DeployTarget(
+    deploy=_command(tmp_path, 'deploy.sh', 'two words', body=body),
+    verify=_command(tmp_path, 'verify.sh', 'two words', body=body),
+  )
+  context = Context(_state(tmp_path, target))
 
-  roster = json.loads(mcp.list_targets(Context(_state(tmp_path, target))))
+  roster = json.loads(mcp.list_targets(context))
+  deployed = subprocess.run(
+    ['bash', '-c', roster['service']['deploy']],
+    cwd=tmp_path,
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+  verified = json.loads(mcp.verify(context, 'service'))
 
-  assert roster['service']['deploy'] == 'oops/trails/server/deploy.sh --flag'
+  assert verified['ok'] is True
+  assert deployed.stdout == verified['output']
   assert roster['service']['plan'] is None
 
 
@@ -87,11 +121,17 @@ def test_streaming_command_timeout_kills_the_process_group(tmp_path):
   assert result['exit_code'] != 0
 
 
-def test_streaming_command_prepends_the_serving_environment(tmp_path):
-  result = mcp._run_streaming(['bash', '-c', 'printf %s "$PATH"'], 10, tmp_path)
+def test_a_declared_command_runs_in_the_repository_environment(tmp_path, monkeypatch):
+  _repository_environment(tmp_path, monkeypatch)
+  target = DeployTarget(
+    deploy=_command(tmp_path, 'deploy.sh'),
+    verify=_command(tmp_path, 'verify.sh', body='command -v python3\n'),
+  )
 
-  assert result['exit_code'] == 0
-  assert result['output'].startswith(f'{Path(sys.executable).parent}:')
+  result = json.loads(mcp.verify(Context(_state(tmp_path, target)), 'service'))
+
+  assert result['ok'] is True
+  assert result['output'].strip() == str(tmp_path / '.venv' / 'bin' / 'python3')
 
 
 def test_verify_runs_the_declared_command(tmp_path, monkeypatch):
@@ -99,36 +139,22 @@ def test_verify_runs_the_declared_command(tmp_path, monkeypatch):
     deploy=_command(tmp_path, 'deploy.sh'),
     verify=_command(tmp_path, 'verify.sh'),
   )
-  calls = []
-  monkeypatch.setattr(
-    mcp,
-    '_run_streaming',
-    lambda command, timeout_seconds, cwd: (
-      calls.append((command, cwd)) or {'command': 'verify', 'exit_code': 0, 'output': 'healthy'}
-    ),
-  )
+  calls = _record_streaming(monkeypatch, 'healthy')
 
   result = json.loads(mcp.verify(Context(_state(tmp_path, target)), 'service'))
 
   assert result['ok'] is True
-  assert calls == [([f'{tmp_path}/verify.sh'], tmp_path)]
+  assert calls == [([*mcp._REPOSITORY_ENVIRONMENT, f'{tmp_path}/verify.sh'], tmp_path)]
 
 
 def test_plan_runs_the_declared_command(tmp_path, monkeypatch):
   target = DeployTarget(deploy=_command(tmp_path, 'deploy.sh'), plan=_command(tmp_path, 'plan.sh'))
-  calls = []
-  monkeypatch.setattr(
-    mcp,
-    '_run_streaming',
-    lambda command, timeout_seconds, cwd: (
-      calls.append((command, cwd)) or {'command': 'plan', 'exit_code': 0, 'output': 'no changes'}
-    ),
-  )
+  calls = _record_streaming(monkeypatch, 'no changes')
 
   result = json.loads(mcp.plan(Context(_state(tmp_path, target)), 'service'))
 
   assert (result['outcome'], result['ok']) == ('clean', True)
-  assert calls == [([f'{tmp_path}/plan.sh'], tmp_path)]
+  assert calls == [([*mcp._REPOSITORY_ENVIRONMENT, f'{tmp_path}/plan.sh'], tmp_path)]
 
 
 def test_plan_separates_an_unsafe_change_from_one_it_never_judged(tmp_path, monkeypatch):
