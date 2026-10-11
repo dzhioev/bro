@@ -162,7 +162,7 @@ class TestAutoload:
   def test_list_classes_autoloads_every_declared_bro(self):
     names = {cls.name for cls in list_classes()}
     assert names == set(bro.registry.declared_specs())
-    assert {'bro', 'dev', 'lead', 'analyst'} <= names
+    assert {'bro', 'dev', 'lead'} <= names
 
   def test_autoload_off_does_not_import_real_bros(self):
     bro.registry._autoload = False

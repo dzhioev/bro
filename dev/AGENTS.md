@@ -46,9 +46,6 @@ build the wheel with `uv build --package bro-dev`.
   `review-pr` runs under it and otherwise names what is missing and how to supply it, while `review-diff` needs none
 - `bros/lead/` — coordinator persona and `orchestrate` spell
 - `bros/terminal/` — standalone container developer, directly derived from `BaseBro`
-- `bros/analyst/` — trail-analysis persona and machinery.
-  It declares the `files` and unrestricted `brash` tool groups and the same commit-hook provisioning;
-  its report destination comes from the operated repository's `[tool.bro.analyst] reports`
 
 The `bro`, `bro.extra`, `bro.prompts`, and `bros` package trees are shared with other distributions.
 Declare every shipped leaf in `[tool.uv.build-backend].module-name`;
