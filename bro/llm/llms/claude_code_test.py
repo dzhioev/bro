@@ -168,3 +168,61 @@ class TestLongContextPricing:
       claude_code.price_table_from_content(
         'https://example.com', '2026-01-01', {'model': {**_rates('1'), 'long_context': tier}}
       )
+
+
+class TestFastModePricing:
+  # the serialized shape retention manifests persist (`benchmark/bro/benchmark/retention.py`)
+  TABLE = claude_code.price_table_from_content(
+    'https://example.com/pricing',
+    date.today().isoformat(),
+    {
+      'standard-only': _rates('1'),
+      'fast': {**_rates('1'), 'fast': _rates('3')},
+      'tiered-fast': {
+        **_rates('1'),
+        'long_context': {'threshold': 10, 'rates': _rates('2')},
+        'fast': _rates('3'),
+      },
+    },
+  )
+
+  @staticmethod
+  def _usage(*, input_tokens: int = 4, **speed: str) -> dict:
+    return {
+      'input_tokens': input_tokens,
+      'cache_creation_input_tokens': 3,
+      'cache_creation': {'ephemeral_5m_input_tokens': 1, 'ephemeral_1h_input_tokens': 2},
+      'cache_read_input_tokens': 2,
+      'output_tokens': 5,
+      **speed,
+    }
+
+  def test_a_fast_call_pays_the_fast_rates_on_every_class(self):
+    usage = self._usage(speed='fast')
+    assert claude_code.price('fast', usage, None, self.TABLE) == Decimal(42) / 1_000_000
+
+  @pytest.mark.parametrize('speed', [{'speed': 'standard'}, {}])
+  def test_a_standard_or_unmarked_call_pays_the_standard_rates(self, speed):
+    usage = self._usage(**speed)
+    assert claude_code.price('fast', usage, None, self.TABLE) == Decimal(14) / 1_000_000
+
+  def test_fast_rates_apply_over_the_long_context_threshold(self):
+    usage = self._usage(input_tokens=6, speed='fast')
+    assert claude_code.price('tiered-fast', usage, None, self.TABLE) == Decimal(48) / 1_000_000
+
+  @pytest.mark.parametrize('model,speed', [('standard-only', 'fast'), ('fast', 'turbo')])
+  def test_a_speed_without_published_rates_is_not_treated_as_free(self, model, speed):
+    assert claude_code.price(model, self._usage(speed=speed), None, self.TABLE) is None
+
+  def test_fast_rates_survive_a_serialized_snapshot(self):
+    current = claude_code.PRICE_TABLE
+    snapshot = claude_code.price_table_from_content(
+      current.source,
+      current.as_of.isoformat(),
+      {'claude-opus-5-5': current.models['claude-opus-5-5'].content()},
+    )
+    usage = self._usage(speed='fast')
+
+    assert claude_code.price('claude-opus-5-5', usage, None, snapshot) == claude_code.price(
+      'claude-opus-5-5', usage, None, current
+    )

@@ -69,10 +69,12 @@ The bro-native engine and provider clients live in `bro.native`.
   Trail records and harness recorders are owned by `bro/trails/`.
 - `pricing.py` — canonical table digests and the once-per-process warning for a table read more than 30 days after its as-of date.
 - `llms/` — provider recipes and provider-owned pricing:
-  - `openai.py` — the OpenAI `NativeLLMSpec` plus standard and priority Responses pricing over raw token details and context bands;
+  - `openai.py` — the OpenAI `NativeLLMSpec` plus standard, flex, and priority Responses pricing over raw token details and context bands,
+    pricing a dated snapshot without a row of its own at its undated model's rates;
     the recipe carries model, reasoning effort, service tier, and compact threshold, with `needed_secrets` → `openai`, `.fast()` → priority tier, and every shared effort level mapped through.
     The live Responses client is `bro.native.llms.openai`.
-  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client, plus Anthropic list pricing over transcript cache-write TTLs and a model's long-context tier;
+  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client,
+    plus Anthropic list pricing over transcript cache-write TTLs, a model's long-context tier, and the fast-mode rates a call's `speed` selects;
     session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags.
   - `echo.py` — the dependency-free native recipe used by tests and the native LLM diagnostic CLI;
     its empty table prices no call, and its client is `bro.native.llms.echo`.
