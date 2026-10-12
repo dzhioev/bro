@@ -5,14 +5,17 @@ import subprocess
 import sys
 import time
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from bro import jobs
 from bro.base.liveness_test_helper import Liveness
 from bro.base.text_window import BYTE_LIMIT
 from bro.brash import REFUSED_STATUS, Policy
 from bro.jobs import Job, Registry
+from bro.jobs_test_helper import StalledSupervisor
 
 
 def _wait_finished(job: Job, timeout: float = 10.0) -> None:
@@ -306,3 +309,44 @@ def test_registry_close_reaps_jobs_and_releases_spools():
   assert all(job._spool.closed for job in (finished, running, orphaned))
   with pytest.raises(ValueError, match='unknown job id'):
     registry.get('job-1')
+
+
+def test_a_stalled_start_leaves_the_registry_readable(tmp_path, monkeypatch):
+  supervisor = StalledSupervisor(tmp_path, monkeypatch)
+  registry = Registry()
+  with contextlib.closing(registry), ThreadPoolExecutor(max_workers=1) as pool:
+    starting = pool.submit(registry.start, 'printf started')
+    supervisor.wait_stalled()
+
+    assert registry.values() == []
+    assert not supervisor.expired()
+
+    supervisor.release()
+    job = starting.result(timeout=10)
+    assert registry.values() == [job]
+
+
+def test_a_start_that_outlives_its_registry_ends_its_job(tmp_path, monkeypatch):
+  started: list[Job] = []
+
+  class RecordedJob(Job):
+    def __init__(self, *args, **kwargs):
+      super().__init__(*args, **kwargs)
+      started.append(self)
+
+  monkeypatch.setattr(jobs, 'Job', RecordedJob)
+  supervisor = StalledSupervisor(tmp_path, monkeypatch)
+  registry = Registry()
+  with ThreadPoolExecutor(max_workers=1) as pool:
+    starting = pool.submit(registry.start, 'sleep 30')
+    supervisor.wait_stalled()
+    registry.close()
+    assert not supervisor.expired()
+
+    supervisor.release()
+    with pytest.raises(RuntimeError, match='job registry is closed'):
+      starting.result(timeout=10)
+
+  [job] = started
+  assert job.process.poll() is not None
+  assert job._spool.closed

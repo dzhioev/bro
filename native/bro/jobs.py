@@ -24,6 +24,7 @@ JobMode = Literal['fg', 'bg']
 TERM_GRACE_SECONDS = 5.0
 SPOOL_MEMORY_BYTES = 1_000_000
 _READ_CHUNK_BYTES = 65_536
+_CLOSED_MESSAGE = 'job registry is closed'
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,12 @@ class Job:
     with self._condition:
       return self._has_news_locked()
 
+  def become_foreground(self) -> None:
+    with self._condition:
+      if self.mode != 'bg':
+        raise ValueError(f'{self.id} is {self.mode}, not background')
+      self.mode = 'fg'
+
   def become_background(self) -> None:
     with self._condition:
       if self.mode != 'fg':
@@ -354,13 +361,21 @@ class Registry:
       return self._closed
 
   def start(self, command: str, mode: JobMode = 'bg', policy: Optional[Path] = None) -> Job:
+    """start and register a job. Its supervisor comes up outside the lock, so a slow
+    start blocks no reader and no `close`; a registry closed meanwhile ends the job
+    instead of registering it."""
     with self._lock:
       if self._closed:
-        raise RuntimeError('job registry is closed')
+        raise RuntimeError(_CLOSED_MESSAGE)
       self._counter += 1
-      job = Job(f'job-{self._counter}', command, mode, policy=policy, inbox=self.inbox)
-      self._jobs[job.id] = job
-    return job
+      job_id = f'job-{self._counter}'
+    job = Job(job_id, command, mode, policy=policy, inbox=self.inbox)
+    with self._lock:
+      if not self._closed:
+        self._jobs[job.id] = job
+        return job
+    job.close()
+    raise RuntimeError(_CLOSED_MESSAGE)
 
   def get(self, job_id: str) -> Job:
     with self._lock:

@@ -129,10 +129,10 @@ async def _wait_for_foreground_job(
 
 
 def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
-  def start(command: str, mode: str) -> Job:
+  def start(command: str) -> Job:
     if len(command.strip()) == 0:
       raise ValueError('command must be non-empty')
-    return live_run.registry.start(command, mode, live_run.brash_policy)  # type: ignore[arg-type]
+    return live_run.registry.start(command, 'bg', live_run.brash_policy)
 
   async def job(
     command: str,
@@ -140,9 +140,11 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
     timeout_seconds: float = _FOREGROUND_WAIT_SECONDS,
     limit: int = DEFAULT_LIMIT,
   ) -> str:
-    started = start(command, mode)
+    started = await off_loop(start, command)
     if mode != 'fg':
       return f'started {started.id} ({mode})'
+    # no await between this claim and the wait: an interrupt before it must leave a bg job
+    started.become_foreground()
     return await _wait_for_foreground_job(
       started, inbox=live_run.inbox, timeout_seconds=timeout_seconds, limit=limit
     )
