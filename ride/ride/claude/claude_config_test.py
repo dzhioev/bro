@@ -222,3 +222,14 @@ class TestProjectsDir:
     assert ride_claude_config.claude_projects_dir(Path('/workspace')) == (
       tmp_path / 'session' / 'projects' / '-workspace'
     )
+
+
+class TestTranscriptClockNow:
+  def test_a_transcript_written_after_the_reading_is_never_older_than_it(self, tmp_path):
+    projects = tmp_path / 'projects'
+    transcript = projects / 'segment.jsonl'
+    for _ in range(200):
+      now = ride_claude_config.transcript_clock_now(projects)
+      with transcript.open('a') as stream:
+        stream.write('{}\n')
+      assert transcript.stat().st_mtime >= now

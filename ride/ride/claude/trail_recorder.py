@@ -31,7 +31,6 @@ import json
 import os
 import signal
 import threading
-import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
@@ -47,6 +46,7 @@ from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.rows import project_messages
 from bro.trails.store import TrailsStore, default_store
+from ride.claude.claude_config import transcript_clock_now
 from ride.claude.session_end_state import RAISE_TOOL
 from ride.claude.transcripts import read_lines_after, watching
 
@@ -544,7 +544,11 @@ def record_session(
     return 1
 
   recorder = Recorder(
-    projects_dir, client, llm=llm_recipe, session=session, started_after=time.time()
+    projects_dir,
+    client,
+    llm=llm_recipe,
+    session=session,
+    started_after=transcript_clock_now(projects_dir),
   )
   log.info('recording %s (interval=%ds, workspace=%s)', projects_dir, interval, session.workspace)
   _watch(recorder, interval, log_path)

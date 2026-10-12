@@ -11,7 +11,6 @@ classification.
 
 import contextlib
 import threading
-import time
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -30,7 +29,7 @@ from bro.llm.usage import (
   zero,
 )
 from bro.trails.claude_format import CLAUDE_FORMAT
-from ride.claude.claude_config import latest_jsonl
+from ride.claude.claude_config import latest_jsonl, transcript_clock_now
 from ride.claude.transcripts import read_lines_after, subagent_transcripts, watching
 
 # a read without a write to wake it, for one the watch missed
@@ -104,7 +103,7 @@ def publishing_usage(projects_dir: Path, target: Path) -> Generator[None]:
   `target` with the failure, and one that cannot be recorded there raises as the
   block ends."""
   target.parent.mkdir(parents=True, exist_ok=True)
-  session = SessionUsage(projects_dir, started_after=time.time())
+  session = SessionUsage(projects_dir, started_after=transcript_clock_now(projects_dir))
   stop = threading.Event()
   with (
     watching(projects_dir) as changes,
