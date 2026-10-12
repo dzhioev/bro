@@ -81,6 +81,16 @@ def claude_projects_dir(workspace: Path) -> Path:
   return claude_config_dir() / 'projects' / encode_project_path(workspace)
 
 
+def transcript_clock_now(projects_dir: Path) -> float:
+  """the current time on the clock that stamps the mtimes of transcripts in
+  `projects_dir`, read off the dir as it is touched, creating it for claude when
+  it has not yet. That clock is not `time.time()`'s: the kernel stamps files from
+  a coarser clock, and a mounted dir takes its host's."""
+  projects_dir.mkdir(parents=True, exist_ok=True)
+  os.utime(projects_dir)
+  return projects_dir.stat().st_mtime
+
+
 def latest_jsonl(projects_dir: Path) -> Optional[Path]:
   if not projects_dir.is_dir():
     return None
