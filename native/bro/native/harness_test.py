@@ -17,6 +17,7 @@ from bro.brash import REFUSED_STATUS
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.inbox import Inbox
 from bro.jobs import Job, Registry
+from bro.jobs_test_helper import StalledSupervisor
 from bro.llm.llms.openai import LLMSpec
 from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
@@ -563,7 +564,7 @@ class TestNativeServiceTools:
         while len(run.registry.values()) == 0:
           await asyncio.sleep(0.01)
         [foreground_job] = run.registry.values()
-        while foreground_job.status().unread_lines == 0:
+        while foreground_job.mode != 'fg' or foreground_job.status().unread_lines == 0:
           await asyncio.sleep(0.01)
       run.registry.start('true', 'bg')
       async with asyncio.timeout(5):
@@ -634,9 +635,47 @@ class TestNativeServiceTools:
       async with asyncio.timeout(5):
         while len(run.registry.values()) == 0:
           await asyncio.sleep(0.01)
+        [job] = run.registry.values()
+        while job.mode != 'fg':
+          await asyncio.sleep(0.01)
       call.cancel()
       with pytest.raises(asyncio.CancelledError):
         await call
+      assert job.mode == 'bg'
+
+  @pytest.mark.asyncio
+  async def test_a_stalled_job_start_leaves_the_loop_running(self, monkeypatch, tmp_path):
+    supervisor = StalledSupervisor(tmp_path, monkeypatch)
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      call = asyncio.create_task(tools['job'].call({'command': 'printf started', 'mode': 'fg'}))
+      await asyncio.to_thread(supervisor.wait_stalled)
+      assert not supervisor.expired()
+
+      supervisor.release()
+      assert await call == 'exited (code 0)\nstarted'
+
+  @pytest.mark.asyncio
+  async def test_cancelling_a_stalled_start_leaves_a_background_job(self, monkeypatch, tmp_path):
+    supervisor = StalledSupervisor(tmp_path, monkeypatch)
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      call = asyncio.create_task(tools['job'].call({'command': 'sleep 30', 'mode': 'fg'}))
+      await asyncio.to_thread(supervisor.wait_stalled)
+      call.cancel()
+      with pytest.raises(asyncio.CancelledError):
+        await call
+
+      supervisor.release()
+      async with asyncio.timeout(10):
+        while len(run.registry.values()) == 0:
+          await asyncio.sleep(0.01)
       [job] = run.registry.values()
       assert job.mode == 'bg'
 
