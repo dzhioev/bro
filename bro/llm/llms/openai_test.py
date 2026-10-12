@@ -5,7 +5,7 @@ import sys
 import warnings
 from datetime import date
 from decimal import Decimal
-from typing import get_args
+from typing import Optional, get_args
 
 import pytest
 
@@ -184,7 +184,7 @@ class TestPricing:
   def test_an_unknown_model_or_unpriced_tier_is_not_treated_as_free(self):
     usage = {'input_tokens': 1, 'output_tokens': 1}
     assert openai_llm.price('unknown', usage, None) is None
-    assert openai_llm.price('gpt-5.6-terra', usage, 'flex') is None
+    assert openai_llm.price('gpt-5.6-terra', usage, 'scale') is None
 
   @pytest.mark.parametrize(
     'usage',
@@ -257,3 +257,88 @@ class TestPricing:
       warnings.simplefilter('always')
       openai_llm.price('gpt-5.6-terra', usage, None, stale)
     assert caught == []
+
+
+def _rates(
+  value: str, *, cached_input: Optional[str] = None, cache_write: Optional[str] = None
+) -> dict:
+  return {'input': value, 'cached_input': cached_input, 'cache_write': cache_write, 'output': value}
+
+
+def _tiers(**tiers: dict) -> dict:
+  return {'long_context_threshold': None, 'service_tiers': tiers}
+
+
+class TestPricingVocabulary:
+  # the serialized shape retention manifests persist (`benchmark/bro/benchmark/retention.py`)
+  TABLE = openai_llm.price_table_from_content(
+    'https://example.com/pricing',
+    date.today().isoformat(),
+    {
+      'model': _tiers(
+        standard={'short': _rates('1', cached_input='1', cache_write='1'), 'long': None},
+        flex={'short': _rates('2'), 'long': None},
+        priority={'short': _rates('3'), 'long': None},
+      ),
+      'model-2024-05-13': _tiers(standard={'short': _rates('4'), 'long': None}),
+      'tiered': {
+        'long_context_threshold': 10,
+        'service_tiers': {
+          'standard': {'short': _rates('1'), 'long': _rates('2')},
+          'priority': {'short': _rates('3'), 'long': None},
+        },
+      },
+    },
+  )
+
+  @pytest.mark.parametrize(
+    'service_tier,rate',
+    [(None, 1), ('auto', 1), ('default', 1), ('flex', 2), ('fast', 3), ('priority', 3)],
+  )
+  def test_each_reported_service_tier_pays_its_tier_rates(self, service_tier, rate):
+    usage = {'input_tokens': 1, 'output_tokens': 1}
+    assert (
+      openai_llm.price('model', usage, service_tier, self.TABLE) == Decimal(2 * rate) / 1_000_000
+    )
+
+  @pytest.mark.parametrize(
+    'model,rate', [('model-2025-08-07', 1), ('model-2024-05-13', 4), ('model-latest', None)]
+  )
+  def test_a_dated_snapshot_without_a_row_pays_its_undated_models_rates(self, model, rate):
+    cost = openai_llm.price(model, {'input_tokens': 1, 'output_tokens': 1}, None, self.TABLE)
+    assert cost == (None if rate is None else Decimal(2 * rate) / 1_000_000)
+
+  def test_a_class_the_model_does_not_bill_prices_while_its_usage_reports_none(self):
+    usage = {'input_tokens': 1, 'input_tokens_details': {'cached_tokens': 0}, 'output_tokens': 1}
+    assert openai_llm.price('model', usage, 'flex', self.TABLE) == Decimal(4) / 1_000_000
+
+  @pytest.mark.parametrize('detail', ['cached_tokens', 'cache_write_tokens'])
+  def test_tokens_in_a_class_the_model_does_not_bill_are_rejected(self, detail):
+    usage = {'input_tokens': 2, 'input_tokens_details': {detail: 1}, 'output_tokens': 0}
+    with pytest.raises(ValueError, match='bills no'):
+      openai_llm.price('model', usage, 'flex', self.TABLE)
+
+  def test_a_model_without_a_threshold_pays_its_rates_at_any_length(self):
+    usage = {'input_tokens': 300_000, 'output_tokens': 0}
+    assert openai_llm.price('model', usage, 'flex', self.TABLE) == Decimal('0.6')
+
+  def test_a_long_call_on_a_tier_without_long_rates_is_not_treated_as_free(self):
+    usage = {'input_tokens': 11, 'output_tokens': 0}
+    assert openai_llm.price('tiered', usage, None, self.TABLE) == Decimal(22) / 1_000_000
+    assert openai_llm.price('tiered', usage, 'priority', self.TABLE) is None
+
+  def test_long_rates_require_a_threshold(self):
+    with pytest.raises(ValueError, match='long_context_threshold'):
+      openai_llm.price_table_from_content(
+        'https://example.com',
+        '2026-01-01',
+        {'model': _tiers(standard={'short': _rates('1'), 'long': _rates('2')})},
+      )
+
+  def test_blank_classes_and_missing_long_rates_survive_a_serialized_snapshot(self):
+    current = openai_llm.PRICE_TABLE
+    model = current.models['gpt-5.4']
+    snapshot = openai_llm.price_table_from_content(
+      current.source, current.as_of.isoformat(), {'gpt-5.4': model.content()}
+    )
+    assert snapshot.models['gpt-5.4'].content() == model.content()

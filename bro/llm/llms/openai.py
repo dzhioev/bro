@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -48,41 +49,62 @@ FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = (
 
 _ONE_MILLION = Decimal(1_000_000)
 _LONG_CONTEXT_THRESHOLD = 272_000
+# a dated snapshot id, which the vendor page prices under its undated name
+# unless it lists the snapshot as a model of its own
+_SNAPSHOT_DATE = re.compile(r'-\d{4}-\d{2}-\d{2}$')
 
 
 @dataclass(frozen=True)
 class TokenRates:
-  """USD per million Responses API tokens, in OpenAI's billing classes."""
+  """USD per million Responses API tokens, in OpenAI's billing classes.
+
+  A class left None is one the vendor publishes no rate for: the model does not
+  bill it, so its usage never reports tokens in it.
+  """
 
   input: Decimal
-  cached_input: Decimal
-  cache_write: Decimal
+  cached_input: Optional[Decimal]
+  cache_write: Optional[Decimal]
   output: Decimal
 
-  def content(self) -> dict[str, str]:
-    return pricing.decimal_strings(
-      {
-        'input': self.input,
-        'cached_input': self.cached_input,
-        'cache_write': self.cache_write,
-        'output': self.output,
-      }
-    )
+  def content(self) -> dict[str, Optional[str]]:
+    rates = {
+      'input': self.input,
+      'cached_input': self.cached_input,
+      'cache_write': self.cache_write,
+      'output': self.output,
+    }
+    return {name: None if rate is None else str(rate) for name, rate in rates.items()}
 
 
 @dataclass(frozen=True)
 class ContextRates:
-  short: TokenRates
-  long: TokenRates
+  """a service tier's rates; `long` is what a call over its model's long-context
+  threshold pays, None where the tier publishes no long-context rate."""
 
-  def content(self) -> dict[str, dict[str, str]]:
-    return {'short': self.short.content(), 'long': self.long.content()}
+  short: TokenRates
+  long: Optional[TokenRates] = None
+
+  def content(self) -> dict[str, Optional[dict[str, Optional[str]]]]:
+    return {
+      'short': self.short.content(),
+      'long': None if self.long is None else self.long.content(),
+    }
 
 
 @dataclass(frozen=True)
 class ModelRates:
-  long_context_threshold: int
+  """a model's rates by service tier; `long_context_threshold` is None for a
+  model priced the same at every prompt length."""
+
   service_tiers: Mapping[str, ContextRates]
+  long_context_threshold: Optional[int] = None
+
+  def __post_init__(self) -> None:
+    if self.long_context_threshold is None and any(
+      rates.long is not None for rates in self.service_tiers.values()
+    ):
+      raise ValueError('long-context rates need a long_context_threshold')
 
   def content(self) -> dict[str, Any]:
     return {
@@ -109,6 +131,13 @@ class PriceTable:
       }
     )
 
+  def rates(self, model: str) -> Optional[ModelRates]:
+    """the model's rates, a dated snapshot falling back to its undated name."""
+    rates = self.models.get(model)
+    if rates is None and _SNAPSHOT_DATE.search(model):
+      rates = self.models.get(_SNAPSHOT_DATE.sub('', model))
+    return rates
+
 
 def _content_mapping(value: Any, field: str) -> Mapping[str, Any]:
   if not isinstance(value, Mapping):
@@ -128,6 +157,10 @@ def _content_decimal(value: Any, field: str) -> Decimal:
   return decimal
 
 
+def _content_optional_decimal(value: Any, field: str) -> Optional[Decimal]:
+  return None if value is None else _content_decimal(value, field)
+
+
 def _content_token_rates(value: Any, field: str) -> TokenRates:
   content = _content_mapping(value, field)
   expected = {'input', 'cached_input', 'cache_write', 'output'}
@@ -135,8 +168,8 @@ def _content_token_rates(value: Any, field: str) -> TokenRates:
     raise ValueError(f'{field} must contain exactly {sorted(expected)}')
   return TokenRates(
     input=_content_decimal(content['input'], f'{field}.input'),
-    cached_input=_content_decimal(content['cached_input'], f'{field}.cached_input'),
-    cache_write=_content_decimal(content['cache_write'], f'{field}.cache_write'),
+    cached_input=_content_optional_decimal(content['cached_input'], f'{field}.cached_input'),
+    cache_write=_content_optional_decimal(content['cache_write'], f'{field}.cache_write'),
     output=_content_decimal(content['output'], f'{field}.output'),
   )
 
@@ -158,8 +191,12 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
     if set(model_content) != expected:
       raise ValueError(f'price table model {model} must contain exactly {sorted(expected)}')
     threshold = model_content['long_context_threshold']
-    if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 0:
-      raise ValueError(f'price table model {model} long_context_threshold must be non-negative')
+    if threshold is not None and (
+      not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 0
+    ):
+      raise ValueError(
+        f'price table model {model} long_context_threshold must be null or non-negative'
+      )
     raw_tiers = _content_mapping(
       model_content['service_tiers'], f'price table model {model} service_tiers'
     )
@@ -167,96 +204,74 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
     for tier, raw_context in raw_tiers.items():
       if not isinstance(tier, str) or tier == '':
         raise ValueError('price table service tier names must be non-empty strings')
-      context = _content_mapping(raw_context, f'price table model {model} service tier {tier}')
+      field = f'price table model {model} service tier {tier}'
+      context = _content_mapping(raw_context, field)
       if set(context) != {'short', 'long'}:
-        raise ValueError(
-          f'price table model {model} service tier {tier} must contain short and long'
-        )
+        raise ValueError(f'{field} must contain short and long')
       parsed_tiers[tier] = ContextRates(
-        short=_content_token_rates(
-          context['short'], f'price table model {model} service tier {tier}.short'
-        ),
-        long=_content_token_rates(
-          context['long'], f'price table model {model} service tier {tier}.long'
-        ),
+        short=_content_token_rates(context['short'], f'{field}.short'),
+        long=None
+        if context['long'] is None
+        else _content_token_rates(context['long'], f'{field}.long'),
       )
-    parsed_models[model] = ModelRates(threshold, MappingProxyType(parsed_tiers))
+    parsed_models[model] = ModelRates(MappingProxyType(parsed_tiers), threshold)
   return PriceTable(source, effective_date, MappingProxyType(parsed_models))
 
 
+def _rates(
+  input_rate: str, cached_input: Optional[str], cache_write: Optional[str], output: str
+) -> TokenRates:
+  """rates in the vendor page's column order, None for a blank cell."""
+  return TokenRates(
+    input=Decimal(input_rate),
+    cached_input=None if cached_input is None else Decimal(cached_input),
+    cache_write=None if cache_write is None else Decimal(cache_write),
+    output=Decimal(output),
+  )
+
+
 # Rates are copied from the vendor page and updated by hand in a PR together
-# with this date. Pricing never fetches vendor data at run time.
+# with this date. Pricing never fetches vendor data at run time. The page's Fast
+# tier is the one a response reports as `priority`.
 PRICE_TABLE = PriceTable(
   source='https://developers.openai.com/api/docs/pricing',
-  as_of=date(2026, 10, 8),
+  as_of=date(2026, 10, 12),
   models=MappingProxyType(
     {
+      'gpt-6-astra': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('10.00', '1.00', '12.50', '50.00'),
+              long=_rates('20.00', '2.00', '25.00', '75.00'),
+            ),
+            'flex': ContextRates(
+              short=_rates('5.00', '0.50', '6.25', '25.00'),
+              long=_rates('10.00', '1.00', '12.50', '37.50'),
+            ),
+            'priority': ContextRates(
+              short=_rates('20.00', '2.00', '25.00', '100.00'),
+              long=_rates('40.00', '4.00', '50.00', '150.00'),
+            ),
+          }
+        ),
+      ),
       'gpt-6.1-sol': ModelRates(
         long_context_threshold=_LONG_CONTEXT_THRESHOLD,
         service_tiers=MappingProxyType(
           {
             'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('2.00'),
-                cached_input=Decimal('0.10'),
-                cache_write=Decimal('2.50'),
-                output=Decimal('10.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.20'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('15.00'),
-              ),
+              short=_rates('2.00', '0.10', '2.50', '10.00'),
+              long=_rates('4.00', '0.20', '5.00', '15.00'),
+            ),
+            'flex': ContextRates(
+              short=_rates('1.00', '0.05', '1.25', '5.00'),
+              long=_rates('2.00', '0.10', '2.50', '7.50'),
             ),
             'priority': ContextRates(
-              short=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.20'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('20.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('8.00'),
-                cached_input=Decimal('0.40'),
-                cache_write=Decimal('10.00'),
-                output=Decimal('30.00'),
-              ),
-            ),
-          }
-        ),
-      ),
-      'gpt-6-sol': ModelRates(
-        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
-        service_tiers=MappingProxyType(
-          {
-            'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('2.00'),
-                cached_input=Decimal('0.20'),
-                cache_write=Decimal('2.50'),
-                output=Decimal('10.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.40'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('15.00'),
-              ),
-            ),
-            'priority': ContextRates(
-              short=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.40'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('20.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('8.00'),
-                cached_input=Decimal('0.80'),
-                cache_write=Decimal('10.00'),
-                output=Decimal('30.00'),
-              ),
+              short=_rates('4.00', '0.20', '5.00', '20.00'),
+              long=_rates('8.00', '0.40', '10.00', '30.00'),
             ),
           }
         ),
@@ -266,67 +281,35 @@ PRICE_TABLE = PriceTable(
         service_tiers=MappingProxyType(
           {
             'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('0.10'),
-                cached_input=Decimal('0.01'),
-                cache_write=Decimal('0.125'),
-                output=Decimal('0.50'),
-              ),
-              long=TokenRates(
-                input=Decimal('0.20'),
-                cached_input=Decimal('0.02'),
-                cache_write=Decimal('0.25'),
-                output=Decimal('0.75'),
-              ),
+              short=_rates('0.10', '0.01', '0.125', '0.50'),
+              long=_rates('0.20', '0.02', '0.25', '0.75'),
+            ),
+            'flex': ContextRates(
+              short=_rates('0.05', '0.005', '0.0625', '0.25'),
+              long=_rates('0.10', '0.01', '0.125', '0.375'),
             ),
             'priority': ContextRates(
-              short=TokenRates(
-                input=Decimal('0.20'),
-                cached_input=Decimal('0.02'),
-                cache_write=Decimal('0.25'),
-                output=Decimal('1.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('0.40'),
-                cached_input=Decimal('0.04'),
-                cache_write=Decimal('0.50'),
-                output=Decimal('1.50'),
-              ),
+              short=_rates('0.20', '0.02', '0.25', '1.00'),
+              long=_rates('0.40', '0.04', '0.50', '1.50'),
             ),
           }
         ),
       ),
-      'gpt-6-astra': ModelRates(
+      'gpt-6-sol': ModelRates(
         long_context_threshold=_LONG_CONTEXT_THRESHOLD,
         service_tiers=MappingProxyType(
           {
             'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('10.00'),
-                cached_input=Decimal('1.00'),
-                cache_write=Decimal('12.50'),
-                output=Decimal('50.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('20.00'),
-                cached_input=Decimal('2.00'),
-                cache_write=Decimal('25.00'),
-                output=Decimal('75.00'),
-              ),
+              short=_rates('2.00', '0.20', '2.50', '10.00'),
+              long=_rates('4.00', '0.40', '5.00', '15.00'),
+            ),
+            'flex': ContextRates(
+              short=_rates('1.00', '0.10', '1.25', '5.00'),
+              long=_rates('2.00', '0.20', '2.50', '7.50'),
             ),
             'priority': ContextRates(
-              short=TokenRates(
-                input=Decimal('20.00'),
-                cached_input=Decimal('2.00'),
-                cache_write=Decimal('25.00'),
-                output=Decimal('100.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('40.00'),
-                cached_input=Decimal('4.00'),
-                cache_write=Decimal('50.00'),
-                output=Decimal('150.00'),
-              ),
+              short=_rates('4.00', '0.40', '5.00', '20.00'),
+              long=_rates('8.00', '0.80', '10.00', '30.00'),
             ),
           }
         ),
@@ -336,53 +319,16 @@ PRICE_TABLE = PriceTable(
         service_tiers=MappingProxyType(
           {
             'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.40'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('20.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('8.00'),
-                cached_input=Decimal('0.80'),
-                cache_write=Decimal('10.00'),
-                output=Decimal('30.00'),
-              ),
+              short=_rates('4.00', '0.40', '5.00', '20.00'),
+              long=_rates('8.00', '0.80', '10.00', '30.00'),
             ),
-          }
-        ),
-      ),
-      'gpt-5.6-luna': ModelRates(
-        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
-        service_tiers=MappingProxyType(
-          {
-            'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('0.20'),
-                cached_input=Decimal('0.02'),
-                cache_write=Decimal('0.25'),
-                output=Decimal('1.20'),
-              ),
-              long=TokenRates(
-                input=Decimal('0.40'),
-                cached_input=Decimal('0.04'),
-                cache_write=Decimal('0.50'),
-                output=Decimal('1.80'),
-              ),
+            'flex': ContextRates(
+              short=_rates('2.00', '0.20', '2.50', '10.00'),
+              long=_rates('4.00', '0.40', '5.00', '15.00'),
             ),
             'priority': ContextRates(
-              short=TokenRates(
-                input=Decimal('0.40'),
-                cached_input=Decimal('0.04'),
-                cache_write=Decimal('0.50'),
-                output=Decimal('2.40'),
-              ),
-              long=TokenRates(
-                input=Decimal('0.80'),
-                cached_input=Decimal('0.08'),
-                cache_write=Decimal('1.00'),
-                output=Decimal('3.60'),
-              ),
+              short=_rates('8.00', '0.80', '10.00', '40.00'),
+              long=_rates('16.00', '1.60', '20.00', '60.00'),
             ),
           }
         ),
@@ -392,33 +338,370 @@ PRICE_TABLE = PriceTable(
         service_tiers=MappingProxyType(
           {
             'standard': ContextRates(
-              short=TokenRates(
-                input=Decimal('2.00'),
-                cached_input=Decimal('0.20'),
-                cache_write=Decimal('2.50'),
-                output=Decimal('12.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.40'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('18.00'),
-              ),
+              short=_rates('2.00', '0.20', '2.50', '12.00'),
+              long=_rates('4.00', '0.40', '5.00', '18.00'),
+            ),
+            'flex': ContextRates(
+              short=_rates('1.00', '0.10', '1.25', '6.00'),
+              long=_rates('2.00', '0.20', '2.50', '9.00'),
             ),
             'priority': ContextRates(
-              short=TokenRates(
-                input=Decimal('4.00'),
-                cached_input=Decimal('0.40'),
-                cache_write=Decimal('5.00'),
-                output=Decimal('24.00'),
-              ),
-              long=TokenRates(
-                input=Decimal('8.00'),
-                cached_input=Decimal('0.80'),
-                cache_write=Decimal('10.00'),
-                output=Decimal('36.00'),
-              ),
+              short=_rates('4.00', '0.40', '5.00', '24.00'),
+              long=_rates('8.00', '0.80', '10.00', '36.00'),
             ),
+          }
+        ),
+      ),
+      'gpt-5.6-luna': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('0.20', '0.02', '0.25', '1.20'),
+              long=_rates('0.40', '0.04', '0.50', '1.80'),
+            ),
+            'flex': ContextRates(
+              short=_rates('0.10', '0.01', '0.125', '0.60'),
+              long=_rates('0.20', '0.02', '0.25', '0.90'),
+            ),
+            'priority': ContextRates(
+              short=_rates('0.40', '0.04', '0.50', '2.40'),
+              long=_rates('0.80', '0.08', '1.00', '3.60'),
+            ),
+          }
+        ),
+      ),
+      'gpt-5.5': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('5.00', '0.50', None, '30.00'),
+              long=_rates('10.00', '1.00', None, '45.00'),
+            ),
+            'flex': ContextRates(
+              short=_rates('2.50', '0.25', None, '15.00'),
+              long=_rates('5.00', '0.50', None, '22.50'),
+            ),
+            'priority': ContextRates(_rates('12.50', '1.25', None, '75.00')),
+          }
+        ),
+      ),
+      'gpt-5.5-pro': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('30.00', None, None, '180.00'),
+              long=_rates('60.00', None, None, '270.00'),
+            ),
+            'flex': ContextRates(_rates('15.00', None, None, '90.00')),
+          }
+        ),
+      ),
+      'gpt-5.4': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('2.50', '0.25', None, '15.00'),
+              long=_rates('5.00', '0.50', None, '22.50'),
+            ),
+            'flex': ContextRates(
+              short=_rates('1.25', '0.13', None, '7.50'),
+              long=_rates('2.50', '0.25', None, '11.25'),
+            ),
+            'priority': ContextRates(_rates('5.00', '0.50', None, '30.00')),
+          }
+        ),
+      ),
+      'gpt-5.4-mini': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.75', '0.075', None, '4.50')),
+            'flex': ContextRates(_rates('0.375', '0.0375', None, '2.25')),
+            'priority': ContextRates(_rates('1.50', '0.15', None, '9.00')),
+          }
+        ),
+      ),
+      'gpt-5.4-nano': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.20', '0.02', None, '1.25')),
+            'flex': ContextRates(_rates('0.10', '0.01', None, '0.625')),
+          }
+        ),
+      ),
+      'gpt-5.4-pro': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('30.00', None, None, '180.00'),
+              long=_rates('60.00', None, None, '270.00'),
+            ),
+            'flex': ContextRates(
+              short=_rates('15.00', None, None, '90.00'),
+              long=_rates('30.00', None, None, '135.00'),
+            ),
+          }
+        ),
+      ),
+      'gpt-5.2': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.75', '0.175', None, '14.00')),
+            'flex': ContextRates(_rates('0.875', '0.0875', None, '7.00')),
+            'priority': ContextRates(_rates('3.50', '0.35', None, '28.00')),
+          }
+        ),
+      ),
+      'gpt-5.2-pro': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('21.00', None, None, '168.00')),
+          }
+        ),
+      ),
+      'gpt-5.1': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.25', '0.125', None, '10.00')),
+            'flex': ContextRates(_rates('0.625', '0.0625', None, '5.00')),
+            'priority': ContextRates(_rates('2.50', '0.25', None, '20.00')),
+          }
+        ),
+      ),
+      'gpt-5': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.25', '0.125', None, '10.00')),
+            'flex': ContextRates(_rates('0.625', '0.0625', None, '5.00')),
+            'priority': ContextRates(_rates('2.50', '0.25', None, '20.00')),
+          }
+        ),
+      ),
+      'gpt-5-mini': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.25', '0.025', None, '2.00')),
+            'flex': ContextRates(_rates('0.125', '0.0125', None, '1.00')),
+            'priority': ContextRates(_rates('0.45', '0.045', None, '3.60')),
+          }
+        ),
+      ),
+      'gpt-5-nano': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.05', '0.005', None, '0.40')),
+            'flex': ContextRates(_rates('0.025', '0.0025', None, '0.20')),
+          }
+        ),
+      ),
+      'gpt-5-pro': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('15.00', None, None, '120.00')),
+          }
+        ),
+      ),
+      'gpt-4.1': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('2.00', '0.50', None, '8.00')),
+            'priority': ContextRates(_rates('3.50', '0.875', None, '14.00')),
+          }
+        ),
+      ),
+      'gpt-4.1-mini': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.40', '0.10', None, '1.60')),
+            'priority': ContextRates(_rates('0.70', '0.175', None, '2.80')),
+          }
+        ),
+      ),
+      'gpt-4.1-nano': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.10', '0.025', None, '0.40')),
+            'priority': ContextRates(_rates('0.20', '0.05', None, '0.80')),
+          }
+        ),
+      ),
+      'gpt-4o': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('2.50', '1.25', None, '10.00')),
+            'priority': ContextRates(_rates('4.25', '2.125', None, '17.00')),
+          }
+        ),
+      ),
+      'gpt-4o-2024-05-13': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('5.00', None, None, '15.00')),
+            'priority': ContextRates(_rates('8.75', None, None, '26.25')),
+          }
+        ),
+      ),
+      'gpt-4o-mini': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.15', '0.075', None, '0.60')),
+            'priority': ContextRates(_rates('0.25', '0.125', None, '1.00')),
+          }
+        ),
+      ),
+      'o1': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('15.00', '7.50', None, '60.00')),
+          }
+        ),
+      ),
+      'o1-pro': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('150.00', None, None, '600.00')),
+          }
+        ),
+      ),
+      'o3-pro': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('20.00', None, None, '80.00')),
+          }
+        ),
+      ),
+      'o3': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('2.00', '0.50', None, '8.00')),
+            'flex': ContextRates(_rates('1.00', '0.25', None, '4.00')),
+            'priority': ContextRates(_rates('3.50', '0.875', None, '14.00')),
+          }
+        ),
+      ),
+      'o4-mini': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.10', '0.275', None, '4.40')),
+            'flex': ContextRates(_rates('0.55', '0.138', None, '2.20')),
+            'priority': ContextRates(_rates('2.00', '0.50', None, '8.00')),
+          }
+        ),
+      ),
+      'o3-mini': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.10', '0.55', None, '4.40')),
+          }
+        ),
+      ),
+      'gpt-4-turbo-2024-04-09': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('10.00', None, None, '30.00')),
+          }
+        ),
+      ),
+      'gpt-4-0613': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('30.00', None, None, '60.00')),
+          }
+        ),
+      ),
+      'gpt-3.5-turbo': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.50', None, None, '1.50')),
+          }
+        ),
+      ),
+      'gpt-3.5-turbo-0125': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.50', None, None, '1.50')),
+          }
+        ),
+      ),
+      'gpt-3.5-turbo-1106': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.00', None, None, '2.00')),
+          }
+        ),
+      ),
+      'gpt-3.5-turbo-instruct': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.50', None, None, '2.00')),
+          }
+        ),
+      ),
+      'davinci-002': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('2.00', None, None, '2.00')),
+          }
+        ),
+      ),
+      'babbage-002': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('0.40', None, None, '0.40')),
+          }
+        ),
+      ),
+      'chat-latest': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('5.00', '0.50', None, '30.00')),
+          }
+        ),
+      ),
+      'gpt-5.3-codex': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.75', '0.175', None, '14.00')),
+            'priority': ContextRates(_rates('3.50', '0.35', None, '28.00')),
+          }
+        ),
+      ),
+      'gpt-5-search-api': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('1.25', '0.125', None, '10.00')),
+          }
+        ),
+      ),
+      'gpt-5.6-cyber': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('12.50', '1.25', '15.625', '75.00')),
+          }
+        ),
+      ),
+      'gpt-5.5-cyber': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('12.50', '1.25', None, '75.00')),
+          }
+        ),
+      ),
+      'gpt-rosalind-research': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('5.00', '0.50', None, '25.00')),
+          }
+        ),
+      ),
+      'gpt-rosalind-discovery': ModelRates(
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(_rates('5.00', '0.50', None, '25.00')),
           }
         ),
       ),
@@ -434,12 +717,22 @@ def _count(value: Any, field: str) -> int:
   return value
 
 
-def _service_tier_name(service_tier: Optional[str]) -> Optional[str]:
-  if service_tier in {None, 'auto', 'default'}:
-    return 'standard'
-  if service_tier in {'fast', 'priority'}:
-    return 'priority'
-  return None
+_PRICED_SERVICE_TIERS: dict[Optional[str], str] = {
+  None: 'standard',
+  'auto': 'standard',
+  'default': 'standard',
+  'flex': 'flex',
+  'fast': 'priority',
+  'priority': 'priority',
+}
+
+
+def _billed(tokens: int, rate: Optional[Decimal], billing_class: str) -> Decimal:
+  if rate is None:
+    if tokens != 0:
+      raise ValueError(f'{billing_class} tokens on a model that bills no {billing_class}')
+    return Decimal(0)
+  return Decimal(tokens) * rate
 
 
 def price(
@@ -450,8 +743,8 @@ def price(
 ) -> Optional[Decimal]:
   """Price one Responses API call from its raw usage and effective tier."""
   selected = PRICE_TABLE if table is None else table
-  model_rates = selected.models.get(model)
-  tier = _service_tier_name(service_tier)
+  model_rates = selected.rates(model)
+  tier = _PRICED_SERVICE_TIERS.get(service_tier)
   if model_rates is None or tier is None:
     return None
   context_rates = model_rates.service_tiers.get(tier)
@@ -472,13 +765,17 @@ def price(
   if fresh_tokens < 0:
     raise ValueError('cached and cache-write tokens exceed input_tokens')
 
-  rates = (
-    context_rates.long if input_tokens > model_rates.long_context_threshold else context_rates.short
-  )
+  threshold = model_rates.long_context_threshold
+  if threshold is not None and input_tokens > threshold:
+    rates = context_rates.long
+    if rates is None:
+      return None
+  else:
+    rates = context_rates.short
   return (
     Decimal(fresh_tokens) * rates.input
-    + Decimal(cached_tokens) * rates.cached_input
-    + Decimal(cache_write_tokens) * rates.cache_write
+    + _billed(cached_tokens, rates.cached_input, 'cached_input')
+    + _billed(cache_write_tokens, rates.cache_write, 'cache_write')
     + Decimal(output_tokens) * rates.output
   ) / _ONE_MILLION
 

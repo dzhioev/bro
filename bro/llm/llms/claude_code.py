@@ -77,15 +77,19 @@ class LongContextRates:
 
 @dataclass(frozen=True)
 class ModelRates:
-  """a model's rates, with the long-context tier of a model priced by prompt length."""
+  """a model's rates, with the long-context tier of a model priced by prompt
+  length, and the rates a fast-mode call pays at any prompt length."""
 
   rates: TokenRates
   long_context: Optional[LongContextRates] = None
+  fast: Optional[TokenRates] = None
 
   def content(self) -> dict[str, Any]:
     content: dict[str, Any] = self.rates.content()
     if self.long_context is not None:
       content['long_context'] = self.long_context.content()
+    if self.fast is not None:
+      content['fast'] = self.fast.content()
     return content
 
   def for_prompt(self, prompt_tokens: int) -> TokenRates:
@@ -167,58 +171,48 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
       raise ValueError('price table model names must be non-empty strings')
     field = f'price table model {model}'
     content = _content_mapping(raw_rates, field)
-    rates = {name: value for name, value in content.items() if name != 'long_context'}
+    rates = {name: value for name, value in content.items() if name not in {'long_context', 'fast'}}
     long_context = (
       _content_long_context(content['long_context'], f'{field}.long_context')
       if 'long_context' in content
       else None
     )
-    parsed_models[model] = ModelRates(_content_token_rates(rates, field), long_context)
+    fast = (
+      _content_token_rates(_content_mapping(content['fast'], f'{field}.fast'), f'{field}.fast')
+      if 'fast' in content
+      else None
+    )
+    parsed_models[model] = ModelRates(_content_token_rates(rates, field), long_context, fast)
   return PriceTable(source, effective_date, MappingProxyType(parsed_models))
 
 
 # Rates are copied from the vendor page and updated by hand in a PR together
-# with this date. Pricing never fetches vendor data at run time.
+# with this date. Pricing never fetches vendor data at run time. The page gives
+# fast mode an input and an output rate; its cache rates apply the page's cache
+# multipliers to the fast input rate. Opus 4.6 serves a fast request at standard
+# speed and bills it at standard rates.
 PRICE_TABLE = PriceTable(
   source='https://platform.claude.com/docs/en/about-claude/pricing',
-  as_of=date(2026, 10, 10),
+  as_of=date(2026, 10, 12),
   models=MappingProxyType(
     {
-      'claude-opus-5-5': ModelRates(
+      'claude-fable-5-1': ModelRates(
         TokenRates(
-          input=Decimal('4.00'),
-          cache_write_5m=Decimal('5.00'),
-          cache_write_1h=Decimal('8.00'),
-          cache_read=Decimal('0.20'),
-          output=Decimal('20.00'),
-        )
+          input=Decimal('10.00'),
+          cache_write_5m=Decimal('12.50'),
+          cache_write_1h=Decimal('20.00'),
+          cache_read=Decimal('0.25'),
+          output=Decimal('50.00'),
+        ),
       ),
-      'claude-opus-5': ModelRates(
+      'claude-mythos-5-1': ModelRates(
         TokenRates(
-          input=Decimal('5.00'),
-          cache_write_5m=Decimal('6.25'),
-          cache_write_1h=Decimal('10.00'),
-          cache_read=Decimal('0.50'),
-          output=Decimal('25.00'),
-        )
-      ),
-      'claude-sonnet-5-5': ModelRates(
-        TokenRates(
-          input=Decimal('2.00'),
-          cache_write_5m=Decimal('2.50'),
-          cache_write_1h=Decimal('4.00'),
-          cache_read=Decimal('0.10'),
-          output=Decimal('10.00'),
-        )
-      ),
-      'claude-sonnet-5': ModelRates(
-        TokenRates(
-          input=Decimal('2.00'),
-          cache_write_5m=Decimal('2.50'),
-          cache_write_1h=Decimal('4.00'),
-          cache_read=Decimal('0.20'),
-          output=Decimal('10.00'),
-        )
+          input=Decimal('10.00'),
+          cache_write_5m=Decimal('12.50'),
+          cache_write_1h=Decimal('20.00'),
+          cache_read=Decimal('0.25'),
+          output=Decimal('50.00'),
+        ),
       ),
       'claude-fable-5': ModelRates(
         TokenRates(
@@ -227,16 +221,161 @@ PRICE_TABLE = PriceTable(
           cache_write_1h=Decimal('20.00'),
           cache_read=Decimal('1.00'),
           output=Decimal('50.00'),
-        )
+        ),
       ),
-      'claude-fable-5-1': ModelRates(
+      'claude-mythos-5': ModelRates(
         TokenRates(
           input=Decimal('10.00'),
           cache_write_5m=Decimal('12.50'),
           cache_write_1h=Decimal('20.00'),
-          cache_read=Decimal('0.25'),
+          cache_read=Decimal('1.00'),
           output=Decimal('50.00'),
-        )
+        ),
+      ),
+      'claude-opus-5-5': ModelRates(
+        TokenRates(
+          input=Decimal('4.00'),
+          cache_write_5m=Decimal('5.00'),
+          cache_write_1h=Decimal('8.00'),
+          cache_read=Decimal('0.20'),
+          output=Decimal('20.00'),
+        ),
+        fast=TokenRates(
+          input=Decimal('8.00'),
+          cache_write_5m=Decimal('10.00'),
+          cache_write_1h=Decimal('16.00'),
+          cache_read=Decimal('0.40'),
+          output=Decimal('40.00'),
+        ),
+      ),
+      'claude-opus-5': ModelRates(
+        TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        ),
+        fast=TokenRates(
+          input=Decimal('10.00'),
+          cache_write_5m=Decimal('12.50'),
+          cache_write_1h=Decimal('20.00'),
+          cache_read=Decimal('1.00'),
+          output=Decimal('50.00'),
+        ),
+      ),
+      'claude-opus-4-8': ModelRates(
+        TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        ),
+        fast=TokenRates(
+          input=Decimal('10.00'),
+          cache_write_5m=Decimal('12.50'),
+          cache_write_1h=Decimal('20.00'),
+          cache_read=Decimal('1.00'),
+          output=Decimal('50.00'),
+        ),
+      ),
+      'claude-opus-4-7': ModelRates(
+        TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        ),
+      ),
+      'claude-opus-4-6': ModelRates(
+        TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        ),
+        fast=TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        ),
+      ),
+      'claude-opus-4-5-20251101': ModelRates(
+        TokenRates(
+          input=Decimal('5.00'),
+          cache_write_5m=Decimal('6.25'),
+          cache_write_1h=Decimal('10.00'),
+          cache_read=Decimal('0.50'),
+          output=Decimal('25.00'),
+        ),
+      ),
+      'claude-opus-4-1-20250805': ModelRates(
+        TokenRates(
+          input=Decimal('15.00'),
+          cache_write_5m=Decimal('18.75'),
+          cache_write_1h=Decimal('30.00'),
+          cache_read=Decimal('1.50'),
+          output=Decimal('75.00'),
+        ),
+      ),
+      'claude-opus-4-20250514': ModelRates(
+        TokenRates(
+          input=Decimal('15.00'),
+          cache_write_5m=Decimal('18.75'),
+          cache_write_1h=Decimal('30.00'),
+          cache_read=Decimal('1.50'),
+          output=Decimal('75.00'),
+        ),
+      ),
+      'claude-sonnet-5-5': ModelRates(
+        TokenRates(
+          input=Decimal('2.00'),
+          cache_write_5m=Decimal('2.50'),
+          cache_write_1h=Decimal('4.00'),
+          cache_read=Decimal('0.10'),
+          output=Decimal('10.00'),
+        ),
+      ),
+      'claude-sonnet-5': ModelRates(
+        TokenRates(
+          input=Decimal('2.00'),
+          cache_write_5m=Decimal('2.50'),
+          cache_write_1h=Decimal('4.00'),
+          cache_read=Decimal('0.20'),
+          output=Decimal('10.00'),
+        ),
+      ),
+      'claude-sonnet-4-6': ModelRates(
+        TokenRates(
+          input=Decimal('3.00'),
+          cache_write_5m=Decimal('3.75'),
+          cache_write_1h=Decimal('6.00'),
+          cache_read=Decimal('0.30'),
+          output=Decimal('15.00'),
+        ),
+      ),
+      'claude-sonnet-4-5-20250929': ModelRates(
+        TokenRates(
+          input=Decimal('3.00'),
+          cache_write_5m=Decimal('3.75'),
+          cache_write_1h=Decimal('6.00'),
+          cache_read=Decimal('0.30'),
+          output=Decimal('15.00'),
+        ),
+      ),
+      'claude-sonnet-4-20250514': ModelRates(
+        TokenRates(
+          input=Decimal('3.00'),
+          cache_write_5m=Decimal('3.75'),
+          cache_write_1h=Decimal('6.00'),
+          cache_read=Decimal('0.30'),
+          output=Decimal('15.00'),
+        ),
       ),
       'claude-haiku-5-5': ModelRates(
         TokenRates(
@@ -264,7 +403,16 @@ PRICE_TABLE = PriceTable(
           cache_write_1h=Decimal('2.00'),
           cache_read=Decimal('0.10'),
           output=Decimal('5.00'),
-        )
+        ),
+      ),
+      'claude-3-5-haiku-20241022': ModelRates(
+        TokenRates(
+          input=Decimal('0.80'),
+          cache_write_5m=Decimal('1.00'),
+          cache_write_1h=Decimal('1.60'),
+          cache_read=Decimal('0.08'),
+          output=Decimal('4.00'),
+        ),
       ),
     }
   ),
@@ -319,7 +467,13 @@ def price(
     if cache_write_5m_tokens + cache_write_1h_tokens != cache_creation_tokens:
       raise ValueError('cache_creation breakdown does not equal cache_creation_input_tokens')
 
-  rates = model_rates.for_prompt(input_tokens + cache_creation_tokens + cache_read_tokens)
+  speed = usage.get('speed', 'standard')
+  if speed == 'standard':
+    rates = model_rates.for_prompt(input_tokens + cache_creation_tokens + cache_read_tokens)
+  elif speed == 'fast' and model_rates.fast is not None:
+    rates = model_rates.fast
+  else:
+    return None
   return (
     Decimal(input_tokens) * rates.input
     + Decimal(cache_write_5m_tokens) * rates.cache_write_5m
