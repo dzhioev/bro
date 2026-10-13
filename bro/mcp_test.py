@@ -4,6 +4,7 @@ import pytest
 
 from bro import mcp, registry
 from bro.base.condition import ConditionError, StringVariable, var, when
+from bro.datasources import references
 from bro.llm.mcp import InProcessMCPServer
 from bro.mcp import render_text, select
 from bros.bro import Bro
@@ -197,7 +198,11 @@ class TestToolLayer:
   def test_entries_of_different_kinds_never_share_a_key(self):
     keys = [
       entry.key
-      for layer in (mcp.mount(_toolset('man', 'read')), mcp.man('ride'), mcp.cli('bro list'))
+      for layer in (
+        mcp.mount(_toolset('man', 'read')),
+        mcp.man(references.ride),
+        mcp.cli('bro list'),
+      )
       for entry in layer.reach_entries
     ]
     assert len(set(keys)) == len(keys)
@@ -237,11 +242,13 @@ class TestToolLayer:
     with pytest.raises(TypeError, match='requires a DataSource'):
       mcp.source('dev-style')  # type: ignore[arg-type]
 
-  def test_man_resolves_its_topic_at_declaration(self):
-    [entry] = mcp.man('Dive-In').entries
-    assert entry.key == mcp.ReachKey('man', 'dive-in')
-    with pytest.raises(LookupError, match='dive-in'):
-      mcp.man('no-such-topic')
+  def test_man_keys_a_page_by_its_topic(self):
+    [entry] = mcp.man(references.dive_in).entries
+    assert entry.key == mcp.ReachKey('man', references.dive_in.name)
+
+  def test_man_requires_a_file_source(self):
+    with pytest.raises(TypeError, match='requires a FileSource'):
+      mcp.man('dive-in')  # type: ignore[arg-type]
 
   def test_revoke_withholds_the_keys_it_wraps_whatever_their_level(self):
     toolset = _toolset('pack', 'read', 'write')

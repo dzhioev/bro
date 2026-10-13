@@ -127,7 +127,7 @@ Classify each changed file by its reach:
 - **Declaration strings** — the persona API (`bro/bro.py`, `bro/mcp.py`, `bros/dev/__init__.py`, `bro/datasources/references.py`, `bro/harness/*`).
   The repository's type check holds its imports and signatures;
   the strings are yours:
-  `man('<topic>')` topics, `cli('<command>')` commands, `mount(toolset, '<tool>')` names, feature names, `[[…]]` spell markers in prompt text, and `{{…}}` directive vocabulary.
+  `cli('<command>')` commands, `mount(toolset, '<tool>')` names, feature names, `[[…]]` spell markers in prompt text, and `{{…}}` directive vocabulary.
   Read each string-keyed call in the repository's persona modules against the new declaration.
 - **Declarative schemas** — what the framework reads as data:
   `[tool.bro]` and its sub-tables (`bro/workspace/project.py` and each section's owner),

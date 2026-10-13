@@ -54,7 +54,7 @@ A markdown reference doc in `bro/prompts/` (loader names are `/`-relative) reach
 
 - **injected** — listed in `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES`, appended to every `ride solo|along` session's `--append-system-prompt`.
   For content every managed Claude session must carry unconditionally.
-- **tool-served** — declared as a `FileSource` in `bro/datasources/references.py`, then declared in a bro's `tools` either on its own as `source(<doc>)` (a `read` tool of its own namespace) or as `man('<topic>')`, joining that bro's manual:
+- **tool-served** — declared as a `FileSource` in `bro/datasources/references.py`, then declared in a bro's `tools` either on its own as `source(<doc>)` (a `read` tool of its own namespace) or as `man(<doc>)`, joining that bro's manual:
   on every harness the bro serves, and the framework lists whichever it mounts in the bro system prompt's `## Data sources` block.
   For reference docs the agent consults on demand;
   the body must be surface-neutral (no `#harness` forks — `FileSource.read` renders with no facts and raises on one).
@@ -145,4 +145,4 @@ A passage of a persona prompt or a spell that applies at some levels only condit
   — or only at some holds, e.g. `interaction.md`, included by the interactive level files
 - **Reference doc**:
   drop a `*.md` under this package, then either add its relative name to `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `ride solo|along` session) or declare a `FileSource` for it in `bro/datasources/references.py`
-  — listed on a bro directly or as `man('<topic>')` (tool-served on demand, every harness — e.g. `environment.md`)
+  — listed on a bro directly or as `man(<doc>)` (tool-served on demand, every harness — e.g. `environment.md`)

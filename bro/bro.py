@@ -836,7 +836,7 @@ _RETIRED_COMPONENT_DECLARATION_ATTRIBUTES = {
   'mcp_servers': "'mcp_servers' was renamed to 'tools'",
   'data_sources': (
     "'data_sources' folded into 'tools': declare a data source as source(...) and a "
-    "reference page as man('<topic>')"
+    'reference page as man(<page>)'
   ),
 }
 

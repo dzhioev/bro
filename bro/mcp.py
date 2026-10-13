@@ -554,12 +554,13 @@ def source(data_source: DataSource) -> ToolLayer:
   return ToolLayer(entries=(Source(data_source),))
 
 
-def man(topic: str) -> ToolLayer:
-  """declare the reference page `topic` into the bro's one manual. An unknown
-  topic raises here, at declaration."""
-  from bro.datasources.references import page
+def man(page: FileSource) -> ToolLayer:
+  """declare `page` into the bro's one manual, under its name as the topic."""
+  from bro.datasources.file import FileSource
 
-  return ToolLayer(entries=(Man(page(topic)),))
+  if not isinstance(page, FileSource):
+    raise TypeError('man requires a FileSource')
+  return ToolLayer(entries=(Man(page),))
 
 
 def revoke(*layers: ToolLayer) -> ToolLayer:
