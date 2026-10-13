@@ -19,9 +19,9 @@ How to add a source of either shape: `bro/reference/extending.md`, "Adding a dat
 - `current_time.py` — current local date and time;
   single `get_time` tool (wire `current-time-source__get_time`)
 - `references.py` — the core reference docs as ready-made instances:
-  one `FileSource` per doc (`environment` → `bro/prompts/environment.md`;
-  `template` / `conditions` / `ride` / `dive-in` / `extending` → the same-named `bro/reference/*.md`), plus `page('<topic>')`, which resolves a topic against that roster for `bro.mcp.man`.
-  A bro declares whichever shape fits in `tools`, as `source(<doc>)` or `man('<topic>')`;
+  one `FileSource` per doc,
+  `environment` over `bro/prompts/environment.md` and `template` / `conditions` / `ride` / `dive-in` / `extending` over the same-named `bro/reference/*.md`.
+  A bro declares whichever shape fits in `tools`, as `source(<doc>)` or `man(<doc>)`;
   `bro-dev` contributes its development-style source separately
 - `file.py` — `FileSource(name, summary, path, render=True)`:
   surface a static reference file as a single `read` tool (wire `<name>-source__read`) whose description carries the summary.
@@ -33,7 +33,7 @@ How to add a source of either shape: `bro/reference/extending.md`, "Adding a dat
 - `man.py` — `ManSource(name, summary, pages)`:
   a roster of `FileSource` pages served as one `read(topic)` tool (wire `<name>-source__read`), the unix `man` shape
   — a doc is declared once and served either as its own dedicated tool or as a topic here.
-  `bro.mcp.man('<topic>')` is the declaration-side entry a bro lists in `tools`, one per topic;
-  `BaseBro` folds every page it resolves into a single `ManSource` via `manual(...)`, so classes across an MRO contribute pages to one manual instead of colliding on its namespace.
+  `bro.mcp.man(<page>)` is the declaration-side entry a bro lists in `tools`, one per page, with the page's name as its topic;
+  any module can declare a page, and `BaseBro` folds every page its class hierarchy declares into a single `ManSource` via `manual(...)`, so classes across an MRO contribute pages to one manual instead of colliding on its namespace.
   The tool description carries the roster with each page's summary and the `topic` parameter its enum, so a surface seeing only the tool listing knows what can be read;
   lookup is case- and whitespace-tolerant and a miss raises with the topics listed.

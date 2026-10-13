@@ -321,6 +321,7 @@ Create the selected module with this shape, adapting names, project text, and co
 
 ```python
 import bro.llm.llms.openai as llm_llms_openai
+from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.mcp import man
 from bros.dev import Dev
 
@@ -343,11 +344,11 @@ class MyDev(Dev):
   features = {'brog': True}
   extra_secrets = ('github',)
   tools = [
-    man('environment'),
-    man('template'),
-    man('conditions'),
-    man('ride'),
-    man('dive-in'),
+    man(environment),
+    man(template),
+    man(conditions),
+    man(ride),
+    man(dive_in),
   ]
   system_prompt = PROJECT_PROMPT
 ```

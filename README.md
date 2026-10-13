@@ -49,6 +49,7 @@ import bro.brog.mcp as brog_mcp
 from acme import issues
 from bro.base.condition import when
 from bro.bro import feature
+from bro.datasources.references import environment
 from bro.datasources.web_search import WebSearch
 from bro.llm.llms import openai
 from bro.mcp import cli, creds, files, man, mount, source
@@ -86,7 +87,7 @@ class Triage(Bro):
     cli('bro show', 'name'),
     cli('rewind show', 'trail_id'),
     source(WebSearch()),
-    man('environment'),
+    man(environment),
   ]
   spells = ('triage.md',)
   system_prompt = SYSTEM_PROMPT
@@ -170,7 +171,7 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `cli('bro show', 'name')` and `cli('rewind show', 'trail_id')` are the two commands it may run, each served as a tool:
   the card of a bro it is about to hand work to, and the run a report cites.
   How a command becomes a tool is below.
-- `source(WebSearch())` and `man('environment')` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
+- `source(WebSearch())` and `man(environment)` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
 - `llm_spec` is the model it runs on by default;
   any launch may name another.
 - `may_summon = ('browser', 'devoops')` is whom it may summon on its own authority:

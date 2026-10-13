@@ -1,4 +1,5 @@
 import bro.llm.llms.openai as llm_llms_openai
+from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.local.prompts import FRAMEWORK_PROJECT
 from bro.mcp import man
 from bros.dev import Dev
@@ -18,10 +19,10 @@ class BroDev(Dev):
   features = {'brog': True}
   extra_secrets = ('github',)
   tools = [
-    man('environment'),
-    man('template'),
-    man('conditions'),
-    man('ride'),
-    man('dive-in'),
+    man(environment),
+    man(template),
+    man(conditions),
+    man(ride),
+    man(dive_in),
   ]
   system_prompt = f'{FRAMEWORK_PROJECT}\n{AUTHORING}'

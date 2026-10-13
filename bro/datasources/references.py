@@ -2,12 +2,11 @@
 
 Each doc is declared once as a `FileSource`. A bro lists it in `tools` either
 as `source(<doc>)`, for a dedicated `read` tool of its own, or as
-`man('<topic>')`, joining the manual the bro's declared pages fold into. The
+`man(<doc>)`, joining the manual the bro's declared pages fold into. The
 instances are stateless, so sharing them across bros is fine.
 """
 
 from bro import prompts, reference
-from bro.base.name_map import NameMap
 from bro.datasources.file import FileSource
 
 environment = FileSource(
@@ -72,12 +71,3 @@ extending = FileSource(
   # carries directive examples; rendering would execute them
   render=False,
 )
-
-_PAGES = NameMap(
-  {page.name: page for page in (environment, template, conditions, ride, dive_in, extending)}
-)
-
-
-def page(topic: str) -> FileSource:
-  """the roster's page for `topic`; an unknown topic raises with the roster listed."""
-  return _PAGES.resolve(topic)

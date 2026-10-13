@@ -1,4 +1,5 @@
 import bro.brog.mcp as brog_mcp
+from bro.datasources.references import dive_in, environment, ride
 from bro.mcp import cli, man, mount
 from bros.bro import Bro
 
@@ -67,9 +68,9 @@ class Lead(Bro):
       'limit',
     ),
     cli('rewind tree', 'trail_id'),
-    man('environment'),
-    man('dive-in'),
-    man('ride'),
+    man(environment),
+    man(dive_in),
+    man(ride),
   ]
   spells = ('orchestrate.md',)
   system_prompt = SYSTEM_PROMPT

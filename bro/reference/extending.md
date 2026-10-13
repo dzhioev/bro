@@ -47,8 +47,8 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   - `mount(project_tools.mcp.toolset)` adds a contributing package's full toolset ("Adding a toolset" below), and `mount(project_tools.mcp.toolset, 'search', 'update')` scopes the mount to specific tools, validated at declaration.
   - `cli('bro list')` serves one installed CLI command as a generated tool (below).
   - `source(YourSource())` mounts a read-only data connector, whose summary joins the composed prompt ("Adding a data source" below).
-  - `man('conditions')` declares one reference page into the bro's single `man` source;
-    every page the class hierarchy declares folds into it.
+  - `man(conditions)` declares one reference page, a `FileSource` such as `bro.datasources.references.conditions`, into the bro's single `man` source under its name as the topic;
+    every page the class hierarchy declares folds into it, from whichever module declares it.
   - `ToolLayer(server_specs=(spec,))` mounts a raw `MCPServerSpec`.
   - `revoke(delegation())`, `revoke(mount(brog_mcp.toolset))`, or `revoke(cli('bro list'))` withholds what the wrapped entries declare, whatever their level or subset.
 

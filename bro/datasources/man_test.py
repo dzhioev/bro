@@ -1,7 +1,6 @@
 import pytest
 
 from bro.base.text_window import BYTE_LIMIT
-from bro.datasources import references
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManSource
 
@@ -64,14 +63,3 @@ async def test_read_tool_serves_the_roster(source):
 async def test_read_tool_returns_the_page(source):
   tool = (await source.as_mcp_server().list_tools())[0]
   assert await tool.call({'topic': 'first'}) == '# First\n\nfirst body\n'
-
-
-def test_page_resolves_a_topic_of_the_repo_roster():
-  page = references.page('dive-in')
-  assert page.name == 'dive-in'
-  assert len(page.read()) > 0
-
-
-def test_page_names_the_topics_on_an_unknown_one():
-  with pytest.raises(LookupError, match='dive-in'):
-    references.page('no-such-topic')
