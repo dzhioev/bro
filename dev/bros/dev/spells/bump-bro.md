@@ -207,7 +207,7 @@ Two kinds of commit, each in the repository's own conventions ([[run pr]]'s step
 - **Each adoption** from step 4 on its own, its body naming the ability or fix and what it replaced.
 
 Before each commit, run [[run pr]]'s step 2 policy audit as that commit's own precondition:
-call `dev-style-source::read`, audit the commit's diff against the returned text, and state the verdict as visible output before the `git commit`.
+call `dev-style-source::read` and the `man-source::read` guide of every area the commit reaches, audit the commit's diff against the returned text, and state the verdict as visible output before the `git commit`.
 The hand-off comes after these commits exist, so its audit cannot stand in for this one.
 
 The split is decided here, and [[run pr]]'s fold keeps it:

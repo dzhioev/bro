@@ -1,5 +1,5 @@
 from bro.dev import references
-from bro.mcp import ANY, brash, creds, files, source, web
+from bro.mcp import ANY, brash, creds, files, man, source, web
 from bros.bro import Bro
 
 SYSTEM_PROMPT = """\
@@ -40,6 +40,12 @@ class Eyebro(Bro):
   name = 'eyebro'
   description = 'code reviewer that holds changes to the standards their repository declares'
   features = {'github': creds.contains('github')}
-  tools = [files(), brash(ANY), web(), source(references.dev_style)]
+  tools = [
+    files(),
+    brash(ANY),
+    web(),
+    source(references.dev_style),
+    *(man(guide) for guide in references.guides),
+  ]
   spells = ('review-diff.md', 'review-pr.md')
   system_prompt = SYSTEM_PROMPT

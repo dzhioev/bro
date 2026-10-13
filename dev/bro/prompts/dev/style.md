@@ -1,5 +1,8 @@
 # Development style
 
+Rules that bind only some work live in guide pages of the `man-source::read` manual, each topic's summary saying when it applies:
+read every guide the work in hand reaches before writing it, and again when auditing it.
+
 - Be concise.
   Surface short status updates between tool calls;
   skip the running commentary.
@@ -28,19 +31,6 @@
   don't add new doc files speculatively.
   When you rename or remove a symbol, flag, or behavior, grep the docs for the old name and the rationale that leaned on it
   — stale references and now-false why-claims don't surface on their own.
-
-- Write markdown prose one sentence per source line, splitting a long sentence further at its major clause boundaries
-  — a semicolon, a colon that introduces a clause, the em-dash clause whose dash then opens the new line.
-  Never strand a bare label or a lone reference on a line of its own:
-  what a break leaves on either side has to read as a clause, so the em dash separating a list item's term from its gloss is punctuation rather than a boundary, and the term keeps the start of its gloss.
-  A reword then shows up in review as the clause it touched.
-  Line length is not the unit: a short sentence is a short line, and nothing is padded out to a column.
-  Never break inside a code block or a table row, or anywhere adjacent to a `{{…}}` group, whose surrounding whitespace renders literally;
-  keep a continuation line in its list item's content column, and repeat a `>` marker on every line of a quoted paragraph.
-  `check-markdown` holds a reflow to whitespace and flags a paragraph left as one source line.
-  Text posted where a single newline renders as a line break
-  — GitHub issue, pull request, and comment bodies, through `brog` or `gh`
-  — keeps each paragraph on one line instead.
 
 - Write comments and docs for a reader who has the final code and the whole repo but wasn't in the room while you wrote it:
   they never saw the alternatives you weighed, the audit/ticket you worked from, or what the code said before.
@@ -101,13 +91,6 @@
   Reserve graceful handling for genuinely expected conditions (optional input, known-transient errors);
   recovering from an impossible case only hides the bug and moves the failure far from its cause.
 
-- Never use a tuned timeout as a substitute for synchronization.
-  When correctness depends on an event, block on its actual completion signal
-  — a handshake, EOF, event, or exit code — and leave runaway bounds to the supervising layer.
-  A wait whose expiry silently continues as though the event happened is a race whose outcome depends on machine load.
-  A timeout is appropriate when expiry fails loudly or degrades with a warning:
-  readiness gates that warn, test deadlines that fail the test, and CLI deadlines that exit non-zero are bounds, not correctness fallbacks.
-
 - Teardown goes through a context manager, not an inline `try:`/`finally:`.
   When cleanup must pair with setup
   — close what was opened, restore what was patched, cancel what was started
@@ -117,31 +100,6 @@
   the inside of the context manager (or teardown helper) that owns the release;
   an epilogue that consumes values computed inside the block (`__exit__` sees the exception, not the block's results);
   and sequencing within teardown itself, where a later cleanup step must run even when an earlier one raises.
-
-- A test asserts what the code does, not what the source says.
-  A test's expected value copied from the implementation
-  — a constant, a default, a registry entry, prompt text
-  — makes the assertion a mirror:
-  the only failure it can catch is an edit that forgot to update the copy, so it verifies nothing and taxes every legitimate change to the value.
-  The gate is naming a failure the assertion would catch besides "someone changed the value";
-  none means it is a second copy of a decided fact
-  — cut it.
-  Cover a value through the behavior it drives
-  — the branch a default selects, the effect a config entry has
-  — and cover checked-in data structurally (it parses, entries are well-formed, references resolve), never by restating entries;
-  a data-only change then needs no new test.
-  When the claim is that a declared value reaches a surface, compare the surface against the imported declaration (`assert timeout == DEFAULT_TIMEOUT`), not a retyped copy;
-  when the claim is that assembly merges sources, assert one representative member per source, not the transcribed roster;
-  when the claim is that a surface selected the right file or branch, one copied phrase is the marker
-  — chosen to discriminate the fork, not a transcript of the content.
-  A full roster or a copied literal stays right in two places:
-  where real machinery between declaration and observation
-  — entry points, a built wheel, a spawned process
-  — can silently drop or admit members,
-  and where the value is an external contract something outside the repository reads as-is
-  — an API's required headers, a persisted disk layout, an env var another process consumes
-  — so referencing the symbol would let a breaking rename slip through;
-  a pinning test says which consumer it pins, in its name or in one comment.
 
 - Diagnose before you patch.
   State the upstream cause of a failure before reaching for a workaround

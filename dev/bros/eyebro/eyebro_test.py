@@ -1,3 +1,6 @@
+import pytest
+
+from bro.dev import references
 from bros.eyebro import Eyebro
 
 
@@ -17,9 +20,19 @@ def test_reviewer_carries_review_spells_but_no_author_procedures():
 def test_claude_surface_selects_the_reference_tools():
   assert [server.namespace for server in Eyebro().assemble(harness='claude', hold='attended')] == [
     'dev-style-source',
+    'man-source',
     'bro',
     'spell',
   ]
+
+
+@pytest.mark.asyncio
+async def test_manual_carries_every_development_guide():
+  servers = Eyebro().assemble(harness='claude', hold='attended')
+  manual = next(server for server in servers if server.namespace == 'man-source')
+  [read] = await manual.list_tools()
+  topics = read.parameters['properties']['topic']['enum']
+  assert {guide.name for guide in references.guides} <= set(topics)
 
 
 def test_github_is_the_reviewers_best_effort_credential():

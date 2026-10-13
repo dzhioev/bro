@@ -43,7 +43,7 @@ Before judging anything, read what binds the change:
 
 - the repository's own guides
   — the root development/contribution doc and the subsystem docs covering what the diff touches, style and policy documents, commit conventions;
-- the development style policy — `dev-style-source::read`;
+- the development style policy — `dev-style-source::read`, and the `man-source::read` guide of every area the diff reaches;
 - the conventions the surrounding code already follows.
 
 Authority runs in that order:
