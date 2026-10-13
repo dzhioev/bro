@@ -50,6 +50,7 @@ class Dev(Bro):
     source(references.dev_style),
     source(references.rebase_conflicts),
     man(extending),
+    *(man(guide) for guide in references.guides),
   ]
   spells = ('audit.md', 'bump-bro.md', 'fix.md', 'land.md', 'resume-pr.md', 'run-pr.md')
   system_prompt = SYSTEM_PROMPT

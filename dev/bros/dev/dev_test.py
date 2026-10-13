@@ -1,5 +1,7 @@
 from typing import ClassVar
 
+import pytest
+
 from bro.dev import references
 from bro.harness import get_harness
 from bro.summon import LAUNCH_ENV, encode_launch
@@ -13,6 +15,20 @@ class _TrackerDev(Dev):
 
 def test_style_reference_ships_with_the_dev_domain():
   assert references.dev_style.read().startswith('# Development style\n')
+
+
+@pytest.mark.parametrize('guide', references.guides, ids=lambda guide: guide.name)
+def test_each_guide_page_reads_as_a_titled_page(guide):
+  assert guide.read().startswith('# ')
+
+
+@pytest.mark.asyncio
+async def test_manual_carries_every_development_guide():
+  servers = Dev().assemble(harness='claude', hold='attended')
+  manual = next(server for server in servers if server.namespace == 'man-source')
+  [read] = await manual.list_tools()
+  topics = read.parameters['properties']['topic']['enum']
+  assert {guide.name for guide in references.guides} <= set(topics)
 
 
 def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):

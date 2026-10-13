@@ -53,7 +53,7 @@ The root owns the formatter, lint, and ruff/pytest/pyright/dependency policy for
 - `uv build --package <distribution>` — build a member's wheel;
   `benchmark/`'s and `oops/cdk/`'s are `uv build --directory <directory>`, since neither is a member to name with `--package`
 
-The development style policy is `dev/bro/prompts/dev/style.md`, tool-served to dev sessions as `dev-style-source::read`;
+The development style policy is `dev/bro/prompts/dev/style.md` and the guide pages beside it, tool-served to dev sessions as `dev-style-source::read` and as `man-source::read` topics;
 shell scripts follow `dev/bro/dev/shell_policy.py` (prelude sourcing, shebang), enforced repository-wide by `local/bro/local/shell_policy_test.py`,
 and pass ShellCheck, which reads each file's dialect off its shebang and follows the sourced libraries through the root `.shellcheckrc`;
 markdown prose follows the semantic line breaks of `dev/bro/dev/markdown_policy.py`, enforced repository-wide by `local/bro/local/markdown_policy_test.py` and checked over a reflow by `check-markdown`;

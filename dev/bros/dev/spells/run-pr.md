@@ -64,7 +64,7 @@ the gate is step 9, paid once on the tree that ships
 — a pass before the rebase is evidence the rebase discards.
 
 **Policy audit**:
-before each commit, call `dev-style-source::read` and audit that commit's `git diff` against the returned policy text.
+before each commit, call `dev-style-source::read` and the `man-source::read` guide of every area the commit reaches, and audit that commit's `git diff` against the returned policy text.
 The tool read is part of the gate
 — it puts the policy fresh in context instead of relying on recall of a read far behind.
 The policies carry their own specifics, so this gate just re-applies all of them.
