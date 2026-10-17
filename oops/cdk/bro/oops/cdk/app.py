@@ -37,7 +37,7 @@ def create_app(
     image_digest=image_digest,
     env=environment,
   )
-  trails_stack.add_dependency(repository_stack)
+  trails_stack.add_stack_dependency(repository_stack)
   return application, DeploymentStacks(
     repository_stack,
     image_build_stack,
