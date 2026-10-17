@@ -4,7 +4,7 @@
 # Bumping a pin here makes the next setup_env.sh run upgrade existing machines.
 # shellcheck disable=SC2034  # the pins are the sourcing script's to read
 
-TMUX_VERSION="3.7b"
+TMUX_VERSION="3.8"
 
 # full ubuntu deb pin; the part before '-' is the stow release used for version checks
 STOW_DEB_VERSION="2.4.1-2"
