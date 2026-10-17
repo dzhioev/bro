@@ -24,7 +24,7 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
 from bro.base import credentials
 from bro.broker.transports.tcp import LOCAL_HOST
-from bro.webview.profile import PROFILE_VERSION
+from bro.webview.profile import PLAYWRIGHT_MCP_PROFILE_VERSIONS, PROFILE_VERSION
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.artifacts import view_mount
 from ride.e2e_test import (
@@ -736,7 +736,9 @@ try:
     mission,
     {'tool': 'browser_click', 'arguments': {'element': 'download link', 'target': '#download'}},
   )
-  assert download.get('files', []) == [], download
+  # the click's reply carries the page snapshot it took; the refused download
+  # itself never reaches it
+  assert all(file['name'].startswith('output/page-') for file in download.get('files', [])), download
   assert 'error' in download or 'download' in download.get('text', '').lower(), download
   after_download = ask(mission, {'tool': 'browser_snapshot', 'arguments': {}})
   assert 'webview end to end' in after_download.get('text', ''), after_download
@@ -1252,12 +1254,13 @@ def test_webview_open_is_denied_without_its_type_key(
   assert (workspace.tree / '.webview-denied-report').read_text() == 'denied'
 
 
+@pytest.mark.parametrize('profile_version', sorted(PLAYWRIGHT_MCP_PROFILE_VERSIONS))
 def test_cookies_pass_loads_profile_without_entering_the_owner_store(
-  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, profile_version: int
 ) -> None:
   host_store = isolated_env.home / '.bro'
   profile_value = {
-    'profile_version': PROFILE_VERSION,
+    'profile_version': profile_version,
     'cookies': [
       {
         'name': 'visible-profile',

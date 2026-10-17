@@ -8,7 +8,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-RUN npm install -g @playwright/mcp@0.0.82 \
+RUN npm install -g @playwright/mcp@0.0.83 \
     && PLAYWRIGHT_ROOT="$(npm root -g)/@playwright" \
     && "$PLAYWRIGHT_ROOT/mcp/node_modules/.bin/playwright" install --with-deps chromium \
     && chmod -R a+rX /opt/ms-playwright "$PLAYWRIGHT_ROOT"
