@@ -318,47 +318,6 @@ class FunctionTool(Tool):
       mode='json', by_alias=True
     )
 
-  def validate_output(self, result: Any) -> None:
-    """raise if a raw tool return doesn't conform to the output schema; no-op otherwise.
-
-    for delivery channels that serialize the result themselves (the HTTP MCP server) but
-    still want the in-process path's fail-fast guard against backend drift. The validated
-    JSON it produces is discarded — only the raising side effect is wanted.
-    """
-    self._coerce_output(result)
-
-
-def validated_callable(tool: FunctionTool) -> Callable[..., Any]:
-  """wrap a FunctionTool's raw function so its return is schema-validated before use.
-
-  for a delivery channel that registers the bare function with an external framework and
-  serializes the result itself (the HTTP MCP server via FastMCP): `functools.wraps` keeps
-  the original signature, so the framework derives the same input schema, while the wrapper
-  adds the in-process path's fail-fast check that the backend result matches the declared
-  output shape. The result is returned unchanged for the framework to serialize.
-  """
-  function = tool.function
-  context_parameter = tool.context_parameter
-
-  @functools.wraps(function)
-  async def validating(**kwargs: Any) -> Any:
-    if context_parameter is not None:
-      kwargs[context_parameter] = Context(state=tool.state)
-    result = function(**kwargs)
-    if inspect.isawaitable(result):
-      result = await result
-    tool.validate_output(result)
-    return result
-
-  if context_parameter is not None:
-    # hide the injected parameter from the framework's schema derivation: an
-    # explicit __signature__ wins over the __wrapped__ chain functools.wraps sets up.
-    signature = inspect.signature(function)
-    validating.__signature__ = signature.replace(  # pyright: ignore[reportAttributeAccessIssue]
-      parameters=[p for p in signature.parameters.values() if p.name != context_parameter]
-    )
-  return validating
-
 
 class _NamespacedTool(Tool):
   """wraps a tool to advertise its `namespace__tool` wire name.

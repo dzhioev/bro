@@ -16,7 +16,6 @@ from bro.llm.mcp import (
   canonical_name,
   namespaced_tools,
   render_return_shape,
-  validated_callable,
   wire_name,
 )
 from bro.mcp import describe
@@ -101,58 +100,44 @@ class TestOutputValidation:
     describe(function, 'd')
     return FunctionTool(function)
 
-  def test_validate_output_accepts_conforming(self):
-    def make() -> _Pair:
-      return _Pair(x=1, label='a')
-
-    self._tool(make).validate_output(_Pair(x=1, label='a'))
-
-  def test_validate_output_raises_on_wrong_type(self):
-    def make() -> _Pair:
-      return _Pair(x=1, label='a')
-
-    with pytest.raises(ValidationError):
-      self._tool(make).validate_output({'x': 'not-an-int', 'label': 'a'})
-
-  def test_validate_output_raises_on_missing_field(self):
-    def make() -> _Pair:
-      return _Pair(x=1, label='a')
-
-    with pytest.raises(ValidationError):
-      self._tool(make).validate_output({'x': 1})
-
-  def test_validate_output_raises_on_wrong_list_shape(self):
-    def make() -> list[_Pair]:
-      return [_Pair(x=1, label='a')]
-
-    with pytest.raises(ValidationError):
-      self._tool(make).validate_output('not-a-list')
-
-  def test_validate_output_str_tool_rejects_non_str(self):
-    def echo(x: Annotated[str, Field(description='x')]) -> str:
-      return x
-
-    tool = self._tool(echo)
-    tool.validate_output('fine')
-    with pytest.raises(AssertionError):
-      tool.validate_output(123)
-
   @pytest.mark.asyncio
-  async def test_validated_callable_returns_result_unchanged(self):
+  async def test_a_conforming_return_dumps_to_json(self):
     def make(n: Annotated[int, Field(description='n')]) -> _Pair:
       return _Pair(x=n, label='a')
 
-    wrapped = validated_callable(self._tool(make))
-    assert await wrapped(n=5) == _Pair(x=5, label='a')
+    assert await self._tool(make).call({'n': 5}) == {'x': 5, 'label': 'a'}
 
   @pytest.mark.asyncio
-  async def test_validated_callable_raises_on_drift(self):
+  async def test_a_return_of_the_wrong_type_raises(self):
+    def make() -> _Pair:
+      return {'x': 'not-an-int', 'label': 'a'}  # type: ignore[return-value]  # simulate backend drift
+
+    with pytest.raises(ValidationError):
+      await self._tool(make).call({})
+
+  @pytest.mark.asyncio
+  async def test_a_return_missing_a_field_raises(self):
     def make() -> _Pair:
       return {'x': 1}  # type: ignore[return-value]  # simulate backend drift
 
-    wrapped = validated_callable(self._tool(make))
     with pytest.raises(ValidationError):
-      await wrapped()
+      await self._tool(make).call({})
+
+  @pytest.mark.asyncio
+  async def test_a_return_of_the_wrong_list_shape_raises(self):
+    def make() -> list[_Pair]:
+      return 'not-a-list'  # type: ignore[return-value]  # simulate backend drift
+
+    with pytest.raises(ValidationError):
+      await self._tool(make).call({})
+
+  @pytest.mark.asyncio
+  async def test_a_str_tool_refuses_a_non_str_return(self):
+    def count() -> str:
+      return 123  # type: ignore[return-value]  # simulate backend drift
+
+    with pytest.raises(AssertionError):
+      await self._tool(count).call({})
 
 
 class TestFunctionTool:
