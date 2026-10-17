@@ -25,12 +25,12 @@ class Session:
     self.calls.append((name, arguments))
     if name == 'browser_run_code_unsafe':
       if self.error is not None:
-        return SimpleNamespace(isError=True, content=[SimpleNamespace(text=self.error)])
+        return SimpleNamespace(is_error=True, content=[SimpleNamespace(text=self.error)])
       path_match = re.search(r'path: (".*"), indexedDB: (true|false)', arguments['code'])
       assert path_match is not None
       path = Path(json.loads(path_match.group(1)))
       path.write_text(json.dumps(self.state))
-    return SimpleNamespace(isError=False, content=[SimpleNamespace(text='ok')])
+    return SimpleNamespace(is_error=False, content=[SimpleNamespace(text='ok')])
 
 
 class Supervisor:

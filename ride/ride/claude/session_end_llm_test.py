@@ -33,11 +33,11 @@ _SESSION_TIMEOUT_SECONDS = 300.0
 _SERVER = """\
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from ride.claude.harness import CLAUDE
 
-server = FastMCP("bro", host="127.0.0.1", port=int(sys.argv[1]), streamable_http_path="/mcp")
+server = MCPServer("bro")
 
 
 @server.tool(name="raise")
@@ -45,7 +45,9 @@ async def raise_session(reason: str) -> str:
   return await CLAUDE.end_session(reason, "raised")
 
 
-server.run(transport="streamable-http")
+server.run(
+  transport="streamable-http", host="127.0.0.1", port=int(sys.argv[1]), streamable_http_path="/mcp"
+)
 """
 
 

@@ -19,8 +19,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, Optional, cast
 
+import anyio
 from mcp import ClientSession, types as mcp_types
-from mcp.shared.exceptions import McpError
+from mcp.shared.exceptions import MCPError
 from mcp.shared.message import SessionMessage
 
 from bro.artifact import ArtifactError, mint_artifact
@@ -285,7 +286,7 @@ class _ReadStream:
     try:
       while line := await asyncio.to_thread(self._stdout.readline):
         try:
-          message = mcp_types.JSONRPCMessage.model_validate_json(line)
+          message = mcp_types.jsonrpc_message_adapter.validate_json(line)
         except Exception as error:
           await self._queue.put(error)
         else:
@@ -319,14 +320,17 @@ class _WriteStream:
 
   async def send(self, session_message: SessionMessage) -> None:
     if self._closed:
-      raise ConnectionError('Playwright MCP input is closed')
+      raise anyio.ClosedResourceError
     encoded = session_message.message.model_dump_json(by_alias=True, exclude_none=True).encode()
 
     def write() -> None:
       self._stdin.write(encoded + b'\n')
       self._stdin.flush()
 
-    await asyncio.to_thread(write)
+    try:
+      await asyncio.to_thread(write)
+    except BrokenPipeError as error:
+      raise anyio.BrokenResourceError from error
 
   async def __aenter__(self):
     return self
@@ -338,7 +342,10 @@ class _WriteStream:
     if self._closed:
       return
     self._closed = True
-    await asyncio.to_thread(self._stdin.close)
+    # close releases the pipe even when an exited reader leaves buffered bytes
+    # undeliverable; the supervisor reports that exit
+    with contextlib.suppress(BrokenPipeError):
+      await asyncio.to_thread(self._stdin.close)
 
 
 async def _await_task(task: asyncio.Task[Any]) -> None:
@@ -409,7 +416,7 @@ class ProcessSupervisor:
     exited = next((task for task in done if task in self._tasks), None)
     if exited is not None:
       operation.cancel()
-      with contextlib.suppress(asyncio.CancelledError, McpError):
+      with contextlib.suppress(asyncio.CancelledError, MCPError):
         await operation
       raise self._exit_error(exited)
     if operation not in done:
@@ -419,8 +426,8 @@ class ProcessSupervisor:
       raise TimeoutError
     try:
       return operation.result()
-    except McpError as error:
-      if closed_process is None or 'Connection closed' not in str(error):
+    except MCPError as error:
+      if closed_process is None or error.code != mcp_types.CONNECTION_CLOSED:
         raise
       process_task = next(task for task, name in self._tasks.items() if name == closed_process)
       await process_task
@@ -546,7 +553,7 @@ def _tools_text(tools: Sequence[mcp_types.Tool]) -> str:
       {
         'name': tool.name,
         'description': tool.description,
-        'inputSchema': tool.inputSchema,
+        'inputSchema': tool.input_schema,
       }
       for tool in tools
       if tool.name not in WITHHELD_TOOLS
@@ -650,7 +657,7 @@ async def _tool_reply(
   except DaemonError as error:
     return {'error': str(error)}
   text = _content_text(result)
-  if result.isError:
+  if result.is_error:
     return {'error': text}
   return {'text': text, 'files': files}
 
@@ -677,7 +684,7 @@ async def _warm_browser(session: ClientSession, supervisor: ProcessSupervisor) -
     )
   except TimeoutError:
     raise DaemonError(f'Playwright MCP browser warm-up exceeded {COMMAND_DEADLINE:.0f}s') from None
-  if result.isError:
+  if result.is_error:
     raise DaemonError(f'Playwright MCP browser warm-up failed: {_content_text(result)}')
 
 

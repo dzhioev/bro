@@ -33,14 +33,9 @@ _SESSION_TIMEOUT_SECONDS = 420
 _RESULT = 'MCP-IDLE-BACKSTOP-PASSED'
 _SERVER = f"""\
 import time
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-server = FastMCP(
-  "fixture",
-  host="127.0.0.1",
-  port=int(__import__("sys").argv[1]),
-  streamable_http_path="/mcp",
-)
+server = MCPServer("fixture")
 
 
 @server.tool()
@@ -49,7 +44,14 @@ def wait_past_idle_cut() -> str:
   return {_RESULT!r}
 
 
-server.run(transport="streamable-http")
+# a JSON response stays silent until the tool returns, where an SSE stream pings
+server.run(
+  transport="streamable-http",
+  host="127.0.0.1",
+  port=int(__import__("sys").argv[1]),
+  streamable_http_path="/mcp",
+  json_response=True,
+)
 """
 
 

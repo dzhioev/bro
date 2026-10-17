@@ -13,7 +13,7 @@ dependencies = [
   "bro-ride",
   "aiohttp==3.14.5",
   "humanize==4.16.0",
-  "mcp==1.28.1",
+  "mcp==2.3.0",
   "openai==3.33.0",
   "rich==15.0.0",
   "textual==8.2.8",

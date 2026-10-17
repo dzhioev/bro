@@ -47,9 +47,9 @@ _ASSISTANT_REPLY = 'MODEL-INPUT-DONE'
 _WATCH_LINE = 'model-input-watch-line'
 
 _MCP_SERVER = f"""\
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
-server = FastMCP("fixture")
+server = MCPServer("fixture")
 
 
 @server.tool(description={_MCP_DESCRIPTION!r})

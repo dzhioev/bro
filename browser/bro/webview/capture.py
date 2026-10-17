@@ -119,7 +119,7 @@ async def _navigate(
     timeout=serve.COMMAND_DEADLINE,
     closed_process='Playwright MCP',
   )
-  if result.isError:
+  if result.is_error:
     print(f'initial navigation failed: {serve._content_text(result)}', file=sys.stderr)
 
 
@@ -138,7 +138,7 @@ async def _capture_state(
     timeout=serve.COMMAND_DEADLINE,
     closed_process='Playwright MCP',
   )
-  if result.isError:
+  if result.is_error:
     raise CaptureError(f'Playwright storage-state capture failed: {serve._content_text(result)}')
   try:
     with path.open('rb') as state_file:

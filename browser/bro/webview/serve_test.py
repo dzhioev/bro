@@ -4,13 +4,18 @@ import hashlib
 import json
 import os
 import stat
+import subprocess
 import sys
 import textwrap
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, BinaryIO, Optional, cast
 
+import anyio
 import pytest
+from mcp import types as mcp_types
+from mcp.shared.exceptions import MCPError
+from mcp.shared.message import SessionMessage
 
 from bro.artifact import path_name
 from bro.broker import brotocol
@@ -663,6 +668,64 @@ async def test_playwright_exit_mid_command_names_the_process(daemon_files, monke
 
     with pytest.raises(serve.DaemonError, match='Playwright MCP.*status 17'):
       await asyncio.wait_for(daemon, TIMEOUT)
+
+
+def _process_exiting_17_once_stdin_closes() -> subprocess.Popen:
+  return subprocess.Popen(
+    [sys.executable, '-c', 'import sys; sys.stdin.read(); sys.exit(17)'], stdin=subprocess.PIPE
+  )
+
+
+def _failed(error: Exception) -> asyncio.Future[Any]:
+  future = asyncio.get_running_loop().create_future()
+  future.set_exception(error)
+  return future
+
+
+@pytest.mark.asyncio
+async def test_a_connection_closed_by_an_exiting_process_names_the_process():
+  with _process_exiting_17_once_stdin_closes() as process:
+    stdin = process.stdin
+    assert stdin is not None
+    async with serve._supervising([('Playwright MCP', process)]) as supervisor:
+      # the process exits only after the operation has failed, so the supervisor
+      # sees the closed connection before the exit
+      closed = _failed(MCPError(code=mcp_types.CONNECTION_CLOSED, message='Connection closed'))
+      closed.add_done_callback(lambda _: stdin.close())
+
+      with pytest.raises(
+        serve.DaemonError, match='Playwright MCP exited unexpectedly with status 17'
+      ):
+        await supervisor.run(closed, closed_process='Playwright MCP')
+
+
+@pytest.mark.asyncio
+async def test_other_protocol_errors_pass_through_the_supervisor():
+  with _process_exiting_17_once_stdin_closes() as process:
+    async with serve._supervising([('Playwright MCP', process)]) as supervisor:
+      refused = _failed(MCPError(code=mcp_types.INVALID_PARAMS, message='bad arguments'))
+
+      with pytest.raises(MCPError, match='bad arguments'):
+        await supervisor.run(refused, closed_process='Playwright MCP')
+
+
+@pytest.mark.asyncio
+async def test_input_to_an_exited_process_reads_as_a_broken_stream():
+  cancelled = SessionMessage(
+    mcp_types.JSONRPCNotification(
+      jsonrpc='2.0', method='notifications/cancelled', params={'requestId': 1}
+    )
+  )
+  with subprocess.Popen([sys.executable, '-c', 'pass'], stdin=subprocess.PIPE) as process:
+    process.wait()
+    assert process.stdin is not None
+    stream = serve._WriteStream(cast(BinaryIO, process.stdin))
+
+    with pytest.raises(anyio.BrokenResourceError):
+      await stream.send(cancelled)
+    await stream.aclose()
+    with pytest.raises(anyio.ClosedResourceError):
+      await stream.send(cancelled)
 
 
 @pytest.mark.asyncio

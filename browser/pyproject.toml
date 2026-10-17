@@ -8,9 +8,10 @@ version = "0.1.0"
 description = "browser persona and webview worker for bro"
 requires-python = ">=3.12"
 dependencies = [
+  "anyio",
   "bro",
   "bro-ride",
-  "mcp==1.28.1",
+  "mcp==2.3.0",
   "pydantic",
 ]
 

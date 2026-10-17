@@ -611,7 +611,7 @@ def _build_service_server(
   live_run: Optional[LiveRun] = None,
 ) -> llm_mcp.MCPServer:
   # built only on the paths that serve a bro, never at construction: deriving the
-  # FunctionTool schemas below pulls the mcp/fastmcp stack (~1s), which metadata
+  # FunctionTool schemas below pulls the mcp server stack (~1s), which metadata
   # surfaces (credential scoping, prompt composition, `bro show`) must not pay.
   # the core roster is decided by the caller's surface and local process state:
   # `banner`, `page` and `results` are unconditional; `cast` needs spells and its
