@@ -273,13 +273,11 @@ toolset = _Toolset('issues')
 
 
 @toolset.tool('list open issues carrying a label, newest first')
-def list_issues(label: str, limit: int = 20) -> str:
-  ...
+def list_issues(label: str, limit: int = 20) -> str: ...
 
 
 @toolset.tool('add a label to an issue')
-def label_issue(number: int, label: str) -> str:
-  ...
+def label_issue(number: int, label: str) -> str: ...
 
 
 @toolset.tool('close an issue as a duplicate of another')
