@@ -92,6 +92,7 @@ A webview peer's own `launch` section is empty, so the generic type-key check pr
 ## Image pin
 
 The version on the `npm install -g @playwright/mcp@…` instruction in `container/Dockerfile` pins both the tool roster and Chromium dependency used by the image.
-Bump it by editing that instruction, incrementing `PROFILE_VERSION` with the new pin in `profile.py`, and adding the outgoing version's synthetic profile to `webview_e2e`.
+Bump it by editing that instruction and adding the new pin as the next profile version in `profile.py`'s `PLAYWRIGHT_MCP_PROFILE_VERSIONS`;
+`webview_e2e` loads a synthetic profile of every version the table holds.
 Then run the webview unit tests and build `bro-browser`;
 the Dockerfile content changes the worker image hash.
