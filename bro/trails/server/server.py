@@ -6,7 +6,7 @@ import contextlib
 import functools
 import json
 import sys
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, Optional
 
 from aiohttp import web
@@ -49,6 +49,10 @@ SWEEP_INTERVAL_SECONDS = 600.0
 CHECK_HEARTBEAT_INTERVAL_SECONDS = 5.0
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 
+STORE_KEY = web.AppKey('store', TrailsStore)
+TOKENS_KEY = web.AppKey[Optional[TokenTable]]('tokens')
+ADMIN_KEY = web.AppKey[Optional[DynamoStore]]('admin')
+
 
 async def _dispatch[Result](operation: Callable[..., Result], *args: Any, **kwargs: Any) -> Result:
   return await asyncio.to_thread(operation, *args, **kwargs)
@@ -58,7 +62,7 @@ async def _dispatch[Result](operation: Callable[..., Result], *args: Any, **kwar
 async def _auth_middleware(request: web.Request, handler):
   if request.path == HEALTH_PATH:
     return await handler(request)
-  name, granted = presented(request.app['tokens'], request.headers.get('Authorization', ''))
+  name, granted = presented(request.app[TOKENS_KEY], request.headers.get('Authorization', ''))
   if len(granted) == 0:
     return _error('unauthorized', 401)
   if request.match_info.http_exception is not None:
@@ -146,7 +150,7 @@ async def _handle_blaze(request: web.Request) -> web.Response:
     blaze_request = BlazeRequest.from_wire(payload)
   except ValueError as exception:
     return _error(str(exception), 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.blaze, blaze_request)
   except ValueError as exception:
@@ -175,7 +179,7 @@ async def _handle_append_records(request: web.Request) -> web.Response:
   tools = payload.get('tools', {})
   if not isinstance(tools, dict):
     return _error('tools must be an object', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.append_records, trail_id, offset, records, tools=tools)
   except BodyTooLarge as exception:
@@ -204,7 +208,7 @@ async def _handle_set_subject(request: web.Request) -> web.Response:
   subject = payload.get('subject')
   if subject is not None and not isinstance(subject, str):
     return _error('subject must be a string or null', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     updated = await _dispatch(store.set_subject, trail_id, subject)
   except TrailNotFound:
@@ -223,7 +227,7 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
   unknown_fields = set(payload) - {'reason', 'detail'}
   if len(unknown_fields) > 0:
     return _error(f'unknown fields: {sorted(unknown_fields)}', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     reason, detail = validate_end(payload.get('reason'), payload.get('detail'))
     await _dispatch(store.end_trail, trail_id, reason, detail)
@@ -237,7 +241,7 @@ async def _handle_end_trail(request: web.Request) -> web.Response:
 @requires(Permission.WRITE)
 async def _handle_keepalive(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     await _dispatch(store.keepalive, trail_id)
   except TrailNotFound:
@@ -248,7 +252,7 @@ async def _handle_keepalive(request: web.Request) -> web.Response:
 @requires(Permission.READ)
 async def _handle_get_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     trail = await _dispatch(store.get_trail, trail_id)
   except TrailNotFound:
@@ -262,7 +266,7 @@ async def _handle_get_trail(request: web.Request) -> web.Response:
 async def _handle_get_step(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   step_id = _parse_ordinal(request.match_info['step_id'], name='step_id')
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     step = await _dispatch(store.get_step, trail_id, step_id)
   except TrailNotFound:
@@ -277,7 +281,7 @@ async def _handle_get_steps(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
   after = _parse_optional_ordinal(request.query.get('after'), name='after')
   limit = _parse_limit(request.query.get('limit'), default=100, ceiling=500)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.get_steps, trail_id, after=after, limit=limit)
   except TrailNotFound:
@@ -296,7 +300,7 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
   unknown = requested_types - MESSAGE_TYPES
   if len(unknown) > 0:
     return _error(f'unknown message types: {sorted(unknown)}', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(
       store.get_messages,
@@ -315,7 +319,7 @@ async def _handle_get_messages(request: web.Request) -> web.Response:
 @requires(Permission.READ)
 async def _handle_get_tool(request: web.Request) -> web.Response:
   sha256 = request.match_info['sha256']
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     tool = await _dispatch(store.get_tool, sha256)
   except ToolNotFound:
@@ -343,7 +347,7 @@ async def _handle_begin_import(request: web.Request) -> web.Response:
     return _error('header must be an object', 400)
   if header.get('id') != trail_id:
     return _error('header id must name the trail of the path', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.begin_import, header)
   except TrailCollision as exception:
@@ -371,7 +375,7 @@ async def _handle_import_rows(request: web.Request) -> web.Response:
   tools = payload.get('tools', {})
   if not isinstance(tools, dict):
     return _error('tools must be an object', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.import_rows, trail_id, offset, rows, tools=tools)
   except BodyTooLarge as exception:
@@ -396,7 +400,7 @@ async def _handle_seal_import(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if payload is not None and payload != {}:
     return _error('body must be empty', 400)
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.seal_import, trail_id)
   except TrailNotFound:
@@ -409,7 +413,7 @@ async def _handle_seal_import(request: web.Request) -> web.Response:
 @requires(Permission.ADMIN)
 async def _handle_migrate_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.migrate_trail, trail_id)
   except TrailNotFound:
@@ -422,7 +426,7 @@ async def _handle_migrate_trail(request: web.Request) -> web.Response:
 @requires(Permission.ADMIN)
 async def _handle_delete_trail(request: web.Request) -> web.Response:
   trail_id = request.match_info['trail_id']
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(store.delete_trail, trail_id)
   except TrailNotFound:
@@ -434,24 +438,26 @@ async def _handle_delete_trail(request: web.Request) -> web.Response:
   return web.json_response(result)
 
 
-def _administered(handler):
+def _administered(
+  handler: Callable[[web.Request, DynamoStore], Awaitable[web.StreamResponse]],
+) -> Callable[[web.Request], Awaitable[web.StreamResponse]]:
   """Answer 501 rather than routing to an administration surface the hosted
   store does not have."""
 
   @functools.wraps(handler)
   async def guarded(request: web.Request) -> web.StreamResponse:
-    if request.app['admin'] is None:
+    admin = request.app[ADMIN_KEY]
+    if admin is None:
       return _error('this trails backend has no administration surface', 501)
-    return await handler(request)
+    return await handler(request, admin)
 
   return guarded
 
 
 @requires(Permission.ADMIN)
 @_administered
-async def _handle_recompute(request: web.Request) -> web.Response:
+async def _handle_recompute(request: web.Request, admin: DynamoStore) -> web.Response:
   trail_id = request.match_info['trail_id']
-  admin: DynamoStore = request.app['admin']
   try:
     return web.json_response(await _dispatch(admin.recompute, trail_id))
   except TrailNotFound:
@@ -462,7 +468,7 @@ async def _handle_recompute(request: web.Request) -> web.Response:
 
 @requires(Permission.ADMIN)
 @_administered
-async def _handle_check(request: web.Request) -> web.StreamResponse:
+async def _handle_check(request: web.Request, admin: DynamoStore) -> web.StreamResponse:
   payload = await _read_json(request)
   if payload is None:
     payload = {}
@@ -471,7 +477,6 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
   trail_id = payload.get('trail_id')
   if trail_id is not None and (not isinstance(trail_id, str) or len(trail_id) == 0):
     return _error('trail_id must be a non-empty string', 400)
-  admin: DynamoStore = request.app['admin']
   if trail_id is None:
     return await _stream_json_with_heartbeats(request, _dispatch(admin.check))
   try:
@@ -484,7 +489,7 @@ async def _handle_check(request: web.Request) -> web.StreamResponse:
 
 @requires(Permission.ADMIN)
 @_administered
-async def _handle_relink(request: web.Request) -> web.Response:
+async def _handle_relink(request: web.Request, admin: DynamoStore) -> web.Response:
   trail_id = request.match_info['trail_id']
   payload = await _read_json(request)
   if not isinstance(payload, dict) or set(payload) != {'forked_from', 'delete_count'}:
@@ -496,7 +501,6 @@ async def _handle_relink(request: web.Request) -> web.Response:
   delete_count = payload['delete_count']
   if not isinstance(delete_count, int) or isinstance(delete_count, bool) or delete_count < 0:
     return _error('delete_count must be a non-negative int', 400)
-  admin: DynamoStore = request.app['admin']
   try:
     result = await _dispatch(admin.relink, trail_id, payload['forked_from'], delete_count)
     return web.json_response(result)
@@ -508,7 +512,7 @@ async def _handle_relink(request: web.Request) -> web.Response:
 
 @requires(Permission.READ)
 async def _handle_list_trails(request: web.Request) -> web.Response:
-  store: TrailsStore = request.app['store']
+  store = request.app[STORE_KEY]
   try:
     result = await _dispatch(
       store.list_trails,
@@ -573,8 +577,8 @@ def create_app(
   if sweep_interval_seconds is not None and admin is None:
     raise ValueError('a trails sweep requires a DynamoStore admin surface')
   app = web.Application(middlewares=[_auth_middleware], client_max_size=MAX_REQUEST_BYTES)
-  app['store'] = store
-  app['tokens'] = tokens
+  app[STORE_KEY] = store
+  app[TOKENS_KEY] = tokens
   app.router.add_get(HEALTH_PATH, _handle_health)
   app.router.add_post('/v1/trails', _handle_blaze)
   app.router.add_get('/v1/trails', _handle_list_trails)
@@ -587,7 +591,7 @@ def create_app(
   app.router.add_post('/v1/trails/{trail_id}/end', _handle_end_trail)
   app.router.add_post('/v1/trails/{trail_id}/keepalive', _handle_keepalive)
   app.router.add_get('/v1/tools/{sha256}', _handle_get_tool)
-  app['admin'] = admin
+  app[ADMIN_KEY] = admin
   app.router.add_post('/v1/admin/trails/{trail_id}/import', _handle_begin_import)
   app.router.add_post('/v1/admin/trails/{trail_id}/import/rows', _handle_import_rows)
   app.router.add_post('/v1/admin/trails/{trail_id}/import/seal', _handle_seal_import)
