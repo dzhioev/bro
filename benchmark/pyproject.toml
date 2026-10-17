@@ -14,8 +14,8 @@ dependencies = [
   "bro",
   "bro-bench",
   "bro-ride",
-  "duckdb==1.5.5",
-  "harbor==0.21.0",
+  "duckdb==1.5.6",
+  "harbor==0.24.0",
 ]
 
 [dependency-groups]
