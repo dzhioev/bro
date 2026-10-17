@@ -32,6 +32,7 @@ def _stub_tree(tmp_path: Path) -> Path:
     manifest.write_text(f'{relative_path} as resolved\n')
   _stub_command(tree / '.venv' / 'bin' / 'activate', ':')
   _stub_command(tree / 'bin' / 'uv', f'echo "$@" >> "{tree}/uv-calls"')
+  _stub_command(tree / 'bin' / 'python', ':')
   _stub_command(tree / 'bin' / 'bro.dev.install', ':')
   return tree
 
