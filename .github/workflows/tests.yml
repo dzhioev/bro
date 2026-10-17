@@ -27,7 +27,13 @@ jobs:
             shard: 3/3
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - name: read the uv pin
+        id: uv-pin
+        run: echo "version=$(cat bro/setup/uv-version)" >> "$GITHUB_OUTPUT"
+      # setup-uv publishes no major-version tags from v8 on
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: ${{ steps.uv-pin.outputs.version }}
       - name: sync the workspace
         run: uv sync --all-packages --all-groups --all-extras
       - name: run-tests
