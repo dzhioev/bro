@@ -24,7 +24,7 @@ from bro.trails.server.auth import (
   resolve_auth,
 )
 from bro.trails.server.dynamo import DynamoStore
-from bro.trails.server.server import HEALTH_PATH, create_app, main
+from bro.trails.server.server import ADMIN_KEY, HEALTH_PATH, STORE_KEY, create_app, main
 
 TOKEN = 'secret-test-token'
 
@@ -480,7 +480,7 @@ def test_admin_routes_serve_a_dynamo_backed_store():
       if (resource := route.resource) is not None
     }
 
-  assert app['admin'] is store
+  assert app[ADMIN_KEY] is store
   assert '/v1/admin/trails/{trail_id}/migrate' in paths
   assert '/v1/admin/trails/check' in paths
   assert '/v1/admin/trails/{trail_id}/recompute' in paths
@@ -576,4 +576,4 @@ def test_main_resolves_the_hosted_store_from_credentials(monkeypatch, store):
 
   assert launched['host'] == '127.0.0.1'
   assert launched['port'] == 9000
-  assert launched['app']['store'] is store
+  assert launched['app'][STORE_KEY] is store
