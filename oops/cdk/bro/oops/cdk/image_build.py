@@ -97,7 +97,7 @@ class ImageBuildStack(Stack):
       connection_access.attach_to_role(role)
       connection_access_resource = connection_access.node.default_child
       assert isinstance(connection_access_resource, iam.CfnPolicy)
-      project_resource.add_dependency(connection_access_resource)
+      project_resource.add_resource_dependency(connection_access_resource)
 
     self.project.add_to_role_policy(
       iam.PolicyStatement(actions=['ecr:GetAuthorizationToken'], resources=['*'])
