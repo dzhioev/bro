@@ -1,12 +1,13 @@
 import importlib.metadata
-from typing import ClassVar
+import json
+from typing import Any, ClassVar, Optional
 
 import pytest
 from starlette.testclient import TestClient
 
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
-from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, Tool
 from bro.mcp import MCPServerSpec, ToolLayer, Toolset, describe, source
 from bro.runtime import mcp_server
 from bro.runtime.mcp_server import _resolve_servers, create_http_app
@@ -289,6 +290,132 @@ class TestNamespaceEndpoints:
   def test_duplicate_tool_in_namespace_raises(self):
     with pytest.raises(SystemExit, match="duplicate tool name '_ping'"):
       create_http_app([_create_ping_server(), _create_ping_server()], TOKEN)
+
+
+class _QueryTool(Tool):
+  """a hand-written tool, whose arguments only its declared schema describes"""
+
+  def __init__(self):
+    self.calls: list[dict[str, Any]] = []
+
+  @property
+  def name(self) -> str:
+    return 'lookup'
+
+  @property
+  def description(self) -> str:
+    return 'look a query up'
+
+  @property
+  def parameters(self) -> dict[str, Any]:
+    return {
+      'type': 'object',
+      'properties': {'query': {'type': 'string'}},
+      'required': ['query'],
+    }
+
+  async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
+    self.calls.append(arguments)
+    return f'found {arguments["query"]}'
+
+
+class _CountTool(Tool):
+  """a hand-written tool declaring an output schema, returning whatever it is given"""
+
+  def __init__(self, result: dict[str, Any] | str):
+    self._result = result
+
+  @property
+  def name(self) -> str:
+    return 'count'
+
+  @property
+  def description(self) -> str:
+    return 'count something'
+
+  @property
+  def parameters(self) -> dict[str, Any]:
+    return {'type': 'object', 'properties': {}}
+
+  @property
+  def output_schema(self) -> Optional[dict[str, Any]]:
+    return {
+      'type': 'object',
+      'properties': {'count': {'type': 'integer'}},
+      'required': ['count'],
+    }
+
+  async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
+    return self._result
+
+
+class TestToolResults:
+  def _call(self, tools: list[Tool], name: str, arguments: dict[str, Any]) -> dict:
+    with _client([InProcessMCPServer('tools', tools)]) as client:
+      body = _rpc(client, '/tools', 'tools/call', {'name': name, 'arguments': arguments})
+    return body['result']
+
+  def test_a_structured_result_carries_its_json_as_text(self):
+    def pair() -> dict[str, int]:
+      return {'x': 1}
+
+    describe(pair, 'return a pair')
+    result = self._call([FunctionTool(pair)], 'pair', {})
+
+    assert result['structuredContent'] == {'x': 1}
+    assert json.loads(result['content'][0]['text']) == {'x': 1}
+    assert not result.get('isError', False)
+
+  def test_a_raising_tool_answers_with_an_error_result(self):
+    def fail() -> str:
+      raise RuntimeError('backend down')
+
+    describe(fail, 'fail every call')
+    result = self._call([FunctionTool(fail)], 'fail', {})
+
+    assert result['isError'] is True
+    assert result['content'] == [{'type': 'text', 'text': 'backend down'}]
+
+  def test_arguments_outside_the_schema_never_reach_the_tool(self):
+    tool = _QueryTool()
+    result = self._call([tool], 'lookup', {})
+
+    assert result['isError'] is True
+    assert result['content'][0]['text'].startswith('Input validation error:')
+    assert 'query' in result['content'][0]['text']
+    assert tool.calls == []
+
+  def test_arguments_within_the_schema_reach_the_tool(self):
+    tool = _QueryTool()
+    result = self._call([tool], 'lookup', {'query': 'q'})
+
+    assert result['content'] == [{'type': 'text', 'text': 'found q'}]
+    assert tool.calls == [{'query': 'q'}]
+
+  def test_an_unknown_tool_answers_with_an_error_result(self):
+    result = self._call([_QueryTool()], 'missing', {})
+
+    assert result['isError'] is True
+    assert 'missing' in result['content'][0]['text']
+
+  def test_a_result_conforming_to_the_output_schema_is_structured(self):
+    result = self._call([_CountTool({'count': 3})], 'count', {})
+
+    assert result['structuredContent'] == {'count': 3}
+    assert not result.get('isError', False)
+
+  def test_a_result_outside_the_output_schema_answers_with_an_error_result(self):
+    result = self._call([_CountTool({'count': 'not an integer'})], 'count', {})
+
+    assert result['isError'] is True
+    assert result['content'][0]['text'].startswith('Output validation error:')
+    assert 'structuredContent' not in result
+
+  def test_text_from_a_tool_declaring_an_output_schema_answers_with_an_error_result(self):
+    result = self._call([_CountTool('three')], 'count', {})
+
+    assert result['isError'] is True
+    assert result['content'][0]['text'].startswith('Output validation error:')
 
 
 class TestCredsRendering:

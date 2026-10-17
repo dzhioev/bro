@@ -231,7 +231,7 @@ class FunctionTool(Tool):
     state: Any = None,
     variables: Optional[condition.Variables] = None,
   ):
-    from mcp.server.fastmcp.utilities.func_metadata import func_metadata
+    from mcp.server.mcpserver.utilities.func_metadata import func_metadata
 
     resolved_description = (
       description if description is not None else getattr(function, 'description', None)
@@ -305,18 +305,19 @@ class FunctionTool(Tool):
 
   def _coerce_output(self, result: Any) -> dict[str, Any] | str:
     # validate a raw return against the output schema and return the JSON-ready value: a
-    # str-returning tool passes through; a structured one is model-validated (raising on a
-    # backend result that doesn't match the declared shape) and dumped to canonical JSON.
+    # str-returning tool passes through; a structured one is validated against its return
+    # annotation (raising on a backend result that doesn't match the declared shape) and
+    # dumped to canonical JSON.
     if self._output_schema is None:
       assert isinstance(result, str), (
         f'unstructured tool {self._name!r} must return str, got {type(result).__name__}'
       )
       return result
-    assert self._metadata.output_model is not None
-    payload = {'result': result} if self._metadata.wrap_output else result
-    return self._metadata.output_model.model_validate(payload).model_dump(
-      mode='json', by_alias=True
-    )
+    from mcp.types import CallToolResult
+
+    converted = self._metadata.convert_result(result)
+    assert isinstance(converted, CallToolResult) and converted.structured_content is not None
+    return converted.structured_content
 
 
 class _NamespacedTool(Tool):

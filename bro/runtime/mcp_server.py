@@ -9,15 +9,16 @@
 import asyncio
 import contextlib
 import importlib.metadata
+import json
 import os
 import secrets
 import socket
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
 
 if TYPE_CHECKING:
-  from mcp.server.lowlevel import Server
+  from mcp.server import Server
   from starlette.types import ASGIApp, Receive, Scope, Send
 
   from bro.llm.mcp import MCPServer, Tool
@@ -97,41 +98,85 @@ def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
   # tool text (descriptions, parameter annotations) arrives fully rendered —
   # each server renders its own at build time (bro.llm.mcp `FunctionTool`).
   import mcp.types as types
-  from mcp.server.lowlevel import Server
+  from jsonschema.exceptions import best_match
+  from jsonschema.protocols import Validator
+  from jsonschema.validators import validator_for
+  from mcp.server import Server, ServerRequestContext
+
+  def validator(schema: dict[str, Any]) -> Validator:
+    validator_class = validator_for(schema)
+    validator_class.check_schema(schema)
+    return validator_class(schema)
 
   tools_by_name: dict[str, Tool] = {}
+  input_validators: dict[str, Validator] = {}
+  output_validators: dict[str, Validator] = {}
   for tool in entries:
     if tool.name in tools_by_name:
       raise SystemExit(f'duplicate tool name {tool.name!r} in {label!r}')
     tools_by_name[tool.name] = tool
+    input_validators[tool.name] = validator(tool.parameters)
+    if tool.output_schema is not None:
+      output_validators[tool.name] = validator(tool.output_schema)
 
-  server = Server(label)
-
-  @server.list_tools()
-  async def handle_list_tools() -> list[types.Tool]:
-    return [
+  listed = types.ListToolsResult(
+    tools=[
       types.Tool(
         name=tool.name,
         description=tool.description,
-        inputSchema=tool.parameters,
-        outputSchema=tool.output_schema,
+        input_schema=tool.parameters,
+        output_schema=tool.output_schema,
       )
       for tool in entries
     ]
+  )
 
-  @server.call_tool()
+  def error_result(text: str) -> types.CallToolResult:
+    return types.CallToolResult(content=[types.TextContent(type='text', text=text)], is_error=True)
+
+  async def handle_list_tools(
+    context: ServerRequestContext, params: Optional[types.PaginatedRequestParams]
+  ) -> types.ListToolsResult:
+    return listed
+
   async def handle_call_tool(
-    name: str, arguments: Optional[dict]
-  ) -> list[types.TextContent] | dict:
-    tool = tools_by_name.get(name)
+    context: ServerRequestContext, params: types.CallToolRequestParams
+  ) -> types.CallToolResult:
+    tool = tools_by_name.get(params.name)
     if tool is None:
-      raise ValueError(f'unknown tool: {name}')
-    result = await tool.call(arguments if arguments is not None else {})
+      return error_result(f'unknown tool: {params.name}')
+    arguments = params.arguments if params.arguments is not None else {}
+    invalid = best_match(input_validators[tool.name].iter_errors(arguments))
+    if invalid is not None:
+      return error_result(f'Input validation error: {invalid.message}')
+    # a failing tool answers the model with its error, as the protocol's tool
+    # result, rather than failing the request
+    try:
+      result = await tool.call(arguments)
+    except Exception as error:
+      return error_result(str(error))
+    output_validator = output_validators.get(tool.name)
+    if output_validator is not None:
+      if not isinstance(result, dict):
+        return error_result(
+          'Output validation error: the tool declares an output schema but returned text'
+        )
+      invalid = best_match(output_validator.iter_errors(result))
+      if invalid is not None:
+        return error_result(f'Output validation error: {invalid.message}')
     if isinstance(result, dict):
-      return result
-    return [types.TextContent(type='text', text=result)]
+      return types.CallToolResult(
+        content=[types.TextContent(type='text', text=json.dumps(result, indent=2))],
+        structured_content=result,
+      )
+    return types.CallToolResult(content=[types.TextContent(type='text', text=result)])
 
-  return server
+  return Server(
+    label,
+    version=importlib.metadata.version('bro'),
+    on_list_tools=handle_list_tools,
+    on_call_tool=handle_call_tool,
+  )
 
 
 class _ServerOwner:
@@ -185,8 +230,10 @@ def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAut
   namespace raises. tool resolution is eager, so once the app is constructed
   (and `/health` answers) every endpoint is ready to serve.
   """
-  from mcp.server.fastmcp.server import StreamableHTTPASGIApp
-  from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+  from mcp.server.streamable_http_manager import (
+    StreamableHTTPASGIApp,
+    StreamableHTTPSessionManager,
+  )
   from starlette.applications import Starlette
   from starlette.requests import Request
   from starlette.responses import JSONResponse, Response

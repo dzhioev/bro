@@ -12,7 +12,7 @@ dependencies = [
   "bro",
   "certifi==2026.7.22",
   "humanize==4.16.0",
-  "mcp==1.28.1",
+  "mcp==2.3.0",
   "pyyaml==6.0.3",
   "rich==15.0.0",
   "tree-sitter==0.26.0",
