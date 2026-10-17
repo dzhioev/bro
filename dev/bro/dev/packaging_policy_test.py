@@ -11,7 +11,7 @@ from bro.dev.packaging_policy import (
 
 _PROJECT = """
 [build-system]
-requires = ["uv_build>=0.12,<0.13"]
+requires = ["uv_build>=0.13,<0.14"]
 build-backend = "uv_build"
 
 [project]

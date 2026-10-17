@@ -143,7 +143,7 @@ For a fresh integrated root, use normalized project metadata, version `0.1.0`, t
 
 ```toml
 [build-system]
-requires = ["uv_build>=0.12,<0.13"]
+requires = ["uv_build>=0.13,<0.14"]
 build-backend = "uv_build"
 
 [project.entry-points.bro]
