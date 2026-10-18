@@ -736,6 +736,18 @@ class BroType(WorkerType):
   widens_talk = True
   manual = True
 
+  @classmethod
+  def authority_declaration(cls, credential_kinds: frozenset[str]):
+    from ride.authority_scope import declaration
+
+    return declaration(credential_kinds)
+
+  @classmethod
+  def option_values(cls, fields: Mapping[str, Any], reading: object):
+    from ride.authority_scope import option_values
+
+    return option_values(fields, reading)
+
   def __init__(self, host: BroHost):
     super().__init__(cast(Any, host))
     if (

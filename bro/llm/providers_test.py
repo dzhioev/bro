@@ -233,3 +233,24 @@ class TestPricing:
 
   def test_echo_has_no_billable_calls(self):
     assert providers.price('echo', 'echo', {}, None) is None
+
+
+def test_recipe_selection_round_trip_preserves_provider_parameters():
+  from bro.llm.llms.anthropic import LLMSpec as AnthropicSpec
+  from bro.llm.llms.echo import LLMSpec as EchoSpec
+  from bro.llm.llms.openai import LLMSpec as OpenAISpec
+
+  for spec in (
+    AnthropicSpec(model=None, effort=None),
+    EchoSpec(),
+    OpenAISpec(reasoning_effort='minimal', service_tier='flex', compact_threshold=12345),
+  ):
+    assert spec.with_selection(spec.selection()) == spec
+  for value in ('none', 'minimal', None):
+    selected = OpenAISpec().with_selection({'model': 'opaque-model', 'effort': value})
+    assert selected.model == 'opaque-model'
+    assert selected.reasoning_effort == value
+  with pytest.raises(ValueError, match='cannot defer model'):
+    OpenAISpec().with_selection({'model': None, 'effort': None})
+  with pytest.raises(ValueError, match='selection fields'):
+    EchoSpec().with_selection({'model': 'echo', 'effort': None})

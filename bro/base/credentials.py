@@ -76,7 +76,10 @@ def _entry_point(group: str, name: str) -> Optional[importlib.metadata.EntryPoin
   return matches[0] if len(matches) == 1 else None
 
 
-_NAME_GRAMMAR = re.compile(r'([a-z0-9_]+)(?:\+([a-z0-9_-]*))?')
+INSTANCE_CHARACTERS = frozenset('abcdefghijklmnopqrstuvwxyz0123456789_-')
+_NAME_GRAMMAR = re.compile(
+  r'([a-z0-9_]+)(?:\+([' + re.escape(''.join(sorted(INSTANCE_CHARACTERS))) + r']*))?'
+)
 
 
 def parse_name(name: str) -> tuple[str, Optional[str]]:

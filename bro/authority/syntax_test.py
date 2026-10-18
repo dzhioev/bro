@@ -23,6 +23,7 @@ from .values import (
   IntegerInterval,
   Integers,
   LatticeInterval,
+  Scalars,
   Strings,
   Subsets,
   Value,
@@ -475,3 +476,63 @@ def test_credential_instance_keywords_are_values_before_clauses(syntax, instance
     assert syntax.entry(parse_entry(rendered)) == entry
   empty = syntax.entry(parse_entry('bro.cred=github+ for * to @browser'))
   assert empty.permission.values == Strings(frozenset({''}))
+
+
+@pytest.mark.parametrize(
+  'text',
+  [
+    '*',
+    '{}',
+    'none',
+    '1..60|none',
+    '!none',
+    '!{none,auto}',
+    '{1,4,auto}',
+    '..|none',
+    '!(1..60|auto)',
+  ],
+)
+def test_integer_string_round_trip(text):
+  base = frozenset({'none', 'auto'})
+  domain = Scalars((Integers().universe(), Finite(base, base)))
+  values = parse_values(text, domain)
+  rendered = render_values(values)
+  assert parse_values(rendered, domain) == values
+  assert render_values(parse_values(rendered, domain)) == rendered
+
+
+@pytest.mark.parametrize('text', ['false', '1.5', '"1"', '[none]'])
+def test_integer_string_refuses_invalid_values(text):
+  domain = Scalars(
+    (Integers((IntegerInterval(1, None),)), Finite(frozenset({'none'}), frozenset({'none'})))
+  )
+  with pytest.raises(ValueError):
+    parse_values(text, domain)
+
+
+def test_numeric_string_sentinel_is_distinct_from_integer():
+  names = frozenset({'1', 'none'})
+  domain = Scalars((Integers().universe(), Finite(names, names)))
+  values = parse_values('1|"1"', domain)
+  assert values.contains(1) and values.contains('1')
+  assert not values.contains(True)
+  assert parse_values(render_values(values), domain) == values
+
+
+@pytest.mark.parametrize(
+  'text',
+  ['~default', 'default', '"~default"', '!~default', '!{~default,default}', '*', '{}', '~on|"on"'],
+)
+def test_symbol_string_sum_round_trip(text):
+  from .values import Symbol
+
+  symbols = frozenset({Symbol('default'), Symbol('on')})
+  domain = Scalars((Strings(cofinite=True), Finite(symbols, symbols)))
+  values = parse_values(text, domain)
+  rendered = render_values(values)
+  assert parse_values(rendered, domain) == values
+  assert render_values(parse_values(rendered, domain)) == rendered
+  assert parse_values('~default', domain).contains(Symbol('default'))
+  assert not parse_values('~default', domain).contains('default')
+  assert parse_values('default', domain).contains('default')
+  assert not parse_values('default', domain).contains(Symbol('default'))

@@ -1,6 +1,8 @@
 import os
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
@@ -15,10 +17,12 @@ from bro.base.condition import (
   Contains,
   Entry,
   Iff,
+  NoAlternative,
   SetVariable,
   Variable,
   Variables,
   When,
+  select,
   var,
 )
 from bro.base.offload import off_loop
@@ -931,6 +935,16 @@ def _declares_components(value: object) -> bool:
   return False
 
 
+@dataclass(frozen=True)
+class CredentialManifest:
+  required: frozenset[str]
+  optional: frozenset[str]
+
+  @property
+  def kinds(self) -> frozenset[str]:
+    return self.required | self.optional
+
+
 class BaseBro(ABC):
   name: str
   description: str
@@ -1004,7 +1018,15 @@ class BaseBro(ABC):
         message += f'; {retired}'
       raise TypeError(message)
 
-  def __init__(self, system_prompt: Optional[str] = None):
+  def __init__(
+    self,
+    system_prompt: Optional[str] = None,
+    *,
+    credential_presence: frozenset[str] | None = None,
+    credential_kinds: frozenset[str] | None = None,
+  ):
+    if credential_presence is None and credential_kinds is not None:
+      raise ValueError('credential_kinds requires explicit credential_presence')
     tool_declarations: list[tuple[str, list[Entry[mcp.ToolLayer]]]] = []
     prompt_parts: list[str] = []
     extra_secret_names: list[str] = []
@@ -1085,7 +1107,15 @@ class BaseBro(ABC):
       '\n\n'.join([f'# Persona: {self.name}', *prompt_parts]) if len(prompt_parts) > 0 else ''
     )
     # a declaration whose entries do not fold fails here, not at first use
-    self.reach()
+    if credential_presence is None:
+      self.reach()
+    else:
+      self.reach_for_presence(
+        credential_presence,
+        credential_kinds
+        if credential_kinds is not None
+        else frozenset(credentials.default_registry()),
+      )
 
   def composed_prompt(self, harness: mcp.HarnessLike, *, hold: str) -> str:
     """Compose the declaration with the selected harness and session hold."""
@@ -1197,6 +1227,65 @@ class BaseBro(ABC):
       for name, kind in self._feature_credentials.items()
       if self._features[name] is not False and (self._features[name] is True) == pinned
     }
+
+  def reach_for_presence(self, present: frozenset[str], kinds: frozenset[str]) -> mcp.Reach:
+    if present - kinds:
+      raise ValueError(f'credential presence names unknown kinds: {sorted(present - kinds)}')
+    variables: dict[str, SetVariable] = {'creds': SetVariable(present, universe=kinds)}
+    features = frozenset(
+      name for name, gate in self._features.items() if isinstance(gate, bool) and gate
+    )
+    features = features | frozenset(
+      name
+      for name, gate in self._features.items()
+      if not isinstance(gate, bool) and gate.evaluate(variables)
+    )
+    variables['features'] = SetVariable(features, universe=frozenset(self._features))
+    return _fold_reach(
+      [(name, select(entries, variables)) for name, entries in self._tool_declarations]
+    )
+
+  def credential_manifest(
+    self, harness: Harness, present: frozenset[str], kinds: frozenset[str]
+  ) -> CredentialManifest:
+    """The selected components' manifest under explicit credential presence."""
+    reach = self.reach_for_presence(present, kinds)
+    components = (*harness.serve(reach).server_specs, *reach.server_specs, *reach.sources)
+    required = set(self._extra_secrets) | self._feature_secrets(pinned=True)
+    optional = self._feature_secrets(pinned=False)
+    for component in components:
+      required.update(_component_needed_secrets(component))
+      optional.update(_component_optional_secrets(component))
+    if self._spells:
+      optional.add(spell_store.CAST_SECRET)
+    return CredentialManifest(frozenset(required), frozenset(optional - required))
+
+  def possible_credential_kinds(self, harness: Harness, kinds: frozenset[str]) -> frozenset[str]:
+    """Union the manifests of every credential-gate outcome, after MRO selection."""
+    gates: set[str] = set(self._feature_credentials.values())
+    for _, entries in self._tool_declarations:
+      for entry in entries:
+        conditions = (
+          [entry.condition]
+          if isinstance(entry, When)
+          else [gate for gate, _ in entry.branches]
+          if isinstance(entry, Iff)
+          else []
+        )
+        for gate in conditions:
+          kind = _gate_credential(gate)
+          if kind is not None:
+            gates.add(kind)
+    ordered = sorted(gates)
+    result: set[str] = set()
+    for outcome in product((False, True), repeat=len(ordered)):
+      present = frozenset(kind for kind, enabled in zip(ordered, outcome, strict=True) if enabled)
+      try:
+        manifest = self.credential_manifest(harness, present, kinds)
+      except NoAlternative:
+        continue
+      result.update(manifest.kinds)
+    return frozenset(result)
 
   def needed_secrets(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
     # the bro's component credential manifest for a consuming harness: the union

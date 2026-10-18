@@ -16,6 +16,8 @@ from bro.base import credentials
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 
 if TYPE_CHECKING:
+  from bro.authority.rules import Declaration
+  from bro.authority.values import Value
   from bro.broker.brotocol import Talk
   from bro.broker.job import CommandJob
   from bro.broker.journal import Event, Record
@@ -322,12 +324,32 @@ class Host(Protocol):
   def artifacts(self) -> ArtifactResolver: ...
 
 
+@dataclass(frozen=True)
+class OptionValues:
+  values: Mapping[str, Value]
+  content: Mapping[str, Any] = field(default_factory=dict)
+
+  def __post_init__(self) -> None:
+    object.__setattr__(self, 'values', MappingProxyType(dict(self.values)))
+    object.__setattr__(self, 'content', MappingProxyType(dict(self.content)))
+
+
 class WorkerType(ABC):
   name: str
   launch_schema: Mapping[str, LaunchFieldSchema] = MappingProxyType({})
   default_timeout: float | None = None
   widens_talk: bool = False
   manual: bool = False
+
+  @classmethod
+  def authority_declaration(cls, credential_kinds: frozenset[str]) -> Declaration:
+    raise NotImplementedError(f'{cls.name} must declare its authority options')
+
+  @classmethod
+  def option_values(cls, fields: Mapping[str, Any], reading: object) -> OptionValues:
+    if fields:
+      raise ValueError(f'unknown {cls.name} fields: {sorted(fields)}')
+    return OptionValues({})
 
   def __init__(self, host: Host):
     self.host = host
