@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Self
 
-type Value = str | int | bool | frozenset[str]
+
+@dataclass(frozen=True)
+class Symbol:
+  name: str
+
+  def __post_init__(self) -> None:
+    if not isinstance(self.name, str) or re.fullmatch(r'[a-z][a-z0-9_-]*', self.name) is None:
+      raise ValueError('symbols require a lowercase name')
+
+
+type Value = str | int | bool | Symbol | frozenset[str]
 
 
 class ValueSet(ABC):
@@ -35,50 +46,90 @@ class ValueSet(ABC):
   def compatible(self, other: ValueSet) -> bool:
     return type(self) is type(other) and self.universe() == other.universe()
 
+  @property
+  def scalar_types(self) -> frozenset[type]:
+    raise ValueError('not a scalar value family')
+
   def _check(self, other: ValueSet) -> None:
     if not self.compatible(other):
       raise ValueError('incompatible value-set families or bases')
 
 
 @dataclass(frozen=True)
+class StringGrammar:
+  initial: frozenset[str]
+  remaining: frozenset[str]
+  empty: bool = False
+
+  def __post_init__(self) -> None:
+    if type(self.empty) is not bool:
+      raise ValueError('empty-string membership must be a flag')
+    if any(
+      not isinstance(alphabet, frozenset)
+      or not alphabet
+      or any(type(character) is not str or len(character) != 1 for character in alphabet)
+      for alphabet in (self.initial, self.remaining)
+    ):
+      raise ValueError('string grammars require non-empty finite character alphabets')
+
+  def contains(self, value: str) -> bool:
+    return (
+      self.empty if not value else value[0] in self.initial and set(value[1:]) <= self.remaining
+    )
+
+
+@dataclass(frozen=True)
 class Strings(ValueSet):
   members: frozenset[str] = frozenset()
   cofinite: bool = False
+  grammar: StringGrammar | None = None
 
   def __post_init__(self) -> None:
     if not isinstance(self.members, frozenset) or any(
       type(value) is not str for value in self.members
     ):
       raise ValueError('string members must be a frozenset of strings')
+    if self.grammar is not None:
+      if not isinstance(self.grammar, StringGrammar):
+        raise ValueError('string bases require an infinite StringGrammar')
+      if any(not self.grammar.contains(value) for value in self.members):
+        raise ValueError('string member outside base grammar')
+
+  @property
+  def scalar_types(self) -> frozenset[type]:
+    return frozenset({str})
 
   def intersection(self, other: ValueSet) -> Self:
     self._check(other)
     assert isinstance(other, Strings)
     if self.cofinite and other.cofinite:
-      return type(self)(self.members | other.members, True)
+      return type(self)(self.members | other.members, True, self.grammar)
     if self.cofinite:
-      return type(self)(other.members - self.members)
+      return type(self)(other.members - self.members, grammar=self.grammar)
     if other.cofinite:
-      return type(self)(self.members - other.members)
-    return type(self)(self.members & other.members)
+      return type(self)(self.members - other.members, grammar=self.grammar)
+    return type(self)(self.members & other.members, grammar=self.grammar)
 
   def difference(self, other: ValueSet) -> Self:
     self._check(other)
     assert isinstance(other, Strings)
-    return self.intersection(type(self)(other.members, not other.cofinite))
+    return self.intersection(type(self)(other.members, not other.cofinite, self.grammar))
 
   def contains(self, value: object) -> bool:
-    return type(value) is str and (
-      (value not in self.members) if self.cofinite else value in self.members
+    return (
+      type(value) is str
+      and (self.grammar is None or self.grammar.contains(value))
+      and ((value not in self.members) if self.cofinite else value in self.members)
     )
 
   def universe(self) -> Self:
-    return type(self)(frozenset(), True)
+    return type(self)(frozenset(), True, self.grammar)
 
   def singleton(self, value: Value) -> Self:
-    if type(value) is not str:
-      raise ValueError('expected a string')
-    return type(self)(frozenset({value}))
+    if not self.universe().contains(value):
+      raise ValueError('expected a string in the base grammar')
+    assert isinstance(value, str)
+    return type(self)(frozenset({value}), grammar=self.grammar)
 
   @property
   def is_empty(self) -> bool:
@@ -98,10 +149,14 @@ class Finite(ValueSet):
       for member in self.members
     ):
       raise ValueError('finite members outside base')
-    if any(type(value) not in (str, int, bool) for value in self.base):
-      raise ValueError('finite scalar base requires strings, integers, or flags')
+    if any(type(value) not in (str, int, bool, Symbol) for value in self.base):
+      raise ValueError('finite scalar base requires strings, integers, flags, or symbols')
     if len({type(value) for value in self.base}) > 1:
       raise ValueError('finite base must have one scalar type')
+
+  @property
+  def scalar_types(self) -> frozenset[type]:
+    return frozenset(type(value) for value in self.base)
 
   def compatible(self, other: ValueSet) -> bool:
     return (
@@ -177,6 +232,10 @@ class Integers(ValueSet):
       result.append(interval)
     object.__setattr__(self, 'intervals', tuple(result))
 
+  @property
+  def scalar_types(self) -> frozenset[type]:
+    return frozenset({int})
+
   def intersection(self, other: ValueSet) -> Self:
     self._check(other)
     assert isinstance(other, Integers)
@@ -225,6 +284,98 @@ class Integers(ValueSet):
   @property
   def is_empty(self) -> bool:
     return not self.intervals
+
+
+@dataclass(frozen=True)
+class Scalars(ValueSet):
+  """A disjoint sum of scalar families distinguished by their Python types."""
+
+  components: tuple[ValueSet, ...]
+
+  def __post_init__(self) -> None:
+    if not isinstance(self.components, tuple) or len(self.components) < 2:
+      raise ValueError('scalar sums require at least two families')
+    types: set[type] = set()
+    for component in self.components:
+      if isinstance(component, Scalars) or not component.scalar_types:
+        raise ValueError('scalar sums require non-empty, unnested scalar bases')
+      if types & component.scalar_types:
+        raise ValueError('scalar sum component types must be disjoint')
+      types.update(component.scalar_types)
+    object.__setattr__(
+      self,
+      'components',
+      tuple(
+        sorted(
+          self.components,
+          key=lambda component: sorted(
+            value_type.__name__ for value_type in component.scalar_types
+          ),
+        )
+      ),
+    )
+
+  @property
+  def scalar_types(self) -> frozenset[type]:
+    return frozenset(
+      value_type for component in self.components for value_type in component.scalar_types
+    )
+
+  def component(self, value_type: type) -> ValueSet:
+    for component in self.components:
+      if value_type in component.scalar_types:
+        return component
+    raise ValueError(f'scalar sum has no {value_type.__name__} component')
+
+  def embed(self, values: ValueSet) -> Self:
+    if sum(component.compatible(values) for component in self.components) != 1:
+      raise ValueError('value set does not belong to a scalar sum component')
+    return type(self)(
+      tuple(
+        values if component.compatible(values) else component.empty()
+        for component in self.components
+      )
+    )
+
+  def intersection(self, other: ValueSet) -> Self:
+    self._check(other)
+    assert isinstance(other, Scalars)
+    return type(self)(
+      tuple(
+        left.intersection(right)
+        for left, right in zip(self.components, other.components, strict=True)
+      )
+    )
+
+  def difference(self, other: ValueSet) -> Self:
+    self._check(other)
+    assert isinstance(other, Scalars)
+    return type(self)(
+      tuple(
+        left.difference(right)
+        for left, right in zip(self.components, other.components, strict=True)
+      )
+    )
+
+  def contains(self, value: object) -> bool:
+    return any(component.contains(value) for component in self.components)
+
+  def universe(self) -> Self:
+    return type(self)(tuple(component.universe() for component in self.components))
+
+  def singleton(self, value: Value) -> Self:
+    if not self.universe().contains(value):
+      raise ValueError('value outside scalar sum base')
+    return type(self)(
+      tuple(
+        component.singleton(value) if component.universe().contains(value) else component.empty()
+        for component in self.components
+      )
+    )
+
+  @property
+  def is_empty(self) -> bool:
+    return all(component.is_empty for component in self.components)
 
 
 @dataclass(frozen=True)

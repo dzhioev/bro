@@ -2,7 +2,7 @@
 
 Pure symbolic algebra with no I/O.
 
-- `values.py` — finite and cofinite strings, finite scalar sets, integer interval unions, and finite-base subset lattice interval unions.
+- `values.py` — finite and cofinite strings over optional base grammars, finite scalar sets, integer interval unions, typed symbols, and disjoint scalar sums, and finite-base subset lattice interval unions.
 - `patterns.py` — descriptors, matching, rectangle subtraction, and exact inclusion of finite pattern unions.
 - `authority.py` — atoms, permissions, use/recipient pairs, authority joins, cap meets, lazy entries, and symbolic permission partitions.
 - `rules.py` — option and type declarations, normalization, use and gift rules, admission checks, and immutable start, joint-start, and override results.

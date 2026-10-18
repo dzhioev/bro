@@ -9,6 +9,8 @@ from .values import (
   IntegerInterval,
   Integers,
   LatticeInterval,
+  Scalars,
+  StringGrammar,
   Strings,
   Subsets,
   Value,
@@ -140,3 +142,53 @@ def test_finite_flags_and_integers_are_distinct_domains():
     Finite(frozenset({True}), frozenset({1}))
   with pytest.raises(ValueError, match='incompatible'):
     Finite(frozenset({True}), frozenset()).intersection(Finite(frozenset({1}), frozenset()))
+
+
+def test_integer_string_sum_against_oracle():
+  base = frozenset({'none', 'auto'})
+  integers = [Integers(), Integers().universe(), Integers((IntegerInterval(0, 2),))]
+  sets = [
+    Scalars((numbers, Finite(base, names))) for numbers, names in product(integers, powerset(base))
+  ]
+  check_family(sets, [-1000, -1, 0, 1, 2, 3, 1000, 'none', 'auto'])
+  assert not sets[-1].contains(True)
+  assert not sets[-1].contains('other')
+  with pytest.raises(ValueError):
+    sets[-1].singleton(True)
+
+
+def test_string_base_grammar_stays_closed_under_operations():
+  domain = Strings(
+    cofinite=True, grammar=StringGrammar(frozenset('abcfrnesh'), frozenset('abcfrnesh'))
+  )
+  left, right = domain.singleton('a'), domain.singleton('b')
+  check_family([domain, left, right, domain.difference(left)], ['a', 'b', 'fresh'])
+  assert not domain.contains('a1')
+  assert not domain.difference(left).contains('a1')
+  with pytest.raises(ValueError, match='grammar'):
+    domain.singleton('a1')
+  with pytest.raises(ValueError, match='incompatible'):
+    domain.intersection(Strings(cofinite=True))
+
+
+def test_string_grammars_require_an_infinite_base():
+  for initial, remaining in ((frozenset(), frozenset('ab')), (frozenset('ab'), frozenset())):
+    with pytest.raises(ValueError, match='non-empty'):
+      StringGrammar(initial, remaining)
+  with pytest.raises(ValueError, match='infinite'):
+    Strings(cofinite=True, grammar='a|b')  # pyright: ignore[reportArgumentType]
+
+
+def test_scalar_sum_with_symbols_against_oracle():
+  from .values import Symbol
+
+  symbols = frozenset({Symbol('default'), Symbol('on')})
+  sets = [
+    Scalars((Strings(members, cofinite), Finite(symbols, selected)))
+    for members, cofinite, selected in product(
+      powerset(['default', '~default', 'a']), (False, True), powerset(symbols)
+    )
+  ]
+  check_family(sets, ['default', '~default', 'a', 'fresh', *symbols])
+  with pytest.raises(ValueError, match='disjoint'):
+    Scalars((Strings(), Strings(cofinite=True)))

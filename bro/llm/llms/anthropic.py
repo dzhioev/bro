@@ -500,6 +500,9 @@ class LLMSpec(llm_llm.LLMSpec):
   """
 
   TYPE: ClassVar[str] = 'anthropic'
+  selection_fields = MappingProxyType({'model': 'model', 'effort': 'effort'})
+  deferred_fields = frozenset({'model', 'effort'})
+  effort_values = frozenset(llm_llm.EFFORT_LEVELS)
 
   model: Optional[str] = DEFAULT_MODEL
   effort: Optional[str] = DEFAULT_EFFORT

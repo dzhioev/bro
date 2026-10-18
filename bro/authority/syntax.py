@@ -16,8 +16,10 @@ from .values import (
   IntegerInterval,
   Integers,
   LatticeInterval,
+  Scalars,
   Strings,
   Subsets,
+  Symbol,
   Value,
   ValueSet,
 )
@@ -25,7 +27,9 @@ from .values import (
 _NAME = re.compile(r'[a-z][a-z0-9_-]*')
 _WORD = re.compile(r'[A-Za-z0-9_:/.-]+')
 _RANGE = re.compile(r'(-?\d+)?\.\.(-?\d+)?')
-_TOKEN = re.compile(r'\s+|"(?:[^"\\]|\\.)*"|\?=|<=|>=|[{}\[\](),|&!*=+@]|[A-Za-z0-9_:/.-]+')
+_TOKEN = re.compile(
+  r'~[a-z][a-z0-9_-]*|\s+|"(?:[^"\\]|\\.)*"|\?=|<=|>=|[{}\[\](),|&!*=+@]|[A-Za-z0-9_:/.-]+'
+)
 
 
 def _name(text: str) -> str:
@@ -81,18 +85,28 @@ class ValueExpression:
         upper = domain.base if self.operation == 'atleast' else members
         result: ValueSet = Subsets(domain.base, (LatticeInterval(lower, upper),))
       case 'range':
-        if not isinstance(domain, Integers):
+        numbers = (
+          domain.component(int)
+          if isinstance(domain, Scalars) and int in domain.scalar_types
+          else domain
+        )
+        if not isinstance(numbers, Integers):
           raise ValueError('integer range requires an integer option')
         lower, upper = self.items
         result = Integers(
           (IntegerInterval(int(lower) if lower else None, int(upper) if upper else None),)
         )
+        if isinstance(domain, Scalars):
+          result = domain.embed(result)
       case 'scalar' | 'finite':
         result = domain.empty()
         for item in self.items:
-          value: Value = _string(item)
+          value: Value = Symbol(item[1:]) if item.startswith('~') else _string(item)
           if (
             isinstance(domain, Integers)
+            or isinstance(domain, Scalars)
+            and int in domain.scalar_types
+            and re.fullmatch(r'-?\d+', item)
             or isinstance(domain, Finite)
             and any(type(member) is int for member in domain.base)
           ):
@@ -102,6 +116,8 @@ class ValueExpression:
           elif isinstance(domain, Finite) and any(type(member) is bool for member in domain.base):
             if item not in ('on', 'off'):
               raise ValueError(f'expected on or off, got {item!r}')
+            value = item == 'on'
+          if isinstance(domain, Scalars) and bool in domain.scalar_types and item in ('on', 'off'):
             value = item == 'on'
           if isinstance(domain, Subsets):
             raise ValueError('subset values require brackets')
@@ -178,7 +194,7 @@ class _Parser:
 
   def scalar(self) -> str:
     token = self.take()
-    if not token.startswith('"') and _WORD.fullmatch(token) is None:
+    if not token.startswith(('"', '~')) and _WORD.fullmatch(token) is None:
       raise ValueError(f'expected a value, got {token!r}')
     return token
 
@@ -530,6 +546,8 @@ class Syntax:
 
 
 def _scalar(value: Value) -> str:
+  if isinstance(value, Symbol):
+    return '~' + value.name
   if type(value) is bool:
     return 'on' if value else 'off'
   if type(value) is int:
@@ -572,6 +590,42 @@ def _prime_intervals(values: Subsets) -> tuple[LatticeInterval, ...]:
     intervals = expanded
 
 
+def _sum_literal(value: Value, family: Scalars) -> str:
+  if isinstance(value, str):
+    if (
+      int in family.scalar_types
+      and re.fullmatch(r'-?\d+', value)
+      or bool in family.scalar_types
+      and value in ('on', 'off')
+    ):
+      return json.dumps(value, ensure_ascii=False)
+  return _scalar(value)
+
+
+def _sum_finite(members: Iterable[Value], family: Scalars) -> str:
+  items = sorted(_sum_literal(member, family) for member in members)
+  return items[0] if len(items) == 1 else '{' + ','.join(items) + '}'
+
+
+def _render_component(component: ValueSet, family: Scalars) -> str:
+  if isinstance(component, Integers):
+    return '..' if component == component.universe() else render_values(component)
+  if isinstance(component, Finite):
+    return _sum_finite(component.members, family)
+  assert isinstance(component, Strings)
+  if not component.cofinite:
+    return _sum_finite(component.members, family)
+  excluded = [
+    _render_component(other.universe(), family)
+    for other in family.components
+    if other is not component
+  ]
+  if component.members:
+    excluded.append(_sum_finite(component.members, family))
+  text = '|'.join(excluded)
+  return '!(' + text + ')' if '|' in text or '&' in text else '!' + text
+
+
 def render_values(values: ValueSet) -> str:
   if values.is_empty:
     return '{}'
@@ -587,6 +641,12 @@ def render_values(values: ValueSet) -> str:
       if interval.lower == interval.upper
       else f'{interval.lower if interval.lower is not None else ""}..{interval.upper if interval.upper is not None else ""}'
       for interval in values.intervals
+    )
+  if isinstance(values, Scalars):
+    return '|'.join(
+      _render_component(component, values)
+      for component in values.components
+      if not component.is_empty
     )
   if isinstance(values, Subsets):
     terms = []
@@ -626,7 +686,11 @@ def render_permission(permission: Permission) -> str:
     return '@' + next(iter(permission.values.members))
   if permission.option.startswith('cred.'):
     kind = permission.option.removeprefix('cred.')
-    if permission.values == Strings(frozenset({''})):
+    if (
+      isinstance(permission.values, Strings)
+      and not permission.values.cofinite
+      and permission.values.members == {''}
+    ):
       values = ''
     return f'{permission.type}.cred={kind}+{values}'
   if _flag(permission.values) and not permission.values.is_empty:

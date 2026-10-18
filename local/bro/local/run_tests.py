@@ -252,6 +252,7 @@ PYTEST_FILES = [
   'ride/ride/repository_test.py',
   'ride/ride/runtime_bundle_test.py',
   'ride/ride/scope_test.py',
+  'ride/ride/authority_scope_test.py',
   'ride/ride/trails_test.py',
   'bro/worker_types_test.py',
   'ride/ride/bro_worker_test.py',
