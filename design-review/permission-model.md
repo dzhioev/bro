@@ -11,7 +11,7 @@ Missions and the other terms are defined below.
 
 ### Mission types and options
 
-𝒯 is the set of **mission types**.
+𝒯 is the finite set of **mission types**.
 Each type t has a finite set of **options** Oₜ, and each option o has a **kind** over a set B, its **base set**:
 
 - **scalar over B**: a value of o is one element of B;
@@ -118,7 +118,7 @@ A descriptor matches G₁ ⊓ G₂ iff it matches a pattern in G₁ and a patter
 > Then πa ⊓ πb = (T, {A ↦ {a3}, B ↦ {{b2}, {b1, b2}, {b2, b3}, {b1, b2, b3}}}, {F}).
 
 **Inclusion.** A set of patterns G₁ is **within** a set G₂ if every descriptor that matches a pattern in G₁ also matches a pattern in G₂.
-The host can decide this with the value-set operations, because a pattern constrains each option separately: to a value set, with or without the unset state.
+The host can decide this with the value-set operations, because pattern sets are finite and a pattern constrains each option separately: to a value set, with or without the unset state.
 
 > **Example.**
 >
@@ -131,7 +131,7 @@ The host can decide this with the value-set operations, because a pattern constr
 An **authority** H gives every atom x a pair H(x) = (use_H(x), give_H(x)):
 
 - use_H(x) ∈ {0, 1} says whether its holder may use x in a start it makes;
-- give_H(x) is a set of patterns, x's **recipient patterns**.
+- give_H(x) is a finite set of patterns, x's **recipient patterns**.
   A mission whose descriptor matches one of them is a **recipient** of x: the holder may give x to it when starting it.
 
 **Join and meet.** For two pairs (u₁, g₁) and (u₂, g₂):
@@ -147,7 +147,7 @@ Joining with (0, ∅) changes nothing, and neither does meeting with ⊤ = (1, {
 > - (1, {π₁}) ⊓ (1, {π₂}) = (1, {π₁ ⊓ π₂}), where π₁ ⊓ π₂ = (T, {A ↦ {a1}, B ↦ every subset of {b1, b2}}, {A, B}).
 > - (1, {π₁}) ⊓ (0, ∅) = (0, ∅), and (1, {π₁}) ⊓ ⊤ = (1, {π₁}).
 
-**Authorities and caps.** Both are written as lists of **entries** p ↦ (u, g), with p a permission, and every atom of p gets the pair (u, g).
+**Authorities and caps.** Both are written as finite lists of **entries** p ↦ (u, g), with p a permission, and every atom of p gets the pair (u, g).
 They differ in how entries add up:
 
 - in an **authority**, an atom in several entries gets the join of their pairs, and an atom in none gets (0, ∅);
@@ -240,7 +240,8 @@ The host applies these rules to turn a request into the new mission's descriptor
 3. It refuses the request if the resulting descriptor isn't valid;
    otherwise that descriptor is d.
 
-An option whose unset state would mean "unrestricted" needs a default that says so as a value, so that the use rule checks it.
+Unset confers nothing a value would need permission for.
+If a type would act on an unset option as some value, whether unrestricted or a fallback such as one particular item, that value has to be the option's default, so that the descriptor carries it and the use rule checks it.
 
 > **Example.** T's defaults are a1 for A, {b1, b2} for B, and for N the value ρ gives, 50;
 > F has none.
@@ -251,6 +252,8 @@ An option whose unset state would mean "unrestricted" needs a default that says 
 > - A request with B ↦ {b3, b4} and F unset is refused as invalid.
 > - Had T given B no default and treated an unset B as {b1, b2, b3, b4}, a starter could get all four elements past the use rule by leaving B unset.
 >   T would have to default B to {b1, b2, b3, b4} instead, so that the use rule checks it.
+> - Likewise, had U used c1 whenever C is unset, a starter holding only the start atom U would reach c1 without (U, C, c1) ever being checked.
+>   U would have to default C to c1.
 
 **Rules.** A starter with authority H may start d = (t, σ) with gift Γ and cap K iff:
 
