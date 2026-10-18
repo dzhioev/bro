@@ -85,6 +85,8 @@ A subpackage with a map of its own is pointed at, not described here.
   The shared answer bound is enforced at the `answer` tool while the run can react;
   terminal fallback output is truncated with a marker and its trail id.
   `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
+- `authority/` — the pure symbolic use/give algebra and authorization transitions;
+  see `authority/AGENTS.md`
 - `base/` — shared low-level utilities;
   see `base/AGENTS.md`
 - `brog/` — the task-tracker facade behind the `brog` MCP namespace;
