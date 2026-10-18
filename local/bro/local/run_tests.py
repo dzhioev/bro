@@ -132,6 +132,10 @@ DISTRIBUTIONS = [
 ]
 
 PYTEST_FILES = [
+  'bro/authority/values_test.py',
+  'bro/authority/patterns_test.py',
+  'bro/authority/authority_test.py',
+  'bro/authority/rules_test.py',
   'bro/base/args_test.py',
   'bro/base/condition_test.py',
   'bro/base/configs_test.py',
