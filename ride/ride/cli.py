@@ -284,7 +284,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
     # not every harness's llm resolution consults the registry, so the launch
     # checks the name itself
     get_class(bro)
-    args['llm'] = bind_launch_llm(repo, bro, args['llm'])
+    args['llm'] = bind_launch_llm(harness, repo, bro, args['llm'])
     resolved_llm = harness.resolve_llm(args['llm'], bro)
   except (KeyError, LLMSelectionError, ValueError) as error:
     parser.error(str(error))

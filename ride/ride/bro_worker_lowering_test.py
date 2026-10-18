@@ -305,7 +305,7 @@ class TestSummonLowering:
   ):
     config = tmp_path / 'bro.json'
     config.write_text(
-      json.dumps({'projects': {'/proj': {'bros': {'dev': {'llm': 'openai:sol:xhigh'}}}}})
+      json.dumps({'projects': {'/proj': {'bros': {'dev': {'llm': ['openai:sol:xhigh']}}}}})
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     launch = ride.bro_worker.SummonLaunchSpec(
@@ -1211,7 +1211,7 @@ class TestClaudeSummonLowering:
     assert lowered.launch.tty is False
 
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
-    from bro.llm.llms.claude_code import LLMSpec as ClaudeCodeSpec
+    from bro.llm.llms.anthropic import LLMSpec as AnthropicSpec
 
     _lower_boxed(
       self._launch(llm=':fable5', summon_depth=5, summon_harness='claude'),
@@ -1223,7 +1223,7 @@ class TestClaudeSummonLowering:
     spec = ride.session.load_resume_spec(workspace)
     assert spec is not None
     assert spec.harness == 'claude'
-    assert spec.resolved_llm == ClaudeCodeSpec(model='claude-fable-5').dump()
+    assert spec.resolved_llm == AnthropicSpec(model='claude-fable-5', effort=None).dump()
     assert spec.summon_depth == 5
     assert spec.summon_harness == 'claude'
 
@@ -1272,7 +1272,9 @@ class TestClaudeSummonLowering:
   def test_a_native_recipe_fails_the_claude_spawn(self, claude_harness, tmp_path):
     from bro.llm.providers import LLMSelectionError
 
-    with pytest.raises(LLMSelectionError, match='runs Claude Code, not openai'):
+    with pytest.raises(
+      LLMSelectionError, match="the claude harness cannot run recipe 'openai:sol'"
+    ):
       _lower_boxed(self._launch(llm='openai:sol'), 'broker-CH', _container_runtime(), _artifacts())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')

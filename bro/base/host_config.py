@@ -14,7 +14,11 @@ Selections live outside repositories and merge from general to specific:
         "https://github.com/foo/api.git": {
           "creds": ["brog+github", "github+dev"],
           "bros": {
-            "eyebro": {"creds": ["trails+review", "github+reviewer"], "grant": ["github"]}
+            "eyebro": {
+              "creds": ["trails+review", "github+reviewer"],
+              "grant": ["github"],
+              "llm": ["anthropic:opus55:high", "openai:sol:xhigh", "default"]
+            }
           }
         },
         "/home/foo/projects/api": {"creds": ["aws+laptop"]}
@@ -30,8 +34,10 @@ A list may name each kind once.
 `revoke` lists: credential names, `@bro` targets, and `:launch.…` names.
 Credential grants and revokes name bare kinds only.
 `creds` picks without adding a kind, so one entry may pick and grant the same kind.
-A `bros` entry may also carry `llm`: the recipe the bro runs by default on this
-project, in the `--llm` grammar, beneath the launch's own flags.
+A `bros` entry may also carry `llm`: the recipes the bro runs on this project,
+an ordered preference list in the `--llm` grammar, beneath the launch's own
+flags. A launch runs the first its harness runs; a last `DEFAULT_RECIPE` entry
+stands for the harness's own recipe.
 The grammar is installation-independent, so unknown credential and bro names
 remain valid until a launch resolves them against its installation, and a
 recipe is carried as written for the launch to parse.
@@ -56,8 +62,8 @@ over the store's defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the ordered scope
 layers retain each pick, grant, and revoke for the launch fold.
-`launch_llm` returns the recipes the matching `bros` entries name in that same
-order, each with its layer.
+`launch_llm` returns the list of the most specific matching `bros` entry naming
+one, with its layer: a more specific list replaces a less specific one whole.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
@@ -102,6 +108,8 @@ _LLM_KEY = 'llm'
 _SUMMON_DEPTH_KEY = 'summon-depth'
 _RETIRED_INSTANCES_KEY = 'instances'
 
+DEFAULT_RECIPE = 'default'
+
 
 @dataclass(frozen=True)
 class Attachment:
@@ -131,10 +139,11 @@ class CredentialSelection:
 
 @dataclass(frozen=True)
 class LLMDefault:
-  """The recipe one `bros` entry names, and the layer naming it."""
+  """The recipes one `bros` entry lists, in preference order, and the layer
+  listing them."""
 
   layer: str
-  recipe: str
+  recipes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -145,9 +154,9 @@ class _ScopeEntry:
 
 @dataclass(frozen=True)
 class _BroEntry(_ScopeEntry):
-  """A `bros` entry: a scope entry plus the recipe it names."""
+  """A `bros` entry: a scope entry plus the recipes it lists."""
 
-  llm: Optional[str]
+  llm: Optional[tuple[str, ...]]
 
 
 @dataclass(frozen=True)
@@ -245,17 +254,17 @@ def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSe
   return _merged(entries)
 
 
-def launch_llm(attachment: Optional[Attachment], bro: str) -> tuple[LLMDefault, ...]:
-  """The recipes the matching `bros` entries name for `bro`, least specific
-  first, each carried as written."""
+def launch_llm(attachment: Optional[Attachment], bro: str) -> Optional[LLMDefault]:
+  """The recipes the most specific matching `bros` entry lists for `bro`, each
+  carried as written; None when no matching entry lists any."""
   _require_bro_name(bro)
   config = _read()
-  defaults: list[LLMDefault] = []
+  listed: Optional[LLMDefault] = None
   for match in _matches(config, attachment):
     entry = match.project.bros.get(bro)
     if entry is not None and entry.llm is not None:
-      defaults.append(LLMDefault(match.bro_layer, entry.llm))
-  return tuple(defaults)
+      listed = LLMDefault(match.bro_layer, entry.llm)
+  return listed
 
 
 def _require_bro_name(bro: str) -> None:
@@ -381,13 +390,26 @@ def _scope_entry(where: str, value: object) -> _ScopeEntry:
 def _bro_entry(where: str, value: object) -> _BroEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  llm = None
-  if _LLM_KEY in value:
-    llm = value[_LLM_KEY]
-    if not isinstance(llm, str) or llm == '':
-      raise ValueError(f'{where}: {_LLM_KEY} must be a non-empty string')
+  llm = None if _LLM_KEY not in value else _recipes(where, value[_LLM_KEY])
   entry = _scope_entry(where, {key: field for key, field in value.items() if key != _LLM_KEY})
   return _BroEntry(entry.selection, entry.scope, llm)
+
+
+def _recipes(where: str, value: object) -> tuple[str, ...]:
+  if (
+    not isinstance(value, list)
+    or len(value) == 0
+    or not all(isinstance(recipe, str) and recipe != '' for recipe in value)
+  ):
+    raise ValueError(
+      f'{where}: {_LLM_KEY} must be a non-empty list of recipes, '
+      f'e.g. ["openai:sol:xhigh", "{DEFAULT_RECIPE}"]'
+    )
+  if DEFAULT_RECIPE in value[:-1]:
+    raise ValueError(
+      f'{where}: {_LLM_KEY} lists recipes after {DEFAULT_RECIPE!r}, which always runs; move it last'
+    )
+  return tuple(value)
 
 
 def _scope_values(where: str, values: object, key: str) -> tuple[str, ...]:

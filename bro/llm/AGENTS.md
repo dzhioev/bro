@@ -24,14 +24,15 @@ The bro-native engine and provider clients live in `bro.native`.
 - `llm.py` — the `LLMSpec` ABC:
   a frozen recipe (model + provider knobs) with `needed_secrets`, optional `.fast()` / `.with_effort(level)` transforms (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max vocabulary),
   and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
-  `NativeLLMSpec` is the marker for recipes the bro-native engine can run;
-  a provider whose harness drives its own loop (`claude_code`) remains a bare `LLMSpec`.
+  `NativeLLMSpec` is the marker for recipes the bro-native engine can run, each naming its model;
+  a provider only a harness driving its own loop runs (`anthropic`) remains a bare `LLMSpec`.
   `LLMUnavailable` is the provider-neutral failure a client raises once its provider stays down through the client's retries.
 - `providers.py` — the provider roster.
   `_PROVIDER_MODULES` maps a name to the module declaring its `LLMSpec`, `DEFAULT_MODEL`, `MODELS` short-name table, and `FAILURE_SIGNATURES`, imported per name.
   Model resolution tries the short name, then full id, then verbatim;
-  the table is a convenience, not a whitelist.
-  `provider_of_model` finds the owning provider.
+  the table is a convenience, not a whitelist, and a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
+  A model named without a provider resolves among the providers a harness serves (`bro.harness.Harness.llm_providers`):
+  `carriers` and `provider_of_model` take that set, and `resolve` lays a selection over a standing recipe within it.
   `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
   `price` prices one call from the provider's raw usage record and effective service tier.
   `price_table` exposes the current provider-owned table and its provenance.
@@ -73,9 +74,10 @@ The bro-native engine and provider clients live in `bro.native`.
     pricing a dated snapshot without a row of its own at its undated model's rates;
     the recipe carries model, reasoning effort, service tier, and compact threshold, with `needed_secrets` → `openai`, `.fast()` → priority tier, and every shared effort level mapped through.
     The live Responses client is `bro.native.llms.openai`.
-  - `claude_code.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client,
+  - `anthropic.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client,
     plus Anthropic list pricing over transcript cache-write TTLs, a model's long-context tier, and the fast-mode rates a call's `speed` selects;
-    session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags.
+    session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags, a `model` or `effort` left None to the session's own default.
+    `DEFAULT_MODEL` is a concrete id, bumped by hand.
   - `echo.py` — the dependency-free native recipe used by tests and the native LLM diagnostic CLI;
     its empty table prices no call, and its client is `bro.native.llms.echo`.
 
@@ -84,7 +86,7 @@ The bro-native engine and provider clients live in `bro.native`.
 - A new provider recipe lives in `llms/`, exports `LLMSpec` with `DEFAULT_MODEL`, a `MODELS` short-name table, `PRICE_TABLE`, `PRICE_TABLE_SHA256`, and `price`, and takes one row in `providers._PROVIDER_MODULES`.
   Its `TYPE` is the roster name.
   Price tables use the provider's raw billing vocabulary.
-  Short names stay unique across providers.
+  Short names stay unique among the providers one harness serves.
 - A recipe run by bro-native subclasses `NativeLLMSpec` and has a matching client module in `bro.native.llms`, registered in `bro.native.providers`.
   Recipe modules never construct clients.
 - Importing a recipe module must stay cheap:
@@ -93,5 +95,5 @@ The bro-native engine and provider clients live in `bro.native`.
 - A `Tool.call` returns `str` for unstructured output or a JSON-ready `dict` for structured output;
   `ToolControlSignal` escapes the native loop.
 - Acronyms stay all-caps in identifiers (`LLMSpec`, `MCPServer`).
-  Provider names are lowercase and hyphenated when needed (`openai`, `claude-code`, `echo`);
+  Provider names are lowercase and hyphenated when needed (`openai`, `anthropic`, `echo`), and name the vendor, not the harness that serves it;
   only module filenames use underscores.

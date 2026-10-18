@@ -1,11 +1,12 @@
-"""Claude Code as an LLM provider: the model and knobs a claude session runs
-under, carried as an `LLMSpec` like every other provider's recipe.
+"""Anthropic as an LLM provider: the model and knobs a Claude Code session runs
+under, carried as an `LLMSpec` like every other provider's recipe, plus
+Anthropic list pricing.
 
-Claude Code drives its own agent loop, so this is a recipe and nothing more — it
-builds no client, and a session surface reads the fields off it.
+The recipe has no in-process client: a session surface reads the fields off it.
 """
 
 import dataclasses
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -16,18 +17,19 @@ from typing import Any, ClassVar, Optional, Self
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
 
-DEFAULT_MODEL = 'opus'
+DEFAULT_MODEL = 'claude-opus-5-5'
 
-# `--model` short names for this provider's models. `opus` and `fable` are not
-# model ids but Claude Code's own family aliases, which it resolves to whichever
-# model it currently defaults each family to — so they stand for themselves.
+# Claude Code's `--model` also takes family aliases (`opus`, `sonnet`, …), each
+# standing for whichever model it currently defaults the family to; a recipe
+# names the model itself
+MODEL_ID = re.compile(r'claude-[a-z0-9-]+')
+
+# `--model` short names for this provider's models.
 MODELS: dict[str, str] = {
-  'opus': 'opus',
   'opus5': 'claude-opus-5',
   'opus55': 'claude-opus-5-5',
   'sonnet5': 'claude-sonnet-5',
   'sonnet55': 'claude-sonnet-5-5',
-  'fable': 'fable',
   'fable5': 'claude-fable-5',
   'fable51': 'claude-fable-5-1',
   'haiku45': 'claude-haiku-4-5-20251001',
@@ -434,12 +436,12 @@ def price(
 ) -> Optional[Decimal]:
   """Price one Anthropic transcript call from its raw usage record."""
   if service_tier is not None:
-    raise ValueError('claude-code usage has no service tier')
+    raise ValueError('anthropic usage has no service tier')
   selected = PRICE_TABLE if table is None else table
   model_rates = selected.models.get(model)
   if model_rates is None:
     return None
-  pricing.warn_if_stale('claude-code', selected.as_of)
+  pricing.warn_if_stale('anthropic', selected.as_of)
 
   input_tokens = _count(usage.get('input_tokens'), 'input_tokens')
   cache_creation_tokens = _count(
@@ -488,17 +490,18 @@ DEFAULT_EFFORT = 'xhigh'
 
 @dataclass(frozen=True)
 class LLMSpec(llm_llm.LLMSpec):
-  """spec for a Claude Code session.
+  """spec for an Anthropic model.
 
-  `effort` is a neutral level (`llm.EFFORT_LEVELS`), which claude's own
-  `--effort` takes unmapped. `fast_mode` is claude's /fast — the field is spelled
-  apart from the `fast()` knob setter it backs, which a same-named field would
-  shadow.
+  `model` and `effort` None name none, leaving the choice to the session that
+  runs the recipe. `effort` is a neutral level (`llm.EFFORT_LEVELS`), which
+  claude's own `--effort` takes unmapped. `fast_mode` is claude's /fast — the
+  field is spelled apart from the `fast()` knob setter it backs, which a
+  same-named field would shadow.
   """
 
-  TYPE: ClassVar[str] = 'claude-code'
+  TYPE: ClassVar[str] = 'anthropic'
 
-  model: str = DEFAULT_MODEL
+  model: Optional[str] = DEFAULT_MODEL
   effort: Optional[str] = DEFAULT_EFFORT
   fast_mode: bool = False
 

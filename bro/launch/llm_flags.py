@@ -1,11 +1,11 @@
-"""the LLM-selection flags every launch surface registers, the preset store
-behind `--llm`, and the host's per-bro defaults beneath the flags.
+"""the LLM-selection flags every launch surface registers, and the preset store
+behind `--llm`.
 
 `--provider` / `--model` / `--effort` / `--fast` name the pieces of a recipe;
 `--llm` names the whole thing at once and excludes them. A surface registers the
 set with `add_llm_flags`, collapses what it parsed into the one canonical value
-with `canonicalize`, and resolves that over its own standing recipe
-(`bro.llm.providers.resolve`).
+with `canonicalize`, and has its harness resolve that over the standing recipe
+(`bro.harness.Harness.resolve_recipe`).
 
 Kept apart from the launcher modules so a surface that only registers the flags
 (the managed-workspace flag layer) can do it without pulling the launcher stack; the provider
@@ -28,7 +28,7 @@ _CURRENT_PROJECT = object()
 PROVIDER_HELP = 'the provider that answers; selects its default model unless --model names one'
 MODEL_HELP = (
   'the model that answers, by short name or full id — resolved within --provider when given, '
-  'otherwise by the provider that serves the name'
+  'otherwise among the providers the harness runs'
 )
 LLM_HELP = (
   'the whole recipe in one value: `provider:model:effort` with an optional `+fast` suffix and '
@@ -122,27 +122,6 @@ def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'L
     return parse(expanded)
   except LLMSelectionError as error:
     raise LLMSelectionError(f'--llm preset {value!r} ({expanded}): {error}') from error
-
-
-def with_host_defaults(
-  selection: 'LLMSelection', attachment: Optional[host_config.Attachment], bro_name: str
-) -> 'LLMSelection':
-  """`selection` with the host's per-bro defaults beneath it: the `bros` entries
-  the attachment names for `bro_name` fill what the flags leave unnamed
-  (`LLMSelection.over`), the more specific entry first. An entry the grammar
-  rejects names itself in the error."""
-  from bro.llm.providers import LLMSelectionError, parse
-
-  for default in reversed(host_config.launch_llm(attachment, bro_name)):
-    try:
-      parsed = parse(default.recipe)
-    except LLMSelectionError as error:
-      raise LLMSelectionError(
-        f'{host_config.HOST_CONFIG_FILE}: bros.{bro_name}.llm {default.recipe!r} '
-        f'({default.layer}): {error}'
-      ) from error
-    selection = selection.over(parsed)
-  return selection
 
 
 def canonicalize(args: dict, selection: 'LLMSelection') -> Optional[str]:

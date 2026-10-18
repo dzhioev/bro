@@ -157,13 +157,13 @@ def _remove_stored_formats(store: TrailsStore, trail_id: str) -> None:
 def _install_synthetic_format(monkeypatch) -> None:
   monkeypatch.setitem(
     formats.UPGRADES,
-    1,
+    model.TRAIL_FORMAT,
     formats.FormatUpgrade(
       header=lambda header: {**header, 'synthetic_header': True},
       row=lambda row: {**row, 'call_id': 'upgraded'},
     ),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
 
 class TestTrailsStoreContract:
@@ -189,8 +189,8 @@ class TestTrailsStoreContract:
     row = trails_store.get_step(trail_id, 0)
     messages = trails_store.get_messages(trail_id)
 
-    assert (header['format'], header['synthetic_header']) == (2, True)
-    assert (row['format'], row['call_id']) == (2, 'upgraded')
+    assert (header['format'], header['synthetic_header']) == (model.TRAIL_FORMAT, True)
+    assert (row['format'], row['call_id']) == (model.TRAIL_FORMAT, 'upgraded')
     assert messages['messages'][0]['call_id'] == 'upgraded'
     header_path, rows_path = _stored_paths(trails_store, trail_id)
     assert 'format' not in json.loads(header_path.read_text())
@@ -203,7 +203,9 @@ class TestTrailsStoreContract:
     header['format'] = model.TRAIL_FORMAT + 1
     header_path.write_text(json.dumps(header))
 
-    with pytest.raises(ValueError, match='trail header uses trail format 2'):
+    with pytest.raises(
+      ValueError, match=f'trail header uses trail format {model.TRAIL_FORMAT + 1}'
+    ):
       trails_store.get_trail(trail_id)
 
     header['format'] = model.TRAIL_FORMAT
@@ -224,11 +226,19 @@ class TestTrailsStoreContract:
     header_path, rows_path = _stored_paths(trails_store, trail_id)
     header = json.loads(header_path.read_text())
     stored_rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
-    assert (header['format'], header['synthetic_header']) == (2, True)
+    assert (header['format'], header['synthetic_header']) == (model.TRAIL_FORMAT, True)
     assert [(row['format'], row['body'], row.get('call_id')) for row in stored_rows] == [
-      (2, 'prompt', 'upgraded'),
-      (2, 'hello', None),
+      (model.TRAIL_FORMAT, 'prompt', 'upgraded'),
+      (model.TRAIL_FORMAT, 'hello', None),
     ]
+
+  def test_a_first_format_header_names_the_claude_code_provider_anthropic(self):
+    header = {'id': 'trail', 'native': {'llm': {'type': 'claude-code', 'model': 'opus'}}}
+
+    upgraded = formats.upgrade_header(header)
+
+    assert upgraded['native']['llm'] == {'type': 'anthropic', 'model': 'opus'}
+    assert header['native']['llm']['type'] == 'claude-code'
 
   def test_row_upgrade_refuses_an_in_place_nested_body_change(self, monkeypatch):
     row = {'trail_id': 'trail', 'step_id': 0, 'body': {'text': 'original'}}
@@ -239,10 +249,10 @@ class TestTrailsStoreContract:
 
     monkeypatch.setitem(
       formats.UPGRADES,
-      1,
+      model.TRAIL_FORMAT,
       formats.FormatUpgrade(header=lambda header: header, row=change_body),
     )
-    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
     with pytest.raises(ValueError, match='format upgrade changed its immutable body'):
       formats.upgrade_row(row)
@@ -255,13 +265,13 @@ class TestTrailsStoreContract:
     _remove_stored_formats(trails_store, trail_id)
     monkeypatch.setitem(
       formats.UPGRADES,
-      1,
+      model.TRAIL_FORMAT,
       formats.FormatUpgrade(
         header=lambda header: header,
         row=lambda row: {**row, 'body': 'changed'},
       ),
     )
-    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
     with pytest.raises(ValueError, match='format upgrade changed its immutable body'):
       trails_store.migrate_trail(trail_id)
@@ -281,8 +291,8 @@ class TestTrailsStoreContract:
 
     assert attached['id'] == trail_id
     header_path, rows_path = _stored_paths(trails_store, trail_id)
-    assert json.loads(header_path.read_text())['format'] == 2
-    assert json.loads(rows_path.read_text().splitlines()[0])['format'] == 2
+    assert json.loads(header_path.read_text())['format'] == model.TRAIL_FORMAT
+    assert json.loads(rows_path.read_text().splitlines()[0])['format'] == model.TRAIL_FORMAT
 
   def test_write_read_and_end_lifecycle(self, trails_store):
     created = trails_store.blaze(_bro_request(subject='initial'))
@@ -704,10 +714,10 @@ class TestImportContract:
 
     monkeypatch.setitem(
       formats.UPGRADES,
-      1,
+      model.TRAIL_FORMAT,
       formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
     )
-    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
     trails_store.import_trail(
       recorded_header,
@@ -742,10 +752,10 @@ class TestImportContract:
 
     monkeypatch.setitem(
       formats.UPGRADES,
-      1,
+      model.TRAIL_FORMAT,
       formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
     )
-    monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+    monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
     trails_store.import_trail(parent_header, parent_rows, tools={_TOOLS_DIGEST: _TOOLS})
 
     trails_store.import_trail(child_header, child_rows, tools={_TOOLS_DIGEST: _TOOLS})

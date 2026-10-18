@@ -18,7 +18,7 @@ from bro.jobs import Job, JobStatus, Registry
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
-from bro.native import dev_mcp
+from bro.native import dev_mcp, providers as native_providers
 from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -31,21 +31,12 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
-def resolve_native(base: 'NativeLLMSpec', selection: 'LLMSelection') -> 'NativeLLMSpec':
-  """the recipe a bro-native launcher runs: `selection` over the bro's own spec.
-
-  A selection naming a harness that drives its own loop is refused rather than
-  taken as a request to launch on that harness — these flags choose a model.
-  """
-  from bro.llm.llm import NativeLLMSpec
-  from bro.llm.providers import LLMSelectionError, resolve
-
-  spec = resolve(base, selection)
+def resolve_native(base: NativeLLMSpec, selection: LLMSelection) -> NativeLLMSpec:
+  """the recipe a bro-native launcher runs: `selection` over the bro's own spec,
+  among the providers the engine has a client for."""
+  spec = BRO.resolve_recipe(base, selection)
   if not isinstance(spec, NativeLLMSpec):
-    raise LLMSelectionError(
-      f'{spec.TYPE} runs its own agent loop, so a bro cannot be launched against it here; '
-      'select a compatible driving harness with `ride solo|along --harness NAME`'
-    )
+    raise TypeError(f'native provider {spec.TYPE!r} declares a recipe the engine cannot run')
   return spec
 
 
@@ -191,6 +182,7 @@ def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[st
 
 class BroHarness(Harness):
   name = 'bro'
+  llm_providers = native_providers.known_names()
 
   def facts(self) -> Variables:
     return {

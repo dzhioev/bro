@@ -51,10 +51,10 @@ class LLMSpec(ABC):
   combinations in `__post_init__` and provides a round-trip `dump` / `from_dict`
   pair keyed by `TYPE` so a stored spec can be reconstructed.
 
-  A recipe is not by itself something the framework can run: a provider whose
-  harness drives its own loop (`bro.llm.llms.claude_code`) is a recipe and
-  nothing more, while one accepted by the bro-native engine subclasses
-  `NativeLLMSpec`. The engine maps that recipe to its client.
+  A recipe is not by itself something the framework can run: one only a harness
+  driving its own loop runs (`bro.llm.llms.anthropic`) is a recipe and nothing
+  more, while one accepted by the bro-native engine subclasses `NativeLLMSpec`.
+  The engine maps that recipe to its client.
 
   Frozen so a class-level `llm_spec = SomeSpec(...)` default can be shared
   across instances safely — `.fast()` and friends return a new spec via
@@ -63,8 +63,6 @@ class LLMSpec(ABC):
 
   # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
-
-  model: str
 
   def fast(self) -> Self:
     """return a copy of self with the provider's 'fast' knob set.
@@ -115,6 +113,8 @@ class LLMSpec(ABC):
 @dataclass(frozen=True)
 class NativeLLMSpec(LLMSpec, ABC):
   """an `LLMSpec` the bro-native engine can run."""
+
+  model: str
 
 
 def _ensure_providers_loaded() -> None:

@@ -34,7 +34,7 @@ from ride import provisioning
 from ride.workspace import build_context, docker
 harness = get_harness(name)
 recipe = harness.resolve_llm('echo:' if name == 'bro' else None, 'bro')
-assert recipe.TYPE == ('echo' if name == 'bro' else 'claude-code')
+assert recipe.TYPE == ('echo' if name == 'bro' else 'anthropic')
 checks = []
 if name == 'claude':
   harness.check_runtime = lambda: checks.append('checked')
@@ -156,7 +156,7 @@ import importlib.abc
 import sys
 class RejectHarness(importlib.abc.MetaPathFinder):
   def find_spec(self, fullname, path=None, target=None):
-    if fullname.startswith(('ride.claude', 'bro.native', 'bro.llm.llms.claude_code')):
+    if fullname.startswith(('ride.claude', 'bro.native', 'bro.llm.llms.anthropic')):
       raise AssertionError('harness implementation imported: ' + fullname)
 sys.meta_path.insert(0, RejectHarness())
 from bro.base.args import Parser

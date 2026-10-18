@@ -9,6 +9,7 @@ import pytest
 
 from bro.trails.model import (
   INITIAL_TRAIL_FORMAT,
+  TRAIL_FORMAT,
   BlazeRequest,
   ForkedFrom,
   RecordedTrail,
@@ -106,7 +107,7 @@ class TestConstructor:
     fake.queue((200, b'{"id": "T1"}'))
 
     store = NetworkStore('http://127.0.0.1:8004', 'tok')
-    assert store.get_trail('T1') == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
+    assert store.get_trail('T1') == {'id': 'T1', 'format': TRAIL_FORMAT}
 
 
 class TestConnectionPool:
@@ -132,12 +133,12 @@ class TestConnectionPool:
     store = _client()
     with ThreadPoolExecutor(max_workers=2) as executor:
       results = list(executor.map(lambda _: store.get_trail('T1'), range(2)))
-    assert results == [{'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}] * 2
+    assert results == [{'id': 'T1', 'format': TRAIL_FORMAT}] * 2
     assert [len(connection.requests) for connection in opened] == [1, 1]
 
     for connection in opened:
       connection.queue((200, b'{"id": "T2"}'))
-    assert store.get_trail('T2') == {'id': 'T2', 'format': INITIAL_TRAIL_FORMAT}
+    assert store.get_trail('T2') == {'id': 'T2', 'format': TRAIL_FORMAT}
     assert len(opened) == 2
 
     store.close()
@@ -165,7 +166,7 @@ class TestConnectionPool:
       store.close()
       assert connection.closes == 0
       store_closed.set()
-      assert request.result(timeout=10) == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
+      assert request.result(timeout=10) == {'id': 'T1', 'format': TRAIL_FORMAT}
 
     assert connection.closes == 1
     with pytest.raises(RuntimeError, match='is closed'):
@@ -178,7 +179,7 @@ class TestGetTrail:
     fake.queue((200, b'{"trail_id": "T1", "bro": "dev"}'))
     c = _client()
     result = c.get_trail('T1')
-    assert result == {'trail_id': 'T1', 'bro': 'dev', 'format': INITIAL_TRAIL_FORMAT}
+    assert result == {'trail_id': 'T1', 'bro': 'dev', 'format': TRAIL_FORMAT}
     method, path, body, headers = fake.requests[0]
     assert (method, path) == ('GET', '/v1/trails/T1')
     assert headers['Authorization'] == 'Bearer tok'
@@ -312,7 +313,7 @@ class TestRetryBehavior:
     fake.queue((200, b'{"id": "T1"}'))
     c = _client()
     result = c.get_trail('T1')
-    assert result == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
+    assert result == {'id': 'T1', 'format': TRAIL_FORMAT}
     assert fake.closes >= 1
 
   def test_second_failure_propagates(self, monkeypatch):
@@ -328,7 +329,7 @@ class TestRetryBehavior:
     fake.queue((503, b'unavailable'))
     fake.queue((200, b'{"id": "T1"}'))
     c = _client()
-    assert c.get_trail('T1') == {'id': 'T1', 'format': INITIAL_TRAIL_FORMAT}
+    assert c.get_trail('T1') == {'id': 'T1', 'format': TRAIL_FORMAT}
 
   def test_persistent_retryable_status_propagates(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

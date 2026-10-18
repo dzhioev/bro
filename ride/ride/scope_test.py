@@ -12,6 +12,7 @@ from bro.bro import feature
 from bro.datasources.web_search import WebSearch
 from bro.harness import Harness
 from bro.llm.mcp import InProcessMCPServer
+from bro.llm.providers import LLMSelectionError
 from bro.mcp import MCPServerSpec, ToolLayer, creds, source
 from bros.bro import Bro
 from ride.harness import get_harness
@@ -193,26 +194,61 @@ class TestBindLaunchLLM:
     config.write_text(json.dumps({'projects': {str(tmp_path): {'bros': bros}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
-  def test_the_launch_settles_its_flags_over_the_bros_entry(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': 'openai:sol:xhigh'}})
+  def _bind(self, harness: str, tmp_path, llm=None):
+    return ride.scope.bind_launch_llm(get_harness(harness), str(tmp_path), 'bro-dev', llm)
 
-    assert ride.scope.bind_launch_llm(str(tmp_path), 'bro-dev', '::low') == 'openai:sol:low'
+  def test_the_launch_settles_its_flags_over_the_listed_recipe(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['openai:sol:xhigh']}})
 
-  def test_a_launch_naming_nothing_runs_the_entry(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': 'openai:sol:xhigh'}})
+    assert self._bind('bro', tmp_path, '::low') == 'openai:sol:low'
 
-    assert ride.scope.bind_launch_llm(str(tmp_path), 'bro-dev', None) == 'openai:sol:xhigh'
+  def test_each_harness_runs_the_first_recipe_it_serves(self, tmp_path, monkeypatch):
+    recipes = ['anthropic:opus55:high+fast', 'openai:sol:xhigh', 'default']
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': recipes}})
 
-  def test_nothing_named_anywhere_is_none(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'other': {'llm': 'openai:sol:xhigh'}})
+    assert self._bind('claude', tmp_path) == 'anthropic:opus55:high+fast'
+    assert self._bind('bro', tmp_path) == 'openai:sol:xhigh'
 
-    assert ride.scope.bind_launch_llm(str(tmp_path), 'bro-dev', None) is None
-    assert ride.scope.bind_launch_llm(None, 'bro-dev', None) is None
+  def test_a_model_named_alone_is_served_by_the_harness_carrying_it(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': [':opus55', 'default']}})
+
+    assert self._bind('claude', tmp_path) == ':opus55'
+    assert self._bind('bro', tmp_path) is None
+
+  def test_default_keeps_the_harness_own_recipe_beneath_the_flags(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['anthropic:opus55', 'default']}})
+
+    assert self._bind('bro', tmp_path) is None
+    assert self._bind('bro', tmp_path, '::low') == '::low'
+
+  def test_a_list_naming_nothing_the_harness_runs_fails_naming_it(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['anthropic:opus55:high+fast']}})
+
+    with pytest.raises(
+      LLMSelectionError,
+      match='bros.bro-dev.llm \\(project-path-bro\\) lists no recipe the bro harness can run '
+      '\\(it serves openai, echo\\); add "default" to fall back to its own',
+    ):
+      self._bind('bro', tmp_path)
+
+  def test_a_malformed_recipe_fails_past_the_one_picked(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['openai:sol', '::ludicrous']}})
+
+    with pytest.raises(
+      LLMSelectionError, match="bros.bro-dev.llm '::ludicrous' \\(project-path-bro\\)"
+    ):
+      self._bind('bro', tmp_path)
+
+  def test_nothing_listed_anywhere_is_none(self, tmp_path, monkeypatch):
+    self._config(tmp_path, monkeypatch, {'other': {'llm': ['openai:sol:xhigh']}})
+
+    assert self._bind('bro', tmp_path) is None
+    assert ride.scope.bind_launch_llm(get_harness('bro'), None, 'bro-dev', None) is None
 
   def test_a_detached_launch_keeps_its_own_value(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': 'openai:sol:xhigh'}})
+    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['openai:sol:xhigh']}})
 
-    assert ride.scope.bind_launch_llm(None, 'bro-dev', '::low') == '::low'
+    assert ride.scope.bind_launch_llm(get_harness('bro'), None, 'bro-dev', '::low') == '::low'
 
 
 class TestLaunchLLMSpec:
@@ -233,7 +269,7 @@ class TestLaunchLLMSpec:
       json.dumps(
         {
           'projects': {
-            str(tmp_path): {'bros': {'bro-dev': {'creds': ['openai+work'], 'llm': 'openai:sol'}}}
+            str(tmp_path): {'bros': {'bro-dev': {'creds': ['openai+work'], 'llm': ['openai:sol']}}}
           }
         }
       )

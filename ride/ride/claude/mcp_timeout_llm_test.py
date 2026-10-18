@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import ride.claude.runner as runner
 from bro import watches
-from bro.llm.llms.claude_code import LLMSpec
+from bro.llm.llms.anthropic import LLMSpec
 from ride.claude.claude_argv import STREAM_JSON_ARGS, ClaudeLaunch
 from ride.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,

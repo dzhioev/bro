@@ -288,7 +288,7 @@ def fork(
 def _server_side_eligible(
   *,
   forked_from_spec: dict,
-  new_spec: LLMSpec,
+  new_spec: NativeLLMSpec,
   fork_step: Step,
   system_prompt_override: Optional[str],
 ) -> bool:

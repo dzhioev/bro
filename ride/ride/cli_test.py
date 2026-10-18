@@ -228,11 +228,11 @@ class TestHostLLMDefault:
     self.config = tmp_path / 'bro.json'
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(self.config))
 
-  def _entry(self, llm: str) -> None:
+  def _entry(self, llm: list[str]) -> None:
     self.config.write_text(json.dumps({'projects': {'/repo': {'bros': {'dev': {'llm': llm}}}}}))
 
   def test_the_launch_records_the_recipe_settled_over_the_hosts_entry(self):
-    self._entry('openai:sol:xhigh')
+    self._entry(['openai:sol:xhigh'])
     with patch('ride.cli.start_session', return_value=0) as start:
       argv = ['ride', 'along', '--repo', '/repo', '--harness', 'bro', '--effort', 'low', 'dev']
       assert ride_cli.main(argv) == 0
@@ -242,14 +242,14 @@ class TestHostLLMDefault:
     command = _session_command(spec)
     assert command[command.index('--llm') + 1] == 'openai:sol:low'
 
-  def test_a_recipe_the_harness_cannot_run_fails_the_launch(self, capsys):
-    self._entry('openai:sol')
+  def test_a_list_the_harness_runs_none_of_fails_the_launch(self, capsys):
+    self._entry(['openai:sol'])
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
-    assert '--harness bro' in capsys.readouterr().err
+    assert 'lists no recipe the claude harness can run' in capsys.readouterr().err
 
   def test_a_malformed_entry_names_itself(self, capsys):
-    self._entry('::ludicrous')
+    self._entry(['::ludicrous'])
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
     assert "bros.dev.llm '::ludicrous' (project-path-bro)" in capsys.readouterr().err
@@ -595,10 +595,10 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--workspace', 'shared', '--drop', 'dev'])
     assert 'pinned workspaces are always kept' in capsys.readouterr().err
 
-  def test_incompatible_provider_names_the_harness_remedy(self, capsys):
+  def test_an_incompatible_provider_names_the_harness_serving_it(self, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
-    assert '--harness bro' in capsys.readouterr().err
+    assert 'openai runs on the bro harness' in capsys.readouterr().err
 
   def test_an_unknown_bro_is_named_on_either_harness(self, capsys):
     for harness in ('claude', 'bro'):

@@ -153,7 +153,7 @@ PYTEST_FILES = [
   'bro/brog/github_test.py',
   'bro/brog/mcp_test.py',
   'bro/llm/cli_tool_test.py',
-  'bro/llm/llms/claude_code_test.py',
+  'bro/llm/llms/anthropic_test.py',
   'bro/llm/llms/openai_test.py',
   'bro/llm/mcp_test.py',
   'bro/llm/providers_test.py',

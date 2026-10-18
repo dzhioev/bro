@@ -8,7 +8,7 @@ from bro.base import credentials, log
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
 from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
-from bro.llm.llms.claude_code import LLMSpec
+from bro.llm.llms.anthropic import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.mcp import Reach
 from bro.run_lifecycle import RunLifecycle
@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 
 
 _AUTH_SECRET = 'claude_code'
+# names neither model nor effort, so Claude Code runs its own current default
+_SESSION_DEFAULT = LLMSpec(model=None, effort=None)
 
 
 def llm_spec(spec: 'SessionSpec | SessionRun') -> LLMSpec:
@@ -71,6 +73,7 @@ def _raise_and_terminate(result: str, status: int) -> None:
 
 class ClaudeHarness(Harness):
   name = 'claude'
+  llm_providers = (LLMSpec.TYPE,)
 
   def facts(self) -> Variables:
     return {
@@ -124,15 +127,10 @@ class ClaudeHarness(Harness):
 
   def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
     del bro_name
-    from bro.llm.providers import LLMSelectionError, resolve
-
     selection = LLMSelection() if value is None else parse(value)
-    resolved = resolve(LLMSpec(), selection)
+    resolved = self.resolve_recipe(_SESSION_DEFAULT, selection)
     if not isinstance(resolved, LLMSpec):
-      raise LLMSelectionError(
-        f'the claude harness runs Claude Code, not {resolved.TYPE}; '
-        'select the compatible driver with --harness bro'
-      )
+      raise TypeError(f'the claude harness resolved an incompatible recipe: {resolved.TYPE}')
     return resolved
 
   def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]:

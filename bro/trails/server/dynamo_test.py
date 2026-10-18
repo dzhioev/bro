@@ -439,7 +439,7 @@ def test_append_rejects_a_header_format_change_after_its_read(components, monkey
 
   monkeypatch.setattr(store, '_append_header_update', race_format_change)
 
-  with pytest.raises(formats.UnsupportedTrailFormat, match='format 2'):
+  with pytest.raises(formats.UnsupportedTrailFormat, match=f'format {model.TRAIL_FORMAT + 1}'):
     store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
 
   assert dynamo.headers[trail_id]['extent'] == 1
@@ -465,7 +465,7 @@ def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeyp
   )
   monkeypatch.setitem(
     formats.UPGRADES,
-    1,
+    model.TRAIL_FORMAT,
     formats.FormatUpgrade(
       header=lambda header: {
         **header,
@@ -475,14 +475,14 @@ def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeyp
       row=lambda row: {**row, 'turn_index': 1},
     ),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
   assert store.check(trail_id)['ok'] is True
   assert 'format' not in dynamo.steps[trail_id, 0]
   store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
 
   assert (dynamo.headers[trail_id]['format'], dynamo.headers[trail_id]['synthetic_header']) == (
-    2,
+    model.TRAIL_FORMAT,
     True,
   )
   assert 'synthetic_nullable' in dynamo.headers[trail_id]
@@ -491,8 +491,8 @@ def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeyp
     dynamo.steps[trail_id, 0]['format'],
     dynamo.steps[trail_id, 0]['body'],
     dynamo.steps[trail_id, 0]['turn_index'],
-  ) == (2, 'prompt', 1)
-  assert dynamo.steps[trail_id, 1]['format'] == 2
+  ) == (model.TRAIL_FORMAT, 'prompt', 1)
+  assert dynamo.steps[trail_id, 1]['format'] == model.TRAIL_FORMAT
   [migration_put] = [put for put in conditional_puts if 'ConditionExpression' in put]
   assert migration_put['ConditionExpression'] == (
     '(attribute_not_exists(#stored_format) OR #stored_format = :source_format)'
@@ -536,10 +536,10 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
 
   monkeypatch.setitem(
     formats.UPGRADES,
-    1,
+    model.TRAIL_FORMAT,
     formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
   store.migrate_trail(trail_id)
 
@@ -565,13 +565,13 @@ def test_migration_refuses_a_body_changing_upgrade_before_rewriting(components, 
       step.pop('format')
   monkeypatch.setitem(
     formats.UPGRADES,
-    1,
+    model.TRAIL_FORMAT,
     formats.FormatUpgrade(
       header=lambda header: header,
       row=lambda row: {**row, 'body': 'small'} if row['step_id'] == 1 else row,
     ),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
   with pytest.raises(ValueError, match='format upgrade changed its immutable body'):
     store.migrate_trail(trail_id)
@@ -591,19 +591,19 @@ def test_recompute_migrates_before_repairing_rows(components, monkeypatch):
     step.pop('format')
   monkeypatch.setitem(
     formats.UPGRADES,
-    1,
+    model.TRAIL_FORMAT,
     formats.FormatUpgrade(
       header=lambda header: header,
       row=lambda row: {**row, 'turn_index': 1},
     ),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
   store.recompute(trail_id)
 
-  assert dynamo.headers[trail_id]['format'] == 2
+  assert dynamo.headers[trail_id]['format'] == model.TRAIL_FORMAT
   assert (dynamo.steps[trail_id, 0]['format'], dynamo.steps[trail_id, 0]['turn_index']) == (
-    2,
+    model.TRAIL_FORMAT,
     1,
   )
   assert store.check(trail_id)['ok'] is True
@@ -1101,10 +1101,10 @@ def test_import_derives_storage_attributes_from_an_upgraded_recorded_header(
 
   monkeypatch.setitem(
     formats.UPGRADES,
-    1,
+    model.TRAIL_FORMAT,
     formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
 
   store.begin_import(header)
 

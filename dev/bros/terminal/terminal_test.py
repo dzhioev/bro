@@ -18,7 +18,7 @@ def test_llm_model_selection_preserves_terminal_compaction():
   declared = Terminal.llm_spec
   assert isinstance(declared, openai.LLMSpec)
   assert declared.compact_threshold is not None
-  spec = providers.resolve(declared, providers.parse(':sol'))
+  spec = providers.resolve(declared, providers.parse(':sol'), ('openai',))
   assert isinstance(spec, openai.LLMSpec)
   assert spec.model == openai.MODELS['sol']
   assert spec.compact_threshold == declared.compact_threshold

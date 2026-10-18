@@ -254,9 +254,8 @@ def format_int(n: int) -> str:
 
 # the vendor a resolved model slug bills, by the shape of the slug. Distinct
 # from the launch-time provider of `bro.llm.providers`, which answers which
-# surface serves a model *name*: a claude slug bills `anthropic` whether a Claude
-# Code session or the Anthropic API served it, where the launch roster would call
-# the same string `claude-code`.
+# recipe a model *name* launches: a slug bills its vendor whichever harness
+# served it.
 _VENDOR_PATTERNS = (
   (re.compile(r'^claude-'), 'anthropic'),
   (re.compile(r'^(gpt|o\d)'), 'openai'),

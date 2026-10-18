@@ -214,7 +214,7 @@ class TestReportScope:
 
   def test_the_scope_follows_the_hosts_per_bro_recipe(self, capsys, monkeypatch, tmp_path):
     config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': 'echo'}}}}}))
+    config.write_text(json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': ['echo']}}}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
 
     _, _, scope = _run(capsys, selection={}, scoped=ScopedSecrets(set(), set()), harness='bro')

@@ -24,7 +24,7 @@ from bro.workspace.paths import ride_trails_dir
 # the recipes each harness is supported under, as `--llm` takes them
 RECIPES: dict[str, tuple[str, ...]] = {
   'bro': ('openai:terra:medium', 'openai:sol:high'),
-  'claude': ('claude-code:opus:xhigh',),
+  'claude': ('anthropic:opus55:xhigh',),
 }
 
 _SESSION_TIMEOUT_SECONDS = 900

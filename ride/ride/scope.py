@@ -1,7 +1,8 @@
 """per-surface scoping of a bro run: which credentials each launch hydrates and
 which type-keyed launch permissions it carries, computed from static seeds under
 project, host, and launch layers;
-`bind_launch_llm` settles the launch's LLM recipe over the same host entries.
+`bind_launch_llm` settles the launch's LLM recipe for its harness over the same
+host entries.
 """
 
 import contextlib
@@ -19,7 +20,6 @@ from bro.base.scope import (
   split_scope_overrides,
   validate_scope_layer,
 )
-from bro.launch.llm_flags import with_host_defaults
 from bro.worker_types import Launch, LaunchFlag, LaunchPass, installed_types, parse_launch
 from ride.repository import Repository, attachment_identities, open_repository
 from ride.workspace.store import ScopedSecrets
@@ -27,6 +27,7 @@ from ride.workspace.store import ScopedSecrets
 if TYPE_CHECKING:
   from bro.harness import Harness
   from bro.llm.llm import LLMSpec
+  from bro.llm.providers import LLMSelection
   from ride.harness import SessionHarness
 
 _RECORDING_CREDENTIAL = 'trails'
@@ -70,28 +71,61 @@ def bind_launch_credentials(
   return host_config.launch_selection(identities, bro_name)
 
 
-def bind_launch_llm(attachment: Optional[str], bro_name: str, llm: Optional[str]) -> Optional[str]:
-  """the canonical `--llm` value a launch as `bro_name` runs under: `llm` — its
-  own canonical selection, or None — with the host's per-bro defaults for the
-  attachment beneath it (`with_host_defaults`); None when nothing names a slot.
-  What the launch records and forwards, so the recipe is settled once, on the
-  host, wherever the session runs."""
-  from bro.llm.providers import LLMSelection, parse
+def bind_launch_llm(
+  harness: 'SessionHarness', attachment: Optional[str], bro_name: str, llm: Optional[str]
+) -> Optional[str]:
+  """the canonical `--llm` value a launch as `bro_name` on `harness` runs under:
+  `llm` — its own canonical selection, or None — over the host's per-bro recipe
+  for the attachment (`_host_recipe`), applied as `LLMSelection.over` lays flags
+  over a default; None when nothing names a slot. What the launch records and
+  forwards, so the recipe is settled once, on the host, wherever the session
+  runs."""
+  from bro.llm.providers import parse
 
   identities = None if attachment is None else attachment_identities(attachment)
-  selection = LLMSelection() if llm is None else parse(llm)
-  selection = with_host_defaults(selection, identities, bro_name)
+  selection = _host_recipe(harness, identities, bro_name)
+  if llm is not None:
+    selection = parse(llm).over(selection)
   return None if selection.is_empty() else selection.format()
+
+
+def _host_recipe(
+  harness: 'SessionHarness', attachment: Optional[host_config.Attachment], bro_name: str
+) -> 'LLMSelection':
+  """the first recipe the host's per-bro list for the attachment names that
+  `harness` runs — the empty selection, keeping the harness's own recipe, for
+  `DEFAULT_RECIPE` or no list at all. Every listed recipe is parsed, so a
+  malformed one fails whichever harness the launch picks, naming itself."""
+  from bro.llm.providers import LLMSelection, LLMSelectionError, parse
+
+  listed = host_config.launch_llm(attachment, bro_name)
+  if listed is None:
+    return LLMSelection()
+  where = f'{host_config.HOST_CONFIG_FILE}: bros.{bro_name}.llm'
+  selections: list[LLMSelection] = []
+  for recipe in listed.recipes:
+    try:
+      selections.append(LLMSelection() if recipe == host_config.DEFAULT_RECIPE else parse(recipe))
+    except LLMSelectionError as error:
+      raise LLMSelectionError(f'{where} {recipe!r} ({listed.layer}): {error}') from error
+  for selection in selections:
+    if harness.runs(selection):
+      return selection
+  raise LLMSelectionError(
+    f'{where} ({listed.layer}) lists no recipe the {harness.name} harness can run '
+    f'(it serves {", ".join(harness.llm_providers)}); '
+    f'add "{host_config.DEFAULT_RECIPE}" to fall back to its own'
+  )
 
 
 def launch_llm_spec(
   driver: 'SessionHarness', attachment: Optional[str], bro_name: str, llm: Optional[str]
 ) -> 'LLMSpec':
   """the recipe a launch as `bro_name` under `driver` runs: `llm` settled over
-  the host's per-bro default (`bind_launch_llm`) and resolved within the driver.
+  the host's per-bro recipe (`bind_launch_llm`) and resolved within the driver.
   Raises `LaunchScopeError` for a bro the installation does not declare."""
   try:
-    return driver.resolve_llm(bind_launch_llm(attachment, bro_name, llm), bro_name)
+    return driver.resolve_llm(bind_launch_llm(driver, attachment, bro_name, llm), bro_name)
   except KeyError as error:
     raise LaunchScopeError(f'unknown bro {bro_name!r}') from error
 
