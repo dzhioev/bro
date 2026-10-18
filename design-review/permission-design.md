@@ -186,24 +186,27 @@ a root launched before the switch has no control file and is refused by name.
   the root for the sessions it spawned, through the container it started, the private root it created, or a joined member's own store and install directory;
   the manual launcher for its child, through an operator-channel connection it keeps.
 - Applying touches only the kinds the override changes, at the stable paths the session already uses, so work on every other kind runs on undisturbed.
-  The applier stages the change and runs an in-session `credentials apply` step, which publishes it in an order that keeps every read consistent:
-  new instance files first, unreferenced;
-  then the store's index, `creds.json`, replaced by rename, carrying the new picks and the next generation number, which is the commit point;
+  A session store's index, `creds.json`, is authoritative for readable material:
+  it maps each readable stored name to an immutable file, and the store reads only the names the current index lists, whatever else its directory holds.
+  The applier stages the change and runs an in-session `credentials apply` step, which publishes it in order:
+  each new or refreshed instance's material as a new file the current index doesn't name, so nothing staged is readable;
+  then the index, replaced by rename, carrying the new picks, the new mapping, and the next generation number, which is the commit point;
   then each changed hook file and command wrapper, and the environment file, each replaced by rename;
-  and last the explicit removal of what the override dropped or replaced, since `docker cp` merges and would leave a revoked instance readable.
+  and last the removal of every file the index no longer names, and of a dropped kind's hook files.
+  From the commit point a dropped or replaced instance is unreadable through the store, and its removal follows, since `docker cp` merges and would otherwise leave it on disk.
   A command that already opened a file keeps what it read, one that opens it later reads the new material, and a dropped kind's paths stop resolving, which is the revocation.
-  A store read that finds its instance file gone re-reads the index once when the generation moved, so a read racing an override returns the new pick or none.
+  A store read that finds its file gone re-reads the index once when the generation moved, so a read racing an override returns the new pick or none.
   Every step after the commit point is idempotent and retried until done, and a failure before it leaves the session as it was.
-- Every override carries an operation id, and the generation a credential override publishes records it.
-  The host checks the override, marks it pending on the mission, and asks the applier to apply it;
-  applying is idempotent per operation id, and its acknowledgement names the generation the session reached.
-  On the acknowledgement the host writes the resume record, then commits its own record and the journal entry, and replies `applied`;
-  a resume record it can't write keeps the operation pending and is retried, since a resume must not restore values the session no longer runs.
-  Without an acknowledgement within its bound, the host replies `uncertain`, naming the operation,
-  and reconciles it from the applier's report of the session's generation once the connection is back or at the next override of that mission:
-  it commits if the session reached the operation's generation and drops the operation otherwise.
-  While an operation is pending, further overrides of that mission are refused naming it, and the mission's own starts proceed, since a credential override never changes authority;
-  an operation still pending when its mission ends is dropped, so a resume restores the values the record last committed.
+- Every override carries an operation id.
+  The host checks the override, records it as pending, with the values it would commit, in the mission's record and its resume record, and asks the applier to apply it;
+  applying is idempotent per operation id.
+  Once the steps after the index's commit point are done, the applier writes a receipt naming the operation and the generation into the workspace's records on the host, which outlive the session, and acknowledges.
+  On the acknowledgement the host commits the pending values in its record, the resume record, and the journal, and replies `applied`.
+  Without an acknowledgement within its bound, the host replies `uncertain`, naming the operation, and settles it from the receipt,
+  never from the index's generation, which a failure partway through the remaining steps can leave ahead of the hook files:
+  when the applier is reachable again, the host has it finish the apply, which writes the receipt and acknowledges;
+  when the mission has ended, or at the workspace's next resume once the root is gone, it commits an operation that has a receipt and drops one that hasn't.
+  While an operation is pending, further overrides of that mission are refused naming it, and the mission's own starts proceed, since a credential override never changes authority.
   An `@bro` override needs no applier: the host writes the resume record and then commits, and refuses the override if the write fails.
 - The environment file sits in the session's install directory and restates every hook variable, with unsets for the ones that go.
   Claude's shell prefix (`CLAUDE_CODE_SHELL_PREFIX`), which already wraps every Bash and hook command, sources it;
@@ -241,7 +244,7 @@ A resumed child is a root, and the missions it had started don't survive.
 - The resume record keeps the launch shape it keeps today and replaces `cred`, `grant`, `revoke`, `llm`, and `resolved_llm` with the set values, gift, cap, and operator layer.
   It drops `summon_depth` and `summon_harness`, which a resume takes from its new reading where today it keeps the first launch's,
   and a manual child's names no runtime bundle, so a resumed one freezes the invoking installation like any other root.
-  An override rewrites it.
+  An override rewrites it, holding a pending operation until the operation is settled.
 - The launch audit adds the descriptor, the gift and cap, and a refusal's rule and atom.
 
 ### Syntax
@@ -349,7 +352,7 @@ assistant holds no `webview`, so the use rule refuses its own `webview open` at 
   `ride/ride/pending_launch.py` (the prepared request),
   `ride/ride/do_ride.py`, `ride/ride/claude/shell_prefix.py`, `bro/watches.py`, `bro/llm/cli_tool.py`, and the native runner and jobs (the environment file and its overlay),
   `ride/ride/workspace/docker.py` (the applier's copy into a running container),
-  `bro/base/credentials.py` (the staged apply, the index's generation, and the store's refresh),
+  `bro/base/credentials.py` (a session store's authoritative index, the staged apply, the index's generation, and the store's refresh),
   `bro/datasources/web_search.py` and `bro/brog/system.py` (caches keyed to the generation),
   `bro/base/host_config.py` and `bro/workspace/project.py` (`limit`, `operator`),
   `bro/bro.py` and `bro/prompts/__init__.py` (held kinds with gates open, `#may_summon`, `quest_watch`, and the deferred contract),
@@ -412,7 +415,7 @@ assistant holds no `webview`, so the use rule refuses its own `webview open` at 
   end to end on the webview route, a test persona standing in for assistant gives browser its cookies profile, browser opens a webview with it, and the stand-in's own `webview open` is refused;
   a mid-run `@<bro>` grant followed by a summon, in a session that started with no target and receives the deferred contract;
   a mid-run `--cred` reaching `credentials get`, `git` through the environment file, and an MCP tool through the store's refresh, while work on an unrelated kind runs through it;
-  a lost acknowledgement reconciled from the session's generation;
+  a lost acknowledgement settled from the receipt, the mission alive and ended;
   a manual summon's commit;
   a resume picking up a changed pick.
 
