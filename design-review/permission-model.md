@@ -311,7 +311,9 @@ A **joint start** is one start request completed in two steps: first by a missio
 - **commit:** the operator sets any options, replacing values the starter set if it chooses.
   The host fills the remaining defaults from the values both principals set, and checks validity.
   Then it runs every check again, against the authorities as they stand at commit:
-  the use rule checks each option against the authority of the principal whose value it holds, with defaults counting as set by the starter and every use pattern matched against the final descriptor, and the gift rule runs on the final descriptor.
+  the use rule checks the start atom against the starter's authority and each option against the authority of the principal whose value it holds,
+  with defaults counting as set by the starter and every use pattern matched against the final descriptor,
+  and the gift rule runs on the final descriptor.
   Any failure refuses the commit.
   The starter's gift and cap can't change.
 
