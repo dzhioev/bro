@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from types import MappingProxyType
 from typing import ClassVar, Self
 
 # the neutral reasoning-effort vocabulary `LLMSpec.with_effort` accepts; each
@@ -63,6 +65,22 @@ class LLMSpec(ABC):
 
   # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
+  selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
+  deferred_fields: ClassVar[frozenset[str]] = frozenset()
+  effort_values: ClassVar[frozenset[str]] = frozenset()
+
+  def selection(self) -> dict[str, str | None]:
+    return {name: getattr(self, field) for name, field in self.selection_fields.items()}
+
+  def with_selection(self, values: Mapping[str, str | None]) -> Self:
+    if values.keys() != self.selection_fields.keys():
+      raise ValueError(f'{self.TYPE} selection fields must be {sorted(self.selection_fields)}')
+    for name, value in values.items():
+      if value is None and name not in self.deferred_fields:
+        raise ValueError(f'{self.TYPE} cannot defer {name}')
+      if value is not None and type(value) is not str:
+        raise ValueError(f'{self.TYPE} {name} must be a string or a deferred value')
+    return replace(self, **{self.selection_fields[name]: value for name, value in values.items()})
 
   def fast(self) -> Self:
     """return a copy of self with the provider's 'fast' knob set.

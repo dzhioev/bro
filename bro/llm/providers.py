@@ -68,6 +68,12 @@ def default_spec(provider: str) -> LLMSpec:
   return _provider_module(provider).LLMSpec()
 
 
+def effort_values() -> frozenset[str]:
+  return frozenset(
+    value for provider in known_names() for value in default_spec(provider).effort_values
+  )
+
+
 def failure_signatures(provider: str) -> tuple[FailureSignature, ...]:
   """the provider's declared failure signatures — how its client's failures
   read in a run's error output, each classified into `FAILURE_CATEGORIES`."""

@@ -34,6 +34,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   plus `bind_launch_llm`, the launch's LLM selection settled over the first recipe in the host's per-bro list for the attachment that the launch's harness runs, returned as the canonical `--llm` the session records and forwards,
   and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
   In-process `bro run` / `bro chat` create no scope.
+- `ride/authority_reading.py` — immutable launch readings of the new-grammar host and project policy, store defaults, and installation registries.
+- `ride/authority_scope.py` — bro option defaults, credential gate-outcome manifests, wire mapping, existence checks, and layered bases.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
 - `ride/broker_root.py` — broker-root composition over the installed `bro.worker_types` classes, the common launch control, and artifact kinds.
   The channel listener binds loopback plus the Docker bridge gateway when that is an address of this host.

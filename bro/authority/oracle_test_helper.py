@@ -3,7 +3,7 @@ from itertools import combinations, product
 
 from .authority import Atom, Authority, LazyEntry
 from .patterns import Descriptor, Pattern, PatternSet
-from .values import Finite, Integers, Strings, Subsets, Value, ValueSet
+from .values import Finite, Integers, Scalars, Strings, Subsets, Value, ValueSet
 
 
 def powerset[Item](values: Iterable[Item]) -> list[frozenset[Item]]:
@@ -17,7 +17,18 @@ def powerset[Item](values: Iterable[Item]) -> list[frozenset[Item]]:
 
 def member(values: ValueSet, value: Value) -> bool:
   if isinstance(values, Strings):
-    return type(value) is str and ((value in values.members) != values.cofinite)
+    return (
+      type(value) is str
+      and (
+        values.grammar is None
+        or (
+          values.grammar.empty
+          if not value
+          else value[0] in values.grammar.initial and set(value[1:]) <= values.grammar.remaining
+        )
+      )
+      and ((value in values.members) != values.cofinite)
+    )
   if isinstance(values, Finite):
     return any(type(value) is type(item) and item == value for item in values.members)
   if isinstance(values, Integers):
@@ -26,6 +37,8 @@ def member(values: ValueSet, value: Value) -> bool:
       and (interval.upper is None or value <= interval.upper)
       for interval in values.intervals
     )
+  if isinstance(values, Scalars):
+    return any(member(component, value) for component in values.components)
   if isinstance(values, Subsets):
     return isinstance(value, frozenset) and any(
       interval.lower <= value and value <= interval.upper for interval in values.intervals
