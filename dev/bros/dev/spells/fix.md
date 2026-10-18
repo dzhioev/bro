@@ -14,7 +14,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.9.0
+version: 4.10.0
 ---
 
 {{iff #features contains brog}}
@@ -95,6 +95,10 @@ Figure out how to achieve it
 which files change and how, and what the change leaves behind;
 for tasks that need external information, say what you need.
 
+When the user requests or agrees to a standalone specification, run [[design]] for that part of the task.
+Use its result for the two summaries below rather than drafting a second specification.
+Otherwise, keep the proposal brief.
+
 Then put the design to the user as two summaries:
 
 - the problem — what is wrong or missing, where it shows, and why it matters
@@ -129,6 +133,10 @@ don't run the gate per checkpoint
 — its one mandatory pass is [[run pr]]'s.
 
 Stop and ask if the approach turns out to need a different direction than the design you put to the user.
+Answer questions about the agreed contract before treating them as revision requests.
+When a substantive amendment to an existing specification is agreed, return to [[design]] at the affected scope,
+using that document rather than creating a parallel design or restarting settled decisions.
+Resume implementation only after the revised design has the approval required by the session or calling workflow.
 {{when #hold = unattended}}
 
 ### Rescue commits before a raise
