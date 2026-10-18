@@ -72,11 +72,14 @@ from its flags, `[tool.bro]`, and the mode's own defaults.
 The wire mapping adds `worker.say` to a requested `talk`.
 
 A bro start holds the kinds its configuration holds
-— the target's needs under the start's harness and provider, every `#creds` gate taken as open, the recording kind, and the reading's credential grants and revokes for that target
+— the needs of every component the target could mount under the start's harness and provider, the recording kind, and the reading's credential grants and revokes for that target
 — plus `add`, minus `drop`.
+The components it could mount are the union over every outcome of its `#creds` gates, each outcome deciding which of the gates' kinds are present,
+since an `iff` alternative or an inherited entry that a closed gate uncovers can need what the reach with every gate open doesn't.
 The harness's own needs count among them: the claude harness's auth kind, and under the bro harness the LLM key of the recipe's provider.
-Taking gates as open keeps the defaults independent of which instances exist;
-when the start runs, a component whose gate kind is absent is dropped, with the optional kinds only it needs.
+So the defaults don't depend on which instances exist, and a starter must be allowed every held kind's value, one that only an unselected component needs included.
+When the start runs, the gates resolve against the instances present for the descriptor's picks, and only the components they select count:
+their required kinds must be present, their optional ones are hydrated when present, and a kind that only unselected components need is not hydrated at all.
 A held kind defaults to its pick: the host's `creds` layers, then the store's `defaults`, then the empty instance.
 Setting `cred.<kind>` holds that kind at that instance.
 A descriptor is valid when `target` is set, no kind is both set and in `drop`, the harness can run the recipe, and `join` isn't a joint start's placement.
@@ -182,19 +185,38 @@ a root launched before the switch has no control file and is refused by name.
   The host normalizes again under the mission's reading, checks the changed values against O and their instances' existence, and the session's supervisor applies them:
   the root for the sessions it spawned, through the container it started, the private root it created, or a joined member's own store and install directory;
   the manual launcher for its child, through an operator-channel connection it keeps.
-- Applying writes a new generation into a fresh directory:
-  the store, the install hooks' files and command wrappers, and an environment file restating every hook variable, with unsets for the ones that go.
-  Switching the session's generation pointer is the commit point, and the old directory is removed after it;
-  a fresh directory rather than a rewrite in place, because `docker cp` merges and would leave a revoked instance readable, and a rewrite could race a running `gh`.
-  The override takes effect once the pointer moves, and a failure before that leaves the record and the session as they were.
-- The environment file sits in the session's install directory.
+- Applying touches only the kinds the override changes, at the stable paths the session already uses, so work on every other kind runs on undisturbed.
+  The applier stages the change and runs an in-session `credentials apply` step, which publishes it in an order that keeps every read consistent:
+  new instance files first, unreferenced;
+  then the store's index, `creds.json`, replaced by rename, carrying the new picks and the next generation number, which is the commit point;
+  then each changed hook file and command wrapper, and the environment file, each replaced by rename;
+  and last the explicit removal of what the override dropped or replaced, since `docker cp` merges and would leave a revoked instance readable.
+  A command that already opened a file keeps what it read, one that opens it later reads the new material, and a dropped kind's paths stop resolving, which is the revocation.
+  A store read that finds its instance file gone re-reads the index once when the generation moved, so a read racing an override returns the new pick or none.
+  Every step after the commit point is idempotent and retried until done, and a failure before it leaves the session as it was.
+- Every override carries an operation id, and the generation a credential override publishes records it.
+  The host checks the override, marks it pending on the mission, and asks the applier to apply it;
+  applying is idempotent per operation id, and its acknowledgement names the generation the session reached.
+  On the acknowledgement the host writes the resume record, then commits its own record and the journal entry, and replies `applied`;
+  a resume record it can't write keeps the operation pending and is retried, since a resume must not restore values the session no longer runs.
+  Without an acknowledgement within its bound, the host replies `uncertain`, naming the operation,
+  and reconciles it from the applier's report of the session's generation once the connection is back or at the next override of that mission:
+  it commits if the session reached the operation's generation and drops the operation otherwise.
+  While an operation is pending, further overrides of that mission are refused naming it, and the mission's own starts proceed, since a credential override never changes authority;
+  an operation still pending when its mission ends is dropped, so a resume restores the values the record last committed.
+  An `@bro` override needs no applier: the host writes the resume record and then commits, and refuses the override if the write fails.
+- The environment file sits in the session's install directory and restates every hook variable, with unsets for the ones that go.
   Claude's shell prefix (`CLAUDE_CODE_SHELL_PREFIX`), which already wraps every Bash and hook command, sources it;
   the framework's process starters — watch producers, `cli()` tools, and the bro harness's jobs — apply it as an overlay, since the prefix doesn't reach them and brash can't source a script.
   The hooks' `bin` directory is on PATH from the start, even when empty, because Claude's shell snapshot pins PATH.
-- The credential store checks the generation on each read and re-reads its directory when it moved, so toolsets and data sources reach new material at their next read with no rebuild.
+- The credential store checks the index's generation on each read and re-reads the index when it moved.
+  An in-process consumer that derives state from credential material keys it to that generation and re-derives it at its next use:
+  web search's lazily latched key and brog's backend and repository move onto it, and the credential-override stage audits every other consumer the same way.
+  A toolset that owns resources, such as webview's open browsers, keeps them.
 - Unchanged mid-run: tools and features a credential would switch on, since the tool roster and the prompt render at start;
-  values a process took from its environment or its store at start, such as Claude's token, the bro harness's LLM key, and the recorder's trails token;
+  what a process latches at start and can't re-derive, such as Claude's token, the bro harness's LLM client, and the recorder's trails client;
   and material the session already read.
+  The override's reply names, for each kind it changes, what reaches the session only at its next start.
 - The host journals each override on the mission as a transition its worker end can see, where today a worker sees only its mission's chat, and the session watch wakes the session with what changed.
   Every session with a broker channel arms its session watch, and the turn-end check no longer depends on start-time targets.
   The record keeps the override, and a resume carries it.
@@ -327,7 +349,8 @@ assistant holds no `webview`, so the use rule refuses its own `webview open` at 
   `ride/ride/pending_launch.py` (the prepared request),
   `ride/ride/do_ride.py`, `ride/ride/claude/shell_prefix.py`, `bro/watches.py`, `bro/llm/cli_tool.py`, and the native runner and jobs (the environment file and its overlay),
   `ride/ride/workspace/docker.py` (the applier's copy into a running container),
-  `bro/base/credentials.py` (generation directories and the store's refresh),
+  `bro/base/credentials.py` (the staged apply, the index's generation, and the store's refresh),
+  `bro/datasources/web_search.py` and `bro/brog/system.py` (caches keyed to the generation),
   `bro/base/host_config.py` and `bro/workspace/project.py` (`limit`, `operator`),
   `bro/bro.py` and `bro/prompts/__init__.py` (held kinds with gates open, `#may_summon`, `quest_watch`, and the deferred contract),
   `ride/ride/claude/system_prompt.py` and `bro/turn_end.py` (the authority read),
@@ -381,14 +404,15 @@ assistant holds no `webview`, so the use rule refuses its own `webview open` at 
   (3) the operator channel;
   (4) the switch, as one change: enforcement, records, the syntax on every surface, the joint-start commit, the views, and the benchmark adapter;
   (5) `ride override` for `@<bro>` names, with the deferred contract;
-  (6) credential overrides: generation directories, the environment file and its overlay, the store's refresh, and both appliers;
+  (6) credential overrides: the staged apply and its commit protocol, the environment file and its overlay, the store's refresh and the caches keyed to it, and both appliers;
   (7) the reference pages and the cheat sheet;
   then end-to-end verification.
 - Verification: the algebra against the brute-force evaluator;
   every surface's refusals;
   end to end on the webview route, a test persona standing in for assistant gives browser its cookies profile, browser opens a webview with it, and the stand-in's own `webview open` is refused;
   a mid-run `@<bro>` grant followed by a summon, in a session that started with no target and receives the deferred contract;
-  a mid-run `--cred` reaching `credentials get`, `git` through the environment file, and an MCP tool through the store's refresh;
+  a mid-run `--cred` reaching `credentials get`, `git` through the environment file, and an MCP tool through the store's refresh, while work on an unrelated kind runs through it;
+  a lost acknowledgement reconciled from the session's generation;
   a manual summon's commit;
   a resume picking up a changed pick.
 
@@ -405,6 +429,7 @@ assistant holds no `webview`, so the use rule refuses its own `webview open` at 
 - A SessionStart hook writing `CLAUDE_ENV_FILE`: the existing shell prefix already wraps every command, so no hook has to be combined with ride's own.
 - Restarting the MCP server on a credential change: Claude would have to re-initialize its sessions.
 - Rebuilding toolset state on a credential change: it would orphan open webviews, while a store that re-reads on a generation change reaches every reader.
+- A fresh generation directory per override behind a pointer switch: retiring the old directory breaks commands that inherited its paths, even for kinds the override didn't touch.
 - Failing or warning a launch on a missing instance: the model checks existence when a start runs, and a shared host config names instances some machines lack.
 - A versioned host-config path, so that pre- and post-switch installations could share a host: the owner chose one window over keeping two files in step.
 - Governing the webview origin lists now: Playwright's filter lets top-level redirects through, and an empty `allow` meaning "any origin" runs against the order a cap relies on (#987).
