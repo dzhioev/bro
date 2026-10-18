@@ -71,15 +71,8 @@ def create(
   )
 
 
-def extract_reply_messages(output: list[ResponseOutputItem]) -> list[ResponseOutputMessage]:
-  messages = [item for item in output if item.type == 'message']
-  if len(messages) == 0:
-    raise RuntimeError(f"output doesn't contain output messages. output: {output}")
-  # gpt-5.6 models can emit auxiliary messages tagged with a `phase` field (a
-  # 'commentary' progress note preceding the 'final_answer' reply); the field
-  # is not in the SDK's ResponseOutputMessage, hence the getattr.
-  final_answers = [m for m in messages if getattr(m, 'phase', None) == 'final_answer']
-  return final_answers if len(final_answers) > 0 else messages
+def _reply_messages(output: list[ResponseOutputItem]) -> list[ResponseOutputMessage]:
+  return [item for item in output if item.type == 'message' and item.phase != 'commentary']
 
 
 def _message_texts(messages: list[ResponseOutputMessage]) -> list[str]:
@@ -92,7 +85,9 @@ def _message_texts(messages: list[ResponseOutputMessage]) -> list[str]:
 
 
 def parse_response(response: Response) -> str:
-  messages = extract_reply_messages(response.output)
+  messages = _reply_messages(response.output)
+  if len(messages) == 0:
+    raise RuntimeError(f"output doesn't contain reply messages. output: {response.output}")
   for message in messages:
     for item in message.content:
       if item.type == 'refusal':
@@ -238,7 +233,7 @@ class OpenAI(LLM):
         for part in item.summary:
           if part.type == 'summary_text' and len(part.text) > 0:
             self.observer.on_event(ReasoningEvent(part.text))
-      elif item.type == 'message' and continues:
+      elif item.type == 'message' and (continues or item.phase == 'commentary'):
         text = ''.join(content.text for content in item.content if content.type == 'output_text')
         if len(text) > 0:
           self.observer.on_event(InterimAssistantTextEvent(text))
@@ -558,7 +553,7 @@ class OpenAI(LLM):
     try:
       return parse_response(response)
     except Exception as error:
-      texts = _message_texts([item for item in response.output if item.type == 'message'])
+      texts = _message_texts(_reply_messages(response.output))
       if len(texts) == 0:
         raise
       log.warning('reply extraction failed, falling back to the terminal message text: %s', error)

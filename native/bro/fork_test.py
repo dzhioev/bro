@@ -544,6 +544,7 @@ def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload
 def _message_item(text: str):
   return SimpleNamespace(
     type='message',
+    phase=None,
     content=[SimpleNamespace(type='output_text', text=text)],
   )
 
