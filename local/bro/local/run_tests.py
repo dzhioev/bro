@@ -136,6 +136,7 @@ PYTEST_FILES = [
   'bro/authority/patterns_test.py',
   'bro/authority/authority_test.py',
   'bro/authority/rules_test.py',
+  'bro/authority/syntax_test.py',
   'bro/base/args_test.py',
   'bro/base/condition_test.py',
   'bro/base/configs_test.py',
