@@ -195,19 +195,22 @@ a root launched before the switch has no control file and is refused by name.
   and last the removal of every file the index no longer names, and of a dropped kind's hook files.
   From the commit point a dropped or replaced instance is unreadable through the store, and its removal follows, since `docker cp` merges and would otherwise leave it on disk.
   A command that already opened a file keeps what it read, one that opens it later reads the new material, and a dropped kind's paths stop resolving, which is the revocation.
-  A store read that finds its file gone re-reads the index once when the generation moved, so a read racing an override returns the new pick or none.
+  A store read that finds its file gone re-reads the index and tries again for as long as the generation keeps moving, so a read racing any number of overrides ends on a file the current index names or on the name's absence;
+  a file gone under an unchanged generation fails as corruption, and a read of an explicit instance returns that instance or its absence, never another one.
   Every step after the commit point is idempotent and retried until done, and a failure before it leaves the session as it was.
 - Every override carries an operation id.
   The host checks the override, records it as pending, with the values it would commit, in the mission's record and its resume record, and asks the applier to apply it;
   applying is idempotent per operation id.
   Once the steps after the index's commit point are done, the applier writes a receipt naming the operation and the generation into the workspace's records on the host, which outlive the session, and acknowledges.
   On the acknowledgement the host commits the pending values in its record, the resume record, and the journal, and replies `applied`.
+  A joined member has no resume record, so its pending operation and receipt live in its member records on the host, and the host commits its record and journal alone;
+  nothing resumes a member, so an operation still pending when the member ends is dropped with it.
   Without an acknowledgement within its bound, the host replies `uncertain`, naming the operation, and settles it from the receipt,
   never from the index's generation, which a failure partway through the remaining steps can leave ahead of the hook files:
   when the applier is reachable again, the host has it finish the apply, which writes the receipt and acknowledges;
   when the mission has ended, or at the workspace's next resume once the root is gone, it commits an operation that has a receipt and drops one that hasn't.
   While an operation is pending, further overrides of that mission are refused naming it, and the mission's own starts proceed, since a credential override never changes authority.
-  An `@bro` override needs no applier: the host writes the resume record and then commits, and refuses the override if the write fails.
+  An `@bro` override needs no applier: the host writes the resume record, where the mission has one, and then commits, and refuses the override only if that write fails.
 - The environment file sits in the session's install directory and restates every hook variable, with unsets for the ones that go.
   Claude's shell prefix (`CLAUDE_CODE_SHELL_PREFIX`), which already wraps every Bash and hook command, sources it;
   the framework's process starters — watch producers, `cli()` tools, and the bro harness's jobs — apply it as an overlay, since the prefix doesn't reach them and brash can't source a script.
@@ -355,7 +358,7 @@ assistant holds no `webview`, so the use rule refuses its own `webview open` at 
   `bro/base/credentials.py` (a session store's authoritative index, the staged apply, the index's generation, and the store's refresh),
   `bro/datasources/web_search.py` and `bro/brog/system.py` (caches keyed to the generation),
   `bro/base/host_config.py` and `bro/workspace/project.py` (`limit`, `operator`),
-  `bro/bro.py` and `bro/prompts/__init__.py` (held kinds with gates open, `#may_summon`, `quest_watch`, and the deferred contract),
+  `bro/bro.py` and `bro/prompts/__init__.py` (held kinds over every outcome of the `#creds` gates, `#may_summon`, `quest_watch`, and the deferred contract),
   `ride/ride/claude/system_prompt.py` and `bro/turn_end.py` (the authority read),
   `bro/summon.py` and the summon tool, `bro/workspace/banner.py`, and webview's `cli.py` and `mcp.py` (`cred.cookies`).
 
