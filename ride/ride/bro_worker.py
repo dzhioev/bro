@@ -791,13 +791,13 @@ class BroType(WorkerType):
         raise LaunchDenied(
           'cannot grant launch permission(s) the summoner does not hold: ' + ', '.join(beyond)
         )
-      harness = get_harness(args.get('harness') or self.host.summon_harness)
-      launch_llm_spec(
-        harness,
-        self.host.workspace.metadata.repo,
-        target,
-        args.get('llm'),
-      )
+      if not request.manual:
+        launch_llm_spec(
+          get_harness(args.get('harness') or self.host.summon_harness),
+          self.host.workspace.metadata.repo,
+          target,
+          args.get('llm'),
+        )
       layers = configured_scope_layers(self.host.workspace.metadata.repo, target)
       credential_store = credentials.Store(
         credentials.default_registry(), credentials.STORE_DIR, {}

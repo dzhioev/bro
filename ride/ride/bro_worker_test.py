@@ -350,6 +350,28 @@ def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
     BroType(Host()).launch(_request(tmp_path, harness='claude', llm='openai:sol'))
 
 
+@pytest.fixture
+def claude_code_host_recipe(monkeypatch):
+  from bro.llm.providers import parse
+
+  monkeypatch.setattr(
+    ride.scope,
+    'with_host_defaults',
+    lambda selection, attachment, bro_name: selection.over(parse('claude-code:opus')),
+  )
+
+
+@pytest.mark.usefixtures('claude_code_host_recipe')
+def test_a_spawned_summon_is_denied_a_configured_recipe_its_harness_cannot_run(tmp_path):
+  with pytest.raises(LaunchDenied, match='claude-code'):
+    BroType(Host()).launch(_request(tmp_path))
+
+
+@pytest.mark.usefixtures('claude_code_host_recipe')
+def test_a_manual_summon_leaves_the_configured_recipe_to_the_users_launch(tmp_path):
+  assert isinstance(BroType(Host()).launch(_request(tmp_path, manual=True)), Expect)
+
+
 def test_audit_fields_are_projected_from_bro_facts(tmp_path):
   worker = BroType(Host())
   run = worker.launch(_request(tmp_path))
