@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.13.0
+version: 2.14.0
 ---
 
 # orchestrate
@@ -79,6 +79,8 @@ Never redo a completed phase.
    If a phase wants a different bro than the rest
    — the one that does rollouts, say
    — settle that now too.
+   The design and review-and-plan bros must expose `spell::design`;
+   check their `bro show` cards before choosing them.
    Then check every phase's summon the way you check any summon, all of them at once, so the user settles each way out before the work starts.
 3. `brog::create_task` with the name,
    tags,
@@ -203,13 +205,7 @@ the session brings each pivotal decision to them as it comes up.
 > Design phase of multi-phase work coordinated by another session.
 > Read the task at `<root-task-url>`
 > — its `## Goal` states what to design.
-> Explore the codebase,
-> work the design out,
-> and stress-test it yourself:
-> edge cases,
-> risks,
-> and the alternatives you rejected with the reason.
-> Settle open questions with the user one at a time.
+> Develop and revise the standalone specification through [[design]].
 > Before writing, present the complete proposed design and obtain the user's explicit approval.
 > If the discussion changed a requirement, update `## Goal` before publishing `## Design`.
 > Do not publish or close while an agent-originated decision remains open to later veto.
@@ -245,7 +241,8 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > APIs,
 > and call sites instead of leaving them as open questions;
 > for every contract shared with a separately deployed process, state the rollout order and how mixed versions remain operable.
-> Bring material objections and open design decisions to the user before editing the design.{{when #may_summon contains eyebro}}
+> Bring material objections and open design decisions to the user before editing the design.
+> Use [[design]] for agreed revisions, without restarting settled decisions.{{when #may_summon contains eyebro}}
 > Then put the design as it stands into a markdown file on a throwaway branch and open a temporary pull request against master whose title and body say it is a design review only, never to be merged.
 > Watch it with `poll-pr` the way [[run pr]] watches the pull requests it opens, armed before the reviewer is summoned.
 > [[Ask <the eyebro>]] to review that pull request as a document, not code:

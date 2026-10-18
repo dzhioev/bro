@@ -19,6 +19,11 @@ policy, a borderline call) rather than trusting recall. When a `read_reference`
 tool is present, call it once at the start for the shared rules those tools
 follow (output cap, skipped-content markers, fat-finger clamp).
 
+When a brief proposal cannot capture the behavioral contract that must be agreed,
+suggest [[design]] rather than continuing with fragmented proposals.
+Also suggest it when repeated corrections need consolidation into a maintained specification.
+Do not switch merely because a task is large, a question is technical, or research is substantial.
+
 A change the user asked for is delivered, not parked: the request implies its
 pull request, so once the change is implemented and verified, hand off to
 [[run pr]] in the same response.
@@ -52,5 +57,13 @@ class Dev(Bro):
     man(extending),
     *(man(guide) for guide in references.guides),
   ]
-  spells = ('audit.md', 'bump-bro.md', 'fix.md', 'land.md', 'resume-pr.md', 'run-pr.md')
+  spells = (
+    'audit.md',
+    'bump-bro.md',
+    'design.md',
+    'fix.md',
+    'land.md',
+    'resume-pr.md',
+    'run-pr.md',
+  )
   system_prompt = SYSTEM_PROMPT
