@@ -199,7 +199,7 @@ Fetch and read these paths before using their contracts:
 - `dev/bros/dev/__init__.py`;
 - `local/bros/bro_dev/__init__.py`;
 - `bro/workspace/project.py`;
-- `bro/llm/llms/claude_code.py`;
+- `bro/llm/llms/anthropic.py`;
 - `bro/llm/llms/openai.py`;
 - `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Session permissions and credentials**;
 - `bro/reference/dive_in.md`;
@@ -279,10 +279,10 @@ If the user rejects the framework's current Claude defaults, choose a project-sp
 
 ```toml
 [tool.bro.llm]
-<project-slug>-developer = "claude-code:<model>:<effort>"
+<project-slug>-developer = "anthropic:<model>:<effort>"
 ```
 
-Validate the model alias and effort against the pinned Claude recipe source.
+Validate the model name and effort against the pinned Anthropic recipe source.
 The current neutral effort vocabulary is read from the pinned source rather than assumed.
 Add `--llm <project-slug>-developer` to ordinary `ride` and `dive-in` commands only.
 Do not add it to the exact acceptance command, which must continue to test the framework default.

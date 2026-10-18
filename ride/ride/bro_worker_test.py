@@ -9,7 +9,7 @@ import pytest
 
 import ride.bro_worker as bro_worker
 import ride.scope
-from bro.base import credentials
+from bro.base import credentials, host_config
 from bro.broker.brotocol import Talk
 from bro.summon import summoned_child_env
 from bro.worker_types import Expect, LaunchDenied, LaunchRequest, PeerDescription, Spawn
@@ -346,29 +346,36 @@ def test_harness_and_llm_choices_do_not_answer_to_the_summoners_credentials(tmp_
 
 
 def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
-  with pytest.raises(LaunchDenied, match='claude harness runs Claude Code, not openai'):
+  with pytest.raises(LaunchDenied, match="the claude harness cannot run recipe 'openai:sol'"):
     BroType(Host()).launch(_request(tmp_path, harness='claude', llm='openai:sol'))
 
 
-@pytest.fixture
-def claude_code_host_recipe(monkeypatch):
-  from bro.llm.providers import parse
-
+def _host_recipes(monkeypatch, *recipes: str) -> None:
   monkeypatch.setattr(
-    ride.scope,
-    'with_host_defaults',
-    lambda selection, attachment, bro_name: selection.over(parse('claude-code:opus')),
+    host_config,
+    'launch_llm',
+    lambda attachment, bro: host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, recipes),
   )
 
 
-@pytest.mark.usefixtures('claude_code_host_recipe')
-def test_a_spawned_summon_is_denied_a_configured_recipe_its_harness_cannot_run(tmp_path):
-  with pytest.raises(LaunchDenied, match='claude-code'):
+def test_a_spawned_summon_is_denied_a_configured_list_its_harness_runs_none_of(
+  tmp_path, monkeypatch
+):
+  _host_recipes(monkeypatch, 'anthropic:opus55:high+fast')
+
+  with pytest.raises(LaunchDenied, match='lists no recipe the bro harness can run'):
     BroType(Host()).launch(_request(tmp_path))
 
 
-@pytest.mark.usefixtures('claude_code_host_recipe')
-def test_a_manual_summon_leaves_the_configured_recipe_to_the_users_launch(tmp_path):
+def test_a_spawned_summon_runs_the_listed_recipe_its_harness_serves(tmp_path, monkeypatch):
+  _host_recipes(monkeypatch, 'anthropic:opus55:high+fast', 'default')
+
+  assert isinstance(BroType(Host()).launch(_request(tmp_path)), Spawn)
+
+
+def test_a_manual_summon_leaves_the_configured_list_to_the_users_launch(tmp_path, monkeypatch):
+  _host_recipes(monkeypatch, 'anthropic:opus55:high+fast')
+
   assert isinstance(BroType(Host()).launch(_request(tmp_path, manual=True)), Expect)
 
 

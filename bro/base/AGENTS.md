@@ -62,7 +62,7 @@ run those with `--help` for flags.
   File reads validate grammar without installation registries;
   a managed launch validates every credential name in its applicable layers so consumer-specific project entries can coexist in shared dotfiles.
   `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table),
-  `launch_llm(attachment, bro)` the recipes the matching `bros` entries name for one bro, carried as written for that same module to lay a launch's flags over,
+  `launch_llm(attachment, bro)` the ordered recipe list of the most specific matching `bros` entry for one bro, carried as written for `ride.scope.bind_launch_llm` to pick from,
   and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
   The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
   `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store

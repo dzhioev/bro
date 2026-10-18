@@ -23,7 +23,7 @@ MODEL = 'gpt-5.6-terra'
 PRICE_TABLES = {'openai': providers.price_table('openai')}
 
 
-def _request(*, summoned_by=None, model=MODEL) -> BlazeRequest:
+def _request(*, summoned_by=None, model: str | None = MODEL) -> BlazeRequest:
   return BlazeRequest(
     harness='bro',
     bro='dev',
@@ -235,6 +235,25 @@ def test_an_unpriced_model_keeps_atif_costs_optional_but_fails_a_cost_report(tmp
   assert converted.steps[2].metrics is not None
   assert converted.steps[2].metrics.cost_usd is None
   assert converted.final_metrics is None
+
+
+def test_the_model_comes_from_the_trails_calls_not_the_launch_recipe(tmp_path):
+  store = LocalStore(tmp_path / 'ride')
+  recording = Recording.create(store, _request(model=None))
+  recording.append(
+    [
+      {'kind': 'user_input', 'body': 'Do it.'},
+      _llm_call(_assistant('Thinking.'), model='gpt-6.1-sol'),
+      _llm_call(_assistant('Still.')),
+      _llm_call(_assistant('Done.')),
+    ]
+  )
+  recording.end('ok')
+
+  converted = trajectory_from_store(store, agent_version=IDENTITY, price_tables=PRICE_TABLES)
+
+  assert converted.agent.model_name == MODEL
+  assert [step.model_name for step in converted.steps[2:]] == ['gpt-6.1-sol', None, None]
 
 
 def test_multiple_root_trails_are_rejected(tmp_path):

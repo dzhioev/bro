@@ -159,11 +159,11 @@ def test_a_recipe_is_named_within_a_registered_provider():
   assert bare_recipe('openai/gpt-5.6-terra') == 'gpt-5.6-terra'
   assert bare_recipe('openai/gpt-5.6-terra:high') == 'gpt-5.6-terra:high'
   assert bare_recipe('openai/gpt-5.6-terra:high+fast') == 'gpt-5.6-terra:high+fast'
-  assert bare_recipe('claude-code/opus5') == 'opus5'
+  assert bare_recipe('anthropic/opus5') == 'opus5'
   assert bare_recipe(None) is None
 
 
-@pytest.mark.parametrize('model_name', ['anthropic/opus', 'gpt-5.6-terra', 'openai/'])
+@pytest.mark.parametrize('model_name', ['mistral/large', 'gpt-5.6-terra', 'openai/'])
 def test_a_recipe_outside_that_form_is_refused(model_name):
   with pytest.raises(ValueError, match='registered provider'):
     bare_recipe(model_name)
@@ -177,7 +177,7 @@ def test_a_recipe_off_the_llm_grammar_is_refused(model_name):
 
 def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
   with pytest.raises(ValueError, match='registered provider'):
-    agent(tmp_path, bro='terminal', model_name='anthropic/opus')
+    agent(tmp_path, bro='terminal', model_name='mistral/large')
 
 
 def test_a_harness_is_registered_in_the_bundle(monkeypatch):
@@ -355,7 +355,7 @@ def test_the_recorded_identity_names_the_bro_harness_and_bundle_under_test(monke
   terminal_agent = agent(tmp_path, bro='terminal', model_name='openai/gpt-5.6-terra')
   terminal = terminal_agent.to_agent_info()
   ridden = agent(
-    tmp_path, bro='terminal', harness='claude', model_name='claude-code/opus5'
+    tmp_path, bro='terminal', harness='claude', model_name='anthropic/opus5'
   ).to_agent_info()
 
   assert len({dev.name, terminal.name, ridden.name}) == 3

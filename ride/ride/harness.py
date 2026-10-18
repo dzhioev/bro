@@ -10,6 +10,7 @@ from ride.scope import ScopeRecipe
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
+  from bro.llm.providers import LLMSelection
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
   from ride.workspace.model import Workspace
@@ -37,6 +38,9 @@ class SessionHarness(Protocol):
   """The managed-session operations supplied by one driving harness."""
 
   name: str
+  llm_providers: tuple[str, ...]
+
+  def runs(self, selection: LLMSelection) -> bool: ...
 
   def scope_recipe(self) -> ScopeRecipe: ...
 

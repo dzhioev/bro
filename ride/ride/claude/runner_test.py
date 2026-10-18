@@ -15,7 +15,7 @@ from bro import brash_policy, watches
 from bro.brash import Policy
 from bro.bro import BaseBro
 from bro.llm import usage
-from bro.llm.llms import claude_code
+from bro.llm.llms import anthropic
 from bro.llm.usage import Usage
 from bro.mcp import ANY, brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
@@ -248,7 +248,9 @@ class TestSessionRun:
       assert ride_runner.run_session(_spec()) == 0
       assert h.start_recorder.call_args.args[0] == tmp_path
       # the launch recipe lands on the trail header as native.llm
-      assert h.start_recorder.call_args.kwargs['llm'] == claude_code.LLMSpec().dump()
+      assert h.start_recorder.call_args.kwargs['llm'] == (
+        anthropic.LLMSpec(model=None, effort=None).dump()
+      )
       assert h.start_recorder.return_value.stop.call_count == 1
 
   def test_claude_and_its_tool_server_read_usage_from_the_file_the_runner_keeps_current(
@@ -306,7 +308,7 @@ class TestSessionRun:
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec(llm=':fable5:high')) == 0
       assert h.start_recorder.call_args.kwargs['llm'] == {
-        'type': 'claude-code',
+        'type': 'anthropic',
         'model': 'claude-fable-5',
         'effort': 'high',
         'fast_mode': False,

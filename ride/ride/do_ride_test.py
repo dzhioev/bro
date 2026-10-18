@@ -61,7 +61,7 @@ class TestCommand:
     ]  # fmt: skip
 
   def test_recorded_recipe_crosses_the_launcher_boundary(self, monkeypatch):
-    from bro.llm.llms.claude_code import LLMSpec
+    from bro.llm.llms.anthropic import LLMSpec
 
     recorded = LLMSpec(model='recorded-model').dump()
     spec = dataclasses.replace(_spec(llm=None), resolved_llm=recorded)

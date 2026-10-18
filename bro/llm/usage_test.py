@@ -85,8 +85,6 @@ class TestVendorOf:
     assert usage.vendor_of(slug) == vendor
 
   def test_a_claude_slug_bills_anthropic_whichever_surface_ran_it(self):
-    # the launch roster calls this same string `claude-code`; who bills it is a
-    # separate question with a separate answer
     assert usage.vendor_of('claude-opus-5') == 'anthropic'
 
   def test_an_unclaimed_slug_raises(self):

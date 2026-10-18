@@ -1,7 +1,7 @@
 """Convert benchmark trails into Harbor's ATIF trajectory model."""
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -36,6 +36,8 @@ class _ConvertedSteps:
   calls_by_source: dict[tuple[int, int], str]
   results_by_call: dict[str, ObservationResult]
   cost_usd: Decimal | None
+  # the model most calls ran, which a step running another one names itself
+  model: str | None
 
 
 @dataclass
@@ -126,19 +128,24 @@ def _standalone_step(step_id: int, message: dict[str, Any]) -> Step:
   return Step(step_id=step_id, timestamp=timestamp, source=source, message=rendered)
 
 
-def _agent_step(
-  step_id: int,
-  provider: str,
-  messages: list[dict[str, Any]],
-  tool_results: dict[str, dict[str, Any]],
-  price_tables: Mapping[str, Any],
-) -> tuple[Step, dict[tuple[int, int], str], dict[str, ObservationResult], Decimal | None]:
+def _llm_call(messages: list[dict[str, Any]]) -> dict[str, Any] | None:
   llm_calls = [message for message in messages if message.get('type') == 'llm_call']
-  if len(llm_calls) != 1:
+  if len(llm_calls) > 1:
     raise ValueError(
       f'an llm_call source group must hold exactly one llm_call, got {len(llm_calls)}'
     )
-  llm_call = llm_calls[0]
+  return None if len(llm_calls) == 0 else llm_calls[0]
+
+
+def _agent_step(
+  step_id: int,
+  provider: str,
+  llm_call: dict[str, Any],
+  messages: list[dict[str, Any]],
+  tool_results: dict[str, dict[str, Any]],
+  price_tables: Mapping[str, Any],
+  default_model: str,
+) -> tuple[Step, dict[tuple[int, int], str], dict[str, ObservationResult], Decimal | None]:
   raw_step_id, _ = _source(llm_call)
   assistant_messages = [message for message in messages if message.get('type') == 'assistant']
   reasoning_messages = [message for message in messages if message.get('type') == 'reasoning']
@@ -198,6 +205,7 @@ def _agent_step(
     step_id=step_id,
     timestamp=timestamp,
     source='agent',
+    model_name=None if model == default_model else model,
     message='\n\n'.join(assistant_content),
     reasoning_content='\n\n'.join(reasoning_content) if len(reasoning_content) > 0 else None,
     tool_calls=calls or None,
@@ -225,15 +233,24 @@ def _convert_steps(
     else:
       groups[source_step_id].append(message)
 
+  llm_calls = {raw_step_id: _llm_call(group) for raw_step_id, group in groups.items()}
+  models = Counter(
+    _required_string(llm_call.get('model'), 'llm_call model')
+    for _, llm_call in sorted(llm_calls.items())
+    if llm_call is not None
+  )
+  default_model = models.most_common(1)[0][0] if len(models) > 0 else None
   steps: list[Step] = []
   calls_by_source: dict[tuple[int, int], str] = {}
   results_by_call: dict[str, ObservationResult] = {}
   total_cost: Decimal | None = Decimal(0)
   for raw_step_id in sorted(groups):
     group = groups[raw_step_id]
-    if any(message.get('type') == 'llm_call' for message in group):
+    llm_call = llm_calls[raw_step_id]
+    if llm_call is not None:
+      assert default_model is not None
       step, group_calls, group_results, cost = _agent_step(
-        len(steps) + 1, provider, group, tool_results, price_tables
+        len(steps) + 1, provider, llm_call, group, tool_results, price_tables, default_model
       )
       overlapping_calls = set(calls_by_source) & set(group_calls)
       if len(overlapping_calls) > 0:
@@ -252,20 +269,17 @@ def _convert_steps(
 
   if len(tool_results) > 0:
     raise ValueError(f'tool results have no projected calls: {sorted(tool_results)}')
-  return _ConvertedSteps(steps, calls_by_source, results_by_call, total_cost)
+  return _ConvertedSteps(steps, calls_by_source, results_by_call, total_cost, default_model)
 
 
-def _llm(header: dict[str, Any]) -> tuple[str, str]:
+def _provider(header: dict[str, Any]) -> str:
   native = header.get('native')
   if not isinstance(native, dict):
     raise ValueError('trail header native must be an object')
   llm = native.get('llm')
   if not isinstance(llm, dict):
     raise ValueError('trail header native.llm must be an object')
-  return (
-    _required_string(llm.get('type'), 'trail header native.llm.type'),
-    _required_string(llm.get('model'), 'trail header native.llm.model'),
-  )
+  return _required_string(llm.get('type'), 'trail header native.llm.type')
 
 
 def _summoner(header: dict[str, Any]) -> tuple[str, tuple[int, int] | None] | None:
@@ -304,8 +318,7 @@ def _build_trajectory(
     raise ValueError(f'summoned trail cycle reaches {trail_id}')
   visiting.add(trail_id)
   header = headers[trail_id]
-  provider, model = _llm(header)
-  converted = _convert_steps(provider, messages[trail_id], price_tables)
+  converted = _convert_steps(_provider(header), messages[trail_id], price_tables)
   total_cost = converted.cost_usd
   subagents: list[Trajectory] = []
   for child_id in children.get(trail_id, []):
@@ -356,7 +369,7 @@ def _build_trajectory(
         _required_string(header.get('harness'), 'trail header harness'),
       ),
       version=agent_version,
-      model_name=model,
+      model_name=converted.model,
     ),
     steps=converted.steps,
     final_metrics=(None if total_cost is None else FinalMetrics(total_cost_usd=float(total_cost))),

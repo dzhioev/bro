@@ -91,7 +91,11 @@ a launch or summon checks the selected name where it is used and reports the ins
 
 LLM flags resolve within the selected harness.
 They never switch the harness implicitly.
-A recipe whose provider the harness cannot run errors with `--harness` as the remedy.
+A provider names the vendor and a harness the transport:
+each harness serves the providers its `llm_providers` names, `claude` serving `anthropic` through Claude Code and `bro` the providers the native engine has clients for.
+A model named without a provider (`:opus55`) resolves among the providers the selected harness serves.
+A recipe the harness does not serve is refused with the installed harnesses that serve it, on every surface naming a harness: the `--harness` flag, a summon's `harness` field, and `bro run`, which is the bro harness.
+With nothing selected, the bro harness runs the bro's declared `llm_spec` and the claude harness passes Claude Code no `--model` or `--effort`, so it runs its own current default.
 `ride check-harness <name>` starts the selected harness's runtime probe in the current installation.
 
 ### Harness seam
@@ -639,8 +643,8 @@ The full fold and validation rules are under "Session permissions and credential
 `image-repository` and `build-context-command` are optional.
 A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
 `[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
-A bro's default recipe on a project is likewise the host's to set:
-a `projects.<identity>.bros.<bro>.llm` entry fills what the launch flags leave unnamed, for ride launches and summons alike (`bro/setup/AGENTS.md`, "Host config").
+A bro's recipes on a project are likewise the host's to set:
+a `projects.<identity>.bros.<bro>.llm` entry lists them in preference order, and a ride launch or summon runs the first its harness serves beneath its own flags (`bro/setup/AGENTS.md`, "Host config").
 A missing pyproject, table, or default
 — or an unknown key
 — fails the launch.
@@ -1039,7 +1043,7 @@ the handle treats that record — or the client’s exit — as the started hand
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 A boxed member’s kill follows the same TERM → grace → KILL shape through `docker exec`, signaling only while the container’s `/proc` still shows the recorded start time, so a late kill finds no target and never a reused pid.
-The request’s `llm` recipe, settled over the host’s per-bro entry like a launch’s own, resolves within the child’s harness and never switches it;
+The request’s `llm` recipe, settled over the first recipe in the host’s per-bro list that the child’s harness serves like a launch’s own, resolves within that harness and never switches it;
 the child runs with the root session’s attachment.
 A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
 a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
@@ -1321,7 +1325,7 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 ### The claude argv
 
 The builder (`ride/ride/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks, kept on over a repository's `disableAllHooks`),
-a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's claude-code recipe,
+a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's anthropic recipe, a model or effort the recipe leaves unnamed passed as no flag,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below,
 `--strict-mcp-config`, so that config is the session's only MCP source and a repository's `.mcp.json` loads nothing,

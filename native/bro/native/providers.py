@@ -15,6 +15,12 @@ _NATIVE_PROVIDER_MODULES = {
   'echo': 'bro.native.llms.echo',
 }
 
+
+def known_names() -> tuple[str, ...]:
+  """the providers whose recipes this engine has a client for."""
+  return tuple(_NATIVE_PROVIDER_MODULES)
+
+
 Factory = Callable[
   [
     NativeLLMSpec,

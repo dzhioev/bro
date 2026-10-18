@@ -10,7 +10,7 @@ LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
 VALID_END_REASONS = frozenset({'ok', 'raised', 'error'})
 VALID_HOLDS = frozenset({'guided', 'attended', 'detached', 'unattended'})
 INITIAL_TRAIL_FORMAT = 1
-TRAIL_FORMAT = INITIAL_TRAIL_FORMAT
+TRAIL_FORMAT = 2
 
 MESSAGE_TYPES = frozenset(
   {

@@ -7,12 +7,13 @@ kind — so a launch, a stored spec, and a hydrated scope all spell it the same.
 
 Adding a provider is a module under `llms/` exporting `LLMSpec`,
 `DEFAULT_MODEL`, a `MODELS` short-name table, and a `FAILURE_SIGNATURES`
-tuple, plus its row in `_PROVIDER_MODULES`.
+tuple, plus its row in `_PROVIDER_MODULES`. A provider whose surface also takes
+names that are not model ids exports `MODEL_ID`, the pattern a full id matches.
 """
 
 import dataclasses
 import importlib
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from types import ModuleType
@@ -23,7 +24,7 @@ from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
 
 _PROVIDER_MODULES: dict[str, str] = {
   'openai': 'bro.llm.llms.openai',
-  'claude-code': 'bro.llm.llms.claude_code',
+  'anthropic': 'bro.llm.llms.anthropic',
   'echo': 'bro.llm.llms.echo',
 }
 
@@ -103,35 +104,50 @@ def resolve_model(provider: str, model: str) -> str:
   """the full model id `model` names within `provider`.
 
   The short-name table is a convenience, not a whitelist: an unlisted name is
-  the id itself, so a model the table has not learned still launches.
+  the id itself, so a model the table has not learned still launches — once it
+  has the shape of one, where the provider declares that shape (`MODEL_ID`).
   """
-  return models(provider).get(model, model)
+  table = models(provider)
+  resolved = table.get(model, model)
+  shape = getattr(_provider_module(provider), 'MODEL_ID', None)
+  if shape is not None and shape.fullmatch(resolved) is None:
+    raise LLMSelectionError(
+      f'{model!r} names no {provider} model id; name a full id or one of: {", ".join(table)}'
+    )
+  return resolved
 
 
-def provider_of_model(model: str) -> str:
-  """the provider whose roster carries `model`, by short name or full id.
-
-  Raises when no provider claims it or more than one does — either way the
-  launch has to name the provider itself.
-  """
-  matches = [
+def carriers(model: str, among: Collection[str]) -> tuple[str, ...]:
+  """the providers in `among` whose rosters carry `model`, by short name or full id."""
+  return tuple(
     provider
     for provider in known_names()
-    if model in models(provider) or model in models(provider).values()
-  ]
+    if provider in among and (model in models(provider) or model in models(provider).values())
+  )
+
+
+def provider_of_model(model: str, among: Collection[str]) -> str:
+  """the one provider in `among` whose roster carries `model`.
+
+  Raises when none of them claims it or more than one does — either way the
+  launch has to name the provider itself.
+  """
+  matches = carriers(model, among)
   if len(matches) == 1:
     return matches[0]
   if len(matches) == 0:
     raise LLMSelectionError(
-      f'unknown model {model!r}; name its provider, or use one of: {", ".join(_all_short_names())}'
+      f'unknown model {model!r}; name its provider, or use one of: {", ".join(_short_names(among))}'
     )
   raise LLMSelectionError(
     f'model {model!r} is served by more than one provider ({", ".join(matches)}); name one'
   )
 
 
-def _all_short_names() -> list[str]:
-  return sorted(name for provider in known_names() for name in models(provider))
+def _short_names(among: Collection[str]) -> list[str]:
+  return sorted(
+    name for provider in known_names() if provider in among for name in models(provider)
+  )
 
 
 @dataclass(frozen=True)
@@ -157,22 +173,26 @@ class LLMSelection:
       raise LLMSelectionError(
         f'unknown effort level {self.effort!r}; expected one of {", ".join(EFFORT_LEVELS)}'
       )
-    if self.provider is None and self.model is not None:
+    if self.provider is None and self.model is not None and not carriers(self.model, known_names()):
       # with no provider named, the model is the only thing that can name one —
       # so it has to be a name some roster actually carries
-      provider_of_model(self.model)
+      raise LLMSelectionError(
+        f'unknown model {self.model!r}; name its provider, or use one of: '
+        f'{", ".join(_short_names(known_names()))}'
+      )
 
   def is_empty(self) -> bool:
     return self == LLMSelection()
 
-  def provider_name(self) -> Optional[str]:
-    """the provider this selection runs, named or inferred from the model —
-    None when it names neither, leaving the standing recipe's provider."""
+  def providers(self, among: Collection[str]) -> tuple[str, ...]:
+    """the providers in `among` this selection can run on: the one it names, or
+    those whose rosters carry its model — all of `among` when it names neither,
+    leaving the standing recipe's provider."""
     if self.provider is not None:
-      return self.provider
+      return (self.provider,) if self.provider in among else ()
     if self.model is not None:
-      return provider_of_model(self.model)
-    return None
+      return carriers(self.model, among)
+    return tuple(among)
 
   def over(self, base: 'LLMSelection') -> 'LLMSelection':
     """this selection with `base` filling what it leaves unnamed — a launch's
@@ -228,8 +248,9 @@ def parse(value: str) -> LLMSelection:
   return selection
 
 
-def resolve(base: LLMSpec, selection: LLMSelection) -> LLMSpec:
-  """the recipe a launch runs: `selection` applied over the standing `base`.
+def resolve(base: LLMSpec, selection: LLMSelection, among: Collection[str]) -> LLMSpec:
+  """the recipe a launch runs: `selection` applied over the standing `base`,
+  with a model named alone resolved among the providers in `among`.
 
   `provider` names a whole recipe — that provider's default model and no knobs —
   while `model` alone names only the model, keeping `base`'s other knobs when it
@@ -246,7 +267,7 @@ def resolve(base: LLMSpec, selection: LLMSelection) -> LLMSpec:
     if selection.model is not None:
       spec = dataclasses.replace(spec, model=resolve_model(selection.provider, selection.model))
   elif selection.model is not None:
-    provider = provider_of_model(selection.model)
+    provider = provider_of_model(selection.model, among)
     model = resolve_model(provider, selection.model)
     spec = (
       dataclasses.replace(base, model=model)

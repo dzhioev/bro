@@ -681,12 +681,36 @@ class TestNativeServiceTools:
 
 
 class TestRecipeResolution:
+  def test_every_served_provider_declares_a_native_recipe(self):
+    from bro.llm import providers
+    from bro.llm.llm import NativeLLMSpec
+    from bro.native.harness import BRO
+
+    for provider in BRO.llm_providers:
+      assert isinstance(providers.default_spec(provider), NativeLLMSpec)
+
+  def test_short_names_do_not_collide_across_the_served_providers(self):
+    # a model named alone resolves among the providers the harness serves, so
+    # one name may never be carried by two of them
+    from bro.llm import providers
+    from bro.native.harness import BRO
+
+    seen: dict[str, str] = {}
+    for provider in BRO.llm_providers:
+      for short_name in providers.models(provider):
+        assert short_name not in seen, f'{short_name} in both {seen.get(short_name)} and {provider}'
+        seen[short_name] = provider
+
   def test_native_resolution_refuses_a_self_driving_recipe(self):
     from bro.llm.llms import openai
     from bro.llm.providers import LLMSelection, LLMSelectionError
     from bro.native.harness import resolve_native
 
-    with pytest.raises(LLMSelectionError, match='compatible driving harness'):
+    with pytest.raises(
+      LLMSelectionError,
+      match="the bro harness cannot run recipe ':fable5': it serves openai, echo; "
+      'anthropic runs on the claude harness',
+    ):
       resolve_native(openai.LLMSpec(), LLMSelection(model='fable5'))
 
   def test_native_selection_keeps_provider_knobs(self):

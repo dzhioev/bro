@@ -258,7 +258,7 @@ def _child_session_spec(
   if resolved_isolation is None:
     raise ValueError('summoned session isolation is unresolved')
   repo = None if launch.repo is None else as_repository(launch.repo).identity
-  llm = bind_launch_llm(repo, launch.target, launch.llm)
+  llm = bind_launch_llm(harness, repo, launch.target, launch.llm)
   pass_picks, pass_grants = _pass_scope_overrides(launch.passes)
   return SessionSpec(
     name=workspace_name,

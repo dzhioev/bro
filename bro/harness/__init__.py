@@ -10,7 +10,9 @@ from bro.base.condition import Variables
 
 if TYPE_CHECKING:
   from bro.bro import BaseBro, LiveRun
+  from bro.llm.llm import LLMSpec
   from bro.llm.mcp import Tool
+  from bro.llm.providers import LLMSelection
   from bro.mcp import MCPServerSpec, Reach
 
 SessionEndReason = Literal['ok', 'raised']
@@ -44,6 +46,8 @@ class Harness:
   """The framework-visible interface of one driving harness."""
 
   name: str
+  # the `bro.llm.providers` names whose recipes this harness runs
+  llm_providers: tuple[str, ...] = ()
 
   def __init__(self, name: str | None = None):
     if name is not None:
@@ -80,6 +84,37 @@ class Harness:
     """End the current session with its terminal result."""
     del result, end_reason
     raise RuntimeError(f'harness {self.name!r} cannot end this session')
+
+  def runs(self, selection: 'LLMSelection') -> bool:
+    """Whether `selection` names a recipe this harness runs, a model named alone
+    looked up among `llm_providers`."""
+    return len(selection.providers(self.llm_providers)) > 0
+
+  def resolve_recipe(self, base: 'LLMSpec', selection: 'LLMSelection') -> 'LLMSpec':
+    """`selection` over the standing `base`, among `llm_providers`; a recipe this
+    harness does not run is refused, naming the installed harnesses that do."""
+    from bro.llm.providers import LLMSelectionError, known_names, resolve
+
+    if not self.runs(selection):
+      served = ', '.join(self.llm_providers) or 'no provider'
+      elsewhere = '; '.join(
+        f'{provider} runs on {_harnesses_running(provider)}'
+        for provider in selection.providers(known_names())
+      )
+      raise LLMSelectionError(
+        f'the {self.name} harness cannot run recipe {selection.format()!r}: '
+        f'it serves {served}; {elsewhere}'
+      )
+    return resolve(base, selection, self.llm_providers)
+
+
+def _harnesses_running(provider: str) -> str:
+  names = [
+    name for name in installed_harness_names() if provider in get_harness(name).llm_providers
+  ]
+  if len(names) == 0:
+    return 'no installed harness'
+  return f'the {" or ".join(names)} harness'
 
 
 def harness_name(value: str) -> str:

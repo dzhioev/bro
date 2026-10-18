@@ -10,7 +10,7 @@ import pytest
 import ride.claude.claude_argv as ride_claude_argv
 from bro.base.spawn import console_script, module_argv
 from bro.bro import BaseBro
-from bro.llm.llms import claude_code
+from bro.llm.llms import anthropic
 from bro.mcp import ToolLayer, brash, files
 from ride.claude import native_tools
 from ride.claude.assembly import persona_servers
@@ -79,7 +79,7 @@ def _declaring(*layers: ToolLayer) -> BaseBro:
 class TestRideSessionLaunch:
   def test_basic_shape(self):
     argv = _ride_session_launch(_spec()).argv
-    assert argv[:2] == ['--model', claude_code.DEFAULT_MODEL]
+    assert '--model' not in argv and '--effort' not in argv
     assert '--bare' not in argv and '--resume' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
@@ -231,6 +231,14 @@ class TestRideSessionLaunch:
   def test_effort_injected(self):
     argv = _ride_session_launch(_spec(llm='::xhigh')).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
+
+  def test_a_named_model_is_passed_on(self):
+    argv = _ride_session_launch(_spec(llm=':opus55')).argv
+    assert argv[:2] == ['--model', anthropic.MODELS['opus55']]
+
+  def test_the_providers_default_model_is_passed_on(self):
+    argv = _ride_session_launch(_spec(llm='anthropic')).argv
+    assert argv[:2] == ['--model', anthropic.DEFAULT_MODEL]
 
   @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
   def test_non_guided_holds_skip_permissions(self, hold):

@@ -50,7 +50,7 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--harness', 'bro']))
     assert ride_flags.extract_forwarded_argv(args) == ['--harness', 'bro']
 
-  def test_llm_flags_default_to_none_for_the_claude_code_spec_to_supply(self):
+  def test_llm_flags_default_to_none_for_the_harness_to_supply(self):
     parser = Parser(add_help=False)
     ride_flags.add_forwarded_flags(parser)
     args = parser.parse_args([])

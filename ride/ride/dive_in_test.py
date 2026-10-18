@@ -414,7 +414,7 @@ class TestTaskSystem:
 
     config = tmp_path / 'bro.json'
     config.write_text(
-      json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': 'openai:sol:xhigh'}}}}})
+      json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': ['openai:sol:xhigh']}}}}})
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     calls: dict = {}

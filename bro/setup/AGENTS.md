@@ -124,7 +124,7 @@ The optional host config selects stored credential instances and layers session 
       "grant": ["@reviewer"],
       "bros": {
         "bro-eyebro": {"creds": ["github+reviewer"], "grant": [":launch.bro.pass.github+reviewer"], "revoke": [":launch.bro.party.join"]},
-        "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": "openai:sol:xhigh"}
+        "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": ["anthropic:opus55:high", "openai:sol:xhigh", "default"]}
       }
     },
     "/home/me/projects/bro": {
@@ -156,11 +156,15 @@ A bro's `creds` selects only among the kinds its configured scope holds;
 a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
 The same entry may pick and grant a kind.
 The full name grammar, layer fold, worker schemas, delegation bound, and credential hydration are documented once in `bro/reference/ride.md`, "Session permissions and credentials".
-A `bros` entry may also carry `llm`, the recipe the bro runs by default on this project, in the `--llm` grammar.
-It fills what the launch leaves unnamed:
-a launch naming a provider or a model keeps its own pair, an effort or `+fast` it does not name is read from the entry, the path entry fills before the URL entry, and whatever no layer names keeps the bro's declared recipe.
+A `bros` entry may also carry `llm`, the recipes the bro runs on this project: an ordered preference list in the `--llm` grammar.
+A launch runs the first entry its harness serves (`bro/reference/ride.md`, "Harness selection"), so one list can cover a bro launched on `claude` and summoned on `bro`.
+`default` stands for the harness's own recipe, the one a launch selecting nothing runs (`bro/reference/ride.md`, "Harness selection"), and may only come last, since it always runs.
+A list naming nothing the harness serves fails the launch, naming the entry, and so does a malformed recipe anywhere in it.
+The path entry's list replaces the URL entry's whole, and no list at all reads as `["default"]`.
+The launch's own `--llm` or a summon's `llm` then fills over the picked recipe:
+naming a provider or a model keeps its own pair, and an effort or `+fast` it does not name is read from the pick;
+a result the harness does not serve fails the launch.
 The settled recipe is what the session records and forwards, so a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
-A recipe the selected harness cannot run fails the launch as an explicit `--llm` would, and a malformed one fails the launch that reads it, naming the entry.
 The retired `instances` field is rejected with `creds` named as its replacement.
 The file read validates credential and bro name grammar without consulting an installation's registries.
 Each launch then requires every credential name in every applicable layer to be registered.
