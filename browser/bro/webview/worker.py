@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any, override
 
+from bro.authority.patterns import Descriptor
+from bro.authority.rules import Declaration, Option
+from bro.authority.values import (
+  Finite,
+  IntegerInterval,
+  Integers,
+  Scalars,
+  StringGrammar,
+  Strings,
+)
+from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.worker_types import (
   LAUNCH_FLAG,
   Container,
   LaunchDenied,
   LaunchPass,
   LaunchRequest,
+  OptionValues,
   WorkerContainer,
   WorkerType,
 )
@@ -58,6 +71,74 @@ class WebviewType(WorkerType):
   default_timeout = None
   widens_talk = False
   manual = False
+
+  @classmethod
+  def authority_declaration(cls, credential_kinds: frozenset[str]) -> Declaration:
+    sentinels = frozenset({'auto'})
+    none = frozenset({'none'})
+
+    def defaults(values: Descriptor, reading: object):
+      return {'vnc_port': 'auto', 'timeout': 'none'}
+
+    def validate(descriptor: Descriptor) -> None:
+      if descriptor.values['vnc_port'] != 'auto' and descriptor.values.get('vnc') is not True:
+        raise ValueError('vnc_port requires vnc')
+
+    return Declaration(
+      {
+        'vnc': Option('scalar', Finite(frozenset({True}), frozenset({True}))),
+        'vnc_port': Option(
+          'scalar',
+          Scalars((Integers((IntegerInterval(1024, 65535),)), Finite(sentinels, sentinels))),
+          open=True,
+        ),
+        'cred.cookies': Option(
+          'scalar',
+          Strings(
+            cofinite=True,
+            grammar=StringGrammar(INSTANCE_CHARACTERS, INSTANCE_CHARACTERS, empty=True),
+          ),
+        ),
+        'timeout': Option(
+          'scalar',
+          Scalars((Integers((IntegerInterval(1, None),)), Finite(none, none))),
+          open=True,
+        ),
+      },
+      defaults=defaults,
+      validate=validate,
+    )
+
+  @classmethod
+  def option_values(cls, fields: Mapping[str, Any], reading: object) -> OptionValues:
+    options = {'vnc', 'vnc_port', 'timeout'}
+    content_names = {'allowed_origins', 'blocked_origins', 'share'}
+    if fields.keys() - options - content_names - {'pass', 'cookies'}:
+      raise ValueError('unknown webview fields')
+    values = {name: value for name, value in fields.items() if name in options}
+    if 'vnc' in values:
+      if type(values['vnc']) is not bool:
+        raise ValueError('vnc must be a flag')
+      if values['vnc'] is False:
+        del values['vnc']
+    for name, sentinel in (('vnc_port', 'auto'), ('timeout', 'none')):
+      if name in values and values[name] is None:
+        values[name] = sentinel
+    if 'cookies' in fields:
+      values['cred.cookies'] = fields['cookies']
+    if 'pass' in fields:
+      from bro.base.credentials import parse_picks
+
+      picks = parse_picks(fields['pass'], where='webview', field='pass')
+      if picks.keys() - {'cookies'}:
+        raise ValueError('webview accepts cookies only')
+      if 'cookies' in picks:
+        if 'cred.cookies' in values:
+          raise ValueError('cookies is set twice')
+        values['cred.cookies'] = picks['cookies']
+    return OptionValues(
+      values, {name: value for name, value in fields.items() if name in content_names}
+    )
 
   @override
   def talk(self, request: LaunchRequest) -> Any:

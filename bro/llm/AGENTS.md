@@ -24,6 +24,7 @@ The bro-native engine and provider clients live in `bro.native`.
 - `llm.py` — the `LLMSpec` ABC:
   a frozen recipe (model + provider knobs) with `needed_secrets`, optional `.fast()` / `.with_effort(level)` transforms (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max vocabulary),
   and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
+  `selection` and `with_selection` project and reconstruct model/effort choices, with each recipe declaring its concrete effort vocabulary and deferrable fields.
   `NativeLLMSpec` is the marker for recipes the bro-native engine can run, each naming its model;
   a provider only a harness driving its own loop runs (`anthropic`) remains a bare `LLMSpec`.
   `LLMUnavailable` is the provider-neutral failure a client raises once its provider stays down through the client's retries.

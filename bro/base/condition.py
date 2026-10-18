@@ -28,6 +28,10 @@ class ConditionError(ValueError):
   violation, or an exhausted `iff`."""
 
 
+class NoAlternative(ConditionError):
+  """An exhaustive choice has no holding branch or else item."""
+
+
 @dataclass(frozen=True)
 class StringVariable:
   """A string-valued variable with an optional closed domain or open validator."""
@@ -236,7 +240,7 @@ class Iff[T]:
     if self.otherwise is not None:
       return self.otherwise
     conditions = ', '.join(str(condition) for condition, _ in self.branches)
-    raise ConditionError(f'no condition of iff({conditions}) holds and there is no else item')
+    raise NoAlternative(f'no condition of iff({conditions}) holds and there is no else item')
 
 
 # what a declarative list may hold: plain items, `when`-gated items, and

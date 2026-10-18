@@ -65,7 +65,7 @@ def party_launch_choices() -> str:
 
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
-DEFAULT_TIMEOUT = 1800.0
+DEFAULT_TIMEOUT = 1800
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
 MANUAL_HELP = (
   'register a manual summon instead of spawning: the quest id becomes the token '

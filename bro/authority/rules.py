@@ -67,6 +67,7 @@ class Declaration:
   overridable_defaults: VariableDefaults = _no_variable_defaults
   validate: Callable[[Descriptor], None] = _valid
   base: Callable[[Descriptor, object], Authority] = _empty_base
+  validate_joint: Callable[[Descriptor], None] = _valid
 
   def __post_init__(self) -> None:
     object.__setattr__(self, 'options', MappingProxyType(dict(self.options)))
@@ -332,6 +333,10 @@ class Rules:
   ) -> Mission:
     request = replace(prepared.request, values={**prepared.request.values, **values})
     descriptor = self.normalize(request, prepared.reading)
+    self._admit(
+      descriptor,
+      (Admission('joint validity check', self._declaration(request.type).validate_joint),),
+    )
     self.use(starter, descriptor, options=frozenset(descriptor.values) - values.keys())
     self.use(operator, descriptor, options=frozenset(values), start=False)
     self.gift(starter, request.gift, descriptor)

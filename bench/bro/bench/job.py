@@ -11,12 +11,14 @@ Detached starts print the accepted request id, and completed work prints the art
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Optional, override
 
+from bro.authority.rules import Declaration, Option
+from bro.authority.values import IntegerInterval, Integers
 from bro.base import log
 from bro.broker.environment import BROKER_CHANNEL
-from bro.worker_types import Job, LaunchDenied, LaunchRequest, WorkerType, tree_path
+from bro.worker_types import Job, LaunchDenied, LaunchRequest, OptionValues, WorkerType, tree_path
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message, Talk
@@ -27,7 +29,7 @@ __cli_name__ = 'benchmark-job'
 BENCHMARK = 'benchmark'
 # request-lifecycle bound when the request names no timeout — generous: a full
 # Terminal-Bench 2.1 job across two agents runs for hours
-DEFAULT_TIMEOUT = 12 * 3600.0
+DEFAULT_TIMEOUT = 12 * 3600
 # `benchmark-job check` exit code while the result is not in yet (0 = answer
 # relayed, 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
@@ -40,6 +42,22 @@ HARBOR_API_KEY_ENV = 'HARBOR_API_KEY'
 class BenchmarkType(WorkerType):
   name = BENCHMARK
   default_timeout = DEFAULT_TIMEOUT
+
+  @classmethod
+  def authority_declaration(cls, credential_kinds: frozenset[str]) -> Declaration:
+    return Declaration(
+      {'timeout': Option('scalar', Integers((IntegerInterval(1, None),)), open=True)},
+      defaults=lambda values, reading: {'timeout': DEFAULT_TIMEOUT},
+    )
+
+  @classmethod
+  def option_values(cls, fields: Mapping[str, Any], reading: object) -> OptionValues:
+    if fields.keys() - {'timeout', 'config'}:
+      raise ValueError('unknown benchmark fields')
+    return OptionValues(
+      {name: value for name, value in fields.items() if name == 'timeout'},
+      {name: value for name, value in fields.items() if name == 'config'},
+    )
 
   @override
   def talk(self, request: LaunchRequest) -> Talk:
