@@ -647,6 +647,16 @@ def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
       continue
     event = item.event
     transition = event.get('transition')
+    if transition == 'override':
+      changed = ', '.join(f'--{verb} {name}' for verb, name in event['changes'])
+      yield f'operator override {event["operation"]} applied: {changed}'
+      if event['may_summon']:
+        from bro.prompts import take_deferred_contract
+
+        contract = take_deferred_contract()
+        if contract:
+          yield contract
+      continue
     chat_line = _chat_event_line(event, own)
     if chat_line is not None:
       line = chat_line

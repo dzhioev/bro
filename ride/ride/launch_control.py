@@ -279,6 +279,15 @@ class LaunchControl:
     except (ValueError, UnattributablePeer) as error:
       context.reply(peer, {'outcome': 'denied', 'error': str(error)})
 
+  def override(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    from ride.overrides import apply
+
+    try:
+      value = apply(self._peers, context.journal, self.reading, message.args)
+      context.reply(peer, {'outcome': 'ok', 'value': value})
+    except (ValueError, OSError, UnattributablePeer) as error:
+      context.reply(peer, {'outcome': 'denied', 'error': str(error)})
+
   def commit(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     from ride.authority_launch import credentials_for
     from ride.authority_scope import checked_recipe

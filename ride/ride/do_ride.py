@@ -297,6 +297,12 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
     watches.Owner.for_session() as watch_owner,
   ):
     if watches.session_watch_admitted():
+      from bro.authority_view import capture_initial
+      from bro.harness import get_harness
+      from bro.prompts import save_deferred_contract
+
+      capture_initial()
+      save_deferred_contract(harness=get_harness(run.harness), hold=run.hold)
       watch_owner.store.start(watches.SESSION_WATCH_COMMAND)
     code = harness.run_session(run)
   requested = requested_exit_status()

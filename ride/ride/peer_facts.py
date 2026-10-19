@@ -33,6 +33,7 @@ class WorkerFacts:
   published_ports: tuple[tuple[int, int], ...] = ()
   extension: Any = None
   record: Mission | Prepared | None = None
+  pending_override: dict[str, Any] | None = None
 
 
 class PeerFacts:

@@ -110,6 +110,19 @@ def build_parser() -> Parser:
   missions = subparsers.add_parser('missions', help="list a running root's missions by name")
   missions.add_argument('root', help='root workspace name')
 
+  override = subparsers.add_parser('override', help="change a running session's bro targets")
+  override.add_argument('name', help='workspace or member name from `ride missions`')
+  for verb in ('grant', 'revoke'):
+    override.add_argument(
+      '--' + verb,
+      dest='changes',
+      action='append',
+      default=[],
+      metavar='@BRO',
+      type=lambda value, verb=verb: (verb, value),
+      help=f'{verb} a bro target (latest flag per target wins)',
+    )
+
   clean = subparsers.add_parser(
     'clean', help='remove stale workspaces, unreferenced mirrors, and unlocked runtime bundles'
   )
@@ -359,6 +372,16 @@ def main(argv: list[str]) -> Optional[int]:
   command = args.pop('cmd')
   if command in ('solo', 'along'):
     _bootstrap_mode_runtime(parser, args, argv)
+  elif command == 'override':
+    try:
+      from ride.overrides import changes
+
+      changes(args['changes'])
+      args['root'] = operator.find_root(args['name'])
+      control = operator.read_control(args['root'])
+      reexec_from_runtime(control.runtime, argv)
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
   elif command == 'missions':
     try:
       control = operator.read_control(args['root'])
@@ -374,6 +397,11 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(str(error))
   if command in ('solo', 'along'):
     return _start_mode(parser, args, solo=command == 'solo')
+  if command == 'override':
+    try:
+      return operator.override(args['root'], args['name'], args['changes'])
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
   if command == 'missions':
     try:
       return operator.list_missions(args['root'])

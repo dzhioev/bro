@@ -931,8 +931,10 @@ def _stream_event_relevant(
     if not include_own:
       return False
     transition = event.get('transition')
-    return transition == 'refused' or (transition == 'message' and event.get('from') == 'owner')
-  if event.get('kind') != LAUNCH:
+    return transition in ('override', 'refused') or (
+      transition == 'message' and event.get('from') == 'owner'
+    )
+  if event.get('transition') == 'override' or event.get('kind') != LAUNCH:
     return False
   if worker_type is not None and _worker_type(event) != worker_type:
     return False
@@ -956,6 +958,7 @@ def _replay_events(
   events: list[dict[str, Any]] = []
   if include_own:
     record = query_mission(client, own)
+    events.extend(record.get('overrides', []))
     events.extend(
       _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
     )

@@ -165,7 +165,14 @@ def resume_request(
   values = credential_values(requested.values, changes.values)
   gift = load_authority(spec.operator_gift, reading.syntax) if spec.operator_gift else Authority()
   cap = load_authority(spec.operator_cap, reading.syntax) if spec.operator_cap else Cap()
-  replaced = (*changes.gift.permissions(), *changes.cap.permissions())
+  gift, cap = replace_operator_layer(gift, cap, changes.gift, changes.cap)
+  return replace(requested, values=values), gift, cap
+
+
+def replace_operator_layer(
+  gift: Authority, cap: Authority, added: Authority, removed: Authority
+) -> tuple[Authority, Authority]:
+  replaced = (*added.permissions(), *removed.permissions())
 
   def keep(authority: Authority) -> Authority:
     entries = []
@@ -178,8 +185,25 @@ def resume_request(
       tuple(entries), authority.operation, tuple(keep(item) for item in authority.operands)
     )
 
-  return (
-    replace(requested, values=values),
-    keep(gift).join(changes.gift),
-    keep(cap).meet(changes.cap),
-  )
+  def compact(authority: Authority) -> Authority:
+    if authority.operation == 'top':
+      return authority
+    entries = list(authority.entries)
+    operands = []
+    for operand in authority.operands:
+      operand = compact(operand)
+      if not operand.entries and not operand.operands:
+        is_top = operand.operation in ('meet', 'top')
+        if is_top == (authority.operation == 'meet'):
+          continue
+        return Authority.top() if is_top else Authority()
+      if operand.operation == authority.operation:
+        entries.extend(operand.entries)
+        operands.extend(operand.operands)
+      else:
+        operands.append(operand)
+    if not entries and len(operands) == 1:
+      return operands[0]
+    return Authority(tuple(entries), authority.operation, tuple(operands))
+
+  return compact(keep(gift).join(added)), compact(keep(cap).meet(removed))
