@@ -187,6 +187,10 @@ class _StreamSession:
         return
       turn_end.settle(self)
 
+  @property
+  def background_wait_hint(self) -> None:
+    return None
+
   def background_work(self) -> tuple[str, ...]:
     return tuple(
       f'{task["task_id"]} {task["task_type"]} `{task["description"].replace("`", "\\`")}`'

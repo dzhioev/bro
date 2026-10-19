@@ -12,3 +12,6 @@ At each turn end, the runtime takes the first applicable route:
 - No live work ends the run immediately.
 
 Ending the run kills its watchers and host-supervised workers and detaches expected workers.
+
+Where `bro::chill` is among your tools, call `bro::chill(timeout_seconds)` instead of ending the turn to wait on a background job without the notice:
+it returns when a job exits or a line arrives, or at the timeout with the jobs still running, so a hung job gets looked at.

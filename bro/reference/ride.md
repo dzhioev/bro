@@ -229,6 +229,8 @@ Watch lines enter the model after tool results or wake an idle turn.
 At each one-shot turn end, the runner applies the shared end-of-turn rule over covered and uncovered missions, live model watches, pending waking watch lines, running jobs, and live session traffic.
 A notice reaches the LLM through the inbox as a user-role item recorded in a `notification` step.
 An end returns the last reply, while a wait idles on the inbox until job or watch news wakes the next turn.
+A model that waits on a job on purpose calls `bro::chill(timeout_seconds)` instead of ending the turn:
+it blocks on the same inbox and returns on news or at the timeout, naming the jobs still running, so no turn-end notice is spent on it.
 Ending the run still closes every job and orphans every in-flight mission, while a delivered `answer` or a `raise` ends it at once.
 `bro chat` uses the same inbox to wake on watch lines while continuing to accept a human's message between turns.
 

@@ -181,6 +181,10 @@ class Runner:
         result.append(f'{job.id} {job.mode} `{command}`')
     return tuple(result)
 
+  @property
+  def background_wait_hint(self) -> str:
+    return 'To wait for it without this notice, call `bro::chill(timeout_seconds)` instead of ending the turn.'
+
   def notify(self, text: str) -> None:
     self.inbox.post(text)
 

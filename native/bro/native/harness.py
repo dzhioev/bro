@@ -81,6 +81,14 @@ _KILL_DESCRIPTION = (
   'for notification delivery.'
 )
 
+_CHILL_DESCRIPTION = (
+  'wait without ending the turn until a job exits, a watch line or another notification arrives, '
+  'or `timeout_seconds` pass, whichever is first. use it to wait on background work: a run that '
+  'ends its turn with jobs still running is reminded of them first. a timeout names the jobs '
+  f'still running so you can check on them. `timeout_seconds` is capped at {_JOB_WAIT_CAP_SECONDS:g} '
+  'and a clamp is named in the result. arrived news is delivered right after this result.'
+)
+
 _JOBS_DESCRIPTION = (
   'list every job in this service registry with its id, mode, command, running/exited state, '
   'exit code, and count of unread output lines.'
@@ -150,11 +158,30 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   def jobs() -> list[JobStatus]:
     return [entry.status() for entry in live_run.registry.values()]
 
+  async def chill(timeout_seconds: float) -> str:
+    wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
+    deadline = time.monotonic() + wait_seconds
+    with live_run.inbox.waiter() as cancelled:
+      woken = await off_loop(live_run.inbox.wait, deadline, cancelled)
+    if woken:
+      result = 'woken by news'
+    else:
+      running = [
+        f'{status.id} {status.mode} `{status.command}`'
+        for status in (entry.status() for entry in live_run.registry.values())
+        if status.state == 'running'
+      ]
+      result = f'no news after {wait_seconds:g}s; running: {", ".join(running) or "no jobs"}'
+    if clamp_note is not None:
+      result = f'{result}\n[{clamp_note}]'
+    return result
+
   return [
     llm_mcp.FunctionTool(job, name='job', description=_JOB_DESCRIPTION),
     llm_mcp.FunctionTool(poll, name='poll', description=_POLL_DESCRIPTION),
     llm_mcp.FunctionTool(kill, name='kill', description=_KILL_DESCRIPTION),
     llm_mcp.FunctionTool(jobs, name='jobs', description=_JOBS_DESCRIPTION),
+    llm_mcp.FunctionTool(chill, name='chill', description=_CHILL_DESCRIPTION),
   ]
 
 
