@@ -261,6 +261,7 @@ class TestRunSession:
   def test_arms_the_admitted_session_watch_before_the_harness(self, monkeypatch, tmp_path):
     monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
     started: list[str] = []
+    monkeypatch.setattr('bro.authority_view.capture_initial', lambda: started.append('snapshot'))
 
     def record_start(store, command):
       started.append(command)
@@ -269,7 +270,7 @@ class TestRunSession:
     monkeypatch.setattr(watches.Store, 'start', record_start)
 
     def capture(_run):
-      assert started == [watches.SESSION_WATCH_COMMAND]
+      assert started == ['snapshot', watches.SESSION_WATCH_COMMAND]
       return 0
 
     self._run(monkeypatch, tmp_path, harness_effect=capture)

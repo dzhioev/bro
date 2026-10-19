@@ -1338,6 +1338,7 @@ class TestRunRootViaBroker:
       'authority',
       'operator.commit',
       'operator.claim',
+      'operator.override',
     }
     assert isinstance(captured['spawner'], workspace_spawn.ProcessSpawner)
     assert captured['type'] == 'bro'

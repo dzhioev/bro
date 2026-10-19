@@ -262,6 +262,7 @@ PYTEST_FILES = [
   'ride/ride/worker_container_test.py',
   'ride/ride/peer_facts_test.py',
   'ride/ride/operator_test.py',
+  'ride/ride/overrides_test.py',
   'ride/ride/artifacts_test.py',
   'ride/ride/pending_launch_test.py',
   'ride/ride/claude/claude_argv_test.py',

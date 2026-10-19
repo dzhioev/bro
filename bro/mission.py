@@ -927,8 +927,10 @@ def visible_event_head() -> int:
 def _stream_event_relevant(event: dict[str, Any], own: str, worker_type: Optional[str]) -> bool:
   if event.get('mission') == own:
     transition = event.get('transition')
-    return transition == 'refused' or (transition == 'message' and event.get('from') == 'owner')
-  if event.get('kind') != LAUNCH:
+    return transition in ('override', 'refused') or (
+      transition == 'message' and event.get('from') == 'owner'
+    )
+  if event.get('transition') == 'override' or event.get('kind') != LAUNCH:
     return False
   if worker_type is not None and _worker_type(event) != worker_type:
     return False
@@ -946,9 +948,10 @@ def _replay_events(
   after: int,
 ) -> list[WatchEvent]:
   record = query_mission(client, own)
-  events: list[dict[str, Any]] = [
+  events: list[dict[str, Any]] = list(record.get('overrides', []))
+  events.extend(
     _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
-  ]
+  )
   for record in _query_listing(client, worker_type):
     if record.get('parent') != own or _ended(record):
       continue
@@ -1076,6 +1079,16 @@ def watch(
       yield _single_line(f'mission watch gap: {item.reason}; re-armed at {item.head}')
       continue
     event = item.event
+    if event.get('transition') == 'override':
+      changed = ', '.join(f'--{verb} {name}' for verb, name in event['changes'])
+      yield f'operator override {event["operation"]} applied: {changed}'
+      if event['may_summon']:
+        from bro.prompts import take_deferred_contract
+
+        contract = take_deferred_contract()
+        if contract:
+          yield contract
+      continue
     chat_line = _chat_event_line(event, own)
     if chat_line is not None:
       line = chat_line

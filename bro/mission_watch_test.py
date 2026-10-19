@@ -579,3 +579,86 @@ async def test_watch_refuses_to_start_without_the_quest_this_session_answers(mon
     watch = mission.watch(wait_seconds=0.05)
     with pytest.raises(quest.QuestError, match=BROKER_MISSION):
       await asyncio.to_thread(next, watch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('replayed', [False, True])
+async def test_operator_overrides_deliver_the_contract_once_without_hiding_worker_events(
+  monkeypatch, tmp_path, replayed
+):
+  from bro.authority_view_test_helper import publish
+  from bro.harness import get_harness
+  from bro.monitor import SESSION_DIR_ENV
+  from bro.prompts import save_deferred_contract, take_deferred_contract
+
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+  publish(monkeypatch)
+  save_deferred_contract(harness=get_harness('bro'), hold='unattended')
+  overrides = [
+    {
+      'seq': sequence,
+      'kind': 'root',
+      'mission': 'ROOT',
+      'transition': 'override',
+      'operation': f'operation-{sequence}',
+      'changes': [[verb, '@bro']],
+      'may_summon': ['bro'] if verb == 'grant' else [],
+    }
+    for sequence, verb in [(4, 'grant'), (5, 'revoke'), (6, 'grant')]
+  ]
+  worker_event = {
+    'seq': 7,
+    'kind': 'launch',
+    'type': 'benchmark',
+    'mission': 'BENCHMARK',
+    'parent': 'ROOT',
+    'args': {},
+    'transition': 'ended',
+    'outcome': 'ok',
+  }
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
+    with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
+      first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await next_message(server)
+      await reply(server, channel, arm, outcome='ok', value={'head': 6 if replayed else 3})
+      channel, own_query = await next_message(server)
+      await reply(
+        server,
+        channel,
+        own_query,
+        outcome='ok',
+        value={
+          'mission': {
+            **quest_record('ROOT', 'started', kind='root'),
+            'overrides': overrides if replayed else [],
+          }
+        },
+      )
+      channel, listing = await next_message(server)
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      if not replayed:
+        channel, poll = await next_message(server)
+        await reply(
+          server,
+          channel,
+          poll,
+          outcome='ok',
+          value={'head': 7, 'events': [*overrides, worker_event]},
+        )
+      assert await first_line == 'operator override operation-4 applied: --grant @bro'
+      assert '# Summoning session' in await asyncio.to_thread(next, watch)
+      assert await asyncio.to_thread(next, watch) == (
+        'operator override operation-5 applied: --revoke @bro'
+      )
+      assert await asyncio.to_thread(next, watch) == (
+        'operator override operation-6 applied: --grant @bro'
+      )
+      worker_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      if replayed:
+        channel, poll = await next_message(server)
+        await reply(
+          server, channel, poll, outcome='ok', value={'head': 7, 'events': [worker_event]}
+        )
+      assert await worker_line == 'mission BENCHMARK (benchmark) ended ok'
+      assert take_deferred_contract() is None

@@ -67,6 +67,11 @@ the launcher's own `--log` never reaches the session.
 
 - `ride resume <workspace>` relaunches the recorded session recipe, with optional `--cred`, `--grant`, and `--revoke` adjustments.
   Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
+- `ride override <name> --grant @<bro>` / `--revoke @<bro>` changes a running workspace or joined member's bro targets over its root's operator channel.
+  Names come from `ride missions <root>`;
+  repeated flags are applied in order, with the last flag per target winning.
+  The banner reads the updated authority, and the next summon uses it.
+  An override affects no already-running child and a resume retains it.
 - `ride list` lists every workspace, its activity state, when its session last marked activity, its attachment, and its subject.
   Live badges are `[o]` boxed and `.o.` unboxed;
   idle badges are `[-]` boxed and `.-.` unboxed.
@@ -164,7 +169,7 @@ A watch set to wake on quiet lines treats its every line as waking.
 Where a persona declares shell reach, both harnesses mount `bro::watch(command, wake_on_quiet)` and `bro::unwatch(command)`.
 Under a finite command list a watch runs its line in brash under the session's brash policy, as the bro harness's jobs do, and under `brash(ANY)` in bash;
 `wake_on_quiet` sets the watch to wake on its quiet lines, while `unwatch` stops the watch it names without checking the command list and refuses the runtime-owned session watch.
-`do-ride` arms `mission watch` before the harness starts when the session may summon, or when a summoned session's talk can carry owner messages or a reply to its own question.
+`do-ride` arms `mission watch` before the harness starts for every session with a broker channel, so operator scope changes wake sessions that started without summon targets too.
 Each joined party member has its own session directory and therefore its own store.
 The session watch reaches the model through the selected harness's delivery port without adding commands to the persona's tool reach.
 

@@ -143,6 +143,7 @@ class SessionSpec:
   operator_gift: dict = field(default_factory=dict)
   operator_cap: dict = field(default_factory=dict)
   operator_values: list[str] = field(default_factory=list)
+  override_operation: dict = field(default_factory=dict)
   mission: Mission | None = field(default=None, repr=False, compare=False)
 
   def __post_init__(self) -> None:
