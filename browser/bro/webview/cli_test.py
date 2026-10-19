@@ -125,7 +125,7 @@ async def test_open_rides_the_launch_to_ready_and_prints_the_owner_handle(monkey
       'type': 'webview',
       'vnc': True,
       'vnc_port': 46080,
-      'pass': ['cookies+e2e'],
+      'cred.cookies': 'e2e',
       'allowed_origins': ['https://allowed.example'],
       'blocked_origins': ['https://blocked.example'],
       'share': [REF],
@@ -175,13 +175,13 @@ async def test_open_fails_with_a_launch_denial(monkeypatch, capsys, caplog):
       brotocol.result(
         launch.request_id,
         'denied',
-        error='launch denied: the VNC view needs :launch.webview.vnc',
+        error='launch denied: use rule: webview.vnc: no matching use pattern',
       ),
     )
 
     assert await task == 1
     assert capsys.readouterr().out == ''
-    assert ':launch.webview.vnc' in caplog.text
+    assert 'use rule: webview.vnc' in caplog.text
 
 
 @pytest.mark.asyncio

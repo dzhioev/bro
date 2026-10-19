@@ -39,7 +39,6 @@ def _owner(tree: Path, *, depth: int = 0) -> PeerDescription:
     tree=tree,
     type='bro',
     bro='bro-dev',
-    launch={'benchmark': {}},
     member=None,
     expected=False,
     artifact_view=None,
@@ -79,7 +78,6 @@ class TestBenchmarkType:
   def test_declarations_are_fixed_for_a_mute_host_job(self):
     worker_type = _worker_type()
     assert worker_type.name == 'benchmark'
-    assert worker_type.launch_schema == {}
     assert worker_type.default_timeout == 12 * 3600
     assert worker_type.widens_talk is False
     assert worker_type.manual is False
@@ -110,9 +108,8 @@ class TestBenchmarkType:
     assert host_environment == tree.parent / 'benchmark-venv'
     assert not host_environment.is_relative_to(tree)
     assert 'VIRTUAL_ENV' not in run.command.env
-    assert run.launch_scope == {}
 
-  def test_summoned_owner_may_start_a_job_when_the_broker_granted_the_type(self, tree):
+  def test_job_builds_for_a_summoned_owner(self, tree):
     run = _worker_type().launch(_request(tree, {'config': CONFIG}, depth=1))
     assert run.command.command[0] == 'uv'
 
