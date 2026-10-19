@@ -34,6 +34,7 @@ class WorkerFacts:
   extension: Any = None
   record: Mission | Prepared | None = None
   pending_override: dict[str, Any] | None = None
+  credential_applier: Any = None
 
 
 class PeerFacts:

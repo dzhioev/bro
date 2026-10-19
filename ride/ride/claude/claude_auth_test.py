@@ -76,7 +76,7 @@ class TestApplyClaudeAuth:
       ride_claude_auth.apply_claude_auth({}, warn_when_missing=True)
     warning.assert_called_once()
     assert 'claude_code secret not resolvable' in warning.call_args.args[0]
-    assert warning.call_args.args[1:] == (material_dir / 'claude_code.cred',)
+    assert warning.call_args.args[1:] == ('claude_code',)
 
   def test_scrubs_outranking_auth_vars(self, material_dir):
     # inherited api-key / bearer vars outrank CLAUDE_CODE_OAUTH_TOKEN in claude's
@@ -129,3 +129,18 @@ class TestApplyClaudeAuth:
     env = {'CLAUDE_CODE_OAUTH_TOKEN': 'stale-tok'}
     ride_claude_auth.apply_claude_auth(env)
     assert env == {'CLAUDE_CODE_OAUTH_TOKEN': 'oauth-tok'}
+
+
+def test_absent_indexed_auth_warns_without_inventing_a_material_path(tmp_path, caplog):
+  from bro.base import credentials
+  from ride.workspace.store import materialize_scoped_store
+
+  source = credentials.Store(credentials.default_registry(), tmp_path / 'source', {})
+  files, _ = credentials.build_scoped_store(source, [])
+  store = credentials.Store(
+    source.registry, materialize_scoped_store(files, tmp_path / 'session'), {}
+  )
+  environment = {}
+  ride_claude_auth.apply_claude_auth(environment, store=store, warn_when_missing=True)
+  assert environment == {}
+  assert 'claude_code secret not resolvable' in caplog.text

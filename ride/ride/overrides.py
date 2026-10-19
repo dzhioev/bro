@@ -7,34 +7,88 @@ import re
 import tempfile
 from collections.abc import Generator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from bro.authority.records import dump_authority
 from bro.authority.rules import Mission, Override
 from bro.authority.syntax import parse_layer
+from bro.base import credentials
 from bro.base.lulid import lulid
 from bro.broker.journal import Journal
 from bro.monitor import party_member_dir
 from bro.workspace.paths import workspace_dir
-from ride.authority_launch import mission_view, replace_operator_layer
+from ride.authority_launch import credential_values, mission_view, replace_operator_layer
 from ride.authority_reading import Reading
 from ride.peer_facts import PeerFacts, WorkerFacts
 
 
 def changes(value: Any) -> list[tuple[str, str]]:
   if not isinstance(value, list) or not value:
-    raise ValueError('override check: at least one --grant or --revoke @bro is required')
+    raise ValueError('override check: at least one --grant, --revoke or --cred is required')
   result = []
+  registry = credentials.default_registry()
   for item in value:
     if (
       not isinstance(item, (list, tuple))
       or len(item) != 2
-      or item[0] not in ('grant', 'revoke')
+      or item[0] not in ('grant', 'revoke', 'cred')
       or not isinstance(item[1], str)
-      or re.fullmatch(r'@[a-z][a-z0-9-]*', item[1]) is None
     ):
-      raise ValueError(f'override check: only --grant/--revoke @<bro> names can change: {item!r}')
-    result.append((item[0], item[1]))
+      raise ValueError(f'override check: invalid change {item!r}')
+    verb, name = item
+    if name.startswith('@'):
+      if verb == 'cred' or re.fullmatch(r'@[a-z][a-z0-9-]*', name) is None:
+        raise ValueError(f'override check: expected @<bro> or credential kind: {item!r}')
+    else:
+      try:
+        kind, instance = credentials.parse_name(name)
+      except ValueError as error:
+        raise ValueError(f'override check: {error}') from error
+      if kind not in registry or (verb == 'cred') != (instance is not None):
+        raise ValueError(
+          f'override check: expected a registered kind, or --cred kind+instance: {item!r}'
+        )
+    result.append((verb, name))
+  return result
+
+
+def candidate(mission: Mission, requested: list[tuple[str, str]], reading: Reading) -> Mission:
+  gift, cap = mission.operator_gift, mission.operator_cap
+  values = dict(mission.request.values)
+  latest = {name: verb for verb, name in requested if name.startswith('@')}
+  for name, verb in latest.items():
+    layer = reading.syntax.layer(
+      parse_layer(grant=[name]) if verb == 'grant' else parse_layer(revoke=[name])
+    )
+    gift, cap = replace_operator_layer(gift, cap, layer.gift, layer.cap)
+  for verb, name in requested:
+    if name.startswith('@'):
+      continue
+    kind, instance = credentials.parse_name(name)
+    update = (
+      {'cred.' + kind: cast(str, instance)}
+      if verb == 'cred'
+      else {'add' if verb == 'grant' else 'drop': frozenset({kind})}
+    )
+    values = credential_values(values, update)
+  variable = {
+    name: value
+    for name, value in values.items()
+    if (name.startswith('cred.') or name in ('add', 'drop'))
+    and (
+      mission.request.values.get(name) != value
+      or any(
+        verb == 'cred' and name == 'cred.' + changed.split('+', 1)[0] for verb, changed in requested
+      )
+    )
+  }
+  cleared = frozenset(name for name in mission.request.values if name not in values)
+  result = reading.rules.override(
+    mission, Override(values=variable, clear=cleared, gift=gift, cap=cap), reading.operator()
+  )
+  for name in latest:
+    if name[1:] not in reading.installation.bros:
+      raise ValueError(f'existence check: bro.target={name[1:]}: bro is not installed')
   return result
 
 
@@ -78,29 +132,22 @@ def apply(
   mission = facts.record
   if not isinstance(mission, Mission):
     raise ValueError('override check: mission has no authority record')
-  gift, cap = mission.operator_gift, mission.operator_cap
+  if any(not name.startswith('@') for _, name in requested):
+    raise ValueError('override check: credential changes require a session applier')
+  proposed = candidate(mission, requested, reading)
   latest = {name: verb for verb, name in requested}
-  for name, verb in latest.items():
-    layer = reading.syntax.layer(
-      parse_layer(grant=[name]) if verb == 'grant' else parse_layer(revoke=[name])
-    )
-    gift, cap = replace_operator_layer(gift, cap, layer.gift, layer.cap)
-  candidate = reading.rules.override(mission, Override(gift=gift, cap=cap), reading.operator())
-  for name in latest:
-    if name[1:] not in reading.installation.bros:
-      raise ValueError(f'existence check: bro.target={name[1:]}: bro is not installed')
   operation = {
     'id': lulid(),
     'kind': 'authority',
     'changes': [[verb, name] for name, verb in latest.items()],
-    'operator_gift': dump_authority(gift, candidate.descriptor),
-    'operator_cap': dump_authority(cap, candidate.descriptor),
+    'operator_gift': dump_authority(proposed.operator_gift, proposed.descriptor),
+    'operator_cap': dump_authority(proposed.operator_cap, proposed.descriptor),
   }
   value = {
     'operation': operation['id'],
     'status': 'applied',
     'changes': operation['changes'],
-    'may_summon': mission_view(candidate)['may_summon'],
+    'may_summon': mission_view(proposed)['may_summon'],
   }
   with pending(facts, operation):
     if facts.workspace is None:
@@ -118,6 +165,6 @@ def apply(
           override_operation=operation,
         )
         atomic_record(resume, data)
-    facts.record = candidate
+    facts.record = proposed
     journal.override(record, value)
   return value

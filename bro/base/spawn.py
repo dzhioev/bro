@@ -28,7 +28,7 @@ import signal
 import subprocess
 import sys
 import sysconfig
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Mapping
 from pathlib import Path
 from typing import Optional
 
@@ -131,13 +131,14 @@ async def _reaped(process: asyncio.subprocess.Process) -> AsyncGenerator[None]:
 
 
 async def run_async(
-  command, *, timeout: Optional[float] = None
+  command, *, timeout: Optional[float] = None, env: Mapping[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
   """`run`'s awaitable counterpart for the tool path: same detached child and
   process-group reaping, cancellable. stdout and stderr are always captured as
   text. Raises `subprocess.TimeoutExpired` on expiry, like `run`."""
   process = await asyncio.create_subprocess_exec(
     *command,
+    env=env,
     stdin=subprocess.DEVNULL,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,

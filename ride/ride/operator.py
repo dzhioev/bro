@@ -189,7 +189,7 @@ def list_missions(root: str) -> int:
   record = read_control(root)
   missions = []
   try:
-    with Client(connect(record.address)) as client:
+    with _directory_lock(), Client(connect(record.address)) as client:
       args = {}
       while True:
         result = client.call(MISSIONS, args, timeout=30).payload
@@ -212,7 +212,7 @@ def _request(root: str, kind: str, args: dict[str, Any]) -> dict[str, Any]:
 
   record = read_control(root)
   try:
-    with Client(connect(record.address)) as client:
+    with _directory_lock(), Client(connect(record.address)) as client:
       result = client.call(kind, args, timeout=30).payload
   except (ConnectionError, OSError, TimeoutError):
     raise OperatorUnavailable(f'root {root!r} operator channel is unavailable for {kind}') from None
@@ -272,3 +272,7 @@ def override(root: str, name: str, changes: list[tuple[str, str]]) -> int:
   value = _request(root, 'operator.override', {'name': name, 'changes': changes})
   print(json.dumps(value, indent=2))
   return 0
+
+
+def register_applier(root: str, mission: str) -> dict[str, str]:
+  return _request(root, 'operator.applier', {'token': mission})
