@@ -330,6 +330,13 @@ def option_values(fields: Mapping[str, object], source: object):
     raise ValueError(f'unknown bro fields: {sorted(unknown)}')
   values = {name: cast(Value, value) for name, value in fields.items() if name in options}
   content = {name: value for name, value in fields.items() if name in content_names}
+  if 'into' in content and (not isinstance(content['into'], str) or not content['into']):
+    raise ValueError('content check: bro.into must be a non-empty git ref')
+  for name in ('step_id', 'index'):
+    if name in content and (type(content[name]) is not int or content[name] < 0):
+      raise ValueError(f'content check: bro.{name} must be a non-negative int')
+  if 'index' in content and 'step_id' not in content:
+    raise ValueError('content check: bro.index requires step_id')
   manual = fields.get('manual', False)
   if type(manual) is not bool:
     raise ValueError('manual must be a flag')
