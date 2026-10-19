@@ -53,10 +53,13 @@ class PeerFacts:
     self._journal = journal
 
   def observe_journal(self, event: Event, record: Record) -> None:
-    if record.kind != 'root' or event.transition != 'accepted':
-      return
-    self.add(event.mission, self._root)
-    self._root_mission = event.mission
+    if record.kind == 'root' and event.transition == 'accepted':
+      self.add(event.mission, self._root)
+      self._root_mission = event.mission
+    if event.transition in ('started', 'ended'):
+      facts = self._facts.get(event.mission)
+      if facts is not None and facts.workspace is None and facts.expected:
+        facts.workspace = pending_launch.claimed_workspace(event.mission)
 
   def add(self, mission: str, facts: WorkerFacts) -> None:
     if mission in self._facts:
@@ -129,6 +132,29 @@ class PeerFacts:
       depth=len(journal.ancestry(mission)),
       extension=facts.extension,
     )
+
+  def missions(self) -> list[dict[str, Any]]:
+    if self._journal is None:
+      raise RuntimeError('peer facts have no journal')
+    missions = []
+    for mission, facts in self._facts.items():
+      if facts.workspace is None and facts.expected:
+        facts.workspace = pending_launch.claimed_workspace(mission)
+      record = self._journal.records.get(mission)
+      view = record.view() if record is not None else self._journal.evicted_view(mission)
+      if view is None:
+        raise RuntimeError(f'mission {mission!r} has facts but no journal record')
+      missions.append(
+        {
+          'id': mission,
+          'name': facts.member or facts.workspace or mission,
+          'workspace': facts.workspace,
+          'member': facts.member,
+          'type': facts.type,
+          'state': view['state'],
+        }
+      )
+    return missions
 
   def ancestors(self, context: Dispatcher, peer: Peer) -> tuple[str, ...]:
     description = self.resolve(context, peer)

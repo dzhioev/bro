@@ -12,7 +12,7 @@ from bro.registry import get_class
 from bro.workspace.banner import banner
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
-from ride import pending_launch
+from ride import operator, pending_launch
 from ride.bro_worker import PendingBro, pending_bro
 from ride.clean import clean_workspaces
 from ride.errors import reports_runtime_errors
@@ -110,6 +110,9 @@ def build_parser() -> Parser:
   resume.add_argument('name', help='workspace to resume, as `ride list` shows it')
 
   subparsers.add_parser('list', help='list workspaces ([o]/[-]=boxed, .o./.-.=unboxed; live/idle)')
+
+  missions = subparsers.add_parser('missions', help="list a running root's missions by name")
+  missions.add_argument('root', help='root workspace name')
 
   clean = subparsers.add_parser(
     'clean', help='remove stale workspaces, unreferenced mirrors, and unlocked runtime bundles'
@@ -372,6 +375,12 @@ def main(argv: list[str]) -> Optional[int]:
   command = args.pop('cmd')
   if command in ('solo', 'along'):
     _bootstrap_mode_runtime(parser, args, argv)
+  elif command == 'missions':
+    try:
+      control = operator.read_control(args['root'])
+      reexec_from_runtime(control.runtime, argv)
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
   elif command == 'resume':
     try:
       runtime = recorded_runtime_reference(args['name'])
@@ -381,6 +390,11 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(str(error))
   if command in ('solo', 'along'):
     return _start_mode(parser, args, solo=command == 'solo')
+  if command == 'missions':
+    try:
+      return operator.list_missions(args['root'])
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
   if command == 'list':
     return list_workspaces()
   if command == 'resume':

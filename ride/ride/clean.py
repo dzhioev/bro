@@ -4,6 +4,7 @@ from typing import Optional
 from bro.base import log
 from bro.workspace.paths import workspace_dir
 from ride.harness import get_harness, installed_harness_names
+from ride.operator import clean_controls
 from ride.repository import clean_managed_mirrors
 from ride.runtime_bundle import clean_runtime_bundles
 from ride.workspace.docker import running_mounts
@@ -118,8 +119,12 @@ def clean_workspaces(
     workspace.metadata.repo for workspace in remaining if workspace.metadata.repo is not None
   }
   mirror_removed, mirror_skipped = clean_managed_mirrors(referenced, dry_run=dry_run)
+  control_removed, control_active = clean_controls(dry_run=dry_run)
   runtime_removed, runtime_skipped = clean_runtime_bundles(dry_run=dry_run)
   action = 'would clean' if dry_run else 'cleaned'
+  log.info(
+    '%s %d operator control file(s), skipped %d active', action, control_removed, control_active
+  )
   log.info('%s %d managed mirror(s), skipped %d referenced', action, mirror_removed, mirror_skipped)
   log.info('%s %d runtime bundle(s), skipped %d active', action, runtime_removed, runtime_skipped)
   for name in installed_harness_names():
