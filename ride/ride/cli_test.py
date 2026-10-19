@@ -8,14 +8,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import ride.cli as ride_cli
-from bro.base import configs, credentials
+from bro.authority.authority import Atom
+from bro.authority.patterns import Descriptor
+from bro.base import configs, credentials, host_config
 from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
 from bro.workspace.paths import workspace_dir
 from bros.bro import Bro
 from ride import pending_launch
 from ride.bro_worker import pending_bro
 from ride.do_ride import command as do_ride_command
-from ride.harness import get_harness
 from ride.workspace.metadata import Isolation
 
 
@@ -231,81 +232,24 @@ class TestHostLLMDefault:
   def _entry(self, llm: list[str]) -> None:
     self.config.write_text(json.dumps({'projects': {'/repo': {'bros': {'dev': {'llm': llm}}}}}))
 
-  def test_the_launch_records_the_recipe_settled_over_the_hosts_entry(self):
+  def test_cli_forwards_explicit_recipe_fields_for_host_normalization(self):
     self._entry(['openai:sol:xhigh'])
     with patch('ride.cli.start_session', return_value=0) as start:
-      argv = ['ride', 'along', '--repo', '/repo', '--harness', 'bro', '--effort', 'low', 'dev']
-      assert ride_cli.main(argv) == 0
-    spec = start.call_args.args[0]
-    assert spec.llm == 'openai:sol:low'
-    assert spec.resolved_llm == get_harness('bro').resolve_llm('openai:sol:low', 'dev').dump()
-    command = _session_command(spec)
-    assert command[command.index('--llm') + 1] == 'openai:sol:low'
-
-  def test_a_list_the_harness_runs_none_of_fails_the_launch(self, capsys):
-    self._entry(['openai:sol'])
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
-    assert 'lists no recipe the claude harness can run' in capsys.readouterr().err
-
-  def test_a_malformed_entry_names_itself(self, capsys):
-    self._entry(['::ludicrous'])
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev'])
-    assert "bros.dev.llm '::ludicrous' (project-path-bro)" in capsys.readouterr().err
-
-
-class TestHostConfigScopeErrors:
-  @pytest.fixture(autouse=True)
-  def config_file(self, tmp_path, monkeypatch):
-    self.path = tmp_path / 'bro.json'
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(self.path))
-
-  def _preflight(self, spec, *_args, **_kwargs):
-    from ride.scope import LaunchScopeError, scoped_secrets
-
-    try:
-      scoped_secrets(
-        spec.bro,
-        get_harness(spec.harness).scope_recipe(),
-        cred=spec.cred,
-        grant=spec.grant,
-        revoke=spec.revoke,
-        llm_spec=spec.llm_spec,
+      assert (
+        ride_cli.main(
+          ['ride', 'along', '--repo', '/repo', '--harness', 'bro', '--effort', 'low', 'dev']
+        )
+        == 0
       )
-    except LaunchScopeError as error:
-      from bro.base import log
+    spec = start.call_args.args[0]
+    assert spec.llm == '::low'
+    assert spec.resolved_llm == {}
 
-      log.error('%s', error)
-      return 1
-    return 0
-
-  def test_instance_spelled_config_grant_names_the_rollout_replacement(self, capsys):
-    self.path.write_text(json.dumps({'defaults': {'grant': ['github+reviewer']}}))
-
-    with (
-      patch('ride.cli.start_session', side_effect=self._preflight),
-      pytest.raises(SystemExit),
-    ):
-      ride_cli.main(['ride', 'solo', '--harness', 'bro', 'dev', 'work'])
-
-    error = capsys.readouterr().err
-    assert 'defaults' in error
-    assert '"creds": ["github+reviewer"]' in error
-    assert '"grant": ["github"]' in error
-
-  def test_host_default_picks_name_the_store_defaults(self, capsys):
-    self.path.write_text(json.dumps({'defaults': {'creds': ['github+work']}}))
-
-    with (
-      patch('ride.cli.start_session', side_effect=self._preflight),
-      pytest.raises(SystemExit),
-    ):
-      ride_cli.main(['ride', 'solo', '--harness', 'bro', 'dev', 'work'])
-
-    error = capsys.readouterr().err
-    assert 'defaults.creds is retired' in error
-    assert 'creds.json: defaults' in error
+  def test_cli_does_not_parse_host_policy_before_the_runtime_start(self):
+    self._entry(['::ludicrous'])
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
+    assert start.call_args.args[0].llm is None
 
 
 class TestCredentialHydrationRoutes:
@@ -367,7 +311,7 @@ class TestCredentialHydrationRoutes:
               'bros': {
                 'hydration-test': {
                   'creds': ['brog+bro'],
-                  'grant': ['brog', ':launch.bro.pass.trails+host'],
+                  'grant': ['brog', 'bro.cred=trails+host'],
                 }
               },
             }
@@ -429,7 +373,7 @@ class TestCredentialHydrationRoutes:
         '--grant',
         'github',
         '--grant',
-        ':launch.bro.pass.github+flag',
+        'bro.cred=github+flag',
         '--revoke',
         'openai',
       )
@@ -439,8 +383,9 @@ class TestCredentialHydrationRoutes:
     spec, launch_scope = route.captures[-1]
     assert spec.cred == ['harbor+launch']
     assert launch_scope.scoped.required == {'github', 'aws', 'brog', 'harbor'}
-    assert launch_scope.scoped.optional == {'trails'}
-    assert launch_scope.launch['bro']['pass'] == frozenset({'github+flag', 'trails+host'})
+    assert launch_scope.scoped.optional == set()
+    assert launch_scope.mission is not None
+    assert launch_scope.mission.descriptor.values['cred.github'] == 'project'
     assert launch_scope.store['creds/github+project.cred'] == b'github-project'
     assert launch_scope.store['creds/aws+project.cred'] == b'aws-project'
     assert launch_scope.store['creds/brog+bro.cred'] == b'brog-bro'
@@ -454,25 +399,76 @@ class TestCredentialHydrationRoutes:
       'harbor+launch',
     ]
 
+  def test_limit_caps_authority_without_changing_credential_hydration(self, route):
+    assert (
+      route.launch(
+        '--cred',
+        'harbor+launch',
+        '--grant',
+        '@reviewer',
+        '--limit',
+        '@reviewer for bro{placement=boxed}',
+      )
+      == 0
+    )
+    _, launch_scope = route.captures[-1]
+    mission = launch_scope.mission
+    assert mission is not None
+    pair = mission.authority.evaluate(
+      Atom('bro', 'target', 'reviewer'),
+      Descriptor('bro', {}),
+      mission.reading.installation.declarations,
+    )
+    assert pair.use.matches(Descriptor('bro', {'placement': 'boxed'}))
+    assert not pair.use.matches(Descriptor('bro', {'placement': 'unboxed'}))
+    assert launch_scope.store['creds/harbor+launch.cred'] == b'harbor-launch'
+
+  def test_give_only_instance_does_not_grant_the_start_atom(self, route):
+    assert (
+      route.launch('--cred', 'harbor+launch', '--grant', 'webview.cred=cookies+absent to @reviewer')
+      == 0
+    )
+    _, launch_scope = route.captures[-1]
+    mission = launch_scope.mission
+    assert mission is not None
+    descriptor = Descriptor('bro', {'target': 'reviewer', 'placement': 'boxed'})
+    types = mission.reading.installation.declarations
+    assert mission.authority.evaluate(Atom('webview'), descriptor, types).use.is_empty
+    pair = mission.authority.evaluate(Atom('webview', 'cred.cookies', 'absent'), descriptor, types)
+    assert pair.use.is_empty
+    assert pair.give.matches(descriptor)
+    assert 'creds/cookies+absent.cred' not in launch_scope.store
+
+  def test_resume_recomputes_unset_credential_picks_under_a_new_reading(self, route):
+    assert route.launch('--cred', 'harbor+launch') == 0
+    host = Path(host_config.HOST_CONFIG_FILE)
+    configuration = json.loads(host.read_text())
+    project = next(iter(configuration['projects'].values()))
+    project['creds'] = ['github+resume', 'aws+project']
+    host.write_text(json.dumps(configuration))
+    assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
+    _, launch_scope = route.captures[-1]
+    assert launch_scope.scoped.selection['github'] == 'resume'
+    assert launch_scope.store['creds/github+resume.cred'] == b'github-resume'
+    assert 'creds/github+project.cred' not in launch_scope.store
+
   def test_root_launch_fails_for_a_picked_absent_instance(self, route, caplog):
     assert route.launch('--cred', 'harbor+absent') == 1
 
     assert route.captures == []
-    assert "secret 'harbor+absent' not found" in caplog.text
+    assert 'required credential instances are missing' in caplog.text
+    assert 'harbor' in caplog.text
 
-  def test_root_launch_fails_for_an_absent_pass_instance(self, route, caplog):
-    assert route.launch('--grant', ':launch.bro.pass.github+absent') == 1
+  def test_root_authority_may_name_an_absent_instance(self, route):
+    assert route.launch('--cred', 'harbor+launch', '--grant', 'bro.cred=github+absent') == 0
+    _, launch_scope = route.captures[-1]
+    assert 'creds/github+absent.cred' not in launch_scope.store
+    assert launch_scope.mission is not None
 
-    assert route.captures == []
-    assert 'github+absent' in caplog.text
-    assert 'launch flags' in caplog.text
-
-  def test_root_launch_pass_right_requires_an_instance(self, route, caplog):
+  def test_old_launch_grammar_is_refused_before_workspace_creation(self, route, caplog):
     assert route.launch('--grant', ':launch.bro.pass.github') == 1
-
     assert route.captures == []
-    assert 'github+<instance>' in caplog.text
-    assert 'github+' in caplog.text
+    assert 'invalid name' in caplog.text
 
   def test_root_launch_fails_when_a_present_name_cannot_load(self, route, caplog):
     path = route.material / f'harbor+broken{credentials.MATERIAL_SUFFIX}'
@@ -498,7 +494,7 @@ class TestCredentialHydrationRoutes:
           '--grant',
           'brog',
           '--grant',
-          ':launch.bro.pass.github+resume',
+          'bro.cred=github+resume',
           'hydration-route',
         ]
       )
@@ -506,10 +502,11 @@ class TestCredentialHydrationRoutes:
     )
 
     spec, launch_scope = route.captures[-1]
-    assert spec.cred == ['harbor+launch', 'github+resume']
+    assert spec.cred == ['github+resume']
+    assert spec.mission.descriptor.values['cred.harbor'] == 'launch'
     assert spec.revoke == ['aws']
     assert launch_scope.scoped.required == {'github', 'brog', 'harbor'}
-    assert launch_scope.launch['bro']['pass'] == frozenset({'github+resume', 'trails+host'})
+    assert launch_scope.mission.descriptor.values['cred.github'] == 'resume'
     assert launch_scope.store['creds/github+resume.cred'] == b'github-resume'
     assert 'creds/aws+project.cred' not in launch_scope.store
 
@@ -530,31 +527,21 @@ class TestCredentialHydrationRoutes:
     assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
 
     spec, launch_scope = route.captures[-1]
-    assert spec.cred == ['harbor+launch', 'github+flag']
-    assert spec.grant == ['github']
+    assert spec.cred == []
+    assert spec.grant == []
+    assert spec.mission.descriptor.values['cred.harbor'] == 'launch'
+    assert spec.mission.descriptor.values['cred.github'] == 'flag'
     assert launch_scope.store['creds/github+flag.cred'] == b'github-flag'
-    assert launch_scope.store.kinds == {'github', 'aws', 'brog', 'harbor'}
+    assert launch_scope.hydrated_kinds == {'github', 'aws', 'brog', 'harbor'}
 
-  def test_resume_fails_for_an_absent_pass_instance(self, route, caplog):
+  def test_resume_may_grant_authority_over_an_absent_instance(self, route):
     assert route.launch('--cred', 'harbor+launch') == 0
     route.captures.clear()
-
     assert (
-      ride_cli.main(
-        [
-          'ride',
-          'resume',
-          '--grant',
-          ':launch.bro.pass.github+absent',
-          'hydration-route',
-        ]
-      )
-      == 1
+      ride_cli.main(['ride', 'resume', '--grant', 'bro.cred=github+absent', 'hydration-route']) == 0
     )
-
-    assert route.captures == []
-    assert 'github+absent' in caplog.text
-    assert 'launch flags' in caplog.text
+    assert route.captures[-1][1].mission is not None
+    assert 'creds/github+absent.cred' not in route.captures[-1][1].store
 
 
 class TestAlong:
@@ -595,16 +582,16 @@ class TestAlong:
       ride_cli.main(['ride', 'along', '--workspace', 'shared', '--drop', 'dev'])
     assert 'pinned workspaces are always kept' in capsys.readouterr().err
 
-  def test_an_incompatible_provider_names_the_harness_serving_it(self, capsys):
-    with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev'])
-    assert 'openai runs on the bro harness' in capsys.readouterr().err
+  def test_cli_defers_provider_compatibility_to_normalization(self):
+    with patch('ride.cli.start_session', return_value=0) as start:
+      assert ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev']) == 0
+    assert start.call_args.args[0].llm == 'openai'
 
-  def test_an_unknown_bro_is_named_on_either_harness(self, capsys):
+  def test_cli_defers_target_existence_to_the_authorized_start(self):
     for harness in ('claude', 'bro'):
-      with pytest.raises(SystemExit):
-        ride_cli.main(['ride', 'along', '--harness', harness, 'no-such-bro'])
-      assert "unknown bro: 'no-such-bro'" in capsys.readouterr().err
+      with patch('ride.cli.start_session', return_value=0) as start:
+        assert ride_cli.main(['ride', 'along', '--harness', harness, 'no-such-bro']) == 0
+      assert start.call_args.args[0].bro == 'no-such-bro'
 
   def test_bro_harness_builds_a_native_chat(self):
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -717,7 +704,19 @@ class TestLifecycle:
   def test_resume_dispatches_scope_overrides(self):
     with patch('ride.cli.resume_session', return_value=0) as resume:
       assert (
-        ride_cli.main(['ride', 'resume', '--cred', 'github+work', '--grant', '@dev', 'workspace'])
+        ride_cli.main(
+          [
+            'ride',
+            'resume',
+            '--cred',
+            'github+work',
+            '--grant',
+            '@dev',
+            '--limit',
+            '@dev for *',
+            'workspace',
+          ]
+        )
         == 0
       )
     assert resume.call_args.args == ('workspace',)
@@ -725,6 +724,7 @@ class TestLifecycle:
       'cred': ['github+work'],
       'grant': ['@dev'],
       'revoke': [],
+      'limit': ['@dev for *'],
     }
 
   def test_check_harness_starts_its_runtime_probe(self):
@@ -792,10 +792,8 @@ class TestSummonedLaunch:
       extension={
         'target': 'dev',
         'prompt': 'work this out with the user',
-        'launch': {'bro': {'bros': ['bro'], 'party': ['boxed']}},
-        'grant': ['@bro'],
-        'revoke': [':launch.bro.party.join'],
-        'pass': ['github+passed'],
+        'request': {'type': 'bro', 'values': {'target': 'dev', 'cred.github': 'passed'}},
+        'root': 'parent-root',
         'summoner': {'trail_id': 'T1'},
         'repo': None,
         'into': None,
@@ -809,9 +807,10 @@ class TestSummonedLaunch:
       assert ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.prompt == 'work this out with the user'
-    assert spec.cred == ['github+passed']
-    assert spec.grant == ['github', '@bro']
-    assert spec.revoke == [':launch.bro.party.join']
+    assert spec.cred == []
+    assert spec.grant == []
+    assert spec.revoke == []
+    assert pending.request['values']['cred.github'] == 'passed'
     assert spec.runtime_bundle == '/runtime'
     assert start.call_args.kwargs['summoned'] == pending
 
@@ -823,15 +822,15 @@ class TestSummonedLaunch:
   def test_user_credential_overrides_layer_on_the_records(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', 'github', 'dev'])
-    assert start.call_args.args[0].grant == ['github', '@bro']
+    assert start.call_args.args[0].grant == ['github']
 
   def test_user_credential_revoke_drops_the_passed_kind_and_pick(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--revoke', 'github', 'dev'])
     spec = start.call_args.args[0]
     assert spec.cred == []
-    assert spec.grant == ['@bro']
-    assert spec.revoke == ['github', ':launch.bro.party.join']
+    assert spec.grant == []
+    assert spec.revoke == ['github']
 
   def test_the_partys_env_is_the_manual_childs_own(self, pending):
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -861,19 +860,19 @@ class TestSummonedLaunch:
   def test_summoned_refuses_bro_overrides(self, pending, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', '@bro', 'dev'])
-    assert 'drop the @bro/:launch override(s): @bro' in capsys.readouterr().err
+    assert 'authority entries belong to the prepared request' in capsys.readouterr().err
 
   def test_summoned_names_a_retired_launch_override_without_a_traceback(self, pending, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'along', '--summoned', 'TOK-1', '--grant', ':bro.party.join', 'dev'])
-    assert ':launch.bro.party.join' in capsys.readouterr().err
+    assert "invalid name ':bro'" in capsys.readouterr().err
 
   def test_summoned_refuses_launch_overrides(self, pending, capsys):
     with pytest.raises(SystemExit):
       ride_cli.main(
-        ['ride', 'along', '--summoned', 'TOK-1', '--grant', ':launch.bro.party.join', 'dev']
+        ['ride', 'along', '--summoned', 'TOK-1', '--grant', 'bro.placement=join', 'dev']
       )
-    assert 'launch section was fixed by the summon request' in capsys.readouterr().err
+    assert 'authority entries belong to the prepared request' in capsys.readouterr().err
 
   def test_summoned_validates_the_bro_against_the_record(self, pending, capsys):
     with pytest.raises(SystemExit):
