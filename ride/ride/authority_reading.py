@@ -252,7 +252,7 @@ class Reading:
       if (host or Path(host_config.HOST_CONFIG_FILE)).is_file()
       else {}
     )
-    directory = store or configs.STORE_DIR
+    directory = store or Path(credentials.STORE_DIR)
     index = Path(directory) / credentials.STORE_FILE
     data = _object(json.loads(index.read_text()), str(index)) if index.is_file() else {}
     defaults = credentials.parse_picks(data.get('defaults', []), where=str(index), field='defaults')
