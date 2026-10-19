@@ -1103,19 +1103,9 @@ def beat(within_seconds: float) -> None:
   _signal_journal_change(Path(directory) / f'{slug_value}{_JOURNAL_WAKE_SUFFIX}')
 
 
-def session_watch_admitted(
-  *,
-  may_summon: Optional[tuple[str, ...]] = None,
-  summoned: Optional[bool] = None,
-  talk: Optional[tuple[str, ...]] = None,
-) -> bool:
+def session_watch_admitted() -> bool:
   """Whether this session can receive traffic carried only by its session watch."""
-  from bro import summon
 
-  resolved_may_summon = summon.effective_may_summon() if may_summon is None else may_summon
-  resolved_summoned = summon.summoned() if summoned is None else summoned
-  resolved_talk = summon.talk() if talk is None else talk
-  quest_traffic = resolved_talk is not None and any(
-    right in resolved_talk for right in ('owner.say', 'owner.question', 'worker.question')
-  )
-  return len(resolved_may_summon) > 0 or (resolved_summoned and quest_traffic)
+  from bro.broker.environment import BROKER_CHANNEL
+
+  return os.environ.get(BROKER_CHANNEL) is not None

@@ -37,7 +37,7 @@ CPYTHON_VERSION = '3.12.15'
 # minimal `bro` one ships from, and the launcher a trial rides under
 WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev', 'bro-ride')
 TARGET = ('linux', 'x86_64', 'glibc')
-MANIFEST_FORMAT = 5
+MANIFEST_FORMAT = 6
 
 # a console script that finds its interpreter beside itself wherever the bundle
 # is copied: sh reads the second line as an `exec`, python as a string

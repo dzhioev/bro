@@ -16,6 +16,12 @@ from dataclasses import dataclass
 from typing import Any, Literal, Optional, cast
 
 from bro.base.lulid import lulid
+from bro.broker.environment import (
+  EMPTY_TALK as EMPTY_TALK,
+  TALK_RIGHTS,
+  Talk,
+  TalkRight as TalkRight,
+)
 
 PROTOCOL_REVISION = 5
 MAX_FRAME_BYTES = 512 * 1024
@@ -25,15 +31,6 @@ OUTCOMES = frozenset({'ok', 'denied', 'failed'})
 MARK_TRANSITIONS = frozenset({'accepted', 'listening', 'started', 'trail'})
 
 type End = Literal['owner', 'worker']
-type TalkRight = Literal[
-  'owner.say',
-  'owner.question',
-  'worker.say',
-  'worker.question',
-]
-type Talk = frozenset[TalkRight]
-TALK_RIGHTS: Talk = frozenset({'owner.say', 'owner.question', 'worker.say', 'worker.question'})
-EMPTY_TALK: Talk = frozenset()
 
 _REQUEST_ENVELOPE_KEYS = frozenset({'type', 'id', 'payload'})
 _CORRELATED_ENVELOPE_KEYS = frozenset({'type', 'request', 'payload'})

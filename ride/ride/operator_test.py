@@ -17,6 +17,7 @@ from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.workspace.paths import runtime_base
 from ride import cli, operator
+from ride.authority_test_helper import mission
 from ride.broker_root import run_root_via_broker
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
@@ -117,7 +118,7 @@ def test_root_provisions_operator_channel_before_spawning_and_removes_it(
     ),
     workspace=workspace,
     bro='bro',
-    launch_scope={},
+    mission=mission(),
     container_runtime=MagicMock(),
     runtime_bundle=runtime,
     types={},
@@ -144,8 +145,9 @@ async def test_operator_guard_applies_to_every_registered_operator_request(tmp_p
     reached.append(message.kind)
     context.reply(peer, {'outcome': 'ok'})
 
-  control.on('operator.commit', handler)
-  control.on('operator.override', handler)
+  kinds = ('operator.commit', 'operator.claim', 'operator.override')
+  for kind in kinds:
+    control.on(kind, handler)
   dispatcher = Dispatcher()
   runtime = MagicMock()
   runtime.provision = AsyncMock(return_value=Provisioned('operator', Endpoint(1234, 'secret')))
@@ -153,14 +155,14 @@ async def test_operator_guard_applies_to_every_registered_operator_request(tmp_p
   dispatcher.bind(runtime)
   context = MagicMock()
   async with control.lifetime(dispatcher):
-    for kind in (operator.MISSIONS, 'operator.commit', 'operator.override'):
+    for kind in (operator.MISSIONS, *kinds):
       handlers[kind](context, 'mission', brotocol.request(kind, {}))
       assert context.reply.call_args.args[1]['outcome'] == 'denied'
     assert not reached
-    for kind in ('operator.commit', 'operator.override'):
+    for kind in kinds:
       handlers[kind](context, 'operator', brotocol.request(kind, {}))
       assert context.reply.call_args.args[1]['outcome'] == 'ok'
-  assert reached == ['operator.commit', 'operator.override']
+  assert reached == list(kinds)
   runtime.close.assert_awaited_once_with('operator')
 
 
@@ -225,3 +227,21 @@ async def test_invalid_listing_arguments_are_refused(args):
     context = MagicMock()
     handlers[operator.MISSIONS](context, 'operator', brotocol.request(operator.MISSIONS, args))
     assert context.reply.call_args.args[1]['outcome'] == 'denied'
+
+
+@pytest.mark.parametrize('error', [ConnectionError('closed'), TimeoutError('silent')])
+def test_joint_start_requests_report_an_unavailable_operator_channel(monkeypatch, error):
+  monkeypatch.setattr(
+    operator,
+    'read_control',
+    lambda root: operator.ControlRecord('tcp://token@localhost:1', '/runtime'),
+  )
+
+  def connect(address):
+    raise error
+
+  monkeypatch.setattr('bro.broker.transport.connect', connect)
+  with pytest.raises(RuntimeError, match='operator channel is unavailable for operator.claim'):
+    operator._request(
+      'root', 'operator.claim', {'token': 'child', 'commit': 'committed', 'workspace': 'child'}
+    )

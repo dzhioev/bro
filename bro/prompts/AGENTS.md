@@ -88,7 +88,7 @@ It renders when `bro.summon.party_member()` reads `RIDE_PARTY_MEMBER` from the l
 ### Summoner contract
 
 `summoner.md` (top level) tells a session that may summon about the runtime-owned session watch, so every summon's lifecycle and chat remains observable without a model-started command.
-It renders only for a run whose `launch.bro.bros` set (`bro.summon.effective_may_summon()`) is non-empty.
+It renders only when the mission’s initial authority has usable bro targets (`bro.summon.effective_may_summon()`).
 The same text states the notification trust rule and tells the summoner how to exchange questions, continue a retained quest, cancel a child, and wait by ending a turn.
 The concrete-Bro family's `watch` spell separately starts a persona-admitted command through `bro::watch` and stops it through `bro::unwatch`.
 

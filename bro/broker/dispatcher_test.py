@@ -1313,3 +1313,16 @@ def test_cancel_is_denied_unless_the_peer_requested_a_live_quest():
   assert [message.outcome for _, message in runtime.sent] == ['denied'] * 6
   assert 'child' in dispatcher.live
   assert not any(dispatcher.journal.knows(f'cancel-{index}') for index in range(1, 7))
+
+
+@pytest.mark.asyncio
+async def test_root_timeout_is_enforced_by_supervision():
+  runtime = FakeRuntime()
+  dispatcher = Dispatcher()
+  dispatcher.bind(cast(Runtime, runtime))
+  async with asyncio.timeout(2):
+    code = await dispatcher.run(LaunchSpec(), cast(Spawner, runtime), type='bro', timeout=0.01)
+  [root] = dispatcher.journal.records.values()
+  assert code != 0
+  assert root.reason == 'timeout'
+  assert runtime.handles[root.mission_id].killed

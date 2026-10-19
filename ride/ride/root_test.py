@@ -3,13 +3,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bro.summon
 import ride.artifacts
 import ride.broker_root
 import ride.root
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
+from ride.authority_test_helper import mission
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -21,10 +21,6 @@ def _workspace(tmp_path: Path, isolation: Isolation = Isolation.BOXED) -> Worksp
 
 def _scope() -> ScopedSecrets:
   return ScopedSecrets({'github'}, {'openai'}, {'github': 'reviewer'})
-
-
-def _launch(*, targets=(), party=('boxed',)):
-  return {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
 
 
 def _docker_launch() -> workspace_docker.Launch:
@@ -60,7 +56,7 @@ class TestDirectStartedParty:
     code = ride.root.run_started_party(
       _docker_launch(),
       workspace,
-      launch_scope=_launch(),
+      mission=mission(values={'timeout': None}),
       credential_scope=_scope(),
       container_runtime=MagicMock(),
       runtime_bundle=MagicMock(),
@@ -90,15 +86,12 @@ class TestDirectStartedParty:
       ride.root.run_started_party(
         launch,
         workspace,
-        launch_scope=_launch(party=('unboxed',)),
+        mission=mission(values={'placement': 'unboxed', 'timeout': None}),
         credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )
       == 0
-    )
-    assert run.call_args.kwargs['env'][bro.summon.LAUNCH_ENV] == (
-      '{"bro":{"bros":[],"party":["unboxed"]}}'
     )
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
     assert 'BROKER_UPSTREAM' not in run.call_args.kwargs['env']
@@ -180,14 +173,13 @@ class TestBrokerStartedParty:
 
     monkeypatch.setattr(ride.broker_root, 'run_root_via_broker', fake_run_root)
     workspace = _workspace(tmp_path)
+    record = mission(grant=('@dev',))
 
     assert (
       ride.root._run_via_broker(
         _docker_launch(),
         workspace,
-        launch_scope=_launch(targets=('dev',)),
-        summon_depth=4,
-        summon_harness='claude',
+        mission=record,
         session_env={'IS_SANDBOX': '1'},
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
@@ -197,9 +189,7 @@ class TestBrokerStartedParty:
     assert captured['session_env'] == {'IS_SANDBOX': '1'}
     wrapped = captured['launch']
     assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
-    assert wrapped.launch.env[bro.summon.LAUNCH_ENV] == (
-      '{"bro":{"bros":["dev"],"party":["boxed"]}}'
-    )
+    assert captured['mission'] is record
     assert wrapped.launch.extra_mounts == (
       ride.artifacts.view_mount('ws', 'ws', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
     )
@@ -224,9 +214,7 @@ class TestBrokerStartedParty:
       ride.root._run_via_broker(
         launch,
         workspace,
-        launch_scope=_launch(),
-        summon_depth=2,
-        summon_harness='bro',
+        mission=mission(values={'timeout': None}),
         session_env={},
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
@@ -235,3 +223,36 @@ class TestBrokerStartedParty:
     )
     assert isinstance(captured['launch'], workspace_spawn.ProcessLaunchSpec)
     assert captured['launch'].interactive
+
+
+def test_a_disabled_broker_refuses_an_unenforceable_finite_deadline(monkeypatch, tmp_path, caplog):
+  monkeypatch.setattr(ride.root, 'broker_enabled', lambda: False)
+  prepare = MagicMock()
+  monkeypatch.setattr(ride.root, 'prepare_container', prepare)
+  workspace = _workspace(tmp_path)
+  code = ride.root.run_started_party(
+    _docker_launch(),
+    workspace,
+    mission=mission(values={'timeout': 7}),
+    credential_scope=_scope(),
+    container_runtime=MagicMock(),
+    runtime_bundle=MagicMock(),
+  )
+  assert code != 0
+  assert 'execution check: bro.timeout' in caplog.text
+  prepare.assert_not_called()
+
+
+def test_a_refused_manual_claim_removes_its_unstarted_container(monkeypatch, tmp_path):
+  monkeypatch.setattr(ride.root, 'prepare_container', lambda launch: 'prepared-container')
+  remove = MagicMock()
+  monkeypatch.setattr(ride.root.subprocess, 'run', remove)
+
+  def claim():
+    raise ValueError('claim check: superseded')
+
+  with pytest.raises(ValueError, match='superseded'):
+    ride.root.run_manual_started_party(
+      _docker_launch(), _workspace(tmp_path), credential_scope=_scope(), claim=claim
+    )
+  assert remove.call_args.args[0] == ['docker', 'rm', '-f', 'prepared-container']

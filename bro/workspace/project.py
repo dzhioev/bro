@@ -3,8 +3,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from bro.authority.syntax import parse_layer
 from bro.base import configs
-from bro.base.scope import ScopeLayer, validate_scope_layer
 from bro.harness import harness_name
 from bro.workspace.paths import find_project_root, project_root
 
@@ -18,6 +18,7 @@ _LAUNCH_KEYS = frozenset(
     'summon-depth',
     'grant',
     'revoke',
+    'limit',
   }
 )
 
@@ -46,6 +47,7 @@ class ProjectConfig:
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
+  limit: tuple[str, ...] = ()
   sections: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
@@ -115,8 +117,9 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
   override: Optional[str] = table.get('image-repository')
   grant = _scope_values(table, source, 'grant')
   revoke = _scope_values(table, source, 'revoke')
+  limit = _scope_values(table, source, 'limit')
   try:
-    validate_scope_layer(ScopeLayer(grant, revoke), context='project')
+    parse_layer(grant=grant, revoke=revoke, limit=limit)
   except ValueError as error:
     raise ValueError(f'[tool.bro] in {source}: {error}') from error
   return ProjectConfig(
@@ -130,6 +133,7 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
     ),
     grant=grant,
     revoke=revoke,
+    limit=limit,
     sections=sections,
   )
 

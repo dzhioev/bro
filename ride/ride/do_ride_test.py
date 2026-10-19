@@ -43,8 +43,8 @@ class TestCommand:
       drop=True,
       llm='::xhigh+fast',
       bro='dev',
-      grant=['gmail_creds'],
-      revoke=['notion'],
+      grant=['aws'],
+      revoke=['brog'],
       into='feature',
       prompt='do it',
     )

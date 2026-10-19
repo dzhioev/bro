@@ -55,10 +55,9 @@ They add no implied `--fast` or other defaults.
 
 Every native run and every managed mode registers one flag set from `llm_flags.py`.
 `--llm` takes `provider:model:effort` with an optional `+fast` suffix and any field left empty (`:fable5`, `::high`, `openai:sol:max+fast`), or a preset from the project's `[tool.bro.llm]` table / host `~/.bro.json`.
-A managed launch first lays its selection over the host's per-bro recipe for the attachment and its harness
-— `ride/ride/scope.py:bind_launch_llm` (`ride/AGENTS.md`)
-— so the value it canonicalizes is the settled recipe and the inner run reads no host config.
-A surface canonicalizes the selection once before forwarding or recording it.
+Managed launches carry recipe inputs to the host, which expands presets and resolves them under the root reading.
+The admitted recipe reaches the inner session through its resolved environment.
+Native in-process surfaces canonicalize their selection before launching.
 
 Each harness resolves the selection through `bro.harness.Harness.resolve_recipe`, among the providers it declares in `llm_providers`;
 `native/bro/native/harness.py:resolve_native` is that resolution over the bro's declared `llm_spec`.

@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 
+from bro.authority.rules import Request, Rules
 from bro.bench import job
 from bro.broker import brotocol
 from bro.broker.brotocol import Message, Tag
@@ -39,7 +40,6 @@ def _owner(tree: Path, *, depth: int = 0) -> PeerDescription:
     tree=tree,
     type='bro',
     bro='bro-dev',
-    launch={'benchmark': {}},
     member=None,
     expected=False,
     artifact_view=None,
@@ -79,7 +79,6 @@ class TestBenchmarkType:
   def test_declarations_are_fixed_for_a_mute_host_job(self):
     worker_type = _worker_type()
     assert worker_type.name == 'benchmark'
-    assert worker_type.launch_schema == {}
     assert worker_type.default_timeout == 12 * 3600
     assert worker_type.widens_talk is False
     assert worker_type.manual is False
@@ -110,9 +109,8 @@ class TestBenchmarkType:
     assert host_environment == tree.parent / 'benchmark-venv'
     assert not host_environment.is_relative_to(tree)
     assert 'VIRTUAL_ENV' not in run.command.env
-    assert run.launch_scope == {}
 
-  def test_summoned_owner_may_start_a_job_when_the_broker_granted_the_type(self, tree):
+  def test_job_builds_for_a_summoned_owner(self, tree):
     run = _worker_type().launch(_request(tree, {'config': CONFIG}, depth=1))
     assert run.command.command[0] == 'uv'
 
@@ -231,7 +229,14 @@ async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, cap
     task = asyncio.create_task(asyncio.to_thread(job.main, argv))
     channel, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     assert message.kind == LAUNCH
-    assert message.args == {'type': job.BENCHMARK, 'config': CONFIG, 'timeout': 60.0}
+    assert message.args == {'type': job.BENCHMARK, 'config': CONFIG, 'timeout': 60}
+    mapped = job.BenchmarkType.option_values(
+      {name: value for name, value in message.args.items() if name != 'type'}, None
+    )
+    descriptor = Rules(
+      {job.BENCHMARK: job.BenchmarkType.authority_declaration(frozenset())}
+    ).normalize(Request(job.BENCHMARK, mapped.values), None)
+    assert type(descriptor.values['timeout']) is int
     await transport.send(channel, brotocol.mark(message.id, 'accepted'))
     assert await task == 0
     assert capsys.readouterr().out.strip() == message.id
@@ -327,3 +332,9 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
     )
     assert await completed == 0
     assert REF in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('seconds', ['0.5', '60.0'])
+def test_start_lifetime_requires_whole_seconds(seconds):
+  with pytest.raises(SystemExit):
+    job.main(['benchmark-job', 'start', '-c', CONFIG, '--timeout', seconds])

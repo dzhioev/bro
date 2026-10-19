@@ -137,6 +137,9 @@ async def test_composed_prompts_leak_no_directives(name, harness):
 
 class TestSummonRecovery:
   def test_channel_mounts_query_backed_list_with_one_tool_shape(self, monkeypatch):
+    from bro.authority_view_test_helper import publish
+
+    publish(monkeypatch)
     monkeypatch.setenv('BROKER_CHANNEL', '/tmp/test-broker.sock')
     bro = create_bro('bro')
     tools = {}

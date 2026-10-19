@@ -159,7 +159,7 @@ def test_add_drop_and_explicit_credentials(installation):
   assert 'cred.cookies' in descriptor.values and 'cred.gate' not in descriptor.values
   descriptor = normalized(source, **{'cred.cookies': 'profile'})
   assert descriptor.values['cred.cookies'] == 'profile'
-  with pytest.raises(Refusal, match='both set and dropped'):
+  with pytest.raises(Refusal, match=r'cred.cookies.*bro.drop'):
     normalized(source, drop=frozenset({'cookies'}), **{'cred.cookies': 'profile'})
   for value in (False, 1.5, 0, -1, 'auto'):
     with pytest.raises(Refusal, match='domain check'):
@@ -265,9 +265,12 @@ def test_unknown_names_in_unapplied_layers_do_not_poison_launch(installation):
       }
     },
   )
-  source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+  mission = source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+  from ride.authority_launch import mission_view
+
+  assert mission_view(mission)['descriptor']['values']['target'] == 'child'
   with pytest.raises(ValueError, match='unknown'):
-    normalized(source, target='other')
+    source.rules.start(Request('bro', {'target': 'other'}), Authority.top(), source)
 
 
 def test_operator_caps_and_layer_conflicts(installation):
@@ -277,7 +280,7 @@ def test_operator_caps_and_layer_conflicts(installation):
     source.rules.use(source.operator(), descriptor)
   bad = reading(installation, {'defaults': {'grant': ['@other'], 'revoke': ['@other']}})
   with pytest.raises(ValueError, match='grant and revoke'):
-    normalized(bad)
+    bad.rules.start(Request('bro', {'target': 'child'}), Authority.top(), bad)
 
 
 def test_reading_snapshots_whole_config_defaults_and_working_tree(tmp_path, installation):
@@ -412,7 +415,7 @@ def test_wire_mapping_separates_values_from_content_and_checks_sentinels(install
       'talk': ['worker.question'],
       'timeout': None,
       'pass': ['cookies+profile'],
-      'isolation': 'unboxed',
+      'placement': 'unboxed',
     },
     source,
   )
@@ -426,7 +429,7 @@ def test_wire_mapping_separates_values_from_content_and_checks_sentinels(install
   for fields in (
     {'manual': True, 'timeout': 1},
     {'manual': True, 'placement': 'join'},
-    {'party': 'join', 'into': 'ref'},
+    {'placement': 'join', 'into': 'ref'},
     {'unknown': 'value'},
   ):
     with pytest.raises(ValueError):

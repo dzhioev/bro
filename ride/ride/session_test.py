@@ -15,15 +15,15 @@ import pytest
 
 import ride.bro_worker
 import ride.claude.harness as claude_harness
-import ride.cli as ride_cli
 import ride.root
 import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
 import ride.session as ride_session
+from bro.authority.patterns import Descriptor
+from bro.authority.records import dump_request, dump_values
+from bro.authority.rules import Request
 from bro.base import credentials
-from bro.base.scope import apply_idempotent, credential_grant_kind, credential_revoke_name
 from bro.monitor import workspace_party_dir, workspace_session_dir
-from bro.workspace.banner import SessionFacts
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
   CONTAINER_PARTY_DIR,
@@ -32,10 +32,11 @@ from bro.workspace.paths import (
   workspace_dir,
 )
 from ride import pending_launch
+from ride.authority_test_helper import mission, reading
 from ride.bro_worker import pending_bro
 from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
-from ride.scope import ScopedSecrets, split_scope_overrides
+from ride.scope import ScopedSecrets
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -69,7 +70,7 @@ def _spec(
   env: Optional[dict[str, str]] = None,
 ) -> ride_session.SessionSpec:
   resolved_bro = bro if bro is not None else 'bro-dev'
-  return ride_session.SessionSpec(
+  spec = ride_session.SessionSpec(
     name=name,
     repo=str(Path.cwd()),
     harness='claude',
@@ -91,6 +92,27 @@ def _spec(
     subject=prompt,
     env=env if env is not None else {},
   )
+  source = reading()
+  from ride.authority_launch import request
+  from ride.bro_worker import BroType
+
+  requested, _ = request(
+    BroType,
+    {
+      'target': resolved_bro,
+      'harness': spec.harness,
+      'placement': spec.isolation.value,
+      'hold': spec.hold,
+      'timeout': None,
+      'grant': spec.grant,
+      'revoke': spec.revoke,
+      'pass': spec.cred,
+    },
+    source,
+    source.operator(),
+    forward=False,
+  )
+  return replace(spec, authority_request=dump_request(requested, Descriptor('bro', {})))
 
 
 def _resume(
@@ -124,7 +146,7 @@ def _scoped_store() -> dict[str, bytes]:
 def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
   base = {
     'scoped': ScopedSecrets({'github'}, set()),
-    'launch': {'bro': {'party': frozenset({'boxed'})}},
+    'mission': mission(),
     'store': _scoped_store(),
   }
   base.update(overrides)
@@ -173,25 +195,22 @@ class _Replaced(Exception):
   """the fake re-exec: the process image was replaced."""
 
 
-def _fake_scoped_secrets(secrets: set[str], optional_secrets: set[str]):
-  """a stand-in for `scoped_secrets` over a fixed bro scope, applying the
-  launch's credential overrides the way the real one does."""
-
-  def scoped(*_args, cred=(), grant=(), revoke=(), **_kwargs):
-    grant_credentials, _ = split_scope_overrides(grant)
-    revoke_credentials, _ = split_scope_overrides(revoke)
-    kinds = apply_idempotent(
-      set(secrets) | set(optional_secrets),
-      grant=(credential_grant_kind(value, context='launch flags') for value in grant_credentials),
-      revoke=(credential_revoke_name(value) for value in revoke_credentials),
+def _fake_credentials(secrets, optional_secrets):
+  def scoped(mission, *, recording=True):
+    values = mission.descriptor.values
+    dropped = values.get('drop', frozenset())
+    kinds = (set(secrets) | set(optional_secrets) | values.get('add', frozenset())) - dropped
+    selection = {
+      name.removeprefix('cred.'): value
+      for name, value in values.items()
+      if name.startswith('cred.')
+    }
+    kinds.update(
+      name.removeprefix('cred.') for name in mission.request.values if name.startswith('cred.')
     )
-    picks = {}
-    for value in cred:
-      kind, instance = credentials.parse_name(value)
-      assert instance is not None
-      picks[kind] = instance
-    optional = kinds & set(optional_secrets)
-    return ScopedSecrets(kinds - optional, optional, picks)
+    selection = {name: value for name, value in selection.items() if name in kinds and value != ''}
+    optional = kinds & optional_secrets
+    return ScopedSecrets(kinds - optional, optional, selection)
 
   return scoped
 
@@ -204,12 +223,36 @@ class _ContainerHarness:
     self,
     secrets: Optional[set[str]] = None,
     optional_secrets: Optional[set[str]] = None,
-    *,
-    real_launch_fold: bool = False,
   ):
     self.secrets = secrets if secrets is not None else {'github'}
     self.optional_secrets = optional_secrets if optional_secrets is not None else set()
-    self.real_launch_fold = real_launch_fold
+
+  def _commit(self, root, token, spec):
+    from ride.authority_launch import mission_view, request
+    from ride.bro_worker import BroType
+
+    source = reading()
+    requested, _ = request(
+      BroType,
+      {
+        'target': spec.bro,
+        'harness': spec.harness,
+        'placement': spec.isolation.value,
+        'hold': spec.hold,
+      },
+      source,
+      source.operator(),
+      forward=False,
+    )
+    record = source.rules.start(requested, source.operator(), source)
+    return {
+      **mission_view(record),
+      'request': dump_request(requested, record.descriptor),
+      'required': list(self.secrets),
+      'optional': list(self.optional_secrets),
+      'resolved_llm': spec.resolved_llm,
+      'commit': 'commit-' + token,
+    }
 
   def __enter__(self):
     self._patches = [
@@ -217,28 +260,28 @@ class _ContainerHarness:
       patch('ride.session.find_container_id', return_value=None),
       patch('ride.session.run_started_party', return_value=0),
       patch(
-        'ride.session.scoped_secrets',
-        side_effect=_fake_scoped_secrets(self.secrets, self.optional_secrets),
+        'ride.session.credentials_for',
+        side_effect=_fake_credentials(self.secrets, self.optional_secrets),
       ),
       patch('ride.claude.harness.CLAUDE.preflight_auth', return_value=None),
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
       patch('ride.claude.harness.container_claude_state', return_value=([], {})),
       patch('ride.workspace.model.BoxedWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
-      (
-        patch('ride.scope.effective_launch', wraps=ride.scope.effective_launch)
-        if self.real_launch_fold
-        else patch(
-          'ride.scope.effective_launch',
-          return_value={'bro': {'party': frozenset({'boxed'})}},
-        )
-      ),
+      patch('ride.session.Reading.take', side_effect=lambda repository: reading()),
       patch('ride.session.local_trails_mounts', return_value=()),
       patch(
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
         return_value=ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image'),
       ),
       patch('ride.session.rev_parse_commit', return_value='headsha'),
+      patch('ride.operator.commit_launch', side_effect=self._commit),
+      patch(
+        'ride.operator.claim_launch',
+        side_effect=lambda root, token, commit, workspace: pending_launch.claim(
+          token, workspace=workspace
+        ),
+      ),
     ]
     entered = [p.__enter__() for p in self._patches]
     self.env = entered[0]
@@ -248,8 +291,8 @@ class _ContainerHarness:
     self.build_scoped_store = entered[5]
     self.container_claude_state = entered[6]
     self.remove_workspace = entered[7]
-    self.scoped_secrets = entered[3]
-    self.effective_launch = entered[9]
+    self.credentials_for = entered[3]
+    self.take_reading = entered[9]
     self.local_trails_mounts = entered[10]
     return self
 
@@ -305,7 +348,7 @@ class TestRuntimeBundle:
       workspace,
       _spec(
         cred=['brog+github'],
-        grant=['github', '@bro', ':launch.bro.party.boxed'],
+        grant=['github', '@bro', 'bro.placement=boxed'],
         revoke=['openai'],
       ),
     )
@@ -320,7 +363,7 @@ class TestRuntimeBundle:
       _resume(
         cred=['trails+write'],
         grant=['openai', '@dev'],
-        revoke=['github', ':launch.bro.party.boxed'],
+        revoke=['github', 'bro.placement=boxed'],
       )
 
     bundle = _runtime_bundle(tmp_path)
@@ -339,7 +382,7 @@ class TestRuntimeBundle:
           '--revoke',
           'github',
           '--revoke',
-          ':launch.bro.party.boxed',
+          'bro.placement=boxed',
           'w',
         ],  # fmt: skip
       )
@@ -348,12 +391,12 @@ class TestRuntimeBundle:
 
 class TestGrantRevoke:
   def test_start_session_applies_grant_and_revoke(self):
-    with _ContainerHarness(secrets={'notion', 'trails', 'github'}) as h:
-      rc = ride_session.start_session(_spec(drop=True, grant=['gmail_creds'], revoke=['notion']))
+    with _ContainerHarness(secrets={'brog', 'trails', 'github'}) as h:
+      rc = ride_session.start_session(_spec(drop=True, grant=['aws'], revoke=['brog']))
     assert rc == 0
     launch = h.run_started_party.call_args.args[0]
-    assert 'gmail_creds' in launch.secrets
-    assert 'notion' not in launch.secrets
+    assert 'aws' in launch.secrets
+    assert 'brog' not in launch.secrets
 
   def test_start_session_cred_replaces_a_credential_instance(self):
     with _ContainerHarness(secrets={'brog', 'github'}) as harness:
@@ -408,7 +451,7 @@ class TestNoTrails:
   def test_no_trails_removes_the_recording_need(self):
     with _ContainerHarness() as harness:
       assert ride_session.start_session(_spec(drop=True, no_trails=True)) == 0
-    assert harness.scoped_secrets.call_args.kwargs['recording'] is False
+    assert harness.local_trails_mounts.call_count == 0
 
   def test_no_trails_disables_recording_and_binds_no_trails_root(self):
     with _ContainerHarness() as h:
@@ -422,156 +465,10 @@ class TestNoTrails:
       assert ride_session.start_session(_spec(drop=True)) == 0
     launch = h.run_started_party.call_args.args[0]
     assert 'TRAILS_DISABLED' not in launch.env
-    assert h.scoped_secrets.call_args.kwargs['recording'] is True
+    assert h.local_trails_mounts.call_count == 1
 
 
-class TestLaunchSection:
-  def test_start_session_folds_seed_persona_config_and_flags_into_the_root(self):
-    configured = (
-      ride.scope.ScopeLayer(grant=(':launch.webview', '@bro')),
-      ride.scope.ScopeLayer(grant=(':launch.webview.vnc',)),
-    )
-    with (
-      patch('ride.scope.configured_scope_layers', return_value=configured),
-      _ContainerHarness(real_launch_fold=True) as harness,
-    ):
-      code = ride_session.start_session(
-        _spec(
-          drop=True,
-          grant=[':launch.bro.party.unboxed'],
-          revoke=[':launch.bro.party.boxed'],
-        )
-      )
-    assert code == 0
-    launch = harness.run_started_party.call_args.kwargs['launch_scope']
-    assert launch['bro']['party'] == frozenset({'unboxed'})
-    assert 'bro' in launch['bro']['bros']
-    assert launch['webview'] == {'vnc': True}
-
-  def test_solo_pass_rights_reach_root_facts_environment_and_banner(self, monkeypatch, tmp_path):
-    (tmp_path / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "bro-dev"\nharness = "claude"\n'
-    )
-    subprocess.run(['git', 'init', '-q', tmp_path], check=True)
-    subprocess.run(['git', '-C', tmp_path, 'add', 'pyproject.toml'], check=True)
-    subprocess.run(
-      [
-        'git',
-        '-C',
-        tmp_path,
-        '-c',
-        'user.name=Test User',
-        '-c',
-        'user.email=test@example.com',
-        'commit',
-        '-qm',
-        'fixture',
-      ],
-      check=True,
-    )
-    material = tmp_path / 'store' / credentials.MATERIAL_DIR
-    material.mkdir(parents=True)
-    for name in ('github+host', 'trails+flag'):
-      (material / f'{name}{credentials.MATERIAL_SUFFIX}').write_text(name)
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'projects': {
-            str(tmp_path): {'bros': {'bro-dev': {'grant': [':launch.bro.pass.github+host']}}}
-          }
-        }
-      )
-    )
-    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path / 'store'))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    captured = {}
-
-    def capture_root(launch, _workspace, **kwargs):
-      captured['environment'] = launch.env
-      captured['facts'] = kwargs['launch_scope']
-      return 0
-
-    with (
-      _ContainerHarness(real_launch_fold=True),
-      patch('ride.session.run_started_party', side_effect=ride.root.run_started_party),
-      patch('ride.root.broker_enabled', return_value=True),
-      patch('ride.root._run_via_broker', side_effect=capture_root),
-    ):
-      code = ride_cli.main(
-        [
-          'ride',
-          'solo',
-          '--workspace',
-          'w',
-          '--repo',
-          str(tmp_path),
-          '--harness',
-          'claude',
-          '--grant',
-          ':launch.bro.pass.trails+flag',
-          'bro-dev',
-          'work',
-        ]
-      )
-    assert code == 0
-    expected = frozenset({'github+host', 'trails+flag'})
-    assert captured['facts']['bro']['pass'] == expected
-    environment = captured['environment']
-    assert frozenset(json.loads(environment['RIDE_LAUNCH'])['bro']['pass']) == expected
-    with patch.dict(os.environ, environment, clear=True):
-      banner = SessionFacts.collect().render_llm()
-    assert ':launch.bro.pass.github+host' in banner
-    assert ':launch.bro.pass.trails+flag' in banner
-
-  def test_boxed_session_threads_the_launch_section(self):
-    expected = {
-      'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'unboxed'})},
-      'webview': {'vnc': True},
-    }
-    with _ContainerHarness() as harness:
-      harness.effective_launch.return_value = expected
-      code = ride_session.start_session(
-        _spec(
-          drop=True,
-          grant=['@dev', ':launch.bro.party.unboxed', ':launch.webview.vnc'],
-          revoke=[':launch.bro.party.boxed'],
-        )
-      )
-    assert code == 0
-    assert harness.effective_launch.call_args.args[0] == 'bro-dev'
-    assert harness.run_started_party.call_args.kwargs['launch_scope'] == expected
-
-  def test_boxed_session_threads_the_summon_depth(self):
-    with _ContainerHarness() as harness:
-      code = ride_session.start_session(replace(_spec(drop=True), summon_depth=5))
-
-    assert code == 0
-    assert harness.run_started_party.call_args.kwargs['summon_depth'] == 5
-
-  def test_boxed_session_threads_the_summon_harness(self):
-    with _ContainerHarness() as harness:
-      code = ride_session.start_session(replace(_spec(drop=True), summon_harness='claude'))
-
-    assert code == 0
-    assert harness.run_started_party.call_args.kwargs['summon_harness'] == 'claude'
-
-  def test_boxed_session_keys_identity_on_the_bro(self):
-    with _ContainerHarness() as harness:
-      code = ride_session.start_session(_spec(drop=True, bro='dev'))
-    assert code == 0
-    assert harness.effective_launch.call_args.args[0] == 'dev'
-
-  def test_bad_launch_name_fails_the_launch(self):
-    with _ContainerHarness() as harness:
-      harness.effective_launch.side_effect = ValueError('unknown worker type: missing')
-      code = ride_session.start_session(_spec(drop=True, grant=[':launch.missing']))
-    assert code == 1
-    assert harness.run_started_party.call_count == 0
-
-
-def _configure_human(tmp_path, name: str = 'Ada Lovelace', email: str = 'ada@example.com'):
-  """the launching human's own git configuration, as the host carries it."""
+def _configure_human(tmp_path, name='Ada Lovelace', email='ada@example.com'):
   (tmp_path / 'gitconfig').write_text(f'[user]\n\tname = {name}\n\temail = {email}\n')
 
 
@@ -848,14 +745,14 @@ class TestCommandArgv:
       llm='::xhigh+fast',
       bro='dev',
       cred=['github+work'],
-      grant=['gmail_creds', '@bro'],
-      revoke=['notion'],
+      grant=['aws', '@bro'],
+      revoke=['brog'],
       into='feature',
     ).to_command_argv()
     assert parts == [
       'ride', 'along', '--drop', '--repo', str(Path.cwd()), '--hold', 'attended', '--llm', '::xhigh+fast',
       '--harness', 'claude', '--workspace', 'w', '--cred', 'github+work',
-      '--grant', 'gmail_creds', '--grant', '@bro', '--revoke', 'notion', '--into', 'feature', 'dev',
+      '--grant', 'aws', '--grant', '@bro', '--revoke', 'brog', '--into', 'feature', 'dev',
     ]  # fmt: skip
 
   def test_unboxed_session_carries_the_unboxed_flag(self):
@@ -936,62 +833,6 @@ class TestCommandArgv:
     ]
 
 
-class TestScopeOverrides:
-  def test_values_join_the_recorded_lists(self):
-    updated = _spec(cred=['brog+github'], grant=['github'], revoke=['openai']).with_scope_overrides(
-      cred=['trails+write'], grant=['@bro-dev'], revoke=['brave']
-    )
-    assert updated.cred == ['brog+github', 'trails+write']
-    assert updated.grant == ['github', '@bro-dev']
-    assert updated.revoke == ['openai', 'brave']
-
-  def test_each_new_override_replaces_the_recorded_one_for_its_name(self):
-    updated = _spec(grant=['@bro-dev'], revoke=['openai']).with_scope_overrides(
-      cred=[], grant=['openai'], revoke=['@bro-dev']
-    )
-    assert (updated.grant, updated.revoke) == (['openai'], ['@bro-dev'])
-
-  def test_a_new_launch_grant_replaces_a_recorded_revoke(self):
-    updated = _spec(revoke=[':launch.webview']).with_scope_overrides(
-      cred=[], grant=[':launch.webview'], revoke=[]
-    )
-    assert (updated.grant, updated.revoke) == ([':launch.webview'], [])
-
-  def test_revoke_kind_drops_a_recorded_pick(self):
-    updated = _spec(cred=['github+reviewer'], grant=['github']).with_scope_overrides(
-      cred=[], grant=[], revoke=['github']
-    )
-    assert updated.cred == []
-    assert (updated.grant, updated.revoke) == ([], ['github'])
-
-  def test_a_new_pick_replaces_the_recorded_pick_for_the_same_kind(self):
-    updated = _spec(cred=['github+reviewer']).with_scope_overrides(
-      cred=['github+developer'], grant=[], revoke=[]
-    )
-    assert updated.cred == ['github+developer']
-
-  def test_restating_a_recorded_credential_override_is_harmless(self):
-    updated = _spec(grant=['github'], revoke=['openai']).with_scope_overrides(
-      cred=[], grant=['github'], revoke=['openai']
-    )
-    assert updated.grant == ['github']
-    assert updated.revoke == ['openai']
-
-  def test_restating_a_recorded_launch_override_is_harmless(self):
-    updated = _spec(grant=['@bro-dev']).with_scope_overrides(cred=[], grant=['@bro-dev'], revoke=[])
-    assert updated.grant == ['@bro-dev']
-
-  def test_restating_a_recorded_launch_revoke_is_harmless(self):
-    updated = _spec(revoke=[':launch.webview']).with_scope_overrides(
-      cred=[], grant=[], revoke=[':launch.webview']
-    )
-    assert updated.revoke == [':launch.webview']
-
-  def test_a_contradicting_pair_survives_for_the_scope_layer(self):
-    updated = _spec().with_scope_overrides(cred=[], grant=['openai'], revoke=['openai'])
-    assert (updated.grant, updated.revoke) == (['openai'], ['openai'])
-
-
 class TestResumeSpecRecord:
   def test_recorded_spec_clears_create_only_inputs_and_round_trips(self, tmp_path):
     spec = _spec(
@@ -1000,7 +841,7 @@ class TestResumeSpecRecord:
       llm='::xhigh',
       bro='dev',
       cred=['github+work'],
-      grant=['gmail_creds'],
+      grant=['aws'],
       into='feature',
       prompt='do it',
       env={'IS_SANDBOX': '1'},
@@ -1008,17 +849,14 @@ class TestResumeSpecRecord:
     workspace = _workspace(tmp_path)
     ride_session.record_resume_spec(workspace, spec)
     loaded = ride_session.load_resume_spec(workspace)
-    assert loaded == spec.resume_variant()
+    assert loaded is not None and loaded.dump() == spec.resume_variant().dump()
     assert loaded is not None and loaded.resume and not loaded.drop
     assert loaded.into is None and loaded.prompt is None
-    # the forwarded flags survive, so the resumed session runs as it was launched
-    assert (loaded.hold, loaded.llm, loaded.bro, loaded.cred, loaded.grant, loaded.env) == (
-      'attended',
-      '::xhigh',
-      'dev',
-      ['github+work'],
-      ['gmail_creds'],
-      {'IS_SANDBOX': '1'},
+    assert loaded.authority_request == spec.authority_request
+    assert loaded.env == spec.env
+    assert (
+      not {'cred', 'grant', 'revoke', 'llm', 'resolved_llm', 'summon_depth', 'summon_harness'}
+      & loaded.dump().keys()
     )
 
   @pytest.mark.parametrize('env', [[], {'A=B': '1'}, {'A': 1}])
@@ -1030,7 +868,7 @@ class TestResumeSpecRecord:
     assert ride_session.load_resume_spec(workspace) is None
     assert 'ignoring unreadable resume spec' in caplog.text
 
-  def test_solo_resume_becomes_an_along_session_with_its_default_hold(self, tmp_path):
+  def test_solo_resume_preserves_its_set_hold_as_an_along_session(self, tmp_path):
     solo = replace(
       _spec(solo=True, hold='unattended', prompt='go'),
       workspace_pinned=False,
@@ -1040,7 +878,7 @@ class TestResumeSpecRecord:
     loaded = ride_session.load_resume_spec(workspace)
     assert loaded is not None
     assert not loaded.solo
-    assert loaded.hold == 'attended'
+    assert loaded.hold == solo.hold
     assert loaded.to_command_argv() == ['ride', 'resume', 'w']
 
   def test_recording_a_resume_is_a_fixpoint(self, tmp_path):
@@ -1072,8 +910,8 @@ class TestResumeSpecRecord:
     spec = _spec(bro='dev')
     workspace.resume_file.write_text(json.dumps({**spec.resume_variant().dump(), 'arguments': []}))
 
-    assert ride_session.load_resume_spec(workspace) == spec.resume_variant()
-    assert ride_session.harness_for_workspace(workspace) is claude_harness.CLAUDE
+    assert ride_session.load_resume_spec(workspace) is None
+    assert ride_session.harness_for_workspace(workspace) is None
 
   def test_a_record_carrying_harness_arguments_is_unreadable(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
@@ -1082,7 +920,7 @@ class TestResumeSpecRecord:
     )
 
     assert ride_session.load_resume_spec(workspace) is None
-    assert "a session takes no harness arguments: ['--debug']" in caplog.text
+    assert 'unreadable session record' in caplog.text
 
   def test_record_from_an_incompatible_ride_reads_as_none(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
@@ -1100,7 +938,8 @@ class TestResumeSpecRecord:
         ),
       ):
         assert ride_session.start_session(_spec(drop=True, bro='dev')) == 0
-    assert recorded[0] == _spec(drop=True, bro='dev').resume_variant()
+    assert recorded[0].authority_request['values']['target'] == 'dev'
+    assert recorded[0].resume
 
 
 class TestResumeSession:
@@ -1108,7 +947,7 @@ class TestResumeSession:
     ride_session.record_resume_spec(_workspace(tmp_path), _spec(bro='dev', hold='attended'))
     with patch('ride.session.start_session', return_value=0) as start:
       assert _resume() == 0
-    assert start.call_args[0][0] == _spec(bro='dev', hold='attended').resume_variant()
+    assert start.call_args[0][0].dump() == _spec(bro='dev', hold='attended').resume_variant().dump()
 
   def test_scope_overrides_reach_the_relaunch(self, tmp_path):
     ride_session.record_resume_spec(
@@ -1117,8 +956,8 @@ class TestResumeSession:
     with patch('ride.session.start_session', return_value=0) as start:
       assert _resume(grant=['@bro-dev']) == 0
     spec = start.call_args[0][0]
-    assert spec.cred == ['brog+github']
-    assert spec.grant == ['brog', '@bro-dev']
+    assert spec.authority_request['values']['cred.brog'] == 'github'
+    assert spec.grant == ['@bro-dev']
 
   def test_a_no_op_launch_override_relaunches_harmlessly(self, tmp_path):
     ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=['@bro-dev']))
@@ -1126,12 +965,14 @@ class TestResumeSession:
       assert _resume(grant=['@bro-dev']) == 0
     assert start.call_args.args[0].grant == ['@bro-dev']
 
-  def test_a_retired_permit_in_the_record_names_its_replacement(self, tmp_path, caplog):
-    ride_session.record_resume_spec(_workspace(tmp_path), _spec(grant=[':bro.party.join']))
-    with _ContainerHarness(real_launch_fold=True) as harness:
-      assert _resume() == 1
-    assert harness.run_started_party.call_count == 0
-    assert ':launch.bro.party.join' in caplog.text
+  def test_pre_switch_records_are_refused(self, tmp_path, caplog):
+    workspace = _workspace(tmp_path)
+    data = _spec().dump()
+    data.pop('authority_request')
+    data['grant'] = []
+    workspace.resume_file.write_text(json.dumps(data))
+    assert _resume() == 1
+    assert 'unreadable session record' in caplog.text
 
   def test_unknown_workspace_errors(self, caplog):
     with patch('ride.session.start_session') as start:
@@ -1181,17 +1022,12 @@ class TestConcurrentSessionGuard:
     # tests drive; without stubs they read the machine's own credential store
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
+      ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
     monkeypatch.setattr(
       ride.scope.credentials,
       'build_scoped_store',
       lambda store, names, optional=(): (_scoped_store(), frozenset()),
-    )
-    monkeypatch.setattr(
-      ride.scope,
-      'effective_launch',
-      lambda *_a, **_k: {'bro': {'party': frozenset({'boxed'})}},
     )
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
@@ -1512,9 +1348,7 @@ class TestUnboxedSession:
       summon_depth=4,
       summon_harness='claude',
     )
-    scope = _launch_scope(
-      launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}}
-    )
+    scope = _launch_scope(mission=mission(grant=['@dev']))
 
     assert (
       ride_session._launch_session(
@@ -1532,9 +1366,7 @@ class TestUnboxedSession:
     )
     assert isinstance(captured['launch'], ride_session.ProcessLaunch)
     assert captured['workspace'] is workspace
-    assert captured['launch_scope'] == scope.launch
-    assert captured['summon_depth'] == 4
-    assert captured['summon_harness'] == 'claude'
+    assert captured['mission'] is scope.mission
 
   def test_resume_guard_precedes_clone_preparation(self, monkeypatch, tmp_path, caplog):
     workspace = self._workspace(monkeypatch, tmp_path)
@@ -1627,14 +1459,9 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
-    monkeypatch.setattr(
-      ride.scope,
-      'effective_launch',
-      lambda *_a, **_k: {'bro': {'party': frozenset({'boxed'})}},
-    )
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
+      ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
     monkeypatch.setattr(
       ride.scope.credentials,
@@ -1731,14 +1558,9 @@ client.close(confirm=True)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
-    monkeypatch.setattr(
-      ride.scope,
-      'effective_launch',
-      lambda *_a, **_k: {'bro': {'party': frozenset({'boxed'})}},
-    )
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
-      ride_session, 'scoped_secrets', lambda *_a, **_k: ScopedSecrets(set(), set())
+      ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
     )
     monkeypatch.setattr(
       ride.scope.credentials,
@@ -1751,9 +1573,7 @@ client.close(confirm=True)
         _spec(isolation=Isolation.UNBOXED),
         workspace,
         None,
-        _launch_scope(
-          launch={'bro': {'bros': frozenset({'bro-dev'}), 'party': frozenset({'boxed'})}}
-        ),
+        _launch_scope(mission=mission(grant=['@bro-dev'])),
         human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
@@ -1789,10 +1609,8 @@ def _pending_record(tmp_path, **overrides):
   extension = {
     'target': 'bro-dev',
     'prompt': 'pair on this',
-    'launch': {'bro': {'bros': ['dev'], 'party': ['boxed']}},
-    'grant': [],
-    'revoke': [],
-    'pass': [],
+    'request': dump_request(Request('bro', {'target': 'bro-dev'}), Descriptor('bro', {})),
+    'root': 'root',
     'summoner': {'trail_id': 'T1'},
     'repo': None,
     'into': None,
@@ -1833,7 +1651,6 @@ class TestSummonedSession:
     launch = run.call_args.args[0]
     assert launch.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
-    assert json.loads(launch.env['RIDE_LAUNCH']) == {'bro': {'bros': ['dev'], 'party': ['boxed']}}
     assert launch.env['BROKER_TALK'] == 'worker.say'
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
@@ -1915,3 +1732,239 @@ class TestSummonedSession:
     assert rc == 1
     assert h.run_started_party.call_count == 0
     assert "cannot read the summoner's HEAD" in caplog.text
+
+
+class TestReadingAdmission:
+  def test_root_limits_survive_runtime_reexec(self):
+    spec = replace(_spec(), limit=['@dev for *'])
+    arguments = spec.to_command_argv()
+    position = arguments.index('--limit')
+    assert arguments[position + 1] == spec.limit[0]
+
+  def test_a_resume_runs_the_hold_its_operator_admitted(self, monkeypatch):
+    source = reading(config={'operator': {'limit': ['bro.hold=* for bro{hold=unattended}']}})
+    with _ContainerHarness() as harness:
+      harness.take_reading.side_effect = lambda repository: source
+      monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
+      assert ride_session.start_session(_spec(solo=True, hold='unattended').resume_variant()) == 0
+    launched = harness.run_started_party.call_args.args[0]
+    descriptor = harness.run_started_party.call_args.kwargs['mission'].descriptor
+    assert launched.command[launched.command.index('--hold') + 1] == descriptor.values['hold']
+
+  @pytest.mark.parametrize('into', [None, 'feature'])
+  def test_url_reading_uses_the_resolved_attachment_commit(self, monkeypatch, tmp_path, into):
+    repository = Repository('https://example.test/repository.git', tmp_path, 'remote-head')
+    seen = []
+    with _ContainerHarness() as harness:
+      monkeypatch.setattr(
+        ride_session, 'hold_repository', lambda identity: contextlib.nullcontext(repository)
+      )
+      monkeypatch.setattr(ride_session, 'resolve_ref', lambda directory, ref: 'selected-commit')
+      harness.take_reading.side_effect = lambda selected: seen.append(selected) or reading()
+      spec = replace(_spec(), repo=repository.identity, into=into)
+      with patch('ride.session._launch_session', return_value=0):
+        assert ride_session.start_session(spec) == 0
+    assert len(seen) == 1
+    assert seen[0].identity == repository.identity
+    assert seen[0].tree_ref == ('remote-head' if into is None else 'selected-commit')
+
+  def test_resumed_child_executes_the_harness_default_of_its_new_reading(self, monkeypatch):
+    from bro.native.harness import BRO
+
+    source = reading()
+    source = replace(source, project={'summon-harness': 'bro'})
+    requested = Request('bro', {'target': 'bro-dev'})
+    spec = replace(
+      _spec(resume=True), authority_request=dump_request(requested, Descriptor('bro', {}))
+    )
+    with _ContainerHarness() as harness:
+      harness.take_reading.side_effect = lambda repository: source
+      monkeypatch.setattr(BRO, 'session_exists', lambda workspace: True)
+      assert ride_session.start_session(spec) == 0
+    launched = harness.run_started_party.call_args.args[0]
+    command = launched.command
+    assert command[command.index('--harness') + 1] == source.summon_harness
+    assert (
+      harness.run_started_party.call_args.kwargs['mission'].descriptor.values['harness']
+      == source.summon_harness
+    )
+
+
+def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch, tmp_path):
+  import threading
+  from concurrent.futures import ThreadPoolExecutor
+  from types import SimpleNamespace
+  from typing import Any, cast
+
+  from bro.authority.rules import Mission
+  from bro.broker.brotocol import request as message
+  from ride import operator
+  from ride.authority_launch import request
+  from ride.bro_worker import BroType
+  from ride.launch_control import LaunchControl
+  from ride.peer_facts import WorkerFacts
+
+  store = tmp_path / 'host-store'
+  (store / 'creds').mkdir(parents=True)
+  (store / credentials.STORE_FILE).write_text('{}')
+  for instance in ('a', 'b'):
+    (store / 'creds' / f'github+{instance}.cred').write_text(instance + '-material')
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+  source = ride_session.Reading.take()
+  root_request, _ = request(
+    BroType,
+    {'target': 'bro', 'harness': 'bro', 'llm': 'echo', 'grant': ['@bro', 'bro.cred=github+{a,b}']},
+    source,
+    source.operator(),
+    forward=False,
+  )
+  root = source.rules.start(root_request, source.operator(), source)
+  requested, _ = request(
+    BroType,
+    {'target': 'bro', 'prompt': 'read the pick', 'pass': ['github+a'], 'manual': True},
+    source,
+    root.authority,
+  )
+  prepared = source.rules.prepare(requested, root.authority, source)
+  token = 'manual-generation'
+  facts = {
+    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    token: WorkerFacts(type='bro', workspace=None, expected=True, record=prepared),
+  }
+  journal = SimpleNamespace(
+    records={token: SimpleNamespace(parent='root', state='accepted')},
+    ancestry=lambda identifier: ('root',),
+  )
+  peers = SimpleNamespace(for_mission=facts.__getitem__)
+  runtime = _runtime_bundle(tmp_path)
+  control = LaunchControl(
+    ride='root',
+    types={'bro': BroType(cast(Any, object()))},
+    peers=peers,
+    journal=cast(Any, journal),
+    audit_file=tmp_path / 'audit',
+    runtime_bundle=runtime,
+    session_env={},
+    worker_container_spawner=cast(Any, object()),
+    reading=source,
+  )
+  control._prepared[token] = prepared
+  pending_launch.write(
+    pending_launch.PendingLaunch(
+      token=token,
+      runtime=runtime.reference,
+      port=1,
+      channel_token='channel',
+      type='bro',
+      talk=('worker.say',),
+      owner_tree=str(tmp_path),
+      extension={
+        'target': 'bro',
+        'prompt': 'read the pick',
+        'request': dump_request(requested, Descriptor('bro', {})),
+        'root': 'root',
+        'summoner': None,
+        'repo': None,
+        'into': None,
+      },
+    )
+  )
+  pending = pending_bro(pending_launch.peek(token))
+  first_claim_ready = threading.Event()
+  replacement_committed = threading.Event()
+  first_claim_finished = threading.Event()
+  dispatch_lock = threading.Lock()
+
+  def operator_request(root, kind, args):
+    if kind == 'operator.commit' and args['fields']['pass'] == ['github+b']:
+      assert first_claim_ready.wait(10), 'first launcher did not reach its claim'
+    if kind == 'operator.claim' and args['workspace'] == 'manual-a':
+      first_claim_ready.set()
+      assert replacement_committed.wait(10), 'replacement commit did not complete'
+    if kind == 'operator.claim' and args['workspace'] == 'manual-b':
+      assert first_claim_finished.wait(10), 'superseded claim did not finish'
+    if kind == 'operator.commit' and args['fields']['pass'] == ['github+b']:
+      args['fields']['talk'] = ['owner.say']
+    replies = []
+    with dispatch_lock:
+      context = SimpleNamespace(journal=journal, reply=lambda peer, result: replies.append(result))
+      handler = control.commit if kind == 'operator.commit' else control.claim
+      handler(cast(Any, context), 'operator', message(kind, args))
+    if kind == 'operator.claim' and args['workspace'] == 'manual-a':
+      first_claim_finished.set()
+    [reply] = replies
+    if reply['outcome'] != 'ok':
+      raise ValueError(reply['error'])
+    if kind == 'operator.commit' and args['fields']['pass'] == ['github+b']:
+      replacement_committed.set()
+    return reply['value']
+
+  monkeypatch.setattr(operator, '_request', operator_request)
+  monkeypatch.setattr(
+    ride_session, 'resolve_runtime_bundle', lambda: contextlib.nullcontext(runtime)
+  )
+  executions = []
+
+  def execute(launch, workspace, *, claim, **kwargs):
+    claim()
+    selected = credentials.Store(credentials.default_registry(), launch.env['BRO_STORE'], {})
+    executions.append(
+      {
+        'workspace': workspace.name,
+        'credential': selected.get('github'),
+        'recipe': json.loads(launch.env[ride_session.RESOLVED_LLM_ENV]),
+        'isolation': launch.env['RIDE_ISOLATION'],
+        'talk': launch.env['BROKER_TALK'],
+      }
+    )
+    return 0
+
+  monkeypatch.setattr(ride_session, 'run_manual_started_party', execute)
+
+  def launch(instance):
+    spec = ride_session.SessionSpec(
+      name='manual-' + instance,
+      harness='bro',
+      workspace_pinned=True,
+      isolation=Isolation.UNBOXED,
+      drop=False,
+      no_trails=True,
+      hold='unattended',
+      cred=['github+' + instance],
+      grant=[],
+      revoke=[],
+      llm='echo',
+      resolved_llm={},
+      solo=True,
+      resume=False,
+      into=None,
+      bro='bro',
+      prompt=pending.prompt,
+      subject=pending.prompt,
+    )
+    return ride_session.start_session(spec, summoned=pending)
+
+  with ThreadPoolExecutor(max_workers=2) as executor:
+    first = executor.submit(launch, 'a')
+    second = executor.submit(launch, 'b')
+    assert first.result(timeout=15) == 1
+    assert second.result(timeout=15) == 0
+  assert len(executions) == 1
+  [executed] = executions
+  assert executed['workspace'] == 'manual-b'
+  assert executed['credential'] == 'b-material'
+  assert facts[token].workspace == executed['workspace']
+  assert pending_launch.claimed_workspace(token) == 'manual-b'
+  host = facts[token].record
+  assert isinstance(host, Mission)
+  assert host.descriptor.values['cred.github'] == 'b'
+  record = ride_session.load_resume_spec(Workspace.open('manual-b'))
+  assert record is not None
+  assert record.authority_request['values'] == dump_values(host.request.values)
+  assert set(record.operator_values) == host.operator_values
+  assert executed['isolation'] == host.descriptor.values['placement']
+  assert set(executed['talk'].split(',')) == host.descriptor.values['talk']
+  assert journal.records[token].talk == host.descriptor.values['talk']
+  assert (
+    executed['recipe'] == ride_session.checked_recipe(host.request, host.descriptor, source).dump()
+  )

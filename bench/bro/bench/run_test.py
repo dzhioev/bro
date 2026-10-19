@@ -177,6 +177,7 @@ def test_a_session_run_starts_the_composed_config_over_the_broker(tree, monkeypa
   assert main([*RUN, '--tasks', 'few', '--timeout', '60']) == 0
   composed = _composed(tree)
   assert captured == {'config': composed.relative_to(tree).as_posix(), 'timeout': 60}
+  assert type(captured['timeout']) is int
   config = json.loads(composed.read_text())
   assert config[PRESETS_KEY] == {'agents': 'one', 'settings': 'quick', 'tasks': 'few'}
   assert config['datasets'][0]['task_names'] == ['org/alpha']

@@ -29,25 +29,22 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   It touches the session's activity file at start and end, and hands its path to the harness on `SessionRun` to touch as the session works;
   `ride list` reads its age off that file.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
-- `ride/scope.py` — per-surface launch scoping:
-  the generic `ScopeRecipe`, attachment-bound credential selection, the project/host grant layers, three-way scope override splitting, `launch`-section computation, and the launch preflight,
-  plus `bind_launch_llm`, the launch's LLM selection settled over the first recipe in the host's per-bro list for the attachment that the launch's harness runs, returned as the canonical `--llm` the session records and forwards,
-  and `launch_llm_spec`, that value resolved within the driving harness for the surfaces that need only the recipe.
-  In-process `bro run` / `bro chat` create no scope.
-- `ride/authority_reading.py` — immutable launch readings of the new-grammar host and project policy, store defaults, and installation registries.
+- `ride/scope.py` — prospective credential scopes, the harness's `ScopeRecipe`, and credential-store views.
+- `ride/authority_reading.py` — immutable root readings of host and project policy, store defaults, and installation registries.
 - `ride/authority_scope.py` — bro option defaults, credential gate-outcome manifests, wire mapping, existence checks, and layered bases.
+- `ride/authority_launch.py` — request/gift/cap mapping, descriptor-based credential hydration, live authority views, and resume-layer replacement.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.
 - `ride/broker_root.py` — broker-root composition over the installed `bro.worker_types` classes, the common launch control, and artifact kinds.
   The channel listener binds loopback plus the Docker bridge gateway when that is an address of this host.
 - `ride/bro_worker.py` — the registered bro worker type and summon lowering:
-  validation and authorization, placement, child authority, the manual expectation, lifecycle projection, `SummonLaunchSpec`, and `SummonSpawner`.
+  admitted descriptors, placement, the manual expectation, lifecycle projection, `SummonLaunchSpec`, and `SummonSpawner`.
   Started parties go through the common isolation-parameterized launcher and carry a resume spec;
   joined members run in the summoner’s existing tree with member-scoped records and no resume.
-- `ride/launch_control.py` — common `launch` argument validation, owner attribution, worker-type dispatch, run lowering, launch audit, and manual-token lifecycle.
+- `ride/launch_control.py` — starter attribution, common admission under the root reading, mission records, authority reads, operator commits, run lowering, and launch audit.
 - `ride/worker_container.py` — container execution for core `WorkerContainer` declarations:
   off-loop broker lowering with coordinated image builds and pruning, detached throwaway workspaces, passed-instance store hydration, artifact views, and requested-or-available loopback port allocation and facts;
   plus a no-workspace foreground run whose piped exchange belongs to a host command.
-- `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the runtime-bound mission listing client.
+- `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the mission-listing and joint-start commit/claim clients.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, and owner-authorized `artifact.share` kinds, and the broker's `JobOutput`:
@@ -95,7 +92,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   A given runtime's unboxed sessions verify TLS against the certifi store it carries, set as `SSL_CERT_FILE` in their snapshot;
   a frozen runtime's sessions trust the host's own store.
   A manual token carries the frozen hash or given path, and its launch command names that runtime's own `ride`.
-- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail under the recipe recorded in the session spec.
+- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail with its set option values and newly computed defaults.
   No pointer is published when trail recording is disabled.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
@@ -117,9 +114,9 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   it mounts only the runtime volume, publishes declared ports on loopback, pipes stdin and stdout, and removes its container on exit.
 - An unboxed Claude session holds its pinned release version's shared lock from before cache verification until the process exits.
   A missing version downloads under a separate lock into unique staging, and `ride clean` keeps an exclusive version lock across removing an unused release.
-- A launch's credential instances follow its attachment identity and selected bro on every surface that resolves them
-  — the session, `ride scope`, dive-in's prefetch, and the children it summons (`bro/reference/ride.md`, "Session permissions and credentials")
-  — and so does its default LLM recipe, settled on the host once and carried inward as the canonical `--llm`.
+- A root takes its reading after runtime re-exec and attachment resolution.
+  Every child and manual commit uses that reading; a resume takes a new one.
+  Hydration uses the admitted descriptor's exact picks, while instance material and minting sources stay live.
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` reach GitHub as the identity it was scoped with rather than through the operator's own configuration.
   An unboxed process gets a closed environment snapshot with its workspace as `PWD`;
@@ -134,8 +131,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - A pinned mode-verb workspace is never auto-dropped.
   An unpinned `along` workspace is kept unless `--drop` is explicit;
   an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
-- A solo resume becomes an along session and takes along's isolation-sensitive default hold;
-  the unattended solo hold describes a run with no human channel.
+- A solo resume becomes an along session and preserves its set hold value.
 - Every reconstructed session argv and `do-ride` command restates the resolved `--hold`.
   The session executable has no placement flag from which to re-derive it.
 - Every launcher exports `RIDE_ISOLATION` from the workspace record;
@@ -145,12 +141,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   It has no resume record;
   clean exit removes its records, failure or kill keeps them, and an unboxed member's private credential root is always removed while a boxed member's store dies with the party's container.
   The party ends with its first session, so that session's teardown kills any members still running, whichever spawner runs them.
-- The framework seeds `:launch.bro` and `:launch.bro.party.boxed`.
-  Credential grants and revokes apply idempotently through project, host, launch, and resume layers, while summon requests refuse them and use `pass` for an authorized instance.
-  A container run hydrates exactly those passed instances into its scoped store during off-loop lowering;
-  a missing instance fails before container creation and removes the throwaway workspace, while a job run refuses passes.
-  Each pass becomes the child's credential grant and pick, including in its resume record.
-  Launch grants and revokes additionally fold through summon requests;
-  a request may grant only authority its owner holds, and every bro launch exports the resulting section through `RIDE_LAUNCH` while launch control enforces its peer-facts copy.
-  The complete document and fold are `bro/reference/ride.md`, "Session permissions and credentials".
+- Launch control runs normalization, the use and gift rules, and admission checks before worker code checks existence or starts work.
+  Worker types declare options and runs, not permission checks.
+  A manual token retains its prepared request until claim; the operator may retry a commit before the child starts.
+  Resume records retain set values and principal attribution, gift/cap, and operator layers, not resolved defaults.
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and workspace records fail as CLI errors.
