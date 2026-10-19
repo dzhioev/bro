@@ -212,7 +212,7 @@ def _child_session_spec(
     raise ValueError('summoned session isolation is unresolved')
   repo = None if launch.repo is None else as_repository(launch.repo).identity
   spec = checked_recipe(
-    launch.record.request, launch.record.descriptor, cast(Reading, launch.record.reading)
+    launch.record.request, launch.record.descriptor, cast('Reading', launch.record.reading)
   )
   llm = launch.llm
   pass_picks, pass_grants = [], []
