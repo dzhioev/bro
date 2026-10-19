@@ -1312,6 +1312,7 @@ class TestBrokerBindHosts:
 class TestRunRootViaBroker:
   def test_wires_registered_types_through_launch(self, monkeypatch, tmp_path):
     from bro.worker_types import LaunchRequest, WorkerType
+    from ride.operator import MISSIONS
 
     captured: dict = {}
 
@@ -1336,8 +1337,10 @@ class TestRunRootViaBroker:
       def subscribe(self, observer):
         captured['observers'].append(observer)
 
-      def run(self, launch, spawner, *, type, end_on_sigterm=False):
-        captured.update(launch=launch, spawner=spawner, type=type, end=end_on_sigterm)
+      def run(self, launch, spawner, *, type, end_on_sigterm=False, lifetime=None):
+        captured.update(
+          launch=launch, spawner=spawner, type=type, end=end_on_sigterm, lifetime=lifetime
+        )
         return 3
 
     monkeypatch.setattr(ride.broker_root, 'Broker', FakeBroker)
@@ -1358,6 +1361,7 @@ class TestRunRootViaBroker:
       == 3
     )
     assert set(captured['handlers']) == {
+      MISSIONS,
       'ping',
       'launch',
       'artifact.mint',
@@ -1367,4 +1371,5 @@ class TestRunRootViaBroker:
     assert isinstance(captured['spawner'], workspace_spawn.ProcessSpawner)
     assert captured['type'] == 'bro'
     assert captured['end'] is True
+    assert callable(captured['lifetime'])
     assert captured['launch'] is launch

@@ -13,7 +13,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 
 - `ride/cli.py` — the `ride` dispatcher.
   `solo` is the one-shot mode verb, `along` the interactive mode verb;
-  `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, and `banner` are lifecycle verbs.
+  `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, `missions`, and `banner` are lifecycle verbs.
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`.
   Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper:
@@ -47,6 +47,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/worker_container.py` — container execution for core `WorkerContainer` declarations:
   off-loop broker lowering with coordinated image builds and pruning, detached throwaway workspaces, passed-instance store hydration, artifact views, and requested-or-available loopback port allocation and facts;
   plus a no-workspace foreground run whose piped exchange belongs to a host command.
+- `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the runtime-bound mission listing client.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, and owner-authorized `artifact.share` kinds, and the broker's `JobOutput`:
