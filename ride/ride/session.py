@@ -804,7 +804,7 @@ def _start_session(
         operator_gift=operator_gift,
         operator_cap=operator_cap,
       )
-      scoped = credentials_for(mission)
+      scoped = credentials_for(mission, recording=not spec.no_trails)
       files, kinds = hydrate(scoped)
       spec = replace(
         spec,

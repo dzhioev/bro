@@ -89,7 +89,7 @@ def scoped_secrets(
       fields.update(provider=llm_spec.TYPE, **llm_spec.selection())
       fields = {name: value for name, value in fields.items() if value is not None}
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
-    return credentials_for(reading.rules.start(requested, reading.operator(), reading))
+    return credentials_for(reading.rules.start(requested, reading.operator(), reading), recording=recording)
 
 
 def credential_store(scoped: ScopedSecrets) -> credentials.Store:

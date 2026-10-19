@@ -55,7 +55,7 @@ def request(
   return Request(worker.name, values, gift, layer.cap), mapped.content
 
 
-def credentials_for(mission: Mission) -> ScopedSecrets:
+def credentials_for(mission: Mission, *, recording: bool = True) -> ScopedSecrets:
   reading = cast(Reading, mission.reading)
   values = mission.descriptor.values
   selection = {
@@ -73,7 +73,7 @@ def credentials_for(mission: Mission) -> ScopedSecrets:
   explicit = frozenset(
     name.removeprefix('cred.') for name in mission.request.values if name.startswith('cred.')
   )
-  manifest = existence(mission.descriptor, reading, present, explicit=explicit)
+  manifest = existence(mission.descriptor, reading, present, explicit=explicit, recording=recording)
   return ScopedSecrets(set(manifest.required), set(manifest.optional), selection)
 
 

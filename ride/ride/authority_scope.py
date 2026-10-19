@@ -272,6 +272,7 @@ def existence(
   explicit: frozenset[str] = frozenset(),
   into_exists: bool = True,
   check_presence: bool = True,
+  recording: bool = True,
 ) -> CredentialManifest:
   values = descriptor.values
   target, harness = cast(str, values['target']), cast(str, values['harness'])
@@ -288,7 +289,8 @@ def existence(
     driver.harness, present & held, installed.credential_kinds
   )
   required, optional = set(selected.required), set(selected.optional) & held
-  optional.update({'trails'} & held)
+  if recording:
+    optional.update({'trails'} & held)
   if driver.auth_kind is not None:
     required.add(driver.auth_kind)
   if driver.llm_key:
