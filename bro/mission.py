@@ -1003,6 +1003,7 @@ def watch_stream(
   from bro.broker.dispatcher import EVENTS
 
   own = own_mission()
+  watches.beat(wait_seconds + ACCEPT_TIMEOUT)
   with open_client() as client:
     head = _event_head(client)
     cursor = head
@@ -1020,6 +1021,7 @@ def watch_stream(
       yield item
     watches.publish_journal_head(cursor)
     while True:
+      watches.beat(wait_seconds + ACCEPT_TIMEOUT)
       try:
         value = _read_value(
           client,

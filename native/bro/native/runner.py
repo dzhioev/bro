@@ -3,6 +3,7 @@
 import os
 import tempfile
 import threading
+import time
 import traceback
 from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
@@ -98,6 +99,8 @@ class Runner:
     self._watch_delivery_pending = False
     self._watch_pump_error: Optional[BaseException] = None
     self._turn_ended = False
+    self._silence_clock = turn_end.SilenceClock()
+    self._watchdog_gate = threading.Lock()
     self._llm: Optional[LLM] = None
     # a bro renders only through an observer its caller passes: an embedding
     # application must not get terminal output, or a display session, it never
@@ -154,11 +157,18 @@ class Runner:
       thread.join()
 
   def _pump_watch_lines(self) -> None:
+    beat_deadline = None
     try:
       while not self._watch_pump_cancelled.is_set():
+        store = self.watch_store
         with self._watch_delivery_lock:
-          batch = self.watch_store.take()
+          batch = store.take()
           self._watch_delivery_pending = batch is not None
+        # a beat moves when a watch's stall falls due, which an idle wait's deadline must follow
+        current = store.next_beat_deadline()
+        if current != beat_deadline:
+          beat_deadline = current
+          self.inbox.notify()
         if batch is not None:
           self.deliver(batch.text())
         else:
@@ -173,17 +183,22 @@ class Runner:
       self._watch_delivery_pending = False
     self.inbox.wait_until_drained(delivery_id, self._watch_pump_cancelled)
 
-  def background_work(self) -> tuple[str, ...]:
-    result = []
-    for job in (item.status() for item in self.registry.values()):
-      if job.state == 'running':
-        command = job.command.replace('`', '\\`')
-        result.append(f'{job.id} {job.mode} `{command}`')
-    return tuple(result)
-
   @property
-  def background_wait_hint(self) -> str:
-    return 'To wait for it without this notice, call `bro::chill(timeout_seconds)` instead of ending the turn.'
+  def silence_clock(self) -> turn_end.SilenceClock:
+    return self._silence_clock
+
+  def background_work(self) -> tuple[turn_end.BackgroundWork, ...]:
+    result = []
+    for job in self.registry.values():
+      status = job.status()
+      if status.state == 'running':
+        command = status.command.replace('`', '\\`')
+        result.append(
+          turn_end.BackgroundWork(
+            job.id, f'{status.id} {status.mode} `{command}`', job.last_active()
+          )
+        )
+    return tuple(result)
 
   def notify(self, text: str) -> None:
     self.inbox.post(text)
@@ -438,11 +453,52 @@ class Runner:
     reply = await llm.send(messages, request_timeout=request_timeout)
     while not await off_loop(self._settle_turn_end):
       self._observer.on_event(InterimAssistantTextEvent(reply))
-      with self.inbox.waiter() as cancelled:
-        await off_loop(self.inbox.wait, None, cancelled)
-      self._raise_watch_pump_error()
+      await self._idle_until_news()
       reply = await llm.wake(request_timeout=request_timeout)
     return reply
+
+  def wait_for_news(self, cancelled: threading.Event) -> bool:
+    """Block for inbox news or cancellation; background work that falls silent
+    and a beating watch that stops post their notices meanwhile, which count as
+    news. The deadline is read again whenever the inbox is notified, as a job
+    start does. A notice is published only while `cancelled` is clear, under
+    the gate `stand_down_watchdog` waits on."""
+    while True:
+      seen = self.inbox.notifications
+      deadline = self._idle_deadline()
+      news = self.inbox.wait_for_change(deadline, cancelled, seen)
+      with self._watchdog_gate:
+        if cancelled.is_set() or news:
+          return news
+        if deadline is None or time.monotonic() < deadline:
+          continue
+        notices = [turn_end.silence_notice(self, time.monotonic())]
+        if self._lifetime_active:
+          notices.append(turn_end.failure_notice(self))
+        for notice in notices:
+          if notice is not None:
+            self.inbox.post(notice)
+        if any(notice is not None for notice in notices):
+          return True
+
+  def stand_down_watchdog(self, cancelled: threading.Event) -> None:
+    """Cancel a `wait_for_news` and return once it can publish no more: an
+    evaluation already past its cancellation check has finished by then."""
+    self.inbox.cancel(cancelled)
+    with self._watchdog_gate:
+      pass
+
+  def _idle_deadline(self) -> Optional[float]:
+    deadlines = [turn_end.next_silence_expiry(self)]
+    if self._lifetime_active:
+      deadlines.append(turn_end.next_liveness_expiry(self))
+    live = [deadline for deadline in deadlines if deadline is not None]
+    return min(live) if len(live) > 0 else None
+
+  async def _idle_until_news(self) -> None:
+    with self.inbox.waiter() as cancelled:
+      await off_loop(self.wait_for_news, cancelled)
+    self._raise_watch_pump_error()
 
   async def wake(self, request_timeout: Optional[float] = None) -> str:
     """Run one interactive turn from pending inbox news."""

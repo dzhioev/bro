@@ -53,10 +53,12 @@ A subpackage with a map of its own is pointed at, not described here.
   a producer publishes a head its command sends only once the output written before it is in the log.
   `watch-run` executes each command line under `job_supervisor`, in brash under the policy its starter names or else in bash, detached from its starter but held by an owner-liveness handle.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
-- `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement, and the shared ordered verdict over missions, watches, undelivered waking lines, harness background work, and live session traffic.
+- `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement,
+  the shared verdict over missions, watches, undelivered waking lines, harness background work, and live session traffic,
+  and the `SilenceClock` that times background work's silence notices.
   Settlement blocks on the store's journal signal until the session watch has emitted through the newest event the session can see in the snapshot it reads.
-  A distinct live set receives at most one shared notice;
-  a second end with uncovered work ends the run, while covered work and work with a wake route keep it waiting.
+  A distinct set of failed waiters receives at most one notice;
+  live work keeps the run waiting silently, and a run with none ends.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   `artifact_mcp.py` is the registered `artifact` toolset, reading and grepping reachable text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
@@ -197,7 +199,7 @@ the spell tools and `cast` render spell bodies under that hold.
   `watch` starts its line in brash under the live run's policy, or the published one where the process runs none, or in bash under `brash(ANY)`;
   `unwatch` stops the named producer without checking the command list and refuses the runtime-owned session watch.
 - the bro harness's own tools:
-  `job`, `poll`, `kill`, `jobs`, and `chill` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
+  `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 

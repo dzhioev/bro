@@ -1,14 +1,16 @@
 import asyncio
 import os
+import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import ClassVar, Optional
 
 import pytest
 
 import bro.mcp as mcp
 import bro.native.runner as native_runner
-from bro import results, watches
+from bro import results, turn_end, watches
 from bro.base import credentials
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.broker.brotocol import Message
@@ -755,10 +757,11 @@ def _kill_and_end(job):
 
 class TestNativeTurnEnd:
   @pytest.mark.asyncio
-  async def test_a_live_background_job_notifies_then_waits_for_its_end(self):
+  async def test_background_work_waits_silently_until_it_falls_silent(self):
     observer = CapturingObserver()
     llm = _ScriptedLLM([])
     runner = StubRunner(llm)
+    runner._silence_clock = turn_end.SilenceClock(patience=0.05)
     job = runner.registry.start('sleep 30', 'bg')
     llm.actions.append(_kill_and_end(job))
 
@@ -766,10 +769,9 @@ class TestNativeTurnEnd:
 
     assert result == 'settled'
     [notice] = llm.drained
-    assert notice.startswith('[notification: the turn ended with work still live]')
-    assert 'background work: job-1 bg `sleep 30`' in notice
-    assert runner.background_wait_hint in notice
-    assert 'Ending the turn again keeps waiting' in notice
+    assert notice.startswith('[notification: background work has been silent]')
+    assert 'background work: job-1 bg `sleep 30` silent for' in notice
+    assert 'Ending the turn again' not in notice
     assert observer.events == [
       TurnStartedEvent('go'),
       InterimAssistantTextEvent('first reply'),
@@ -805,6 +807,108 @@ class TestNativeTurnEnd:
     assert result == 'watch delivered'
     assert any('[printf watched] watched' in batch for batch in llm.drained)
 
+  @pytest.mark.asyncio
+  async def test_a_beat_that_stalls_after_the_run_went_idle_wakes_it_once(self):
+    producer = (
+      f'{sys.executable} -c "from bro import watches; watches.beat(0.05); '
+      'import time; time.sleep(60)"'
+    )
+
+    class StallLLM(MockLLM):
+      def __init__(self):
+        super().__init__(response='first reply')
+        self.runner: Runner | None = None
+        self.drained: list[str] = []
+
+      async def send(self, messages, *, request_timeout=None):
+        assert self.runner is not None
+        self.runner.watch_store.start(producer)
+        return await super().send(messages, request_timeout=request_timeout)
+
+      async def wake(self, *, request_timeout=None):
+        batch = self.inbox.drain()
+        assert batch is not None
+        self.drained.append(batch.text)
+        self.wake_calls += 1
+        return 'noticed'
+
+    llm = StallLLM()
+    runner = StubRunner(llm)
+    llm.runner = runner
+
+    result = await runner.run('go', surface='test')
+
+    assert result == 'noticed'
+    [notice] = llm.drained
+    assert 'is alive but has stopped beating' in notice
+
+  def test_a_job_started_while_the_inbox_waiter_idles_arms_its_silence_notice(self):
+    runner = StubRunner()
+    runner._silence_clock = turn_end.SilenceClock(patience=0.05)
+    waiting = threading.Event()
+    idle_deadline = runner._idle_deadline
+
+    def signalling_deadline():
+      deadline = idle_deadline()
+      waiting.set()
+      return deadline
+
+    runner._idle_deadline = signalling_deadline
+    with ThreadPoolExecutor(1) as pool, runner:
+      woken = pool.submit(runner.wait_for_news, threading.Event())
+      assert waiting.wait(10)
+
+      runner.registry.start('sleep 30', 'bg')
+
+      assert woken.result(timeout=10) is True
+    drained = runner.inbox.drain()
+    assert drained is not None and 'background work has been silent' in drained.text
+
+  def test_standing_the_watchdog_down_waits_out_an_evaluation_already_past_its_check(
+    self, monkeypatch
+  ):
+    runner = StubRunner()
+    runner._silence_clock = turn_end.SilenceClock(patience=0.05)
+    evaluating = threading.Event()
+    release = threading.Event()
+    events: list[str] = []
+    silence_notice = turn_end.silence_notice
+
+    def held_notice(port, now):
+      evaluating.set()
+      assert release.wait(10)
+      return silence_notice(port, now)
+
+    monkeypatch.setattr(turn_end, 'silence_notice', held_notice)
+    cancelled = threading.Event()
+    post = runner.inbox.post
+
+    def recording_post(notice: str) -> int:
+      events.append('posted')
+      return post(notice)
+
+    monkeypatch.setattr(runner.inbox, 'post', recording_post)
+
+    def watchdog() -> None:
+      runner.wait_for_news(cancelled)
+
+    def stand_down() -> None:
+      runner.stand_down_watchdog(cancelled)
+      events.append('stood down')
+
+    with ThreadPoolExecutor(2) as pool, runner:
+      runner.registry.start('sleep 30', 'bg')
+      watching = pool.submit(watchdog)
+      assert evaluating.wait(10)
+      standing = pool.submit(stand_down)
+      assert cancelled.wait(10)
+
+      release.set()
+      watching.result(timeout=10)
+      standing.result(timeout=10)
+
+    assert events == ['posted', 'stood down']
+
   def test_watch_pump_keeps_only_one_batch_in_flight(self):
     class Store:
       def __init__(self):
@@ -813,6 +917,9 @@ class TestNativeTurnEnd:
           for text in ('first', 'second')
         ]
         self.take_calls = 0
+
+      def next_beat_deadline(self):
+        return None
 
       def take(self):
         self.take_calls += 1

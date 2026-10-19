@@ -83,6 +83,7 @@ class Job:
     self._settled = False
     self._exit_consumed = False
     self._cursor = self._spool.tell()
+    self._last_active = time.monotonic()
     ready_read_fd, ready_write_fd = os.pipe()
     owner_read_fd, self._owner_write_fd = os.pipe()
     with (
@@ -140,6 +141,7 @@ class Job:
       self._spool.seek(0, os.SEEK_END)
       self._spool.write(text)
       self._spool.flush()
+      self._last_active = time.monotonic()
       self._condition.notify_all()
 
   def _record_exit(self) -> None:
@@ -225,9 +227,15 @@ class Job:
         self._condition.wait(remaining)
       return self._finished_locked()
 
+  def last_active(self) -> float:
+    """The monotonic time of the job's start, latest output, or latest `poll`."""
+    with self._condition:
+      return self._last_active
+
   def poll(self, limit: int = DEFAULT_LIMIT, *, tail: bool = False) -> str:
     """Read the current unread head or tail without blocking."""
     with self._condition:
+      self._last_active = time.monotonic()
       pending = self._unread_locked()
       if tail:
         self._cursor = self._end_locked()
@@ -373,7 +381,13 @@ class Registry:
     with self._lock:
       if not self._closed:
         self._jobs[job.id] = job
-        return job
+        registered = True
+      else:
+        registered = False
+    if registered:
+      if self.inbox is not None:
+        self.inbox.notify()
+      return job
     job.close()
     raise RuntimeError(_CLOSED_MESSAGE)
 

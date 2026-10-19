@@ -119,24 +119,29 @@ def run_streaming(
     _ended(process),
   ):
     with contextlib.closing(process.stdin) as stdin:
-      session = _StreamSession(stdin, store, waiters)
-      session.send(prompt)
-      for line in process.stdout:
-        event = _stream_event(line)
-        if event is None:
-          continue
-        session.observe(event)
-        if event.get('type') == 'result':
-          text = event.get('result')
-          reply = text if isinstance(text, str) else ''
-          results.append(reply)
-          if on_result is not None:
-            on_result(reply)
-          if stopped.is_set():
-            session.end()
-          else:
-            session.settle()
+      with _StreamSession(stdin, store, waiters, on_timer_failure=process.terminate) as session:
+        session.send(prompt)
+        for line in process.stdout:
+          event = _stream_event(line)
+          if event is None:
+            continue
+          session.observe(event)
+          if event.get('type') == 'result':
+            text = event.get('result')
+            reply = text if isinstance(text, str) else ''
+            results.append(reply)
+            if on_result is not None:
+              on_result(reply)
+            if stopped.is_set():
+              session.end()
+            else:
+              session.settle()
+        session.raise_timer_failure()
   return StreamedRun(process.returncode, stopped.is_set(), tuple(results))
+
+
+# how often an idle session re-reads the watches' beats, which a stream event does not announce
+_BEAT_POLL_SECONDS = 5.0
 
 
 class _StreamSession:
@@ -144,12 +149,41 @@ class _StreamSession:
   background tasks and its waiters' rewakes, read off the event stream, and
   its stdin, which carries a notice and whose close is the end."""
 
-  def __init__(self, stdin: IO[str], store: watches.Store, waiters: WaiterState) -> None:
+  def __init__(
+    self,
+    stdin: IO[str],
+    store: watches.Store,
+    waiters: WaiterState,
+    *,
+    on_timer_failure: Callable[[], None],
+  ) -> None:
     self._stdin = stdin
+    self._on_timer_failure = on_timer_failure
+    self._timer_error: BaseException | None = None
     self._store = store
     self._waiters = waiters
-    self._tasks: tuple[dict, ...] = ()
+    self._work: tuple[turn_end.BackgroundWork, ...] = ()
+    self._first_seen: dict[str, float] = {}
     self._rewakes_seen = 0
+    self._silence_clock = turn_end.SilenceClock()
+    self._write_lock = threading.Lock()
+    self._awaiting_input = threading.Event()
+    self._changed = threading.Event()
+    self._finished = threading.Event()
+    self._timer = threading.Thread(target=self._send_silence_notices)
+
+  def __enter__(self) -> '_StreamSession':
+    self._timer.start()
+    return self
+
+  def __exit__(self, *_: object) -> None:
+    self._finished.set()
+    self._changed.set()
+    self._timer.join()
+
+  @property
+  def silence_clock(self) -> turn_end.SilenceClock:
+    return self._silence_clock
 
   @property
   def watch_store(self) -> watches.Store:
@@ -157,15 +191,19 @@ class _StreamSession:
 
   def send(self, text: str) -> None:
     # a claude gone already reports through its exit code
-    with contextlib.suppress(BrokenPipeError):
+    with self._write_lock, contextlib.suppress(BrokenPipeError):
+      if self._stdin.closed:
+        return
       self._stdin.write(json.dumps(_user_message(text)) + '\n')
       self._stdin.flush()
 
   def observe(self, event: dict) -> None:
+    if event.get('type') in ('assistant', 'user'):
+      self._awaiting_input.clear()
     if event.get('type') != 'system':
       return
     if event.get('subtype') == 'background_tasks_changed':
-      self._tasks = _task_list(event)
+      self._track_tasks(_task_list(event))
     elif event.get('subtype') == 'hook_response' and _from_waiter(event):
       status = event.get('exit_code')
       if status == REWAKE_STATUS:
@@ -186,24 +224,71 @@ class _StreamSession:
       if self._waiters.rewakes() > self._rewakes_seen:
         return
       turn_end.settle(self)
+    if not self._stdin.closed:
+      self._awaiting_input.set()
+      self._changed.set()
 
-  @property
-  def background_wait_hint(self) -> None:
-    return None
-
-  def background_work(self) -> tuple[str, ...]:
-    return tuple(
-      f'{task["task_id"]} {task["task_type"]} `{task["description"].replace("`", "\\`")}`'
-      for task in self._tasks
-      if task.get('ambient') is not True
+  def _track_tasks(self, tasks: tuple[dict, ...]) -> None:
+    # claude's stream names no task's output activity, so a task is as silent as it is old
+    now = time.monotonic()
+    live = [task for task in tasks if task.get('ambient') is not True]
+    self._first_seen = {
+      task['task_id']: self._first_seen.get(task['task_id'], now) for task in live
+    }
+    self._work = tuple(
+      turn_end.BackgroundWork(
+        task['task_id'],
+        f'{task["task_id"]} {task["task_type"]} `{task["description"].replace("`", "\\`")}`',
+        self._first_seen[task['task_id']],
+      )
+      for task in live
     )
+    self._changed.set()
+
+  def background_work(self) -> tuple[turn_end.BackgroundWork, ...]:
+    return self._work
+
+  def raise_timer_failure(self) -> None:
+    if self._timer_error is not None:
+      raise RuntimeError('the silence timer failed') from self._timer_error
+
+  def _send_silence_notices(self) -> None:
+    try:
+      self._watch_for_silence()
+    except BaseException as error:
+      self._timer_error = error
+      # ends the stream read the run is blocked in
+      self._on_timer_failure()
+
+  def _watch_for_silence(self) -> None:
+    while not self._finished.is_set():
+      timeout = _BEAT_POLL_SECONDS
+      stall_due = None
+      if self._awaiting_input.is_set():
+        stall_due = turn_end.next_liveness_expiry(self)
+        expiries = [
+          expiry for expiry in (turn_end.next_silence_expiry(self), stall_due) if expiry is not None
+        ]
+        if len(expiries) > 0:
+          timeout = min(timeout, max(0.0, min(expiries) - time.monotonic()))
+      self._changed.wait(timeout)
+      self._changed.clear()
+      if self._awaiting_input.is_set() and not self._stdin.closed:
+        notices = [turn_end.silence_notice(self, time.monotonic())]
+        if stall_due is not None and time.monotonic() >= stall_due:
+          notices.append(turn_end.failure_notice(self))
+        for notice in notices:
+          if notice is not None:
+            self.send(notice)
 
   def notify(self, text: str) -> None:
     self.send(text)
 
   def end(self) -> None:
     self._waiters.stand_down()
-    self._stdin.close()
+    with self._write_lock:
+      self._stdin.close()
+    self._changed.set()
 
 
 @contextlib.contextmanager

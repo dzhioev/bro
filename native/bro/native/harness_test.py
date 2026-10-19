@@ -485,7 +485,7 @@ class TestNativeServiceTools:
     server, tools = await _service_tools(NoShellBro())
 
     assert 'skill' in tools
-    assert {'job', 'poll', 'kill', 'jobs', 'chill'}.isdisjoint(tools)
+    assert {'job', 'poll', 'kill', 'jobs'}.isdisjoint(tools)
     assert server.tool_universe is not None
     assert 'skill' in server.tool_universe
     assert 'job' not in server.tool_universe
@@ -497,7 +497,8 @@ class TestNativeServiceTools:
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      assert {'watch', 'unwatch', 'job', 'poll', 'kill', 'jobs', 'chill', 'skill'} <= set(tools)
+      assert {'watch', 'unwatch', 'job', 'poll', 'kill', 'jobs', 'skill'} <= set(tools)
+      assert 'chill' not in tools
       mode = tools['job'].parameters['properties']['mode']
       assert set(mode['enum']) == {'fg', 'bg'}
       assert server.tool_universe is not None
@@ -602,21 +603,38 @@ class TestNativeServiceTools:
       assert run.registry.get('job-1').mode == 'bg'
 
   @pytest.mark.asyncio
-  async def test_chill_times_out_naming_the_running_jobs_and_wakes_on_an_exit(self, tmp_path):
+  async def test_foreground_wait_ends_when_the_job_stays_silent(self, monkeypatch):
     run = _NativeRun()
     server, tools = await _service_tools(_ShellBro(), run)
-    release = tmp_path / 'release-chill'
-    command = f'while [ ! -e {shlex.quote(str(release))} ]; do sleep 0.01; done'
     with contextlib.ExitStack() as stack:
       stack.callback(run.registry.close)
       stack.callback(server.close)
-      await tools['job'].call({'command': command, 'mode': 'bg'})
+      monkeypatch.setattr(bro_harness.turn_end, 'PATIENCE_SECONDS', 0.1)
+      result = await tools['job'].call({'command': 'sleep 30', 'mode': 'fg', 'timeout_seconds': 60})
+      assert isinstance(result, str)
+      assert result.startswith('running')
+      assert "continues in bg mode; read on with poll(id='job-1')" in result
+      assert 'job-1 printed nothing for' in result
+      assert run.registry.get('job-1').mode == 'bg'
 
-      timed_out = await tools['chill'].call({'timeout_seconds': 0.05})
-      assert timed_out == f'no news after 0.05s; running: job-1 bg `{command}`'
-
-      release.touch()
-      assert await tools['chill'].call({'timeout_seconds': 30}) == 'woken by news'
+  @pytest.mark.asyncio
+  async def test_foreground_wait_is_no_silence_while_the_job_keeps_printing(self, monkeypatch):
+    run = _NativeRun()
+    server, tools = await _service_tools(_ShellBro(), run)
+    with contextlib.ExitStack() as stack:
+      stack.callback(run.registry.close)
+      stack.callback(server.close)
+      monkeypatch.setattr(bro_harness.turn_end, 'PATIENCE_SECONDS', 0.5)
+      result = await tools['job'].call(
+        {
+          'command': 'while true; do echo tick; sleep 0.02; done',
+          'mode': 'fg',
+          'timeout_seconds': 1.5,
+        }
+      )
+      assert isinstance(result, str)
+      assert "continues in bg mode; read on with poll(id='job-1')" in result
+      assert 'printed nothing' not in result
 
   @pytest.mark.asyncio
   async def test_exit_during_foreground_settlement_is_consumed_once(self, monkeypatch, tmp_path):

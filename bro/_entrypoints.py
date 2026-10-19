@@ -66,5 +66,9 @@ def bro_trails_server_server():
   return run_cli('bro.trails.server.server', sys.argv)
 
 
+def bro_watch_beat():
+  return run_cli('bro.watch_beat', sys.argv)
+
+
 def bro_watch_run():
   return run_cli('bro.watch_run', sys.argv)

@@ -68,6 +68,26 @@ def test_registry_ids_increment_and_get_resolves():
   second.process.wait()
 
 
+def test_a_job_is_active_from_its_start_its_output_and_its_polls():
+  with contextlib.closing(Registry()) as registry:
+    job = registry.start('printf first; sleep 0.3; printf second; sleep 30', 'bg')
+    started = job.last_active()
+    assert started <= time.monotonic()
+
+    deadline = time.monotonic() + 10
+    while job.last_active() == started:
+      assert time.monotonic() < deadline, 'the job printed nothing'
+      time.sleep(0.01)
+    printed = job.last_active()
+    assert printed > started
+
+    assert job.status().state == 'running'
+    assert job.last_active() == printed
+    job.poll()
+    assert job.last_active() > printed
+    job.kill()
+
+
 def test_registry_unknown_id_lists_known_jobs():
   registry = Registry()
   registry.start('true').process.wait()

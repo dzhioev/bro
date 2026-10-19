@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import cast
@@ -14,6 +15,7 @@ from bro.broker.transport import connect
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.quest_test_helper import TIMEOUT, SpawnedEndpoint, running_live_broker
 from bro.run_lifecycle import RunLifecycle
+from bro.watches import BeatSnapshot
 
 
 @dataclass
@@ -22,9 +24,21 @@ class FakeWatch:
   alive: bool = True
   last: str | None = None
   head: int | None = 0
+  stalled: bool = False
+  deadline: float | None = None
+  snapshots: list[watches.BeatSnapshot | None] = field(default_factory=list)
 
   def producer_alive(self) -> bool:
     return self.alive
+
+  def beat_snapshot(self) -> watches.BeatSnapshot | None:
+    if len(self.snapshots) > 0:
+      return self.snapshots.pop(0) if len(self.snapshots) > 1 else self.snapshots[0]
+    if self.stalled:
+      return watches.BeatSnapshot('beat 1', 1.0)
+    if self.deadline is not None:
+      return watches.BeatSnapshot('beat 2', self.deadline)
+    return None
 
   def last_complete_line(self) -> str | None:
     return self.last
@@ -39,12 +53,20 @@ class FakeStore:
   waking: bool = False
   notified: set[frozenset[str]] = field(default_factory=set)
   waited_for: list[int] = field(default_factory=list)
+  reported: list[tuple[str, str]] = field(default_factory=list)
 
   def declared(self) -> list[FakeWatch]:
     return self.watches
 
   def has_waking_lines(self) -> bool:
     return self.waking
+
+  def mark_stall_reported(self, command: str, snapshot: BeatSnapshot) -> None:
+    self.reported.append((command, snapshot.text))
+
+  def next_beat_deadline(self) -> float | None:
+    deadlines = [watch.deadline for watch in self.watches if watch.deadline is not None]
+    return min(deadlines) if len(deadlines) > 0 else None
 
   def mark_notified(self, live_set: frozenset[str]) -> bool:
     if live_set in self.notified:
@@ -59,22 +81,21 @@ class FakeStore:
     return True
 
 
-@dataclass(eq=True)
+def _work(identifier: str, last_active: float = 0.0) -> turn_end.BackgroundWork:
+  return turn_end.BackgroundWork(identifier, f'{identifier} bg `sleep`', last_active)
+
+
 class FakePort:
   def __init__(
-    self, store: FakeStore, background: tuple[str, ...] = (), wait_hint: str | None = None
+    self, store: FakeStore, background: tuple[turn_end.BackgroundWork, ...] = ()
   ) -> None:
     self.watch_store = cast(watches.Store, store)
+    self.silence_clock = turn_end.SilenceClock(patience=60.0, cap=240.0)
     self.background = background
-    self.wait_hint = wait_hint
     self.notifications: list[str] = []
     self.ends = 0
 
-  @property
-  def background_wait_hint(self) -> str | None:
-    return self.wait_hint
-
-  def background_work(self) -> tuple[str, ...]:
+  def background_work(self) -> tuple[turn_end.BackgroundWork, ...]:
     return self.background
 
   def notify(self, text: str) -> None:
@@ -112,9 +133,9 @@ def _with_broker(monkeypatch, *missions: mission.LiveMission, reply_awaited: boo
     (FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]), (), True),
   ],
 )
-def test_silent_wait_verdict_precedes_background_work(monkeypatch, store, missions, reply_awaited):
+def test_a_live_wait_is_silent_beside_background_work(monkeypatch, store, missions, reply_awaited):
   _with_broker(monkeypatch, *missions, reply_awaited=reply_awaited)
-  port = FakePort(store, ('task-1',))
+  port = FakePort(store, (_work('task-1'),))
 
   turn_end.settle(port)
 
@@ -134,46 +155,62 @@ def test_settlement_waits_for_the_session_watch_journal_head(monkeypatch):
   assert cast(FakeStore, port.watch_store).waited_for == [7]
 
 
-def test_owner_led_background_work_notifies_then_keeps_waiting(monkeypatch):
-  _with_broker(monkeypatch, _mission('WEB-1', 'webview'))
+def test_background_work_and_a_speaking_summoner_keep_the_run_waiting_silently(monkeypatch):
+  _with_broker(monkeypatch)
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
   monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say',))
   store = FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)])
-  port = FakePort(store, ('browser task',))
+  working = FakePort(store, (_work('job-1'),))
+  speaking = FakePort(store)
+
+  turn_end.settle(working)
+  turn_end.settle(speaking)
+
+  assert (working.notifications, working.ends) == ([], 0)
+  assert (speaking.notifications, speaking.ends) == ([], 0)
+
+
+def test_a_failed_waiter_notices_even_beside_live_work(monkeypatch):
+  _with_broker(monkeypatch, _mission('WEB-1', 'webview'))
+  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+  store = FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)])
+  port = FakePort(store, (_work('job-1'),))
 
   turn_end.settle(port)
   turn_end.settle(port)
 
-  assert len(port.notifications) == 1
-  notice = port.notifications[0]
-  assert 'background work: browser task' in notice
+  [notice] = port.notifications
   assert 'mission WEB-1: webview' in notice
-  assert 'the summoner may still send a message' in notice
-  assert 'Ending the turn again keeps waiting' in notice
-  assert '`bro::answer`' in notice
-  assert '`bro::quest_cancel`' not in notice
+  assert 'orphans' not in notice
+  assert (
+    'Deliver the result of your task through `bro::answer` once the whole task is done.' in notice
+  )
   assert port.ends == 0
 
-  port.background = ('another task',)
+
+def test_a_stalled_watch_notices_once_and_no_longer_holds_the_run():
+  stalled = FakeWatch('poll-pr x', stalled=True)
+  port = FakePort(FakeStore([stalled]))
+
   turn_end.settle(port)
-  assert len(port.notifications) == 2
+  assert 'the watch `poll-pr x` is alive but has stopped beating' in port.notifications[0]
+  assert port.ends == 0
+
+  turn_end.settle(port)
+  assert len(port.notifications) == 1
+  assert port.ends == 1
 
 
-def test_the_wait_hint_follows_the_background_work_it_is_for(monkeypatch):
-  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
-  monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say',))
-  hinted = FakePort(FakeStore(), ('job-1',), wait_hint='use chill')
-  unhinted = FakePort(FakeStore(), ('job-1',))
-  speaking_only = FakePort(
-    FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]), (), wait_hint='use chill'
-  )
+def test_a_stalled_session_watch_is_a_down_session_watch(monkeypatch):
+  monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
+  _with_broker(monkeypatch, _mission('Q1'))
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND, stalled=True)]))
 
-  for port in (hinted, unhinted, speaking_only):
-    turn_end.settle(port)
+  turn_end.settle(port)
 
-  assert 'use chill' in hinted.notifications[0]
-  assert 'use chill' not in unhinted.notifications[0]
-  assert 'use chill' not in speaking_only.notifications[0]
+  [notice] = port.notifications
+  assert 'the session watch `quest watch` is down' in notice
+  assert 'quest Q1 to dev' in notice
 
 
 def test_uncovered_mission_notifies_once_then_ends(monkeypatch):
@@ -187,6 +224,7 @@ def test_uncovered_mission_notifies_once_then_ends(monkeypatch):
   assert 'quest Q1 to dev' in port.notifications[0]
   assert '`bro::quest_cancel`' in port.notifications[0]
   assert 'orphans the uncovered work' in port.notifications[0]
+  assert 'bro::answer' not in port.notifications[0]
   assert port.ends == 1
 
 
@@ -204,7 +242,6 @@ def test_dead_session_watch_turns_session_traffic_into_notice_then_end(monkeypat
   turn_end.settle(port)
 
   assert len(port.notifications) == 1
-  assert 'the summoner may still send a message' not in port.notifications[0]
   assert '[watch-run] exited 1' in port.notifications[0]
   assert port.ends == 1
 
@@ -224,6 +261,114 @@ def test_undelivered_exit_line_precedes_dead_watch_notice(monkeypatch):
   store.waking = False
   turn_end.settle(port)
   assert len(port.notifications) == 1
+
+
+def test_a_beat_refreshed_between_probes_cannot_end_a_run_with_a_healthy_watch():
+  stalled = watches.BeatSnapshot('old beat', 1.0)
+  fresh = watches.BeatSnapshot('new beat', time.time() + 1000)
+  watch = FakeWatch('poll-pr x', snapshots=[stalled, fresh])
+  port = FakePort(FakeStore([watch]))
+
+  turn_end.settle(port)
+
+  assert port.ends == 0
+  assert 'poll-pr x' in port.notifications[0]
+  assert cast(FakeStore, port.watch_store).reported == [('poll-pr x', 'old beat')]
+
+
+def test_the_beat_a_verdict_judged_is_the_one_it_reports(monkeypatch):
+  stalled = watches.BeatSnapshot('old beat', 1.0)
+  fresh = watches.BeatSnapshot('new beat', time.time() + 1000)
+  watch = FakeWatch('poll-pr x', snapshots=[stalled, fresh])
+  store = FakeStore([watch])
+  port = FakePort(store)
+
+  assert turn_end.failure_notice(port) is not None
+
+  assert store.reported == [('poll-pr x', 'old beat')]
+  assert watch.beat_snapshot() == fresh
+
+
+def test_the_liveness_expiry_is_the_nearest_beat_deadline_on_the_monotonic_clock(monkeypatch):
+  monkeypatch.setattr(turn_end.time, 'time', lambda: 1000.0)
+  monkeypatch.setattr(turn_end.time, 'monotonic', lambda: 50.0)
+  watch = FakeWatch('poll-pr x', deadline=1030.0)
+  port = FakePort(FakeStore([watch, FakeWatch('other', deadline=1090.0), FakeWatch('plain')]))
+
+  assert turn_end.next_liveness_expiry(port) == 80.0
+  assert turn_end.next_liveness_expiry(FakePort(FakeStore([FakeWatch('plain')]))) is None
+
+
+def test_a_beat_that_stalls_after_the_session_went_idle_draws_its_notice_once():
+  watch = FakeWatch('poll-pr x')
+  port = FakePort(FakeStore([watch]))
+  turn_end.settle(port)
+  assert (port.notifications, port.ends) == ([], 0)
+
+  watch.stalled = True
+
+  notice = turn_end.failure_notice(port)
+  assert notice is not None and 'the watch `poll-pr x` is alive but has stopped beating' in notice
+  assert turn_end.failure_notice(port) is None
+  assert cast(FakeStore, port.watch_store).reported == [
+    ('poll-pr x', 'beat 1'),
+    ('poll-pr x', 'beat 1'),
+  ]
+
+
+def test_a_reported_session_watch_stall_leaves_the_deadline_and_stays_noticed_once(monkeypatch):
+  monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
+  _with_broker(monkeypatch)
+  watch = FakeWatch(watches.SESSION_WATCH_COMMAND, stalled=True)
+  port = FakePort(FakeStore([watch]))
+
+  first = turn_end.failure_notice(port)
+
+  assert first is not None and 'the session watch `quest watch` is down' in first
+  assert cast(FakeStore, port.watch_store).reported == [(watches.SESSION_WATCH_COMMAND, 'beat 1')]
+  assert turn_end.failure_notice(port) is None
+
+
+def test_silence_notices_follow_the_patience_and_its_backoff():
+  port = FakePort(FakeStore(), (_work('job-1', last_active=100.0),))
+
+  assert turn_end.silence_notice(port, 159.0) is None
+  assert turn_end.next_silence_expiry(port) == 160.0
+
+  notice = turn_end.silence_notice(port, 160.0)
+  assert notice is not None
+  assert 'job-1 bg `sleep` silent for 1m; next notice in 2m' in notice
+  assert turn_end.silence_notice(port, 279.0) is None
+  assert turn_end.next_silence_expiry(port) == 280.0
+
+  assert turn_end.silence_notice(port, 280.0) is not None
+  assert turn_end.next_silence_expiry(port) == 520.0
+  assert 'next notice in 4m' in (turn_end.silence_notice(port, 520.0) or '')
+  assert turn_end.next_silence_expiry(port) == 760.0
+
+
+def test_activity_restarts_the_silence_from_the_base_patience():
+  port = FakePort(FakeStore(), (_work('job-1', last_active=0.0),))
+  assert turn_end.silence_notice(port, 60.0) is not None
+
+  port.background = (_work('job-1', last_active=100.0),)
+
+  assert turn_end.silence_notice(port, 159.0) is None
+  assert turn_end.next_silence_expiry(port) == 160.0
+  assert 'next notice in 2m' in (turn_end.silence_notice(port, 160.0) or '')
+
+
+def test_silence_is_judged_per_job_and_a_finished_job_is_forgotten():
+  port = FakePort(FakeStore(), (_work('job-1', 0.0), _work('job-2', 50.0)))
+
+  notice = turn_end.silence_notice(port, 60.0)
+
+  assert notice is not None
+  assert 'job-1' in notice and 'job-2' not in notice
+  port.background = ()
+  assert turn_end.next_silence_expiry(port) is None
+  port.background = (_work('job-1', 0.0),)
+  assert 'job-1' in (turn_end.silence_notice(port, 70.0) or '')
 
 
 def test_no_live_work_ends_at_once():
@@ -296,9 +441,7 @@ async def test_a_question_the_session_owes_its_summoner_is_no_reply_it_awaits(mo
 
     await asyncio.to_thread(turn_end.settle, port)
 
-  [notice] = port.notifications
-  assert 'the summoner may still send a message' in notice
-  assert port.ends == 0
+  assert (port.notifications, port.ends) == ([], 0)
 
 
 @pytest.mark.asyncio

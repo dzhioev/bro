@@ -30,6 +30,7 @@ class Inbox:
     self._notices: list[tuple[int, str]] = []
     self._next_notice_id = 0
     self._last_drained_notice_id = 0
+    self._notifications = 0
 
   def mark(self, job: Job) -> None:
     with self._condition:
@@ -54,6 +55,7 @@ class Inbox:
 
   def notify(self) -> None:
     with self._condition:
+      self._notifications += 1
       self._condition.notify_all()
 
   def cancel(self, cancelled: threading.Event) -> None:
@@ -76,6 +78,28 @@ class Inbox:
     """Return on news, cancellation, or the monotonic deadline; consume nothing."""
     with self._condition:
       while not self._has_news_locked() and not cancelled.is_set():
+        if deadline is None:
+          self._condition.wait()
+        else:
+          remaining = deadline - time.monotonic()
+          if remaining <= 0:
+            return False
+          self._condition.wait(remaining)
+      return self._has_news_locked()
+
+  @property
+  def notifications(self) -> int:
+    """How many `notify` calls have landed, for `wait_for_change` to measure against."""
+    with self._condition:
+      return self._notifications
+
+  def wait_for_change(
+    self, deadline: Optional[float], cancelled: threading.Event, seen: int
+  ) -> bool:
+    """Like `wait`, and also return, with False, once `notifications` passes `seen`,
+    so the caller can recompute a deadline its state has since outdated."""
+    with self._condition:
+      while not self._has_news_locked() and not cancelled.is_set() and self._notifications == seen:
         if deadline is None:
           self._condition.wait()
         else:

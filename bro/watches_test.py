@@ -4,6 +4,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -678,3 +679,121 @@ def test_session_watch_admission(may_summon, summoned, talk, expected):
 def test_slugs_keep_commands_apart_and_out_of_subdirectories():
   assert watches.slug(['quest', 'watch']) != watches.slug(['mission', 'watch'])
   assert '/' not in watches.slug(['poll-pr', 'owner/repo', '42'])
+
+
+class TestBeat:
+  def _producer_environment(self, monkeypatch, watch: watches.Watch) -> None:
+    monkeypatch.setenv(watches.PRODUCER_ENV, '1')
+    monkeypatch.setenv(watches.PRODUCER_DIRECTORY_ENV, str(watch.directory))
+    monkeypatch.setenv(watches.PRODUCER_SLUG_ENV, watch.slug)
+
+  def test_a_watch_that_never_beat_cannot_stall(self, owner):
+    watch = _seed(owner.store, 'tail -f log', '')
+
+    assert not watch.beat_stalled(time.time() + 10**6)
+
+  def test_a_beat_stalls_the_watch_after_the_allowed_misses(self, owner, monkeypatch):
+    watch = _seed(owner.store, 'poll', '')
+    self._producer_environment(monkeypatch, watch)
+
+    watches.beat(60)
+    beaten_at = float(watch.beat_file.read_text().split()[0])
+
+    allowed = watches.BEAT_MISSES_ALLOWED * 60
+    assert not watch.beat_stalled(beaten_at + allowed)
+    assert watch.beat_stalled(beaten_at + allowed + 1)
+
+    watches.beat(60)
+    assert not watch.beat_stalled(time.time() + allowed - 1)
+
+  def test_a_beat_outside_a_producer_does_nothing(self, owner, monkeypatch):
+    watch = _seed(owner.store, 'poll', '')
+    monkeypatch.setenv(watches.PRODUCER_DIRECTORY_ENV, str(watch.directory))
+    monkeypatch.setenv(watches.PRODUCER_SLUG_ENV, watch.slug)
+    monkeypatch.delenv(watches.PRODUCER_ENV, raising=False)
+
+    watches.beat(60)
+
+    assert not watch.beat_file.exists()
+
+  @pytest.mark.parametrize('promise', [0, -1, float('inf'), float('nan')])
+  def test_a_promise_must_be_a_finite_positive_number(self, promise):
+    with pytest.raises(ValueError, match='finite positive'):
+      watches.beat(promise)
+
+  def test_the_next_deadline_is_the_earliest_one_whose_stall_is_unreported(
+    self, owner, monkeypatch
+  ):
+    now = time.time()
+    live = _seed(owner.store, 'live', '')
+    stalled = _seed(owner.store, 'stalled', '')
+    plain = _seed(owner.store, 'plain', '')
+    for watch, beaten_at in ((live, now), (stalled, now - 1000)):
+      watch.beat_file.write_text(f'{beaten_at!r} 10.0\n')
+    monkeypatch.setattr(watches.Watch, 'producer_alive', lambda watch: True)
+
+    assert owner.store.next_beat_deadline() == pytest.approx(now - 1000 + 3 * 10.0)
+    assert plain.beat_deadline() is None
+
+    owner.store.mark_stall_reported('stalled', stalled.beat_snapshot())
+
+    assert owner.store.next_beat_deadline() == pytest.approx(now + 3 * 10.0)
+
+    stalled.beat_file.write_text(f'{now!r} 10.0\n')
+
+    assert owner.store.next_beat_deadline() == pytest.approx(now + 3 * 10.0)
+    assert stalled.stall_unreported_deadline() == pytest.approx(now + 3 * 10.0)
+
+  def test_the_journal_wait_gives_up_on_a_producer_whose_beat_stalls(self, owner):
+    command = f'{sys.executable} -c "from bro import watches; watches.beat(0.05); import time; time.sleep(60)"'
+    owner.store.start(command)
+    watch = owner.store._watch(command)
+    _wait_for_file(watch.beat_file)
+
+    assert owner.store.wait_for_journal_head(command, 1) is False
+    assert watch.producer_alive()
+
+  def test_the_journal_wait_follows_a_first_beat_written_after_it_began(
+    self, owner, tmp_path, monkeypatch
+  ):
+    gate = tmp_path / 'gate'
+    os.mkfifo(gate)
+    command = (
+      f'{sys.executable} -c "import sys; open(sys.argv[1]).read(); from bro import watches; '
+      f'watches.beat(0.05); import time; time.sleep(60)" {shlex.quote(str(gate))}'
+    )
+    owner.store.start(command)
+    watch = owner.store._watch(command)
+    blocked = threading.Event()
+    select = watches.select.select
+
+    def signalling_select(*arguments):
+      blocked.set()
+      return select(*arguments)
+
+    monkeypatch.setattr(watches.select, 'select', signalling_select)
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+      waited = pool.submit(owner.store.wait_for_journal_head, command, 1)
+      assert blocked.wait(10)
+      assert not watch.beat_file.exists()
+
+      gate.write_text('go')
+
+      assert waited.result(timeout=10) is False
+    assert watch.beat_file.exists()
+
+  def test_a_malformed_beat_fails_the_reader(self, owner):
+    watch = _seed(owner.store, 'poll', '')
+    watch.beat_file.write_text('soon\n')
+
+    with pytest.raises(watches.WatchError, match='malformed beat'):
+      watch.beat_stalled(0.0)
+
+  def test_a_restarted_watch_forgets_its_old_beat(self, owner, monkeypatch):
+    watch = _seed(owner.store, 'poll', '')
+    self._producer_environment(monkeypatch, watch)
+    watches.beat(60)
+
+    watch.clear()
+
+    assert not watch.beat_file.exists()

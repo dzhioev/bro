@@ -13,6 +13,7 @@ import pytest
 
 import bro.llm.llms.echo as llm_llms_echo
 import bro.llm.llms.openai as llm_llms_openai
+from bro import turn_end
 from bro.bro import AnswerDelivered, BaseBro
 from bro.inbox import Inbox
 from bro.launch.call import (
@@ -301,6 +302,42 @@ async def test_tui_starts_a_turn_when_news_arrives_while_idle(monkeypatch):
 
       assert runner.mock_llm.wake_calls >= 1
       assert app.query_one('#input-bar', MessageInput).disabled is False
+
+
+@pytest.mark.asyncio
+async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_work_on_idle(
+  monkeypatch,
+):
+  from bro.launch.call_tui import ChatApp
+
+  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  runner = _MockRunner(response='reply')
+  runner._silence_clock = turn_end.SilenceClock(patience=0.05)
+  returned = threading.Event()
+  original = runner.wait_for_news
+
+  def recording(cancelled):
+    try:
+      return original(cancelled)
+    finally:
+      returned.set()
+
+  runner.wait_for_news = recording
+  app = ChatApp(runner, 'first')
+  with runner:
+    async with app.run_test(size=(80, 40)) as pilot:
+      await app.workers.wait_for_complete()
+      app._begin_turn()
+      assert await asyncio.to_thread(returned.wait, 10)
+
+      runner.registry.start('sleep 30', 'bg')
+      wake_calls = runner.mock_llm.wake_calls
+      app._end_turn()
+      await asyncio.wait_for(runner.mock_llm.woken.wait(), timeout=10)
+      await app.workers.wait_for_complete()
+      await pilot.pause()
+
+      assert runner.mock_llm.wake_calls > wake_calls
 
 
 @dataclass(frozen=True)
