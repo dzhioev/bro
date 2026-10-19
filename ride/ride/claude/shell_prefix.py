@@ -13,6 +13,8 @@ import shlex
 import shutil
 from pathlib import Path
 
+from bro.base.credential_environment import ENVIRONMENT_FILE, INSTALL_DIRECTORY_ENV
+
 SHELL_ENV = 'CLAUDE_CODE_SHELL'
 SHELL_PREFIX_ENV = 'CLAUDE_CODE_SHELL_PREFIX'
 PREFIX_FILENAME = 'shell-prefix'
@@ -32,12 +34,13 @@ def session_shell(env: dict[str, str]) -> str:
   return bash
 
 
-def _prefix_script(shell: str, session_path: str) -> str:
+def _prefix_script(shell: str, session_path: str, environment_file: str | None = None) -> str:
   return (
     '#!/bin/sh\n'
     f'PATH={shlex.quote(session_path)}\n'
     'export PATH\n'
-    f'unset {SHELL_ENV} {SHELL_PREFIX_ENV}\n'
+    + ('' if environment_file is None else f'. {shlex.quote(environment_file)}\n')
+    + f'unset {SHELL_ENV} {SHELL_PREFIX_ENV}\n'
     f'exec {shlex.quote(shell)} -c "$1"\n'
   )
 
@@ -49,7 +52,11 @@ def apply_shell_prefix(env: dict[str, str], directory: Path) -> None:
   if _FLAG_SEPARATOR in str(prefix):
     raise RuntimeError(f'claude would split the shell prefix path {prefix} at "{_FLAG_SEPARATOR}"')
   shell = session_shell(env)
-  prefix.write_text(_prefix_script(shell, env['PATH']))
+  directory_value = env.get(INSTALL_DIRECTORY_ENV)
+  environment_file = (
+    None if directory_value is None else str(Path(directory_value) / ENVIRONMENT_FILE)
+  )
+  prefix.write_text(_prefix_script(shell, env['PATH'], environment_file))
   prefix.chmod(0o755)
   env[SHELL_ENV] = shell
   env[SHELL_PREFIX_ENV] = str(prefix)

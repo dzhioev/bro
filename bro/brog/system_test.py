@@ -1,4 +1,5 @@
 import importlib.metadata
+import json
 from typing import Any, cast
 
 import pytest
@@ -122,3 +123,66 @@ class TestDefaultSystem:
   def test_empty_ride_bro_means_no_author(self, backend, monkeypatch):
     monkeypatch.setenv('RIDE_BRO', '')
     assert cast(Any, default_system())['author'] is None
+
+
+def test_live_backend_and_repository_follow_the_credential_generation(tmp_path, monkeypatch):
+  from types import SimpleNamespace
+
+  import bro.brog.system as systems
+  from bro.base.credential_apply import apply_request, atomic_file
+
+  registry = credentials.default_registry()
+  source = tmp_path / 'source'
+  (source / 'creds').mkdir(parents=True)
+  for instance, backend, repository in [
+    ('one', 'github', 'owner/first'),
+    ('two', 'other', 'owner/second'),
+  ]:
+    (source / 'creds' / ('brog+' + instance + '.cred')).write_text(
+      json.dumps({'backend': backend, 'repo': repository})
+    )
+  directory = tmp_path / 'hooks'
+  directed = tmp_path / 'session'
+  files, kinds = credentials.build_scoped_store(
+    credentials.Store(registry, source, {'brog': 'one'}), ['brog']
+  )
+  for filename, content in files.items():
+    atomic_file(directed / filename, content)
+  store = credentials.Store(registry, directed, {})
+  credentials.install_hooks(registry, kinds, store, directory, {})
+  builds = []
+
+  def factory(name):
+    def build(provider, config, author):
+      builds.append(name)
+      return SimpleNamespace(get_task=lambda task_id: (name, config['repo'], task_id))
+
+    return build
+
+  monkeypatch.setattr(systems, '_backend_factory', factory)
+  with credentials.as_default_store(store):
+    system = systems.current_system()
+    assert system.get_task('first') == ('github', 'owner/first', 'first')
+    assert system.get_task('again') == ('github', 'owner/first', 'again')
+    files, _ = credentials.build_scoped_store(
+      credentials.Store(registry, source, {'brog': 'two'}), ['brog']
+    )
+    import base64
+
+    request = {
+      'operation': 'brog-change',
+      'changed': ['brog'],
+      'files': {name: base64.b64encode(value).decode() for name, value in files.items()},
+    }
+    apply_request(directed, directory, request)
+    assert system.get_task('second') == ('other', 'owner/second', 'second')
+    assert builds == ['github', 'other']
+    files, _ = credentials.build_scoped_store(credentials.Store(registry, source, {}), [])
+    request = {
+      'operation': 'brog-revoke',
+      'changed': ['brog'],
+      'files': {name: base64.b64encode(value).decode() for name, value in files.items()},
+    }
+    apply_request(directed, directory, request)
+    with pytest.raises(credentials.SecretNotFound):
+      system.get_task('revoked')

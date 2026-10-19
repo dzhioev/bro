@@ -700,3 +700,27 @@ class TestHealthBeat:
     )
 
     assert json.loads(health_file.read_text())['stale_after'] is None
+
+
+def test_missing_indexed_config_reports_health_without_requesting_a_material_path(
+  tmp_path, monkeypatch, caplog
+):
+  from bro.base import credentials
+  from ride.claude import trail_recorder
+  from ride.workspace.store import materialize_scoped_store
+
+  source = credentials.Store(credentials.default_registry(), tmp_path / 'source', {})
+  files, _ = credentials.build_scoped_store(source, [])
+  store = credentials.Store(
+    source.registry, materialize_scoped_store(files, tmp_path / 'session'), {}
+  )
+  events = []
+  monkeypatch.setattr(trail_recorder, 'managed_session', lambda: object())
+  monkeypatch.setattr(trail_recorder, 'default_store', lambda: credentials.get_json('trails'))
+  monkeypatch.setattr(
+    trail_recorder.health, 'write', lambda *args, **kwargs: events.append((args, kwargs))
+  )
+  with credentials.as_default_store(store):
+    assert trail_recorder.record_session(tmp_path / 'projects', log_path=tmp_path / 'log') == 1
+  assert events[0][0][0] == 'error'
+  assert 'config not found: trails' in caplog.text

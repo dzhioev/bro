@@ -87,6 +87,10 @@ Both top-level keys are optional, and any credential annotation outside `sources
 
 Retired `<store>/registry.json` and `<store>/credentials.json` files fail loudly.
 Use `BRO_STORE` for a synthesized service or session store.
+A hydrated session's index additionally carries `generation`, `kinds` (the declared hydrated kinds), and `material`, an authoritative stored-name-to-relative-file mapping under `creds/`.
+Only mapped names are readable, regardless of other files in the directory.
+A credential override advances the generation and may record its `operation` id;
+`bro/reference/ride.md` describes publication and recovery.
 
 The `credentials get <kind>` CLI applies the store's explicit selection, while `--instance` addresses one stored name exactly.
 `credentials list` prints every registered kind with its description;

@@ -323,7 +323,9 @@ def test_the_run_environment_points_at_the_store_and_the_record_root(tmp_path):
 def test_the_bundle_follows_the_host_store_default(bundle_interpreter, store):
   with scoped_store(CREDENTIAL) as directory:
     config = json.loads((directory / 'creds.json').read_text())
-    assert config == {'defaults': [INSTANCE], 'sources': {}}
+    assert config['defaults'] == [INSTANCE]
+    assert config['sources'] == {}
+    assert config['material'][INSTANCE] == f'creds/{INSTANCE}.cred'
     assert (directory / 'creds' / f'{INSTANCE}.cred').read_text() == KEY
 
 

@@ -15,6 +15,7 @@ from typing import Any
 
 from bro.base import spawn
 from bro.base.args import Argument, CommandSignature, command_signature
+from bro.base.credential_environment import overlay
 from bro.llm.mcp import InProcessMCPServer, Tool
 
 NAMESPACE = 'cli'
@@ -147,7 +148,7 @@ class _CommandTool(Tool):
     if timeout < 1:
       raise ValueError(f'{TIMEOUT!r} must be positive, got {timeout}')
     try:
-      process = await spawn.run_async(argv, timeout=timeout)
+      process = await spawn.run_async(argv, timeout=timeout, env=overlay())
     except subprocess.TimeoutExpired:
       return (
         f'TIMED OUT after {timeout}s — killed. Re-run with a larger {TIMEOUT} if the '

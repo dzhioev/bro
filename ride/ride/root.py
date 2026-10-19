@@ -133,6 +133,8 @@ def run_manual_started_party(
   *,
   credential_scope: ScopedSecrets,
   claim: Callable[[], object],
+  applier_root: str | None = None,
+  applier_mission: str | None = None,
 ) -> int:
   """Run a manually started party on its summoner's provisioned channel."""
   log_scoped_secrets(
@@ -149,12 +151,35 @@ def run_manual_started_party(
       )
       claim()
       cleanup.pop_all()
-    if launch.tty:
-      code = attach_interactive(container_id)
-    else:
-      code = subprocess.run(['docker', 'start', '-a', container_id]).returncode
+    from ride.credential_applier import CredentialApplier
+    from ride.workspace.docker import IMAGE_ENV
+
+    applier = CredentialApplier(
+      {**IMAGE_ENV, **launch.env, 'BRO_STORE': '/home/ride/.bro'}, container_id
+    )
+    with _manual_applier(applier_root, applier_mission, applier, workspace):
+      if launch.tty:
+        code = attach_interactive(container_id)
+      else:
+        code = subprocess.run(['docker', 'start', '-a', container_id]).returncode
   else:
+    from ride.credential_applier import CredentialApplier
+
     claim()
-    code = subprocess.run(launch.command, cwd=launch.cwd, env=launch.env).returncode
+    with _manual_applier(applier_root, applier_mission, CredentialApplier(launch.env), workspace):
+      code = subprocess.run(launch.command, cwd=launch.cwd, env=launch.env).returncode
   workspace.record_session_end(code)
   return code
+
+
+@contextlib.contextmanager
+def _manual_applier(root, mission, applier, workspace):
+  if root is None and mission is None:
+    yield
+    return
+  if root is None or mission is None:
+    raise ValueError('manual credential applier needs root and mission')
+  from ride.manual_credentials import connected_applier
+
+  with connected_applier(root, mission, applier, workspace.path):
+    yield

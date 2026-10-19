@@ -79,9 +79,17 @@ def run_root_via_broker(
   """Run a root peer and serve launch through the installed worker types."""
   reading = cast(Reading, mission.reading)
   party_members = PartyMembers()
-  docker_spawner = DockerSpawner(host_log=workspace.host_log, party_members=party_members)
-  process_spawner = ProcessSpawner(host_log=workspace.host_log, party_members=party_members)
-  exec_spawner = ExecSpawner(party_members)
+
+  def register_applier(mission_id, applier):
+    facts.for_mission(mission_id).credential_applier = applier
+
+  docker_spawner = DockerSpawner(
+    host_log=workspace.host_log, party_members=party_members, credentials=register_applier
+  )
+  process_spawner = ProcessSpawner(
+    host_log=workspace.host_log, party_members=party_members, credentials=register_applier
+  )
+  exec_spawner = ExecSpawner(party_members, credentials=register_applier)
   root_extension = BroFacts(
     bro=bro,
     placement=Placement('start', workspace.isolation),
@@ -163,6 +171,12 @@ def run_root_via_broker(
   operator.on('operator.commit', control.commit)
   operator.on('operator.claim', control.claim)
   operator.on('operator.override', control.override)
+  operator.on('operator.applier', control.credential_overrides.register)
+  facade.on('credentials.attach', control.credential_overrides.attach)
+  facade.on('credentials.work', control.credential_overrides.work)
+  facade.on('credentials.acknowledge', control.credential_overrides.acknowledge)
+  facade.on('credentials.close', control.credential_overrides.close)
+  facade.subscribe(control.credential_overrides.observe)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
   facade.on(SHARE, artifact_control.share)
@@ -172,13 +186,19 @@ def run_root_via_broker(
   for worker_type in worker_types.values():
     for subscriber in worker_type.subscribers():
       facade.subscribe(subscriber)
+
+  @contextlib.asynccontextmanager
+  async def lifetime(context):
+    async with operator.lifetime(context), control.credential_overrides.lifetime():
+      yield
+
   with contextlib.closing(artifacts):
     return facade.run(
       launch,
       root_spawner,
       type=BRO,
       end_on_sigterm=True,
-      lifetime=operator.lifetime,
+      lifetime=lifetime,
       timeout=None
       if mission.descriptor.values['timeout'] == 'none'
       else cast(int, mission.descriptor.values['timeout']),

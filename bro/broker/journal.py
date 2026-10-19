@@ -280,7 +280,7 @@ class Journal:
     return True
 
   def override(self, record: Record, payload: dict[str, Any]) -> None:
-    self._require_live(record)
+    self._require_current(record)
     event = self._append(record, 'override', payload)
     record.overrides.append(event.view())
     del record.overrides[:-MAX_RECORD_MESSAGES]

@@ -43,6 +43,7 @@ from bro.broker.spawn import ChildHandle, LaunchSpec, RingBuffer, Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.monitor import PROCESS_FILENAME, workspace_session_dir
+from ride.credential_applier import CredentialApplier
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
   DETACH_FLAG,
@@ -189,7 +190,7 @@ class _DockerChild(ChildHandle):
     await self._party_members.end(self._party_name)
     workspace = self._detach_workspace()
     if workspace is not None:
-      if code == 0:
+      if code == 0 and not _credential_operations(workspace):
         await self._remove_workspace(workspace)
       else:
         workspace.record_session_end(code)
@@ -444,7 +445,9 @@ class _ProcessChild(ChildHandle):
     cleanup_directory: Optional[Path],
     workspace_lock: contextlib.ExitStack,
     party_members: 'PartyMembers',
+    credential_applier: CredentialApplier | None = None,
   ):
+    self._credential_applier = credential_applier
     self._process = process
     self._ring = RingBuffer(ring_bytes)
     self._drain = asyncio.create_task(self._drain_output())
@@ -491,12 +494,14 @@ class _ProcessChild(ChildHandle):
     party_workspace, self._party_workspace = self._party_workspace, None
     workspace, records, directory, workspace_lock = self._detach_resources()
     with workspace_lock:
+      if self._credential_applier is not None:
+        await asyncio.to_thread(self._credential_applier.close)
       if directory is not None:
         await self._remove_directory(directory)
       await _settle_member(self._party_members, self, party_workspace, records, code)
       if workspace is None:
         return
-      if code == 0:
+      if code == 0 and not _credential_operations(workspace):
         try:
           await asyncio.to_thread(workspace.remove)
         except (RuntimeError, OSError) as error:
@@ -685,7 +690,8 @@ class _ExecChild(ChildHandle):
 
 
 class ExecSpawner(Spawner):
-  def __init__(self, party_members: Optional[PartyMembers] = None):
+  def __init__(self, party_members: Optional[PartyMembers] = None, *, credentials=None):
+    self._credentials = credentials
     self._party_members = party_members if party_members is not None else PartyMembers()
 
   async def spawn(
@@ -699,6 +705,15 @@ class ExecSpawner(Spawner):
     env[BROKER_TALK] = encode_talk(talk)
     member_exec = replace(launch.launch, env=env)
     argv = await asyncio.to_thread(prepare_member_exec, member_exec)
+    if self._credentials is not None:
+      from ride.workspace.docker import member_store_dir
+
+      self._credentials(
+        mission,
+        CredentialApplier(
+          {**env, 'BRO_STORE': str(member_store_dir(member_exec.member))}, member_exec.container
+        ),
+      )
     process = await asyncio.create_subprocess_exec(
       *argv,
       stdin=asyncio.subprocess.DEVNULL,
@@ -754,7 +769,14 @@ def _prepare_docker_spawn(
 
 
 class DockerSpawner(Spawner):
-  def __init__(self, host_log: Optional[Path] = None, party_members: Optional[PartyMembers] = None):
+  def __init__(
+    self,
+    host_log: Optional[Path] = None,
+    party_members: Optional[PartyMembers] = None,
+    *,
+    credentials=None,
+  ):
+    self._credentials = credentials
     self._host_log = host_log
     self._party_members = party_members if party_members is not None else PartyMembers()
 
@@ -765,6 +787,15 @@ class DockerSpawner(Spawner):
     container_id, workspace = await asyncio.to_thread(
       _prepare_docker_spawn, launch, channel, mission, talk
     )
+    if self._credentials is not None:
+      from ride.workspace.docker import IMAGE_ENV
+
+      self._credentials(
+        mission,
+        CredentialApplier(
+          {**IMAGE_ENV, **launch.launch.env, 'BRO_STORE': '/home/ride/.bro'}, container_id
+        ),
+      )
     if launch.launch.tty:
       process = await asyncio.create_subprocess_exec(
         'docker', 'start', '-a', '-i', DETACH_FLAG, container_id
@@ -811,7 +842,14 @@ async def _cleanup_on_failure(directory: Optional[Path]) -> AsyncIterator[_Clean
 
 
 class ProcessSpawner(Spawner):
-  def __init__(self, host_log: Optional[Path] = None, party_members: Optional[PartyMembers] = None):
+  def __init__(
+    self,
+    host_log: Optional[Path] = None,
+    party_members: Optional[PartyMembers] = None,
+    *,
+    credentials=None,
+  ):
+    self._credentials = credentials
     self._host_log = host_log
     self._party_members = party_members if party_members is not None else PartyMembers()
 
@@ -824,6 +862,10 @@ class ProcessSpawner(Spawner):
     env[BROKER_UPSTREAM] = channel.host_endpoint.address(LOCAL_HOST)
     env[BROKER_MISSION] = mission
     env[BROKER_TALK] = encode_talk(talk)
+    credential_applier = None
+    if self._credentials is not None:
+      credential_applier = CredentialApplier(env)
+      self._credentials(mission, credential_applier)
     cleanup_directory = None if launch.cleanup_directory is None else Path(launch.cleanup_directory)
     records_directory = None if launch.records_directory is None else Path(launch.records_directory)
     async with _cleanup_on_failure(cleanup_directory) as cleanup:
@@ -857,6 +899,7 @@ class ProcessSpawner(Spawner):
             cleanup_directory,
             workspace_lock.pop_all(),
             self._party_members,
+            credential_applier=credential_applier,
           )
           if launch.party_workspace is not None:
             assert records_directory is not None
@@ -865,3 +908,12 @@ class ProcessSpawner(Spawner):
               raise ValueError(f'party {launch.party_workspace!r} ended before the member started')
           return child
         return _HeadlessProcess(process)
+
+
+def _credential_operations(workspace: Workspace) -> bool:
+  try:
+    data = json.loads(workspace.resume_file.read_text())
+  except FileNotFoundError:
+    return False
+  operation = data.get('override_operation', {})
+  return operation.get('kind') == 'credentials' or (workspace.path / 'credential-receipts').is_dir()

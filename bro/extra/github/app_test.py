@@ -206,5 +206,8 @@ class TestSource:
     assert json.loads(files['creds.json']) == {
       'defaults': ['github+bot'],
       'sources': {'github+bot': {'type': 'github_app'}},
+      'generation': 0,
+      'material': {'github+bot': 'creds/github+bot.cred'},
+      'kinds': ['github'],
     }
     assert kinds == frozenset({'github'})

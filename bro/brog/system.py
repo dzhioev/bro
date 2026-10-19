@@ -171,3 +171,24 @@ def default_system() -> System:
   if author == '':
     author = None
   return build_system(lambda: credentials.get_json('brog'), author=author)
+
+
+def current_system() -> System:
+  return cast(
+    System, _CurrentSystem(credentials.default_store(), os.environ.get('RIDE_BRO') or None)
+  )
+
+
+class _CurrentSystem:
+  def __init__(self, store: credentials.Store, author: str | None):
+    self._store = store
+    self._author = author
+    self._generation = -1
+    self._system: System | None = None
+
+  def __getattr__(self, name: str) -> Any:
+    generation = self._store.generation
+    if self._system is None or self._generation != generation:
+      self._system = build_system(lambda: self._store.get_json('brog'), author=self._author)
+      self._generation = generation
+    return getattr(self._system, name)

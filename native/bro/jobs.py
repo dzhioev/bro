@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from bro import brash_policy
 from bro.base import spawn
+from bro.base.credential_environment import overlay
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, apply_limit, format_size, take_head
 
 if TYPE_CHECKING:
@@ -98,6 +99,7 @@ class Job:
           str(owner_read_fd),
           *brash_policy.line_argv(command, policy),
         ],
+        env=overlay(),
         pass_fds=(ready_write_fd, owner_read_fd),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

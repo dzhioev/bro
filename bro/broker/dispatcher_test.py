@@ -1326,3 +1326,39 @@ async def test_root_timeout_is_enforced_by_supervision():
   assert code != 0
   assert root.reason == 'timeout'
   assert runtime.handles[root.mission_id].killed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failed', [False, True])
+async def test_deferred_replies_keep_the_request_id_and_deny_async_failures(failed):
+  dispatcher, runtime = _dispatcher()
+  released, answered = asyncio.Event(), asyncio.Event()
+  send = runtime.send
+
+  def capture(peer, message):
+    send(peer, message)
+    if message.request_id == 'deferred-request':
+      answered.set()
+
+  runtime.send = capture
+
+  async def answer():
+    await released.wait()
+    if failed:
+      raise OSError('deferred read failed')
+    return {'outcome': 'ok', 'value': 'deferred value'}
+
+  dispatcher.on('deferred', lambda context, peer, message: context.defer(peer, answer()))
+  dispatcher.on(PING, ping_handler)
+  dispatcher.on_message('requester', _request('deferred', {}, 'deferred-request'))
+  dispatcher.on_message('requester', _request(PING, {}, 'other-request'))
+  assert runtime.sent[-1][1].request_id == 'other-request'
+  released.set()
+  await asyncio.wait_for(answered.wait(), 5)
+  reply = runtime.sent[-1][1]
+  assert reply.request_id == 'deferred-request'
+  assert reply.outcome == ('denied' if failed else 'ok')
+  if failed:
+    assert 'deferred read failed' in reply.payload['error']
+  else:
+    assert reply.payload['value'] == 'deferred value'
