@@ -51,8 +51,9 @@ Interpret them as follows:
    — a name an entry merely answers to is denied unless it is listed in its own right.
    Where several entries answer to one role they all qualify;
    pick by their descriptions.
-   The list is fixed at launch and nothing in-session widens it;
-   widening means relaunching with `--grant @<bro>`, which is the user's call.
+   The banner reads this list live.
+   The operator may change it with `ride override <name> --grant @<bro>` or `--revoke @<bro>`;
+   a watch notification reports the change.
 
 6. `talk` lists the chat moves fixed for this run's own quest.
    `owner.say` and `owner.question` let the summoner send messages or questions to a summoned run;

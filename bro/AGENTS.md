@@ -86,7 +86,7 @@ A subpackage with a map of its own is pointed at, not described here.
   The shared answer bound is enforced at the `answer` tool while the run can react;
   terminal fallback output is truncated with a marker and its trail id.
   `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
-- `authority_view.py` — live and process-initial authority views over a mission’s own broker channel.
+- `authority_view.py` — live and session-initial authority views over a mission’s own broker channel.
 - `authority/` — the pure symbolic use/give algebra and authorization transitions;
   see `authority/AGENTS.md`
 - `base/` — shared low-level utilities;

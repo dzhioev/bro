@@ -32,6 +32,7 @@ MAX_MESSAGE_BYTES = 16 << 10
 MAX_PENDING_QUESTIONS = 16
 MAX_RECORD_MESSAGES = 32
 CHAT_TRANSITIONS = frozenset({'message', 'refused', 'listening'})
+WORKER_TRANSITIONS = CHAT_TRANSITIONS | {'override'}
 
 
 @dataclass
@@ -48,6 +49,7 @@ class Record:
   pending: list[dict[str, Any]] = field(default_factory=list)
   messages: list[dict[str, Any]] = field(default_factory=list)
   messages_truncated: bool = False
+  overrides: list[dict[str, Any]] = field(default_factory=list)
   chat_seq: int = 0
   state: str = 'accepted'
   accepted_at: Optional[Moment] = None
@@ -82,6 +84,7 @@ class Record:
       view['type'] = self.type
     if include_messages:
       view['messages'] = self.conversation()
+      view['overrides'] = list(self.overrides)
       if self.messages_truncated:
         view['messages_truncated'] = True
     else:
@@ -276,6 +279,12 @@ class Journal:
     self._append(record, 'trail', event_payload)
     return True
 
+  def override(self, record: Record, payload: dict[str, Any]) -> None:
+    self._require_live(record)
+    event = self._append(record, 'override', payload)
+    record.overrides.append(event.view())
+    del record.overrides[:-MAX_RECORD_MESSAGES]
+
   def listening(self, record: Record) -> bool:
     self._require_live(record)
     if record.listening:
@@ -434,7 +443,7 @@ class Journal:
       else:
         probe = record
       if self.visible(caller, probe, workers) or (
-        probe.worker == caller and event.transition in CHAT_TRANSITIONS
+        probe.worker == caller and event.transition in WORKER_TRANSITIONS
       ):
         visible.append(event.view())
       if len(visible) == MAX_EVENT_BATCH:
@@ -473,7 +482,7 @@ class Journal:
     self._events.append(event)
     if record.parent is not None:
       self._visible_heads[record.parent] = event.seq
-    if transition in CHAT_TRANSITIONS:
+    if transition in WORKER_TRANSITIONS:
       self._visible_heads[record.mission_id] = event.seq
     changed = self._changed
     self._changed = asyncio.Event()

@@ -194,3 +194,38 @@ def test_the_session_texts_cast_no_spell(monkeypatch):
       for talk in talks:
         fragment = session_fragment('unattended', harness=get_harness(harness), talk=talk)
         assert '[[' not in fragment, (summoning, summoned, harness, talk)
+
+
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+@pytest.mark.parametrize('summoned', [False, True])
+def test_deferred_contract_renders_at_start_and_is_consumed_once(
+  monkeypatch, tmp_path, harness, summoned
+):
+  from bro.monitor import SESSION_DIR_ENV
+  from bro.prompts import save_deferred_contract, take_deferred_contract
+
+  publish(monkeypatch)
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+  if summoned:
+    monkeypatch.setenv(SUMMONED_ENV, '1')
+  else:
+    monkeypatch.delenv(SUMMONED_ENV, raising=False)
+  save_deferred_contract(harness=get_harness(harness), hold='unattended')
+  publish(monkeypatch, targets=('bro',))
+  contract = take_deferred_contract()
+  assert contract is not None and '# Summoning session' in contract
+  assert 'bro::quest_watch' not in contract
+  assert ('# One-shot turn end' in contract) is not summoned
+  assert '{{' not in contract
+  assert take_deferred_contract() is None
+
+
+def test_initial_summoner_names_the_mounted_watch_tool_and_saves_no_contract(monkeypatch, tmp_path):
+  from bro.monitor import SESSION_DIR_ENV
+  from bro.prompts import save_deferred_contract, take_deferred_contract
+
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+  publish(monkeypatch, targets=('bro',))
+  save_deferred_contract(harness=get_harness('bro'), hold='unattended')
+  assert take_deferred_contract() is None
+  assert 'bro::quest_watch' in session_fragment('unattended', harness=get_harness('bro'))

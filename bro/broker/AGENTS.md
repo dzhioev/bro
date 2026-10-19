@@ -91,6 +91,8 @@ An evicted view retains only id, kind, parent, and state because lineage is unch
 
 The event sequence is monotone for the broker root.
 `message`, `refused`, and `listening` are chat transitions.
+`override` records a host-applied scope change and is visible to the overridden worker;
+its retained tail is separate from chat.
 A journaled chat entry carries `from: owner|worker`.
 A journaled message carries its payload whole up to `MAX_MESSAGE_BYTES`.
 The retention ladder exempts live records:
@@ -100,7 +102,7 @@ The event ring is independently bounded.
 Args share one bounded-head implementation for memory and audit.
 Trail ids and terminal reasons use a bounded journal projection measured by the same encoded cost.
 A caller sees the missions it owns and nothing beneath them.
-It may query the mission its worker undertakes by id and see that mission's chat transitions, but it cannot list that mission or see its lifecycle transitions.
+It may query the mission its worker undertakes by id and see that mission's chat and override transitions, but it cannot list that mission or see its lifecycle transitions.
 A bare `events {}` read answers the root's `head` beside the caller's `visible_head`, the newest event visible to it whether or not the event ring still retains it, or 0.
 
 ## Dispatcher invariants

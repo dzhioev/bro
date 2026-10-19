@@ -162,6 +162,7 @@ def run_root_via_broker(
   facade.on('authority', control.authority)
   operator.on('operator.commit', control.commit)
   operator.on('operator.claim', control.claim)
+  operator.on('operator.override', control.override)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
   facade.on(SHARE, artifact_control.share)

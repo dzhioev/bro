@@ -23,6 +23,10 @@ if TYPE_CHECKING:
 MISSIONS = 'operator.missions'
 
 
+class OperatorUnavailable(RuntimeError):
+  pass
+
+
 def _directory() -> Path:
   return runtime_base() / 'control'
 
@@ -211,7 +215,7 @@ def _request(root: str, kind: str, args: dict[str, Any]) -> dict[str, Any]:
     with Client(connect(record.address)) as client:
       result = client.call(kind, args, timeout=30).payload
   except (ConnectionError, OSError, TimeoutError):
-    raise RuntimeError(f'root {root!r} operator channel is unavailable for {kind}') from None
+    raise OperatorUnavailable(f'root {root!r} operator channel is unavailable for {kind}') from None
   if result.get('outcome') != 'ok':
     raise ValueError(f'{kind} refused: {result.get("error", result)}')
   return result['value']
@@ -235,3 +239,36 @@ def commit_launch(root: str, token: str, spec: Any) -> dict[str, Any]:
 
 def claim_launch(root: str, token: str, commit: str, workspace: str) -> None:
   _request(root, 'operator.claim', {'token': token, 'commit': commit, 'workspace': workspace})
+
+
+def find_root(name: str) -> str:
+  if _path(name).exists():
+    return name
+  matches = []
+  for path in sorted(_directory().glob('*.json')):
+    try:
+      rows = mission_rows(path.stem)
+    except OperatorUnavailable:
+      continue
+    if any(row['name'] == name for row in rows):
+      matches.append(path.stem)
+  if len(matches) != 1:
+    raise ValueError(f'name {name!r} has no unique live operator control file')
+  return matches[0]
+
+
+def mission_rows(root: str) -> list[dict[str, Any]]:
+  rows = []
+  args = {}
+  while True:
+    value = _request(root, MISSIONS, args)
+    rows.extend(value['missions'])
+    if 'cursor' not in value:
+      return rows
+    args = {'cursor': value['cursor']}
+
+
+def override(root: str, name: str, changes: list[tuple[str, str]]) -> int:
+  value = _request(root, 'operator.override', {'name': name, 'changes': changes})
+  print(json.dumps(value, indent=2))
+  return 0
