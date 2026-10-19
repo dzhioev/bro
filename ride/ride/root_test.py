@@ -3,13 +3,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bro.summon
 import ride.artifacts
 import ride.broker_root
 import ride.root
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
+from ride.authority_test_helper import mission
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
@@ -21,10 +21,6 @@ def _workspace(tmp_path: Path, isolation: Isolation = Isolation.BOXED) -> Worksp
 
 def _scope() -> ScopedSecrets:
   return ScopedSecrets({'github'}, {'openai'}, {'github': 'reviewer'})
-
-
-def _launch(*, targets=(), party=('boxed',)):
-  return {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
 
 
 def _docker_launch() -> workspace_docker.Launch:
@@ -60,7 +56,7 @@ class TestDirectStartedParty:
     code = ride.root.run_started_party(
       _docker_launch(),
       workspace,
-      launch_scope=_launch(),
+      mission=mission(),
       credential_scope=_scope(),
       container_runtime=MagicMock(),
       runtime_bundle=MagicMock(),
@@ -90,15 +86,12 @@ class TestDirectStartedParty:
       ride.root.run_started_party(
         launch,
         workspace,
-        launch_scope=_launch(party=('unboxed',)),
+        mission=mission(values={'placement': 'unboxed'}),
         credential_scope=_scope(),
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
       )
       == 0
-    )
-    assert run.call_args.kwargs['env'][bro.summon.LAUNCH_ENV] == (
-      '{"bro":{"bros":[],"party":["unboxed"]}}'
     )
     assert 'BROKER_CHANNEL' not in run.call_args.kwargs['env']
     assert 'BROKER_UPSTREAM' not in run.call_args.kwargs['env']
@@ -180,14 +173,13 @@ class TestBrokerStartedParty:
 
     monkeypatch.setattr(ride.broker_root, 'run_root_via_broker', fake_run_root)
     workspace = _workspace(tmp_path)
+    record = mission(grant=('@dev',))
 
     assert (
       ride.root._run_via_broker(
         _docker_launch(),
         workspace,
-        launch_scope=_launch(targets=('dev',)),
-        summon_depth=4,
-        summon_harness='claude',
+        mission=record,
         session_env={'IS_SANDBOX': '1'},
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),
@@ -197,9 +189,7 @@ class TestBrokerStartedParty:
     assert captured['session_env'] == {'IS_SANDBOX': '1'}
     wrapped = captured['launch']
     assert isinstance(wrapped, workspace_spawn.DockerLaunchSpec)
-    assert wrapped.launch.env[bro.summon.LAUNCH_ENV] == (
-      '{"bro":{"bros":["dev"],"party":["boxed"]}}'
-    )
+    assert captured['mission'] is record
     assert wrapped.launch.extra_mounts == (
       ride.artifacts.view_mount('ws', 'ws', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
     )
@@ -224,9 +214,7 @@ class TestBrokerStartedParty:
       ride.root._run_via_broker(
         launch,
         workspace,
-        launch_scope=_launch(),
-        summon_depth=2,
-        summon_harness='bro',
+        mission=mission(),
         session_env={},
         container_runtime=MagicMock(),
         runtime_bundle=MagicMock(),

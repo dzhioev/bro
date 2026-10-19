@@ -6,23 +6,29 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 
 import bro.native.harness as native_harness
 import ride.artifacts
+import ride.authority_launch
 import ride.bro_worker
 import ride.broker_root
 import ride.do_ride
 import ride.harness
 import ride.identity
 import ride.peer_facts
-import ride.scope
 import ride.session
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 import ride.workspace.store as workspace_store
+from bro.authority.records import dump_request
+from bro.authority.rules import Mission
+from bro.base import credentials
+from bro.base.host_config import Attachment
+from bro.bro import BaseBro
 from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
@@ -40,6 +46,10 @@ from bro.workspace.paths import (
   workspace_dir,
   workspace_tree,
 )
+from ride.authority_launch import credentials_for
+from ride.authority_reading import Reading
+from ride.authority_scope import checked_recipe
+from ride.authority_test_helper import mission, reading
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -74,14 +84,19 @@ def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
 SESSION = 'session-ws'
 
 
-def _do_ride_environment(workspace_name: str, base_sha: str = 'PARENT-SHA') -> dict[str, str]:
+def _do_ride_environment(
+  workspace_name: str, record: Mission, base_sha: str = 'PARENT-SHA'
+) -> dict[str, str]:
+  assert isinstance(record.reading, Reading)
   workspace = Workspace.open(workspace_name)
   spec = ride.session.load_resume_spec(workspace)
   assert spec is not None
   assert workspace.metadata.branch is not None
   return {
     ride.do_ride.INSTALL_DIRECTORY_ENV: ride.do_ride.CONTAINER_INSTALL_DIRECTORY,
-    ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(spec.resolved_llm),
+    ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(
+      checked_recipe(record.request, record.descriptor, record.reading).dump()
+    ),
     'RIDE_ISOLATION': 'boxed',
     'RIDE_BRANCH': workspace.metadata.branch,
     'RIDE_BASE_SHA': base_sha,
@@ -117,8 +132,25 @@ def _lower_boxed(
   return lowered
 
 
-def _authority(*, targets=(), party=('boxed',)):
-  return {'bro': {'bros': frozenset(targets), 'party': frozenset(party)}}
+def _launch(**fields) -> ride.bro_worker.SummonLaunchSpec:
+  source = fields.pop('source', None)
+  values = {'harness': fields['harness']}
+  for name in ('llm', 'hold'):
+    if fields.get(name) is not None:
+      values[name] = fields[name]
+  values['placement'] = (
+    'join' if fields.get('party') == 'join' else fields.get('isolation', Isolation.BOXED).value
+  )
+  if fields.get('passes'):
+    values['pass'] = fields['passes']
+  record = mission(
+    target=fields['target'],
+    source=source,
+    values=values,
+    grant=fields.get('grant', ()),
+    revoke=fields.get('revoke', ()),
+  )
+  return ride.bro_worker.SummonLaunchSpec(record=record, **fields)
 
 
 def _artifacts() -> ride.artifacts.ArtifactStore:
@@ -151,38 +183,27 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
 
 
 @pytest.fixture
-def lowering_harness(monkeypatch, tmp_path):
-  def fake_scoped_secrets(
-    name,
-    surface,
-    attachment=None,
-    attachment_repository=None,
-    llm_spec=None,
-    cred=(),
-    grant=(),
-    revoke=(),
-    recording=True,
-  ):
-    del name, surface, attachment, attachment_repository, llm_spec, recording
-    grant_credentials, _ = ride.scope.split_scope_overrides(grant)
-    revoke_credentials, _ = ride.scope.split_scope_overrides(revoke)
-    kinds = {'aws', 'trails', 'openai'} | set(grant_credentials)
-    kinds.difference_update(revoke_credentials)
-    selection = {}
-    for value in cred:
-      kind, _, instance = value.partition('+')
-      selection[kind] = instance
-    optional = {'openai'} & kinds
-    return workspace_store.ScopedSecrets(kinds - optional, optional, selection)
+def lowering_harness(monkeypatch, tmp_path, register_test_bros):
+  class Dev(BaseBro):
+    name = 'dev'
 
-  monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', fake_scoped_secrets)
+  register_test_bros(Dev)
+
+  def credential_scope(record):
+    selection = {
+      name.removeprefix('cred.'): value
+      for name, value in record.descriptor.values.items()
+      if name.startswith('cred.')
+    }
+    return workspace_store.ScopedSecrets(
+      {'aws', 'trails'} | (selection.keys() - {'openai'}), {'openai'}, selection
+    )
+
+  monkeypatch.setattr(ride.authority_launch, 'credentials_for', credential_scope)
   monkeypatch.setattr(
-    ride.bro_worker,
-    'preflight_scoped_launch',
-    lambda scoped, *_args, **_kwargs: (
-      _authority(),
-      ride.scope.HydratedStore({}, frozenset(scoped.required | scoped.optional)),
-    ),
+    ride.authority_launch,
+    'hydrate',
+    lambda scoped: ({}, frozenset(scoped.required | scoped.optional)),
   )
   monkeypatch.setattr(ride.session, 'local_trails_mounts', lambda scoped: ())
   monkeypatch.setattr(ride.bro_worker, 'human_git_identity_env', lambda repository: {})
@@ -198,14 +219,13 @@ def lowering_harness(monkeypatch, tmp_path):
 
 class TestSummonLowering:
   def test_lowers_to_the_bro_run_docker_launch(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -228,16 +248,20 @@ class TestSummonLowering:
           'deploy the thing',
         ],  # fmt: skip
         env={
-          **_do_ride_environment('broker-CH'),
+          **_do_ride_environment('broker-CH', launch.record),
           'RIDE_BRO': 'dev',
           'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro dev deploy the thing',
-          'RIDE_LAUNCH': '{"bro":{"bros":[],"party":["boxed"]}}',
           'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
+        credential_selection={
+          name.removeprefix('cred.'): cast(str, value)
+          for name, value in launch.record.descriptor.values.items()
+          if name.startswith('cred.')
+        },
         credential_store={},
         hydrated_kinds=frozenset({'aws', 'openai', 'trails'}),
         tty=False,
@@ -254,14 +278,13 @@ class TestSummonLowering:
     )
 
   def test_lowering_logs_the_scope_like_any_container_launch(self, lowering_harness, caplog):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     with caplog.at_level('INFO'):
@@ -269,14 +292,13 @@ class TestSummonLowering:
     assert 'scoped secrets for summoned dev: aws, trails' in caplog.text
 
   def test_hold_rides_the_childs_do_ride_argv(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       hold='attended',
     )
@@ -284,14 +306,13 @@ class TestSummonLowering:
     assert lowered.launch.command[-5:] == ['--hold', 'attended', '--', 'dev', 'deploy the thing']
 
   def test_the_llm_recipe_rides_the_childs_do_ride_argv(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       llm='openai:sol:high+fast',
     )
@@ -303,70 +324,56 @@ class TestSummonLowering:
   def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps({'projects': {'/proj': {'bros': {'dev': {'llm': ['openai:sol:xhigh']}}}}})
+    source = replace(
+      reading(config={'projects': {'/proj': {'bros': {'dev': {'llm': ['openai:sol:xhigh']}}}}}),
+      attachment=Attachment(path='/proj'),
     )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    launch = ride.bro_worker.SummonLaunchSpec(
+    monkeypatch.setattr('bro.base.host_config._read', lambda: pytest.fail('launch reread policy'))
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       llm='::low',
+      source=source,
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    command = lowered.launch.command
-    assert command[command.index('--llm') + 1] == 'openai:sol:low'
-    spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
-    assert spec is not None
-    assert spec.llm == 'openai:sol:low'
-    assert spec.resolved_llm == native_harness.BRO.resolve_llm('openai:sol:low', 'dev').dump()
+    resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
+    assert resolved == native_harness.BRO.resolve_llm('openai:sol:low', 'dev').dump()
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(
-      name,
-      recipe,
-      attachment=None,
-      attachment_repository=None,
-      llm_spec=None,
-      cred=(),
-      grant=(),
-      revoke=(),
-    ):
-      captured.append(llm_spec)
+    def capture_scope(record):
+      captured.append(record)
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
-    monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', capture_scope)
-    launch = ride.bro_worker.SummonLaunchSpec(
+    monkeypatch.setattr(ride.authority_launch, 'credentials_for', capture_scope)
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       llm='echo',
     )
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert captured == [native_harness.BRO.resolve_llm('echo', 'dev')]
+    assert captured == [launch.record]
+    assert launch.record.descriptor.values['provider'] == 'echo'
 
   def test_lowering_records_the_childs_resume_spec(self, lowering_harness, tmp_path):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='deploy the thing',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       hold='guided',
       llm='openai:sol:high',
@@ -377,41 +384,25 @@ class TestSummonLowering:
     workspace = Workspace.open('broker-CH')
     assert workspace.metadata.throwaway
     assert lowered.launch.secrets == {'aws', 'github', 'trails'}
-    assert '--cred github+passed' in lowered.launch.env['RIDE_COMMAND']
-    assert '--grant github' in lowered.launch.env['RIDE_COMMAND']
-    assert (
-      ride.session.load_resume_spec(workspace)
-      == ride.session.SessionSpec(
-        name='broker-CH',
-        harness='bro',
-        workspace_pinned=False,
-        isolation=Isolation.BOXED,
-        drop=True,
-        no_trails=False,
-        hold='guided',
-        cred=['github+passed'],
-        grant=['github', '@reviewer'],
-        revoke=[],
-        llm='openai:sol:high',
-        resolved_llm=native_harness.BRO.resolve_llm('openai:sol:high', 'dev').dump(),
-        solo=True,
-        resume=False,
-        into=None,
-        bro='dev',
-        prompt='deploy the thing',
-        subject='deploy the thing',
-        repo='/proj',
-      ).resume_variant()
-    )
+    assert lowered.launch.credential_selection['github'] == 'passed'
+    spec = ride.session.load_resume_spec(workspace)
+    assert spec is not None
+    assert spec.authority_request == dump_request(launch.record.request, launch.record.descriptor)
+    assert spec.bro == launch.target
+    assert spec.subject == launch.prompt
+    assert spec.prompt is None
+    assert spec.resume
+    assert spec.repo == '/proj'
+    assert not spec.drop
+    assert not spec.solo
 
   def test_child_resume_record_carries_a_given_runtime(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
@@ -445,14 +436,13 @@ class TestSummonLowering:
         env={}, mounts=('/host/state:/state',)
       ),
     )
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -465,14 +455,13 @@ class TestSummonLowering:
     )
 
   def test_the_child_keeps_session_state_like_any_boxed_session(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -480,21 +469,21 @@ class TestSummonLowering:
     assert lowered.launch.env[SESSION_DIR_ENV] == str(CONTAINER_SESSION_DIR)
     assert _session_state_mount('broker-CH') in lowered.launch.extra_mounts
 
-  def test_the_childs_own_allow_list_rides_its_environment(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+  def test_child_authority_is_preserved_in_its_resume_request(self, lowering_harness):
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(targets=('bro', 'reviewer')),
       harness='bro',
+      grant=('@bro', '@reviewer'),
     )
-    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    assert json.loads(lowered.launch.env['RIDE_LAUNCH']) == {
-      'bro': {'bros': ['bro', 'reviewer'], 'party': ['boxed']}
-    }
+    _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
+    spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
+    assert spec is not None
+    assert spec.authority_request == dump_request(launch.record.request, launch.record.descriptor)
 
   def test_the_child_credits_the_human_of_the_repository_it_shares(
     self, lowering_harness, monkeypatch, tmp_path
@@ -506,14 +495,13 @@ class TestSummonLowering:
     subprocess.run(['git', 'init', '-q', '-b', 'master', str(repository)], check=True)
     for key, value in (('user.name', 'Ada Lovelace'), ('user.email', 'ada@example.com')):
       subprocess.run(['git', 'config', key, value], cwd=repository, check=True)
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=repository,
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -521,23 +509,21 @@ class TestSummonLowering:
     assert lowered.launch.env[HUMAN_EMAIL_ENV] == 'ada@example.com'
 
   def test_into_overrides_the_inherited_base_ref(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       into='summon',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts()).launch
     assert lowered.env == {
-      **_do_ride_environment('broker-CH', base_sha='REF-SHA'),
+      **_do_ride_environment('broker-CH', launch.record, base_sha='REF-SHA'),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness bro --into summon dev p',
-      'RIDE_LAUNCH': '{"bro":{"bros":[],"party":["boxed"]}}',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -545,14 +531,13 @@ class TestSummonLowering:
     assert lowered.base_ref == 'REF-SHA'
 
   def test_unresolvable_into_fails_the_spawn(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       into='nope',
     )
@@ -565,13 +550,12 @@ class TestSummonLowering:
     monkeypatch.setattr(
       ride.bro_worker, 'resolve_head', lambda root, repository: pytest.fail('git must not be read')
     )
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent='empty',
       parent_tree=workspace_tree('empty'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
@@ -584,13 +568,12 @@ class TestSummonLowering:
   ):
     workspace = Workspace.ensure(PARENT, None, Isolation.UNBOXED)
     workspace.tree.mkdir(parents=True)
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='work beside me',
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
-      launch_scope=_authority(targets=('reviewer',), party=('join',)),
       harness='bro',
       party='join',
       isolation=None,
@@ -615,9 +598,6 @@ class TestSummonLowering:
     assert lowered.env[SESSION_DIR_ENV] == str(records / 'session')
     assert lowered.env['RIDE_PARTY_MEMBER'] == 'broker-CH'
     assert lowered.env['RIDE_COMMAND'].startswith('summon --join')
-    assert json.loads(lowered.env['RIDE_LAUNCH']) == {
-      'bro': {'bros': ['reviewer'], 'party': ['join']}
-    }
     assert lowered.env['RIDE_SUMMONED'] == '1'
     assert lowered.env['IS_SANDBOX'] == '1'
     assert lowered.cleanup_directory is not None
@@ -633,13 +613,12 @@ class TestSummonLowering:
   ) -> workspace_spawn.ExecLaunchSpec:
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='work beside me',
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
-      launch_scope=_authority(targets=('reviewer',), party=('join',)),
       harness='bro',
       passes=passes,
       party='join',
@@ -693,7 +672,6 @@ class TestSummonLowering:
       'RIDE_COMMAND': ride_command,
       'RIDE_PARTY_MEMBER': 'broker-CH',
       'RIDE_SUMMONED': '1',
-      'RIDE_LAUNCH': '{"bro":{"bros":["reviewer"],"party":["join"]}}',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
     }
     assert 'BRO_STORE' not in member.env  # delivered into the container at spawn
@@ -710,20 +688,19 @@ class TestSummonLowering:
     )
 
     assert lowered.launch.secrets == {'aws', 'github', 'trails'}
-    assert lowered.launch.credential_selection == {'github': 'passed'}
+    assert lowered.launch.credential_selection['github'] == 'passed'
     assert lowered.launch.env['RIDE_COMMAND'].startswith('summon --join --pass github+passed')
     shutil.rmtree(party_member_dir(workspace.path, 'broker-CH'))
 
   def test_boxed_join_requires_a_running_container(self, lowering_harness, monkeypatch, tmp_path):
     workspace = Workspace.ensure(PARENT, None, Isolation.BOXED)
     monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: None)
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace.tree,
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       party='join',
       isolation=None,
@@ -753,13 +730,12 @@ class TestSummonLowering:
   async def test_unboxed_started_child_keeps_failed_workspace_without_credentials(
     self, lowering_harness, tmp_path
   ):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent='detached-root',
       parent_tree=workspace_tree('detached-root'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
@@ -817,13 +793,12 @@ raise SystemExit(3)
   def test_unboxed_lowering_surfaces_private_store_cleanup_failure(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent='detached-root',
       parent_tree=workspace_tree('detached-root'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       isolation=Isolation.UNBOXED,
     )
@@ -849,14 +824,13 @@ raise SystemExit(3)
       )
 
   def test_unreadable_parent_head_fails_the_spawn(self, lowering_harness):
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent='gone',
       parent_tree=workspace_tree('gone'),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     with pytest.raises(ValueError, match="summoner's HEAD"):
@@ -887,14 +861,13 @@ raise SystemExit(3)
       _artifacts(),
     )
     channel = Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
     )
     await spawner.spawn(launch, channel, 'X-1', frozenset({'worker.say'}))
@@ -935,13 +908,12 @@ raise SystemExit(3)
       facts,
       _artifacts(),
     )
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=parent.name,
       parent_tree=parent.tree,
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       party='join',
       isolation=None,
@@ -968,14 +940,13 @@ raise SystemExit(3)
       _artifacts(),
     )
     channel = Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
-    launch = ride.bro_worker.SummonLaunchSpec(
+    launch = _launch(
       target='dev',
       prompt='p',
       parent=PARENT,
       parent_tree=workspace_tree(PARENT),
       repo=Path('/proj'),
       summoner=SUMMONER,
-      launch_scope=_authority(),
       harness='bro',
       into='nope',
     )
@@ -1019,12 +990,12 @@ with session_broxy():
   assert lifecycle is not None
   lifecycle.trail('trail-' + prompt)
   if prompt == 'first':
-    answer = summon_and_wait('dev', 'second', party='join', timeout=20)
+    answer = summon_and_wait('dev', 'second', placement='join', timeout=20)
     lifecycle.completed('first:' + answer, 'ok')
   elif prompt == 'second':
     lifecycle.completed('second', 'ok')
   elif prompt == 'owner':
-    summon_detached('dev', 'linger', party='join', timeout=20)
+    summon_detached('dev', 'linger', placement='join', timeout=20)
     marker = Path('linger-started')
     deadline = time.monotonic() + 10
     while not marker.exists():
@@ -1034,7 +1005,7 @@ with session_broxy():
   else:
     signal.signal(signal.SIGTERM, lambda *_args: sys.exit(0))
     Path('linger-started').touch()
-    time.sleep(30)
+    signal.pause()
   lifecycle.close()
 """
   member_executable.write_text(member_source)
@@ -1049,19 +1020,18 @@ with session_broxy():
   answer = summon_and_wait(
     'dev',
     'first',
-    party='join',
-    grant=['@dev', ':launch.bro.party.join'],
+    placement='join',
+    grant=['@dev', 'bro.placement=join'],
     timeout=20,
   )
   owner = summon_and_wait(
     'dev',
     'owner',
-    isolation='unboxed',
-    grant=['@dev', ':launch.bro.party.join'],
+    placement='unboxed',
+    grant=['@dev', 'bro.placement=join'],
     timeout=20,
   )
   Path({str(report)!r}).write_text(answer + '|' + owner)
-  time.sleep(1)
 """
   launch = workspace_spawn.ProcessLaunchSpec(
     command=[sys.executable, '-c', root_source],
@@ -1074,7 +1044,7 @@ with session_broxy():
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_authority(targets=('dev',), party=('join', 'unboxed')),
+    mission=mission(grant=('@dev', 'bro.placement=join', 'bro.placement=unboxed')),
     container_runtime=_container_runtime(),
     runtime_bundle=runtime_bundle,
   )
@@ -1112,11 +1082,10 @@ class TestClaudeSummonLowering:
       'parent_tree': workspace_tree(PARENT),
       'repo': Path('/proj'),
       'summoner': SUMMONER,
-      'launch_scope': _authority(),
       'harness': 'claude',
       **overrides,
     }
-    return ride.bro_worker.SummonLaunchSpec(**fields)
+    return _launch(**fields)
 
   def test_unboxed_join_provisions_claude_state_under_the_member_records(
     self, claude_harness, monkeypatch, tmp_path
@@ -1186,17 +1155,17 @@ class TestClaudeSummonLowering:
     shutil.rmtree(records)
 
   def test_lowers_to_a_ride_solo_claude_launch(self, claude_harness):
-    lowered = _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
+    launch = self._launch()
+    lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.command == [
       'do-ride', 'solo', '--workspace', 'broker-CH', '--harness', 'claude', '--repo', '/proj',
       '--hold', 'unattended', '--', 'dev', 'deploy the thing',
     ]  # fmt: skip
     assert lowered.launch.env == {
       'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
-      **_do_ride_environment('broker-CH'),
+      **_do_ride_environment('broker-CH', launch.record),
       'RIDE_BRO': 'dev',
       'RIDE_COMMAND': 'ride solo --repo /proj --hold unattended --harness claude dev deploy the thing',
-      'RIDE_LAUNCH': '{"bro":{"bros":[],"party":["boxed"]}}',
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
@@ -1211,21 +1180,12 @@ class TestClaudeSummonLowering:
     assert lowered.launch.tty is False
 
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
-    from bro.llm.llms.anthropic import LLMSpec as AnthropicSpec
-
-    _lower_boxed(
-      self._launch(llm=':fable5', summon_depth=5, summon_harness='claude'),
-      'broker-CH',
-      _container_runtime(),
-      _artifacts(),
-    )
-    workspace = Workspace.open('broker-CH')
-    spec = ride.session.load_resume_spec(workspace)
+    launch = self._launch(llm=':fable5', summon_depth=5, summon_harness='claude')
+    _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
+    spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
     assert spec is not None
     assert spec.harness == 'claude'
-    assert spec.resolved_llm == AnthropicSpec(model='claude-fable-5', effort=None).dump()
-    assert spec.summon_depth == 5
-    assert spec.summon_harness == 'claude'
+    assert spec.authority_request == dump_request(launch.record.request, launch.record.descriptor)
 
   def test_the_partys_env_additions_reach_a_started_child(self, claude_harness, tmp_path):
     lowered = _lower_boxed(
@@ -1239,42 +1199,26 @@ class TestClaudeSummonLowering:
   def test_scope_follows_the_claude_recipe(self, claude_harness, monkeypatch):
     captured: list = []
 
-    def capture_scope(
-      name,
-      recipe,
-      attachment=None,
-      attachment_repository=None,
-      llm_spec=None,
-      cred=(),
-      grant=(),
-      revoke=(),
-    ):
-      captured.append(recipe.name)
+    def capture_scope(record):
+      captured.append(record.descriptor.values['harness'])
       return workspace_store.ScopedSecrets(required=set(), optional=set())
 
-    monkeypatch.setattr(ride.bro_worker, 'scoped_secrets', capture_scope)
+    monkeypatch.setattr(ride.authority_launch, 'credentials_for', capture_scope)
     _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
     assert captured == ['claude']
 
-  def test_auth_preflight_failure_fails_the_spawn_before_the_workspace(
+  def test_missing_harness_auth_fails_the_spawn_before_the_workspace(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    from ride.claude.harness import CLAUDE
-
-    monkeypatch.setattr(
-      CLAUDE, 'preflight_auth', lambda spec, store: 'claude_code secret not resolvable'
-    )
-    with pytest.raises(ValueError, match='claude_code secret not resolvable'):
+    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path / 'empty-store'))
+    monkeypatch.setattr(ride.authority_launch, 'credentials_for', credentials_for)
+    with pytest.raises(ValueError, match=r'missing.*claude_code'):
       _lower_boxed(self._launch(), 'broker-CH', _container_runtime(), _artifacts())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
 
   def test_a_native_recipe_fails_the_claude_spawn(self, claude_harness, tmp_path):
-    from bro.llm.providers import LLMSelectionError
-
-    with pytest.raises(
-      LLMSelectionError, match="the claude harness cannot run recipe 'openai:sol'"
-    ):
+    with pytest.raises(ValueError, match="the claude harness cannot run recipe 'openai:sol'"):
       _lower_boxed(self._launch(llm='openai:sol'), 'broker-CH', _container_runtime(), _artifacts())
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
@@ -1337,7 +1281,7 @@ class TestRunRootViaBroker:
       def subscribe(self, observer):
         captured['observers'].append(observer)
 
-      def run(self, launch, spawner, *, type, end_on_sigterm=False, lifetime=None):
+      def run(self, launch, spawner, *, type, timeout=None, end_on_sigterm=False, lifetime=None):
         captured.update(
           launch=launch, spawner=spawner, type=type, end=end_on_sigterm, lifetime=lifetime
         )
@@ -1353,7 +1297,7 @@ class TestRunRootViaBroker:
         launch,
         workspace=workspace,
         bro='bro-dev',
-        launch_scope=_authority(),
+        mission=mission(),
         container_runtime=_container_runtime(),
         runtime_bundle=MagicMock(),
         types={'test': TestWorkerType},
@@ -1367,6 +1311,8 @@ class TestRunRootViaBroker:
       'artifact.mint',
       'artifact.get',
       'artifact.share',
+      'authority',
+      'operator.commit',
     }
     assert isinstance(captured['spawner'], workspace_spawn.ProcessSpawner)
     assert captured['type'] == 'bro'

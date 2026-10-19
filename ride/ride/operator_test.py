@@ -17,6 +17,7 @@ from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.workspace.paths import runtime_base
 from ride import cli, operator
+from ride.authority_test_helper import mission
 from ride.broker_root import run_root_via_broker
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
@@ -117,7 +118,7 @@ def test_root_provisions_operator_channel_before_spawning_and_removes_it(
     ),
     workspace=workspace,
     bro='bro',
-    launch_scope={},
+    mission=mission(),
     container_runtime=MagicMock(),
     runtime_bundle=runtime,
     types={},

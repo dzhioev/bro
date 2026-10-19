@@ -1,4 +1,3 @@
-import json
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -8,14 +7,26 @@ from unittest.mock import MagicMock
 import pytest
 
 import ride.bro_worker as bro_worker
-import ride.scope
-from bro.base import credentials, host_config
-from bro.broker.brotocol import Talk
-from bro.summon import summoned_child_env
-from bro.worker_types import Expect, LaunchDenied, LaunchRequest, PeerDescription, Spawn
+from bro.authority.patterns import Descriptor
+from bro.authority.records import dump_request
+from bro.authority.rules import Mission, Prepared
+from bro.base.host_config import Attachment
+from bro.bro import BaseBro
+from bro.broker.brotocol import request
+from bro.worker_types import Expect, LaunchDenied, PeerDescription, Spawn
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
+from ride.authority_test_helper import mission, reading
 from ride.bro_worker import BroFacts, BroType, Placement, SummonLaunchSpec
+from ride.launch_control import LaunchControl
 from ride.workspace.metadata import Isolation
+
+
+@pytest.fixture(autouse=True)
+def installed_dev(register_test_bros):
+  class Dev(BaseBro):
+    name = 'dev'
+
+  register_test_bros(Dev)
 
 
 class Peers:
@@ -24,150 +35,115 @@ class Peers:
 
 
 class Host:
-  def __init__(self):
-    self.depth_cap = 2
-    self.summon_harness = 'bro'
+  def __init__(self, source=None):
+    self.reading = source or reading(config={'summon-depth': 2})
+    self.depth_cap = self.reading.summon_depth
+    self.summon_harness = self.reading.summon_harness
     self.workspace = SimpleNamespace(
       name='ws',
       metadata=SimpleNamespace(repo=None),
       repository=None,
     )
     self.peers = Peers()
-    self.journal = object()
+    self.journal = MagicMock()
     self.session_env = {'ONE': '1'}
     self.summon_spawner = object()
+    self.artifacts = MagicMock()
 
 
-def _owner(
-  tmp_path: Path,
-  *,
-  type: str = 'bro',
-  targets=('dev',),
-  party=('boxed',),
-  pass_rights=(),
-  depth=0,
-):
-  extension = BroFacts(bro='bro-dev')
+def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), depth=0, source=None):
   return PeerDescription(
     mission='root',
     workspace='ws',
     tree=tmp_path,
     type=type,
     bro='bro-dev' if type == 'bro' else None,
-    launch=(
-      {
-        'bro': {
-          'bros': frozenset(targets),
-          'party': frozenset(party),
-          'pass': frozenset(pass_rights),
-        }
-      }
-      if type == 'bro'
-      else {'test': {}}
-    ),
+    mission_record=mission(grant=grant, revoke=revoke, source=source),
     member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
     depth=depth,
-    extension=extension if type == 'bro' else None,
+    extension=BroFacts('bro-dev') if type == 'bro' else None,
   )
 
 
-def _request(tmp_path, *, owner=None, manual=False, passes=(), share=(), talk=(), **args):
-  return LaunchRequest(
-    id='mission',
-    type='bro',
-    args={'target': 'dev', 'prompt': 'work', **args},
-    owner=_owner(tmp_path) if owner is None else owner,
-    requested_talk=cast(Talk, frozenset(talk)),
-    timeout=None if manual else 1800.0,
-    passes=tuple(passes),
-    share=tuple(share),
-    manual=manual,
+def _request(tmp_path, *, host=None, owner=None, **args):
+  host = host or Host()
+  control = LaunchControl(
+    ride='ws',
+    types={'bro': BroType(host)},
+    peers=host.peers,
+    journal=host.journal,
+    audit_file=tmp_path / 'audit.jsonl',
+    runtime_bundle=MagicMock(),
+    session_env={},
+    worker_container_spawner=MagicMock(),
+    reading=host.reading,
   )
-
-
-def _real_launch_fold(monkeypatch, tmp_path, layers=()):
-  material = tmp_path / credentials.MATERIAL_DIR
-  material.mkdir(exist_ok=True)
-  monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
-  monkeypatch.setattr(bro_worker, 'effective_launch', ride.scope.effective_launch)
-  monkeypatch.setattr(bro_worker, 'configured_scope_layers', lambda *args, **kwargs: layers)
-  return material
-
-
-@pytest.fixture(autouse=True)
-def launch_scope(monkeypatch):
-  monkeypatch.setattr(bro_worker, 'configured_scope_layers', lambda *args, **kwargs: ())
-  monkeypatch.setattr(
-    bro_worker,
-    'effective_launch',
-    lambda target, layers, *, grant, revoke, **_kwargs: {
-      'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}
-    },
-  )
-  monkeypatch.setattr(bro_worker, 'workspace_isolation', lambda name: Isolation.BOXED)
+  message = request('launch', {'type': 'bro', 'target': 'dev', 'prompt': 'work', **args})
+  admitted, _ = control._request(message, owner or _owner(tmp_path, source=host.reading))
+  return admitted
 
 
 def test_worker_defers_an_uninstalled_summon_default_until_a_request(monkeypatch):
   resolve = MagicMock(side_effect=ValueError("harness 'bro' is not installed"))
   monkeypatch.setattr(bro_worker, 'get_harness', resolve)
-
   BroType(Host())
-
   resolve.assert_not_called()
 
 
 def test_talk_widens_the_bro_default(tmp_path):
   worker = BroType(Host())
-  assert worker.talk(_request(tmp_path, talk=('owner.say',))) == frozenset(
+  assert worker.talk(_request(tmp_path, talk=['owner.say'])) == frozenset(
     {'worker.say', 'owner.say'}
   )
 
 
 def test_spawn_launch_carries_the_authorized_child(tmp_path):
   host = Host()
-  run = BroType(host).launch(
-    _request(
-      tmp_path,
-      hold='guided',
-      passes=('github+work',),
-      share=('sha256:' + 'a' * 64 + '/report.md',),
-    )
+  admitted = _request(
+    tmp_path,
+    host=host,
+    hold='guided',
+    **{'pass': ['github+work']},
+    owner=_owner(tmp_path, grant=('@dev', 'bro.cred=github+work'), source=host.reading),
+    share=['sha256:' + 'a' * 64 + '/report.md'],
   )
+  run = BroType(host).launch(admitted)
   assert isinstance(run, Spawn)
   assert run.spawner is host.summon_spawner
-  assert run.extension == BroFacts(
-    bro='dev',
-    placement=Placement('start', Isolation.BOXED),
-  )
-  assert run.launch_scope == {
-    'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}
-  }
+  assert run.extension == BroFacts(bro='dev', placement=Placement('start', Isolation.BOXED))
   launch = cast(SummonLaunchSpec, run.launch)
+  assert launch.record is admitted.record
+  assert launch.record.descriptor.values['cred.github'] == 'work'
   assert launch.target == 'dev'
   assert launch.parent == 'ws'
   assert launch.parent_tree == tmp_path
   assert launch.hold == 'guided'
-  assert launch.passes == ('github+work',)
   assert launch.share == ('sha256:' + 'a' * 64 + '/report.md',)
   assert launch.summoner == {'trail_id': 'trail'}
   assert launch.env == {'ONE': '1'}
 
 
 def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
-  run = BroType(Host()).launch(
-    _request(tmp_path, manual=True, into='feature', passes=('github+work',))
+  host = Host()
+  admitted = _request(
+    tmp_path,
+    host=host,
+    manual=True,
+    into='feature',
+    **{'pass': ['github+work']},
+    owner=_owner(tmp_path, grant=('@dev', 'bro.cred=github+work'), source=host.reading),
   )
+  run = BroType(host).launch(admitted)
   assert isinstance(run, Expect)
+  assert isinstance(admitted.record, Prepared)
   assert run.pending == {
     'target': 'dev',
     'prompt': 'work',
-    'launch': {'bro': {'bros': ['reviewer'], 'party': ['boxed']}},
-    'grant': [],
-    'revoke': [],
-    'pass': ['github+work'],
+    'request': dump_request(admitted.record.request, Descriptor('bro', {})),
+    'root': 'ws',
     'summoner': {'trail_id': 'trail'},
     'repo': None,
     'into': 'feature',
@@ -178,14 +154,14 @@ def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
 @pytest.mark.parametrize(
   ('args', 'message'),
   [
-    ({'target': ''}, 'non-empty string'),
+    ({'target': ''}, 'bro.target'),
     ({'prompt': ''}, 'non-empty string'),
-    ({'unknown': True}, 'unknown bro launch field'),
-    ({'party': 'merge'}, "must be 'start' or 'join'"),
-    ({'isolation': 'shared'}, "must be 'boxed' or 'unboxed'"),
-    ({'grant': [None]}, 'list of non-empty names'),
+    ({'unknown': True}, 'unknown bro fields'),
+    ({'placement': 'merge'}, 'bro.placement'),
+    ({'grant': [None]}, 'list of entries'),
     ({'step_id': -1}, 'non-negative int'),
     ({'index': 0}, 'requires step_id'),
+    ({'into': ''}, 'non-empty git ref'),
   ],
 )
 def test_malformed_bro_arguments_are_denied(tmp_path, args, message):
@@ -193,190 +169,121 @@ def test_malformed_bro_arguments_are_denied(tmp_path, args, message):
     BroType(Host()).launch(_request(tmp_path, **args))
 
 
-def test_owner_of_another_type_may_summon_when_its_launch_section_allows_it(tmp_path):
-  owner = _owner(tmp_path, type='test')
-  owner = replace(
-    owner,
-    launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}},
-  )
-  run = BroType(Host()).launch(_request(tmp_path, owner=owner))
+def test_owner_of_another_type_may_summon_with_authority(tmp_path):
+  run = BroType(Host()).launch(_request(tmp_path, owner=_owner(tmp_path, type='test')))
   assert isinstance(run, Spawn)
 
 
-def test_depth_cap_is_enforced(tmp_path):
+def test_depth_cap_is_enforced_at_the_host_boundary(tmp_path):
   with pytest.raises(LaunchDenied, match='depth cap'):
-    BroType(Host()).launch(_request(tmp_path, owner=_owner(tmp_path, depth=2)))
+    _request(tmp_path, owner=_owner(tmp_path, depth=2))
 
 
-def test_target_must_be_in_the_owners_allow_list(tmp_path):
-  with pytest.raises(LaunchDenied, match='launch.bro.bros'):
-    BroType(Host()).launch(_request(tmp_path, owner=_owner(tmp_path, targets=())))
+def test_target_requires_use_authority(tmp_path):
+  with pytest.raises(LaunchDenied, match='use rule: @dev'):
+    _request(tmp_path, owner=_owner(tmp_path, grant=()))
 
 
-def test_unmarked_placement_prefers_boxed_then_unboxed(tmp_path):
-  worker = BroType(Host())
-  boxed = worker.launch(
+def test_unmarked_placement_defaults_to_boxed_without_using_authority(tmp_path):
+  with pytest.raises(LaunchDenied, match='use rule: bro.placement=boxed'):
     _request(
       tmp_path,
       owner=_owner(
-        tmp_path,
-        party=('boxed', 'unboxed'),
+        tmp_path, grant=('@dev', 'bro.placement=unboxed'), revoke=('bro.placement=boxed',)
       ),
     )
-  )
-  assert cast(BroFacts, boxed.extension).placement == Placement('start', Isolation.BOXED)
-  unboxed = worker.launch(
-    _request(
-      tmp_path,
-      owner=_owner(tmp_path, party=('unboxed',)),
-    )
-  )
-  assert cast(BroFacts, unboxed.extension).placement == Placement('start', Isolation.UNBOXED)
 
 
-def test_join_needs_its_permit_and_inherits_isolation(tmp_path):
-  worker = BroType(Host())
-  with pytest.raises(LaunchDenied, match='launch.bro.party.join'):
-    worker.launch(_request(tmp_path, party='join'))
-  run = worker.launch(
-    _request(
-      tmp_path,
-      owner=_owner(tmp_path, party=('join',)),
-      party='join',
-    )
+def test_join_needs_use_authority_and_inherits_isolation(tmp_path):
+  with pytest.raises(LaunchDenied, match='use rule: bro.placement=join'):
+    _request(tmp_path, placement='join')
+  admitted = _request(
+    tmp_path, placement='join', owner=_owner(tmp_path, grant=('@dev', 'bro.placement=join'))
   )
-  assert cast(BroFacts, run.extension).placement == Placement('join', Isolation.BOXED)
+  run = BroType(Host()).launch(admitted)
+  assert cast(BroFacts, run.extension).placement == Placement('join', None)
   assert cast(SummonLaunchSpec, cast(Spawn, run).launch).isolation is None
 
 
-def test_explicit_isolation_needs_its_permit(tmp_path):
-  with pytest.raises(LaunchDenied, match='launch.bro.party.unboxed'):
-    BroType(Host()).launch(_request(tmp_path, isolation='unboxed'))
+def test_explicit_unboxed_placement_needs_use_authority(tmp_path):
+  with pytest.raises(LaunchDenied, match='use rule: bro.placement=unboxed'):
+    _request(tmp_path, placement='unboxed')
 
 
-def test_granted_launch_names_must_be_held(tmp_path):
-  worker = BroType(Host())
-  with pytest.raises(LaunchDenied, match='does not hold'):
-    worker.launch(_request(tmp_path, grant=['@reviewer']))
-  with pytest.raises(LaunchDenied, match='does not hold'):
-    worker.launch(_request(tmp_path, grant=[':launch.bro.party.unboxed']))
-
-
-def test_summon_request_names_a_retired_permits_replacement(tmp_path):
-  with pytest.raises(LaunchDenied, match=':launch.bro.party.join'):
-    BroType(Host()).launch(_request(tmp_path, grant=[':bro.party.join']))
+def test_gifts_require_give_authority(tmp_path):
+  with pytest.raises(LaunchDenied, match='gift rule'):
+    _request(tmp_path, grant=['@reviewer'])
 
 
 def test_redundant_covered_grant_is_accepted(tmp_path):
-  owner = _owner(tmp_path, targets=('dev', 'reviewer'))
-  run = BroType(Host()).launch(_request(tmp_path, owner=owner, grant=['@reviewer']))
-  assert isinstance(run, Spawn)
-
-
-def test_held_pass_right_reaches_the_child_facts_and_environment(monkeypatch, tmp_path):
-  material = _real_launch_fold(monkeypatch, tmp_path)
-  (material / f'github+work{credentials.MATERIAL_SUFFIX}').write_text('token')
-  owner = _owner(tmp_path)
-  owner = replace(
-    owner,
-    launch={
-      'bro': {
-        **owner.launch['bro'],
-        'pass': frozenset({'github+work'}),
-      }
-    },
-  )
-
   run = BroType(Host()).launch(
-    _request(tmp_path, owner=owner, grant=[':launch.bro.pass.github+work'])
+    _request(tmp_path, grant=['@reviewer'], owner=_owner(tmp_path, grant=('@dev', '@reviewer')))
   )
-
   assert isinstance(run, Spawn)
-  assert run.launch_scope['bro']['pass'] == frozenset({'github+work'})
-  assert json.loads(summoned_child_env(run.launch_scope, None)['RIDE_LAUNCH'])['bro']['pass'] == [
-    'github+work'
-  ]
 
 
-def test_unheld_pass_right_is_denied_before_presence_is_read(monkeypatch, tmp_path):
-  _real_launch_fold(monkeypatch, tmp_path)
-
-  with pytest.raises(LaunchDenied, match='summoner does not hold'):
-    BroType(Host()).launch(_request(tmp_path, grant=[':launch.bro.pass.github+absent']))
-
-
-def test_child_config_missing_pass_instance_names_its_layer(monkeypatch, tmp_path):
-  layers = (
-    ride.scope.ScopeLayer(grant=(':launch.bro.pass.github+absent',), source='project-path-bro'),
-  )
-  _real_launch_fold(monkeypatch, tmp_path, layers)
-
-  with pytest.raises(LaunchDenied, match=r'github\+absent.*project-path-bro.*missing'):
-    BroType(Host()).launch(_request(tmp_path))
+def test_admitted_record_controls_lowering_not_the_starters_authority(tmp_path):
+  admitted = _request(tmp_path)
+  admitted = replace(admitted, owner=_owner(tmp_path, grant=(), revoke=('bro',)))
+  assert isinstance(BroType(Host()).launch(admitted), Spawn)
 
 
-def test_summon_pass_right_requires_an_instance(tmp_path):
-  with pytest.raises(LaunchDenied, match=r'github\+<instance>.*github\+'):
-    BroType(Host()).launch(_request(tmp_path, grant=[':launch.bro.pass.github']))
+def test_pass_option_is_checked_before_credential_presence(tmp_path):
+  with pytest.raises(LaunchDenied, match=r'use rule: bro.cred=github\+absent'):
+    _request(tmp_path, **{'pass': ['github+absent']})
 
 
 @pytest.mark.parametrize(
-  ('field', 'value'),
-  [('grant', 'github'), ('grant', 'github+work'), ('revoke', 'openai')],
+  ('field', 'kind', 'option'), [('grant', 'github', 'add'), ('revoke', 'openai', 'drop')]
 )
-def test_credential_values_name_the_childs_host_config_entry(tmp_path, field, value):
-  with pytest.raises(
-    LaunchDenied,
-    match=r'cannot grant or revoke credential kind.*projects\.<identity>\.bros\.dev',
-  ):
-    BroType(Host()).launch(
-      _request(
-        tmp_path,
-        grant=[value] if field == 'grant' else [],
-        revoke=[value] if field == 'revoke' else [],
-      )
-    )
+def test_credential_kind_overrides_reach_the_child_descriptor(tmp_path, field, kind, option):
+  admitted = _request(
+    tmp_path, **{field: [kind]}, owner=_owner(tmp_path, grant=('@dev', 'bro.cred=github+'))
+  )
+  assert isinstance(admitted.record, Mission)
+  assert kind in admitted.record.descriptor.values[option]
+
+
+def test_a_gift_of_an_absent_instance_is_admitted_without_reading_its_material(tmp_path):
+  admitted = _request(
+    tmp_path,
+    grant=['bro.cred=github+absent'],
+    owner=_owner(tmp_path, grant=('@dev', 'bro.cred=github+absent')),
+  )
+  assert isinstance(BroType(Host()).launch(admitted), Spawn)
 
 
 def test_harness_and_llm_choices_do_not_answer_to_the_summoners_credentials(tmp_path):
-  run = BroType(Host()).launch(_request(tmp_path, harness='claude', llm=':opus5'))
-
-  launch = cast(SummonLaunchSpec, cast(Spawn, run).launch)
-  assert (launch.harness, launch.llm) == ('claude', ':opus5')
+  admitted = _request(tmp_path, harness='claude', llm=':opus5')
+  launch = cast(SummonLaunchSpec, cast(Spawn, BroType(Host()).launch(admitted)).launch)
+  assert launch.harness == 'claude'
+  assert launch.record.descriptor.values['provider'] == 'anthropic'
 
 
 def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
   with pytest.raises(LaunchDenied, match="the claude harness cannot run recipe 'openai:sol'"):
-    BroType(Host()).launch(_request(tmp_path, harness='claude', llm='openai:sol'))
+    _request(tmp_path, harness='claude', llm='openai:sol')
 
 
-def _host_recipes(monkeypatch, *recipes: str) -> None:
-  monkeypatch.setattr(
-    host_config,
-    'launch_llm',
-    lambda attachment, bro: host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, recipes),
-  )
+def _host_recipes(*recipes):
+  source = reading(config={'projects': {'/proj': {'bros': {'dev': {'llm': list(recipes)}}}}})
+  return Host(replace(source, attachment=Attachment(path='/proj')))
 
 
-def test_a_spawned_summon_is_denied_a_configured_list_its_harness_runs_none_of(
-  tmp_path, monkeypatch
-):
-  _host_recipes(monkeypatch, 'anthropic:opus55:high+fast')
-
-  with pytest.raises(LaunchDenied, match='lists no recipe the bro harness can run'):
-    BroType(Host()).launch(_request(tmp_path))
+def test_a_spawned_summon_is_denied_a_configured_list_its_harness_runs_none_of(tmp_path):
+  host = _host_recipes('anthropic:opus55:high+fast')
+  with pytest.raises(LaunchDenied, match='no configured recipe runs'):
+    _request(tmp_path, host=host)
 
 
-def test_a_spawned_summon_runs_the_listed_recipe_its_harness_serves(tmp_path, monkeypatch):
-  _host_recipes(monkeypatch, 'anthropic:opus55:high+fast', 'default')
+def test_a_spawned_summon_runs_the_listed_recipe_its_harness_serves(tmp_path):
+  host = _host_recipes('anthropic:opus55:high+fast', 'default')
+  assert isinstance(BroType(host).launch(_request(tmp_path, host=host)), Spawn)
 
-  assert isinstance(BroType(Host()).launch(_request(tmp_path)), Spawn)
 
-
-def test_a_manual_summon_leaves_the_configured_list_to_the_users_launch(tmp_path, monkeypatch):
-  _host_recipes(monkeypatch, 'anthropic:opus55:high+fast')
-
-  assert isinstance(BroType(Host()).launch(_request(tmp_path, manual=True)), Expect)
+def test_a_manual_summon_leaves_the_configured_list_to_the_operators_launch(tmp_path):
+  host = _host_recipes('anthropic:opus55:high+fast')
+  assert isinstance(BroType(host).launch(_request(tmp_path, host=host, manual=True)), Expect)
 
 
 def test_audit_fields_are_projected_from_bro_facts(tmp_path):
@@ -386,3 +293,13 @@ def test_audit_fields_are_projected_from_bro_facts(tmp_path):
     'placement': {'party': 'start', 'isolation': 'boxed'},
     'target': 'dev',
   }
+
+
+def test_a_bro_launch_requires_an_admitted_record(tmp_path):
+  admitted = replace(_request(tmp_path), record=None)
+  with pytest.raises(ValueError, match='requires an admitted record'):
+    BroType(Host()).launch(admitted)
+
+
+def test_spawn_records_are_missions(tmp_path):
+  assert isinstance(_request(tmp_path).record, Mission)
