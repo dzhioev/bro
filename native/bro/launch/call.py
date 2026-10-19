@@ -105,7 +105,7 @@ async def _idle_waiters(
 ) -> AsyncIterator[tuple[asyncio.Task, asyncio.Task, threading.Event]]:
   cancelled = threading.Event()
   line_task = asyncio.create_task(lines.wait())
-  news_task = asyncio.create_task(off_loop(runner.inbox.wait, None, cancelled))
+  news_task = asyncio.create_task(off_loop(runner.wait_for_news, cancelled))
   try:
     yield line_task, news_task, cancelled
   finally:

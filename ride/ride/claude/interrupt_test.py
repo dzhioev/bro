@@ -7,6 +7,7 @@ import shlex
 import signal
 import struct
 import subprocess
+import sys
 import termios
 import threading
 import time
@@ -143,24 +144,57 @@ class TestRunStreaming:
     assert run == interrupt.StreamedRun(code=0, stopped=False, results=('echo:go',))
     assert waiters.stood_down()
 
-  def test_a_running_task_draws_one_notice_and_holds_the_session_until_it_ends(
+  def test_a_running_task_holds_the_session_without_a_notice_until_it_ends(
     self, tmp_path, store, waiters
   ):
     seen: list[str] = []
     script = (
-      'tasks("t1")\nresult("started")\nresult(next_message())\n'
-      'result("still waiting")\ntasks()\nresult("finished")\n'
+      'tasks("t1")\nresult("started")\nresult("still waiting")\ntasks()\nresult("finished")\n'
       'result("after the end: " + repr(next_message()))\n'
     )
 
     run = _stream(tmp_path, script, store, waiters, on_result=seen.append)
 
     assert (run.code, run.stopped) == (0, False)
-    started, notice, waiting, finished, after_end = run.results
-    assert (started, waiting, finished) == ('started', 'still waiting', 'finished')
-    assert 't1 local_bash `work t1`' in notice
-    assert after_end == 'after the end: None'
+    assert run.results == ('started', 'still waiting', 'finished', 'after the end: None')
     assert seen == list(run.results)
+
+  def test_a_task_that_ages_past_the_patience_draws_a_silence_notice(
+    self, tmp_path, store, waiters, monkeypatch
+  ):
+    monkeypatch.setattr(turn_end, 'PATIENCE_SECONDS', 0.2)
+    script = 'tasks("t1")\nresult("started")\nresult(next_message())\ntasks()\nresult("finished")\n'
+
+    run = _stream(tmp_path, script, store, waiters)
+
+    started, notice, finished = run.results
+    assert (started, finished) == ('started', 'finished')
+    assert notice.startswith('[notification: background work has been silent]')
+    assert 't1 local_bash `work t1` silent for' in notice
+
+  def test_a_failing_silence_timer_fails_the_run(self, tmp_path, store, waiters, monkeypatch):
+    def failing_expiry(port):
+      raise RuntimeError('the clock broke')
+
+    monkeypatch.setattr(turn_end, 'next_silence_expiry', failing_expiry)
+    script = 'tasks("t1")\nresult("started")\ntime.sleep(60)\n'
+
+    with pytest.raises(RuntimeError, match='the silence timer failed') as raised:
+      _stream(tmp_path, script, store, waiters)
+
+    assert 'the clock broke' in str(raised.value.__cause__)
+
+  def test_a_beat_that_stalls_after_the_session_went_idle_draws_a_notice(
+    self, tmp_path, store, waiters
+  ):
+    command = f'{sys.executable} -c "from bro import watches; watches.beat(0.05); import time; time.sleep(60)"'
+    store.start(command)
+    script = 'result("started")\nresult(next_message())\nresult("done")\n'
+
+    run = _stream(tmp_path, script, store, waiters, on_result=lambda _: None)
+
+    started, notice, done = run.results
+    assert 'is alive but has stopped beating' in notice
 
   def test_ambient_tasks_are_no_background_work(self, tmp_path, store, waiters):
     script = 'tasks(ambient=("housekeeping",))\nresult("idle")\nresult(repr(next_message()))\n'
@@ -208,9 +242,7 @@ class TestRunStreaming:
 
     run = _stream(tmp_path, script, store, waiters)
 
-    first, rewoken, stdin = run.results
-    assert (first, rewoken) == ('first', 'rewoken')
-    assert 't1 local_bash' in stdin
+    assert run.results == ('first', 'rewoken', 'stdin: None')
 
   def test_another_stop_hooks_exit_is_no_rewake_of_the_waiter(self, tmp_path, store, waiters):
     with waiters.locked():
@@ -254,6 +286,7 @@ class TestRunStreaming:
       order.append(signal_number)
       send_signal(process, signal_number)
 
+    monkeypatch.setattr(turn_end, 'PATIENCE_SECONDS', 0.2)
     monkeypatch.setattr(WaiterState, 'stand_down', _stand_down)
     monkeypatch.setattr(subprocess.Popen, 'send_signal', _send_signal)
     script = (
@@ -270,6 +303,7 @@ class TestRunStreaming:
     self, tmp_path, store, waiters, monkeypatch
   ):
     monkeypatch.setattr(interrupt, '_EXIT_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(turn_end, 'PATIENCE_SECONDS', 0.2)
     script = (
       'signal.signal(signal.SIGINT, signal.SIG_IGN)\ntasks("t1")\nresult("started")\n'
       'next_message()\nos.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(10)\n'
@@ -315,6 +349,7 @@ class TestRunStreaming:
       settle(port)
 
     monkeypatch.setattr(turn_end, 'settle', _settle)
+    monkeypatch.setattr(turn_end, 'PATIENCE_SECONDS', 0.2)
     script = (
       'def interrupted(*_):\n  tasks("t2")\n  result("interrupted")\n  sys.exit(0)\n'
       'signal.signal(signal.SIGINT, interrupted)\ntasks("t1")\nresult("started")\n'

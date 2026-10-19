@@ -344,6 +344,27 @@ class TestPollLoopResilience:
     assert fetch.calls == 3
     assert 'Logging error' not in capsys.readouterr().err
 
+  def test_the_watch_beats_before_any_request_and_every_cycle(self, monkeypatch):
+    self._baseline(monkeypatch)
+    events: list[str] = []
+    monkeypatch.setattr(poll_pr.watches, 'beat', lambda within: events.append(f'beat {within}'))
+    promise = 10 + poll_pr._CYCLE_SLACK_SECONDS
+    fetch = _Stepper([_open_pr(), _open_pr(), {'merged': True}])
+    monkeypatch.setattr(
+      poll_pr.pulls, 'pull_request', lambda *a: (events.append('request'), fetch(*a))[1]
+    )
+
+    assert _poll(interval=10) == 0
+
+    assert events == [
+      f'beat {promise}',
+      'request',
+      f'beat {promise}',
+      'request',
+      f'beat {promise}',
+      'request',
+    ]
+
   def test_remote_disconnected_cycle_error_is_swallowed(self, monkeypatch):
     self._baseline(monkeypatch)
     fetch = _Stepper(

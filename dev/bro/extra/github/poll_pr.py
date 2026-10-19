@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Optional, TypeVar
 
+from bro import watches
 from bro.base import credentials, log
 from bro.base.args import Parser
 from bro.extra.github import api, pulls
@@ -332,6 +333,10 @@ class FailureTracker:
     )
 
 
+# what one cycle's requests may take beyond the poll interval before the watch counts as stalled
+_CYCLE_SLACK_SECONDS = 60
+
+
 def poll_pr(
   owner: str,
   repo: str,
@@ -347,6 +352,8 @@ def poll_pr(
   conflicts = ConflictTracker()
   checks = CheckTracker()
   sources = FailureTracker(failure_grace)
+  beat_promise = interval + _CYCLE_SLACK_SECONDS
+  watches.beat(beat_promise)
 
   try:
     # the baseline decides what counts as pre-existing, so it is all-or-nothing:
@@ -375,6 +382,7 @@ def poll_pr(
       )
 
     while True:
+      watches.beat(beat_promise)
       # re-read per cycle so a short-lived minted credential stays fresh across
       # a watch that outlives it
       cycle_token = token()

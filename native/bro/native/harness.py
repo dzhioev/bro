@@ -7,7 +7,7 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Literal, Optional, Protocol, cast
 
 import bro.llm.mcp as llm_mcp
-from bro import spells as spell_store
+from bro import spells as spell_store, turn_end
 from bro.base import log, spawn
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
@@ -60,8 +60,10 @@ _JOB_DESCRIPTION = (
   'only the commands the list admits and stops at the first it refuses, exiting 126 with the '
   'refusal in the output; unrestricted personas run it in `bash -c`. `fg` waits for exit and '
   'returns tail-kept output; if its timeout or other job news ends the wait first, the job becomes '
-  '`bg` and the result names its id and `poll` continuation. `bg` returns immediately and reports '
-  'only its exit through this run’s notifications. `timeout_seconds` is capped at '
+  '`bg` and the result names its id and `poll` continuation; so does a job that prints nothing for '
+  f'{turn_end.PATIENCE_SECONDS / 60:g} minutes. `timeout_seconds` bounds the wait, never the command. '
+  '`bg` returns immediately and reports only its exit through this run’s notifications. '
+  '`timeout_seconds` is capped at '
   f'{_JOB_WAIT_CAP_SECONDS:g} and a clamp is named in the result. output is bounded by `limit` '
   'lines and the shared byte cap, with skipped/pending markers.'
 )
@@ -79,14 +81,6 @@ _KILL_DESCRIPTION = (
   'the grace period. waits for and consumes the exit it forces, so no later exit notification '
   'follows; unread output remains available to `poll`, and unread watch output remains eligible '
   'for notification delivery.'
-)
-
-_CHILL_DESCRIPTION = (
-  'wait without ending the turn until a job exits, a watch line or another notification arrives, '
-  'or `timeout_seconds` pass, whichever is first. use it to wait on background work: a run that '
-  'ends its turn with jobs still running is reminded of them first. a timeout names the jobs '
-  f'still running so you can check on them. `timeout_seconds` is capped at {_JOB_WAIT_CAP_SECONDS:g} '
-  'and a clamp is named in the result. arrived news is delivered right after this result.'
 )
 
 _JOBS_DESCRIPTION = (
@@ -112,9 +106,20 @@ async def _wait_for_foreground_job(
 ) -> str:
   wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
   deadline = time.monotonic() + wait_seconds
+  silent = False
   try:
     with inbox.waiter() as cancelled:
-      await off_loop(inbox.wait, deadline, cancelled)
+      while True:
+        if await off_loop(
+          inbox.wait, min(deadline, job.last_active() + turn_end.PATIENCE_SECONDS), cancelled
+        ):
+          break
+        now = time.monotonic()
+        if now >= deadline:
+          break
+        if now >= job.last_active() + turn_end.PATIENCE_SECONDS:
+          silent = True
+          break
   except asyncio.CancelledError:
     job.become_background()
     raise
@@ -122,6 +127,8 @@ async def _wait_for_foreground_job(
   result, became_background = job.settle_foreground(limit)
   if became_background:
     result = f'{result}\n{job.id} continues in bg mode; read on with poll(id={job.id!r})'
+    if silent:
+      result = f'{result}\n{job.id} printed nothing for {turn_end.PATIENCE_SECONDS / 60:g} minutes'
   if clamp_note is not None:
     result = f'{result}\n[{clamp_note}]'
   return result
@@ -158,30 +165,11 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   def jobs() -> list[JobStatus]:
     return [entry.status() for entry in live_run.registry.values()]
 
-  async def chill(timeout_seconds: float) -> str:
-    wait_seconds, clamp_note = _bounded_wait(timeout_seconds, 'timeout_seconds')
-    deadline = time.monotonic() + wait_seconds
-    with live_run.inbox.waiter() as cancelled:
-      woken = await off_loop(live_run.inbox.wait, deadline, cancelled)
-    if woken:
-      result = 'woken by news'
-    else:
-      running = [
-        f'{status.id} {status.mode} `{status.command}`'
-        for status in (entry.status() for entry in live_run.registry.values())
-        if status.state == 'running'
-      ]
-      result = f'no news after {wait_seconds:g}s; running: {", ".join(running) or "no jobs"}'
-    if clamp_note is not None:
-      result = f'{result}\n[{clamp_note}]'
-    return result
-
   return [
     llm_mcp.FunctionTool(job, name='job', description=_JOB_DESCRIPTION),
     llm_mcp.FunctionTool(poll, name='poll', description=_POLL_DESCRIPTION),
     llm_mcp.FunctionTool(kill, name='kill', description=_KILL_DESCRIPTION),
     llm_mcp.FunctionTool(jobs, name='jobs', description=_JOBS_DESCRIPTION),
-    llm_mcp.FunctionTool(chill, name='chill', description=_CHILL_DESCRIPTION),
   ]
 
 

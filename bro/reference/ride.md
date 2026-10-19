@@ -154,6 +154,14 @@ Under a finite command list a watch runs its line in brash under the session's b
 Each joined party member has its own session directory and therefore its own store.
 The session watch reaches the model through the selected harness's delivery port without adding commands to the persona's tool reach.
 
+A healthy wait costs no turn:
+only failed work gets a turn-end notice, and background work earns one when it stays silent.
+Background work is silent while it prints nothing and the model does not read it;
+a silent piece of work notices after `PATIENCE_SECONDS`, then after waits that double up to `PATIENCE_CAP_SECONDS` counted from each notice, and any output or read starts the count over.
+A watch producer may promise its next beat with `watches.beat(within_seconds)` (shell: `watch-beat <within_seconds>`), from the loop that does its work;
+a producer that has beaten and then goes `BEAT_MISSES_ALLOWED` promises without another is stalled, which is a failed waiter, and a producer that never beats is judged by its process alone.
+An idle run wakes for a stall as it falls due, and the stall is reported once per beat.
+
 ## Claude harness
 
 A Claude session runs Claude Code with the natives the selected bro's tool groups map to, Claude's own skills and base prompt, and the bro's persona, spells, and MCP namespaces.
@@ -186,6 +194,10 @@ A solo session runs Claude in print mode over stream-json, its prompt delivered 
 Claude then stays alive as long as stdin is open, and a finished background task or a waiter's rewake starts a turn of its own.
 At each turn's `result` event the runner applies the shared end-of-turn rule (`bro.turn_end`),
 with Claude's background work read off the stream's last `background_tasks_changed` event, less the entries flagged `ambient`, which Claude marks as housekeeping rather than activity.
+A claude task's stream names no output, so its silence is its age.
+A timer thread of the stream session sends the silence notice, and the notice of a beat that stalls, as user messages while the session awaits input, re-reading the watches' beats every few seconds;
+a failure of that thread ends the stream and fails the run.
+A TUI session gets no timed notices.
 A notice goes in as a user message on stdin;
 an end stands the waiter down and closes stdin, which ends the session without the up to 30 seconds Claude holds a closing print session for a pending async hook.
 A stop stands the waiter down before it interrupts Claude, which kills a pending waiter, so that kill never reads as the waiter failing;
@@ -226,11 +238,10 @@ A managed session's runtime-owned `quest watch` therefore reaches the model with
 an in-process run uses the same path for each `bro::watch` it starts in its temporary store.
 Watch lines enter the model after tool results or wake an idle turn.
 
-At each one-shot turn end, the runner applies the shared end-of-turn rule over covered and uncovered missions, live model watches, pending waking watch lines, running jobs, and live session traffic.
+At each one-shot turn end, the runner applies the shared end-of-turn rule over covered and uncovered missions, live and stalled model watches, pending waking watch lines, running jobs, and live session traffic.
 A notice reaches the LLM through the inbox as a user-role item recorded in a `notification` step.
-An end returns the last reply, while a wait idles on the inbox until job or watch news wakes the next turn.
-A model that waits on a job on purpose calls `bro::chill(timeout_seconds)` instead of ending the turn:
-it blocks on the same inbox and returns on news or at the timeout, naming the jobs still running, so no turn-end notice is spent on it.
+An end returns the last reply, while a wait idles on the inbox until job or watch news, a job's silence notice, or a stall wakes the next turn.
+A foreground `job` wait ends on a silent job as a background one does, the job continuing in the background.
 Ending the run still closes every job and orphans every in-flight mission, while a delivered `answer` or a `raise` ends it at once.
 `bro chat` uses the same inbox to wake on watch lines while continuing to accept a human's message between turns.
 

@@ -401,6 +401,37 @@ async def test_watch_renders_both_types_and_cuts_an_oversized_chat_line(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_watch_promises_a_beat_before_its_first_request_and_before_every_read(monkeypatch):
+  beats: list[float] = []
+  monkeypatch.setattr(mission.watches, 'beat', beats.append)
+  promise = 0.05 + mission.ACCEPT_TIMEOUT
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(BROKER_MISSION, 'ROOT')
+    watch = mission.watch(wait_seconds=0.05)
+    first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+    channel, arm = await next_message(server)
+    assert beats == [promise]
+    await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
+    channel, listing = await next_message(server)
+    await reply(server, channel, listing, outcome='ok', value={'missions': []})
+    channel, poll = await next_message(server)
+    assert beats == [promise, promise]
+    event = {
+      'seq': 1,
+      'kind': 'launch',
+      'type': 'bro',
+      'mission': 'BRO-1',
+      'parent': 'ROOT',
+      'args': {'target': 'dev'},
+      'transition': 'started',
+    }
+    await reply(server, channel, poll, outcome='ok', value={'head': 1, 'events': [event]})
+
+    assert await first_line == 'mission BRO-1 (bro to dev) started'
+    watch.close()
+
+
+@pytest.mark.asyncio
 async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(monkeypatch):
   def event(sequence: int) -> dict:
     return {

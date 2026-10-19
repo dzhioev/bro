@@ -37,6 +37,7 @@ PRODUCER_COMMAND_ENV = 'BRO_WATCH_COMMAND'
 PRODUCER_POLICY_ENV = 'BRO_WATCH_BRASH_POLICY'
 PRODUCER_JOURNAL_ENV = 'BRO_WATCH_JOURNAL'
 SESSION_WATCH_COMMAND = 'quest watch'
+BEAT_MISSES_ALLOWED = 3
 _QUIET_MARK = b'\x1f'
 _PENDING_MARKER = '[...pending watch lines...]'
 _COMMAND_SUFFIX = '.command'
@@ -48,6 +49,8 @@ _JOURNAL_SUFFIX = '.journal'
 _JOURNAL_HEAD_SUFFIX = '.journal-head'
 _JOURNAL_WAKE_SUFFIX = '.journal-wake'
 _WAKE_ON_QUIET_SUFFIX = '.wake-on-quiet'
+_BEAT_SUFFIX = '.beat'
+_STALL_REPORTED_SUFFIX = '.beat-reported'
 _TURN_FILENAME = '.turn'
 _NOTIFIED_FILENAME = '.notified'
 _LOCK_FILENAME = '.lock'
@@ -277,6 +280,15 @@ class Batch:
 
 
 @dataclass(frozen=True)
+class BeatSnapshot:
+  """One read of a producer's beat: its text identifies the beat, and `deadline`
+  is the epoch time after which it counts as stalled."""
+
+  text: str
+  deadline: float
+
+
+@dataclass(frozen=True)
 class Watch:
   command: str
   directory: Path
@@ -319,8 +331,56 @@ class Watch:
   def wake_on_quiet_file(self) -> Path:
     return self.directory / f'{self.slug}{_WAKE_ON_QUIET_SUFFIX}'
 
+  @property
+  def beat_file(self) -> Path:
+    return self.directory / f'{self.slug}{_BEAT_SUFFIX}'
+
+  @property
+  def stall_reported_file(self) -> Path:
+    return self.directory / f'{self.slug}{_STALL_REPORTED_SUFFIX}'
+
   def wakes_on_quiet(self) -> bool:
     return self.wake_on_quiet_file.exists()
+
+  def mark_stall_reported(self, snapshot: 'BeatSnapshot') -> None:
+    """Record that the stall of the beat `snapshot` observed has been reported."""
+    self.stall_reported_file.write_text(snapshot.text)
+
+  def stall_unreported_deadline(self) -> Optional[float]:
+    """The deadline of the producer's current beat while its stall is unreported."""
+    snapshot = self.beat_snapshot()
+    if snapshot is None:
+      return None
+    try:
+      reported = self.stall_reported_file.read_text()
+    except FileNotFoundError:
+      return snapshot.deadline
+    return None if reported == snapshot.text else snapshot.deadline
+
+  def beat_snapshot(self) -> Optional['BeatSnapshot']:
+    """The producer's current beat as one read, or None for a producer that never beat."""
+    try:
+      raw = self.beat_file.read_text()
+    except FileNotFoundError:
+      return None
+    fields = raw.split()
+    try:
+      beaten_at, promise = float(fields[0]), float(fields[1])
+    except (IndexError, ValueError):
+      raise WatchError(f'{self.beat_file} carries a malformed beat') from None
+    if len(fields) != 2 or promise <= 0:
+      raise WatchError(f'{self.beat_file} carries a malformed beat')
+    return BeatSnapshot(raw, beaten_at + BEAT_MISSES_ALLOWED * promise)
+
+  def beat_deadline(self) -> Optional[float]:
+    snapshot = self.beat_snapshot()
+    return None if snapshot is None else snapshot.deadline
+
+  def beat_stalled(self, now: float) -> bool:
+    """Whether the producer has beaten and then gone `BEAT_MISSES_ALLOWED`
+    promises without another."""
+    deadline = self.beat_deadline()
+    return deadline is not None and now > deadline
 
   def producer_identity(self) -> Optional[ProcessIdentity]:
     return ProcessIdentity.read(self.pid_file)
@@ -407,6 +467,8 @@ class Watch:
       self.journal_head_file,
       self.journal_wake_file,
       self.wake_on_quiet_file,
+      self.beat_file,
+      self.stall_reported_file,
     ):
       path.unlink(missing_ok=True)
 
@@ -501,6 +563,19 @@ class Store:
       else:
         watch.wake_on_quiet_file.unlink(missing_ok=True)
 
+  def next_beat_deadline(self) -> Optional[float]:
+    """The earliest epoch time a live beating producer stalls at, over those whose
+    stall is not yet reported, or None."""
+    deadlines = [
+      deadline
+      for watch in self.declared()
+      if watch.producer_alive() and (deadline := watch.stall_unreported_deadline()) is not None
+    ]
+    return min(deadlines) if len(deadlines) > 0 else None
+
+  def mark_stall_reported(self, command: str, snapshot: BeatSnapshot) -> None:
+    self._watch(command).mark_stall_reported(snapshot)
+
   def mark_notified(self, live_set: frozenset[str]) -> bool:
     """Record a live set and return whether this is its first notice."""
     encoded = json.dumps(sorted(live_set), ensure_ascii=False, separators=(',', ':')).encode()
@@ -530,7 +605,7 @@ class Store:
       if published is not None and published >= target:
         return True
       identity = watch.producer_identity()
-      if identity is None or not identity.alive():
+      if identity is None or not identity.alive() or watch.beat_stalled(time.time()):
         return False
       try:
         wake_fd = os.open(watch.journal_wake_file, os.O_RDWR | os.O_NONBLOCK)
@@ -543,17 +618,18 @@ class Store:
           return True
         if not identity.alive():
           return False
+        beat_deadline = watch.beat_deadline()
+        timeout = None if beat_deadline is None else max(0.0, beat_deadline - time.time())
         pidfd_open = getattr(os, 'pidfd_open', None)
         if pidfd_open is None:
-          os.set_blocking(wake_fd, True)
-          os.read(wake_fd, 1)
-          continue
-        try:
-          process_fd = pidfd_open(identity.process_id)
-        except ProcessLookupError:
-          continue
-        cleanup.callback(os.close, process_fd)
-        ready, _, _ = select.select([wake_fd, process_fd], [], [])
+          ready, _, _ = select.select([wake_fd], [], [], timeout)
+        else:
+          try:
+            process_fd = pidfd_open(identity.process_id)
+          except ProcessLookupError:
+            continue
+          cleanup.callback(os.close, process_fd)
+          ready, _, _ = select.select([wake_fd, process_fd], [], [], timeout)
         if wake_fd in ready:
           os.read(wake_fd, 1)
 
@@ -1007,6 +1083,24 @@ def publish_journal_head(head: int) -> None:
   with os.fdopen(journal, 'wb', buffering=0) as writer:
     os.set_blocking(journal, True)
     writer.write(f'{head}\n'.encode())
+
+
+def beat(within_seconds: float) -> None:
+  """Promise this watch's store another beat within `within_seconds`.
+
+  Called from a producer's work loop, it does nothing outside a producer."""
+  if not within_seconds > 0 or within_seconds == float('inf'):
+    raise ValueError('a beat promise must be a finite positive number of seconds')
+  directory = os.environ.get(PRODUCER_DIRECTORY_ENV)
+  slug_value = os.environ.get(PRODUCER_SLUG_ENV)
+  if os.environ.get(PRODUCER_ENV) != '1' or directory is None or slug_value is None:
+    return
+  target = Path(directory) / f'{slug_value}{_BEAT_SUFFIX}'
+  staging = target.with_name(f'{target.name}.{os.getpid()}.tmp')
+  staging.write_text(f'{time.time()!r} {within_seconds!r}\n')
+  os.replace(staging, target)
+  # a journal wait already blocked must see this beat's deadline
+  _signal_journal_change(Path(directory) / f'{slug_value}{_JOURNAL_WAKE_SUFFIX}')
 
 
 def session_watch_admitted(

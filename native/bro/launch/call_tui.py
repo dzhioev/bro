@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import threading
 from contextlib import ExitStack
 from datetime import datetime
 from typing import ClassVar, Optional
@@ -128,6 +129,7 @@ class ChatApp(App):
     self._inbox_task: asyncio.Task | None = None
     self._idle = asyncio.Event()
     self._idle.set()
+    self._inbox_wait: threading.Event | None = None
     self._display_lifetime = ExitStack()
     self._display_session: DisplaySession | None = None
     self._observer: LiveDisplayObserver | None = None
@@ -197,6 +199,8 @@ class ChatApp(App):
 
   def _begin_turn(self) -> None:
     self._idle.clear()
+    if self._inbox_wait is not None:
+      self._runner.stand_down_watchdog(self._inbox_wait)
     field = self.query_one('#input-bar', MessageInput)
     field.placeholder = _BUSY_PLACEHOLDER
     field.disabled = True
@@ -208,13 +212,17 @@ class ChatApp(App):
     field.placeholder = _IDLE_PLACEHOLDER
     field.focus()
     self._idle.set()
+    # the inbox waiter's deadline predates whatever this turn started
+    self._runner.inbox.notify()
 
   async def _watch_inbox(self) -> None:
     while True:
-      with self._runner.inbox.waiter() as cancelled:
-        await off_loop(self._runner.inbox.wait, None, cancelled)
       await self._idle.wait()
-      if not self._runner.inbox.has_news():
+      with self._runner.inbox.waiter() as cancelled:
+        self._inbox_wait = cancelled
+        await off_loop(self._runner.wait_for_news, cancelled)
+      self._inbox_wait = None
+      if not self._idle.is_set() or not self._runner.inbox.has_news():
         continue
       self._begin_turn()
       self._turn = self._wake_from_news()
