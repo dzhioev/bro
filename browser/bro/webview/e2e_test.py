@@ -30,9 +30,11 @@ from ride.artifacts import view_mount
 from ride.e2e_test import (
   _RUNTIME_PYTHON,
   IsolatedEnv,
+  _root_mission,
   _session_broxy_probe,
   _wait_until,
   isolated_env as isolated_env,
+  route_environment as route_environment,
 )
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, find_container_id
@@ -48,8 +50,30 @@ from pathlib import Path
 
 completed = subprocess.run(['webview', 'open'], capture_output=True, text=True)
 assert completed.returncode == 1, completed
-assert ':launch.webview' in completed.stderr, completed.stderr
+assert 'use rule: webview:' in completed.stderr, completed.stderr
 Path('/workspace/.webview-denied-report').write_text('denied')
+"""
+
+
+_GIVE_ONLY_PROFILE_ROUTE = r"""
+import json
+import subprocess
+from pathlib import Path
+
+from bro.base import credentials
+
+assert credentials.try_get('cookies') is None
+refused = subprocess.run(['webview', 'open', '--cookies', 'e2e'], capture_output=True, text=True)
+assert refused.returncode == 1, refused
+assert 'use rule: webview:' in refused.stderr, refused.stderr
+launched = subprocess.run(
+  ['summon', '--grant', 'webview.cred=cookies+e2e', '--llm', 'echo', '--harness', 'bro',
+   'browser', 'Open the authenticated page and report its profile state.'],
+  capture_output=True, text=True,
+)
+assert launched.returncode == 0, launched.stderr
+assert 'visible-profile-cookie' in launched.stdout, launched.stdout
+Path('/workspace/.give-only-profile-report').write_text(launched.stdout)
 """
 
 
@@ -60,7 +84,7 @@ from bro.summon import summon_and_wait
 answer = summon_and_wait(
   'bro',
   'open the granted webview',
-  grant=[':launch.webview'],
+  grant=['webview'],
   llm='echo',
   harness='bro',
   timeout=300,
@@ -561,9 +585,19 @@ import json
 import subprocess
 from pathlib import Path
 
+from bro.broker.client import Client
+from bro.mission import query_mission
+
 opened = subprocess.run(['webview', 'open'], capture_output=True, text=True)
 assert opened.returncode == 0, opened.stderr
-Path('/workspace/.webview-nested-report').write_text(json.loads(opened.stdout)['mission'])
+mission = json.loads(opened.stdout)['mission']
+client = Client.from_env()
+assert client is not None
+with client:
+  record = query_mission(client, mission, wait_seconds=30, wait_for_settlement=True)
+assert record.get('settled') is True, record
+assert record['result']['outcome'] == 'ok', record
+Path('/workspace/.webview-nested-report').write_text(mission)
 """
 
 
@@ -581,7 +615,7 @@ with client:
   try:
     nested = client.call('launch', {'type': 'webview'}, 30)
     assert nested.payload.get('outcome') == 'denied', nested.payload
-    assert ':launch.webview' in nested.payload.get('error', ''), nested.payload
+    assert 'use rule' in nested.payload.get('error', '') and 'webview' in nested.payload['error'], nested.payload
   except Exception:
     client.result(mission, {'outcome': 'failed', 'error': traceback.format_exc()})
     raise
@@ -638,7 +672,7 @@ def one_file(reply):
 
 try:
   denied = run('webview', 'open', '--vnc', expected=1)
-  assert ':launch.webview.vnc' in denied.stderr, denied.stderr
+  assert 'use rule' in denied.stderr and 'webview.vnc' in denied.stderr, denied.stderr
 
   upload = workspace / 'upload.txt'
   upload.write_text('shared upload payload')
@@ -840,7 +874,7 @@ def ask(mission, payload):
 try:
   assert credentials.try_get('cookies') is None
   denied = run('webview', 'open', '--cookies', 'denied', expected=1)
-  assert "beyond the owner's" in denied.stderr, denied.stderr
+  assert 'use rule' in denied.stderr and 'webview.cred=cookies+denied' in denied.stderr, denied.stderr
 
   opened = json.loads(run('webview', 'open', '--cookies', 'e2e').stdout)
   mission = opened['mission']
@@ -997,7 +1031,8 @@ def _run_route(
   vnc: bool,
   observer: Callable[[Workspace, threading.Event], None],
   allowed: bool = True,
-  launch_scope: dict | None = None,
+  grants: tuple[str, ...] | None = None,
+  target: str = 'bro',
 ) -> tuple[int, Workspace]:
   import ride.broker_root as broker_root
 
@@ -1016,7 +1051,7 @@ def _run_route(
     workspace_docker.Launch(
       name=name,
       command=_session_broxy_probe(source),
-      env={'RIDE_BRO': 'bro-dev'},
+      env={'RIDE_BRO': target},
       secrets=(),
       tty=False,
       image=env.image,
@@ -1035,11 +1070,13 @@ def _run_route(
     code = broker_root.run_root_via_broker(
       launch,
       workspace=workspace,
-      bro='bro-dev',
-      launch_scope=(
-        launch_scope
-        if launch_scope is not None
-        else ({'webview': {'vnc': True} if vnc else {}} if allowed else {})
+      bro=target,
+      mission=_root_mission(
+        workspace.repository,
+        grants=grants
+        if grants is not None
+        else (('webview', 'webview.vnc') if vnc else ('webview',) if allowed else ()),
+        target=target,
       ),
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,
@@ -1254,9 +1291,14 @@ def test_webview_open_is_denied_without_its_type_key(
   assert (workspace.tree / '.webview-denied-report').read_text() == 'denied'
 
 
+@pytest.mark.parametrize('delegate', [False, True], ids=['direct', 'give-only'])
 @pytest.mark.parametrize('profile_version', sorted(PLAYWRIGHT_MCP_PROFILE_VERSIONS))
 def test_cookies_pass_loads_profile_without_entering_the_owner_store(
-  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, profile_version: int
+  isolated_env: IsolatedEnv,
+  monkeypatch: pytest.MonkeyPatch,
+  profile_version: int,
+  delegate: bool,
+  register_test_bros,
 ) -> None:
   host_store = isolated_env.home / '.bro'
   profile_value = {
@@ -1294,18 +1336,72 @@ def test_cookies_pass_loads_profile_without_entering_the_owner_store(
   monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
   monkeypatch.setattr(credentials, '_default_store', None)
 
+  from bro.base import host_config
+  from bro.bro import BaseBro
+
+  class ProfileGiver(BaseBro):
+    name = 'profile-giver'
+
+  if delegate:
+    register_test_bros(ProfileGiver)
+
+  config = isolated_env.root / 'give-only-profile.json'
+  config.write_text(
+    json.dumps(
+      {
+        'projects': {
+          str(isolated_env.project): {
+            'bros': {
+              ProfileGiver.name: {'grant': ['@browser', 'webview.cred=cookies+e2e to @browser']},
+            },
+          },
+        },
+      }
+    )
+  )
+  if delegate:
+    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+    import ride.bro_worker as ride_spawn
+
+    original_started_party_launch = ride_spawn.started_party_launch
+    child_source = (
+      _PROFILE_ROUTE
+      + r"""
+from bro.run_lifecycle import RunLifecycle
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('give-only-profile-child')
+channel.completed(report_path.read_text(), 'ok')
+channel.close()
+"""
+    )
+
+    def started_party_launch(*arguments, **keywords):
+      assert arguments[0].bro == 'browser'
+      return replace(
+        original_started_party_launch(*arguments, **keywords),
+        command=_session_broxy_probe(child_source),
+      )
+
+    monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
+
   code, workspace = _run_route(
     isolated_env,
     monkeypatch,
-    suffix='profile',
-    source=_PROFILE_ROUTE,
+    suffix='profile-give-only' if delegate else 'profile',
+    source=_GIVE_ONLY_PROFILE_ROUTE if delegate else _PROFILE_ROUTE,
     vnc=False,
     observer=lambda _workspace, _route_ended: None,
-    launch_scope={'webview': {'pass': frozenset({'cookies+e2e'})}},
+    grants=() if delegate else ('webview', 'webview.cred=cookies+e2e'),
+    target=ProfileGiver.name if delegate else 'bro',
   )
 
   assert code == 0, _diagnostic(workspace, '.webview-profile-error')
-  report = json.loads((workspace.tree / '.webview-profile-report.json').read_text())
+  report = json.loads(
+    (
+      workspace.tree / ('.give-only-profile-report' if delegate else '.webview-profile-report.json')
+    ).read_text()
+  )
   assert 'visible-profile-cookie' in report['browser_state']['text']
   assert 'hidden-profile-cookie' not in report['request'].get('text', '')
   assert _live_containers(workspace) == []
@@ -1330,10 +1426,7 @@ def test_spawned_child_opens_a_granted_webview(
     source=_SUMMON_WEBVIEW_ROUTE,
     vnc=False,
     observer=lambda _workspace, _route_ended: None,
-    launch_scope={
-      'bro': {'bros': frozenset({'bro'}), 'party': frozenset({'boxed'})},
-      'webview': {},
-    },
+    grants=('@bro', 'webview'),
   )
   assert code == 0, _diagnostic(workspace, '.webview-summon-error')
   assert (workspace.tree / '.webview-summon-report').read_text() == 'opened'
@@ -1360,9 +1453,7 @@ def test_browser_one_shot_uses_its_seeded_webview_and_checked_snapshot_refs(
     source=_BROWSER_ONE_SHOT_ROOT,
     vnc=False,
     observer=lambda _workspace, _route_ended: None,
-    launch_scope={
-      'bro': {'bros': frozenset({'browser'}), 'party': frozenset({'boxed'})},
-    },
+    grants=('@browser',),
   )
 
   assert code == 0, _diagnostic(workspace, '.browser-one-shot-error')
@@ -1391,9 +1482,7 @@ def test_browser_browse_thread_routes_clarification_live_share_upload_and_log(
     source=_BROWSER_THREAD_ROOT,
     vnc=False,
     observer=lambda _workspace, _route_ended: None,
-    launch_scope={
-      'bro': {'bros': frozenset({'browser'}), 'party': frozenset({'boxed'})},
-    },
+    grants=('@browser',),
   )
 
   assert code == 0, _diagnostic(workspace, '.browser-thread-error')
@@ -1433,6 +1522,10 @@ def test_webview_peer_cannot_launch_without_its_own_type_key(
   assert code == 0, diagnostic
   assert (workspace.tree / '.webview-nested-report').read_text()
   assert _live_containers(workspace) == []
+
+  assert not any(
+    directory.name.startswith('webview-') for directory in workspace.path.parent.iterdir()
+  )
 
 
 def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(

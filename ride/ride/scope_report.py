@@ -1,126 +1,83 @@
-"""The launch and credential scope a prospective ride session would hold."""
+"""Render a prospective descriptor, base authority, and credential presence."""
 
+import json
 from pathlib import Path
-from typing import Optional
+from typing import cast
 
-from bro.base import credentials, host_config
-from bro.base.scope import launch_names, launch_pass_name
+from bro.authority.records import dump_values
+from bro.authority.values import Strings
+from bro.base import credentials
 from bro.workspace.project import project_config
-from ride.harness import get_harness
+from ride.authority_launch import mission_view, request
+from ride.authority_reading import Reading
+from ride.authority_scope import existence
+from ride.bro_worker import BroType
 from ride.repository import Repository, as_repository
-from ride.scope import (
-  LaunchScopeError,
-  bind_launch_credentials,
-  configured_scope_layers,
-  effective_launch,
-  launch_llm_spec,
-  scoped_secrets,
-)
 
 
-def report_scope(repo: Optional[Repository | Path], bro: Optional[str], harness: str) -> int:
+def report_scope(repo: Repository | Path | None, bro: str | None, harness: str) -> int:
   try:
-    repo = None if repo is None else as_repository(repo)
-    if repo is None and bro is None:
-      raise ValueError('ride scope requires --bro when detached')
-    config = (
-      None
-      if repo is None
-      else (repo.project_config() if repo.is_url else project_config(repo.git_dir))
-    )
+    repository = None if repo is None else as_repository(repo)
     if bro is None:
-      assert config is not None
-      bro_name = config.default_bro
-    else:
-      bro_name = bro
-    driver = get_harness(harness)
-    recipe = driver.scope_recipe()
-    attachment = None if repo is None else repo.identity
-    binding = bind_launch_credentials(attachment, bro_name)
-    llm_spec = launch_llm_spec(driver, attachment, bro_name, None)
-    scoped = scoped_secrets(bro_name, recipe, attachment=attachment, llm_spec=llm_spec)
-    registry = credentials.default_registry()
-    selection = {kind: instance for kind, instance in scoped.selection.items() if kind in registry}
-    store = credentials.Store(registry, credentials.STORE_DIR, selection)
-    launch = effective_launch(
-      bro_name,
-      configured_scope_layers(attachment, bro_name, attachment_repository=repo),
-      grant=(),
-      revoke=(),
-      credential_store=None,
+      if repository is None:
+        raise ValueError('ride scope requires --bro when detached')
+      bro = (
+        repository.project_config().default_bro
+        if repository.is_url
+        else project_config(repository.git_dir).default_bro
+      )
+    reading = Reading.take(repository)
+    requested, _ = request(
+      BroType, {'target': bro, 'harness': harness}, reading, reading.operator(), forward=False
     )
-  except (LaunchScopeError, ValueError) as error:
-    print(f'cannot compute the scope: {error}')
-    return 1
-  print(f'repository: {repo.identity if repo is not None else "(detached)"}')
-  print(f'bro:        {bro_name} ({recipe.name})')
-  print(f'launch:     {", ".join(launch_names(launch)) or "(none)"}')
-  _print_pass_rights(launch, store)
-  _print_tiers(
-    [
-      ('required', sorted(scoped.required)),
-      ('optional', sorted(scoped.optional - scoped.required)),
-    ],
-    binding,
-    store,
-  )
-  return 0
-
-
-def _print_pass_rights(launch: object, store: credentials.Store) -> None:
-  rights = [name for name in launch_names(launch) if launch_pass_name(name) is not None]
-  if not rights:
-    return
-  present = store.instance_names()
-  width = max(len(right) for right in rights)
-  print('pass:')
-  for right in rights:
-    credential_name = launch_pass_name(right)
-    assert credential_name is not None
-    kind, instance = credentials.parse_name(credential_name)
-    assert instance is not None
-    state = 'PRESENT' if credentials.storage_name(kind, instance) in present else 'MISSING'
-    print(f'  {right:<{width}}  {state}')
-
-
-def _print_tiers(
-  tiers: list[tuple[str, list[str]]],
-  binding: host_config.CredentialSelection,
-  store: credentials.Store,
-) -> None:
-  """print each non-empty tier under one column layout measured over all of them."""
-  names = [name for _, tier in tiers for name in tier]
-  if len(names) == 0:
-    return
-  optional = set(dict(tiers).get('optional', ()))
-  present = store.instance_names()
-  name_width = max(len(name) for name in names)
-  reads_width = max(len(_reads(name, binding, store)) for name in names)
-  for label, tier in tiers:
-    if len(tier) == 0:
-      continue
-    print(f'{label}:')
-    for name in tier:
-      storage = store.selected_name(name)
-      if storage in present:
+    descriptor = reading.rules.normalize(requested, reading)
+    mission = reading.rules._mission(requested, descriptor, reading)
+    selection = {
+      name.removeprefix('cred.'): cast(str, value)
+      for name, value in descriptor.values.items()
+      if name.startswith('cred.')
+    }
+    store = credentials.Store(credentials.default_registry(), credentials.STORE_DIR, selection)
+    present = store.instance_names()
+    present_kinds = frozenset(
+      kind
+      for kind, instance in selection.items()
+      if credentials.storage_name(kind, instance) in present
+    )
+    manifest = existence(descriptor, reading, present_kinds, check_presence=False)
+    print(
+      'descriptor: '
+      + json.dumps(dump_values(descriptor.values), ensure_ascii=False, sort_keys=True)
+    )
+    view = mission_view(mission)
+    for key in ('summon_entries', 'permits', 'may_give'):
+      print(f'{key}: ' + (', '.join(view[key]) or '(none)'))
+    print('credentials:')
+    for kind, instance in sorted(selection.items()):
+      name = credentials.storage_name(kind, instance)
+      if kind not in manifest.required | manifest.optional:
+        state = 'SKIPPED'
+      elif name in present:
         state = 'PRESENT'
-      elif name in optional and name not in store.selection:
+      elif kind in manifest.optional and not instance and kind not in reading.picks(bro):
         state = 'SKIPPED'
       else:
         state = 'MISSING'
-      reads = _reads(name, binding, store)
-      print(f'  {name:<{name_width}}  {reads:<{reads_width}}  {state}')
-
-
-def _reads(
-  kind: str,
-  binding: host_config.CredentialSelection,
-  store: credentials.Store,
-) -> str:
-  if kind in binding.instances:
-    selected = credentials.storage_name(kind, binding.instances[kind])
-    return f'{selected} ({binding.layers[kind]})'
-  if kind in store.defaults:
-    selected = credentials.storage_name(kind, store.defaults[kind])
-    return f'{selected} (store defaults)'
-  return f'{kind} (unpicked)'
+      print(f'  {kind}+{instance}: {state}')
+    instances = set()
+    for permission in mission.authority.permissions():
+      if (
+        permission.option is not None
+        and permission.option.startswith('cred.')
+        and isinstance(permission.values, Strings)
+        and not permission.values.cofinite
+      ):
+        kind = permission.option.removeprefix('cred.')
+        instances.update((kind, instance) for instance in permission.values.members)
+    for kind, instance in sorted(instances):
+      state = 'PRESENT' if credentials.storage_name(kind, instance) in present else 'MISSING'
+      print(f'authority instance {kind}+{instance}: {state}')
+    return 0
+  except (ValueError, credentials.SecretNotFound) as error:
+    print(f'cannot compute the scope: {error}')
+    return 1

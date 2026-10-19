@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import ride.claude.claude_argv as ride_claude_argv
+from bro.authority_view_test_helper import publish
 from bro.base.spawn import console_script, module_argv
 from bro.bro import BaseBro
 from bro.llm.llms import anthropic
@@ -143,13 +144,9 @@ class TestRideSessionLaunch:
       _ride_session_launch(_spec(bro='declaring'))
 
   def test_a_summoning_session_without_brash_gets_no_shell(self, monkeypatch):
-    from bro.summon import LAUNCH_ENV, encode_launch
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring())
-    monkeypatch.setenv(
-      LAUNCH_ENV,
-      encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
-    )
+    publish(monkeypatch, targets=('reviewer',))
     argv = _ride_session_launch(_spec(bro='declaring')).argv
     assert set(native_tools.SHELL).isdisjoint(_tools(argv))
     matchers = [entry['matcher'] for entry in _settings(argv)['hooks']['PreToolUse']]
@@ -203,13 +200,9 @@ class TestRideSessionLaunch:
         assert shlex.split(hook['command']) == module_argv('ride.claude.session_end')
 
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch, tmp_path):
-    from bro.summon import LAUNCH_ENV, encode_launch
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
-    monkeypatch.setenv(
-      LAUNCH_ENV,
-      encode_launch({'bro': {'bros': frozenset({'reviewer'})}}),
-    )
+    publish(monkeypatch, targets=('reviewer',))
     argv = _ride_session_launch(
       _spec(bro='declaring', solo=True, hold='unattended', prompt='go'),
       brash_policy=tmp_path / 'brash-policy.json',

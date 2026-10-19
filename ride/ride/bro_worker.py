@@ -12,32 +12,26 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, cast
 
-from bro.base import configs, credentials, log
-from bro.base.scope import split_scope_overrides
+from bro.authority.patterns import Descriptor
+from bro.authority.records import dump_request
+from bro.authority.rules import Mission, Prepared
+from bro.base import log
 from bro.quest import BRO
 from bro.summon import (
+  DEFAULT_TALK,
   DEFAULT_TIMEOUT,
-  PARTY_BOXED,
-  PARTY_CHOICES,
-  PARTY_JOIN,
   PARTY_MEMBER_ENV,
-  PARTY_UNBOXED,
   summoned_child_env,
 )
 from bro.worker_types import (
-  LAUNCH_PASS,
   Expect,
-  Launch,
   LaunchDenied,
   LaunchRequest,
-  LaunchSet,
   Spawn,
   UnattributablePeer,
   WorkerType,
-  dump_launch,
 )
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.workspace.metadata import Isolation
@@ -48,6 +42,7 @@ if TYPE_CHECKING:
   from bro.broker.spawn import ChildHandle
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
+  from ride.authority_reading import Reading
   from ride.peer_facts import PeerFacts
   from ride.repository import Repository
   from ride.runtime_bundle import RuntimeBundle
@@ -94,48 +89,6 @@ def human_git_identity_env(repository):
   return resolve(repository)
 
 
-def bind_launch_llm(*args):
-  from ride.scope import bind_launch_llm as resolve
-
-  return resolve(*args)
-
-
-def preflight_scoped_launch(*args, **kwargs):
-  from ride.scope import preflight_scoped_launch as resolve
-
-  return resolve(*args, **kwargs)
-
-
-def scoped_secrets(*args, **kwargs):
-  from ride.scope import scoped_secrets as resolve
-
-  return resolve(*args, **kwargs)
-
-
-def launch_llm_spec(*args, **kwargs):
-  from ride.scope import launch_llm_spec as resolve
-
-  return resolve(*args, **kwargs)
-
-
-def configured_scope_layers(*args, **kwargs):
-  from ride.scope import configured_scope_layers as resolve
-
-  return resolve(*args, **kwargs)
-
-
-def effective_launch(*args, **kwargs):
-  from ride.scope import effective_launch as resolve
-
-  return resolve(*args, **kwargs)
-
-
-def launch_covers(*args, **kwargs):
-  from ride.scope import launch_covers as resolve
-
-  return resolve(*args, **kwargs)
-
-
 def record_resume_spec(*args, **kwargs):
   from ride.session import record_resume_spec as lower
 
@@ -168,74 +121,49 @@ def workspace_isolation(name: str) -> Isolation:
 
 class BroHost(Protocol):
   peers: Any
+  reading: Reading
   workspace: Any
   journal: Any
-  depth_cap: int
-  summon_harness: str
   session_env: dict[str, str]
   summon_spawner: Any
 
 
 @dataclass(frozen=True)
 class SummonLaunchSpec:
-  """an authorized summon as a launch description, cheap to build on the broker
-  loop: the request fields plus the summoner's workspace name and tree, attributed
-  by the control at request time.
-  `SummonSpawner` lowers it to a concrete launch off-loop — the target-bro
-  import, scoped-set computation, and any base-ref resolution are blocking work
-  the broker loop should not carry.
-
-  `passes` become the child's credential picks and grants.
-  `grant`/`revoke` are the request's authority values for the recorded session spec.
-  The control already resolved them into the child's own launch section and a request
-  naming no `harness` into the control's summon harness.
-  `share` names artifact refs the control already checked against the
-  summoner's own reach; the lowering links them into the child's view.
-  `env` is the party's `--env` additions, carried by the child's session like
-  the root's."""
-
-  target: str
+  record: Mission
   prompt: str
   parent: str
   parent_tree: Path
-  summoner: Optional[dict[str, Any]]
-  launch_scope: Launch
-  harness: str
-  repo: Optional[Repository | Path] = None
-  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
-  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
-  into: Optional[str] = None
-  hold: Optional[str] = None
-  grant: tuple[str, ...] = ()
-  revoke: tuple[str, ...] = ()
-  passes: tuple[str, ...] = ()
+  summoner: dict[str, Any] | None
+  repo: Repository | Path | None = None
+  into: str | None = None
   share: tuple[str, ...] = ()
-  llm: Optional[str] = None
-  party: Literal['start', 'join'] = 'start'
-  isolation: Optional[Isolation] = Isolation.BOXED
   env: dict[str, str] = field(default_factory=dict)
 
-  def __post_init__(self) -> None:
-    if self.party not in ('start', 'join'):
-      raise ValueError("summon party must be 'start' or 'join'")
-    if self.party == 'start' and self.isolation is None:
-      raise ValueError('a party start needs an isolation')
-    if self.party == 'join' and self.isolation is not None:
-      raise ValueError('a party join inherits its isolation')
+  @property
+  def target(self) -> str:
+    return cast(str, self.record.descriptor.values['target'])
+
+  @property
+  def harness(self) -> str:
+    return cast(str, self.record.descriptor.values['harness'])
+
+  @property
+  def hold(self) -> str:
+    return cast(str, self.record.descriptor.values['hold'])
+
+  @property
+  def party(self) -> Literal['start', 'join']:
+    return 'join' if self.record.descriptor.values['placement'] == 'join' else 'start'
+
+  @property
+  def isolation(self) -> Isolation | None:
+    placement = self.record.descriptor.values['placement']
+    return None if placement == 'join' else Isolation(cast(str, placement))
 
 
 def _workspace_name(channel: str) -> str:
   return f'broker-{channel}'
-
-
-def _pass_scope_overrides(passes: Sequence[str]) -> tuple[list[str], list[str]]:
-  credential_grants: list[str] = []
-  for name in passes:
-    kind, instance = credentials.parse_name(name)
-    if instance is None:
-      raise ValueError(f'passed credential {name!r} names no instance')
-    credential_grants.append(kind)
-  return list(passes), credential_grants
 
 
 def _child_session_spec(
@@ -250,6 +178,7 @@ def _child_session_spec(
 
   A started party records its resume variant;
   a joined member uses the spec only to build its `do-ride` argv and environment."""
+  from ride.authority_scope import checked_recipe
   from ride.repository import as_repository
   from ride.session import SessionSpec
 
@@ -258,8 +187,9 @@ def _child_session_spec(
   if resolved_isolation is None:
     raise ValueError('summoned session isolation is unresolved')
   repo = None if launch.repo is None else as_repository(launch.repo).identity
-  llm = bind_launch_llm(harness, repo, launch.target, launch.llm)
-  pass_picks, pass_grants = _pass_scope_overrides(launch.passes)
+  spec = checked_recipe(
+    launch.record.request, launch.record.descriptor, cast('Reading', launch.record.reading)
+  )
   return SessionSpec(
     name=workspace_name,
     repo=repo,
@@ -271,19 +201,20 @@ def _child_session_spec(
     hold=launch.hold
     if launch.hold is not None
     else default_hold(solo=True, isolation=resolved_isolation),
-    cred=pass_picks,
-    grant=[*pass_grants, *launch.grant],
-    revoke=list(launch.revoke),
-    llm=llm,
-    resolved_llm=harness.resolve_llm(llm, launch.target).dump(),
+    cred=[],
+    grant=[],
+    revoke=[],
+    llm=None,
+    resolved_llm=spec.dump(),
+    authority_request=dump_request(launch.record.request, launch.record.descriptor),
+    mission=launch.record,
+    operator_values=sorted(launch.record.operator_values),
     solo=True,
     resume=False,
     into=launch.into,
     bro=launch.target,
     prompt=launch.prompt,
     subject=launch.prompt,
-    summon_depth=launch.summon_depth,
-    summon_harness=launch.summon_harness,
     runtime_bundle=runtime_reference,
     env=dict(launch.env),
   )
@@ -294,40 +225,14 @@ def _child_launch_scope(
   spec: SessionSpec,
   repository: Optional[Repository],
 ) -> tuple[ScopedLaunch, ScopedSecrets]:
+  from ride.authority_launch import credentials_for, hydrate
   from ride.session import ScopedLaunch
 
-  harness = get_harness(spec.harness)
-  scoped = scoped_secrets(
-    launch.target,
-    harness.scope_recipe(),
-    attachment=None if repository is None else repository.identity,
-    attachment_repository=repository,
-    cred=spec.cred,
-    grant=spec.grant,
-    revoke=spec.revoke,
-    llm_spec=spec.llm_spec,
-  )
-  auth_error = harness.preflight_auth(spec, scoped)
-  if auth_error is not None:
-    raise ValueError(auth_error)
-  _, store = preflight_scoped_launch(
-    scoped,
-    spec.bro,
-    attachment=spec.repo,
-    attachment_repository=repository,
-    grant=spec.grant,
-    revoke=spec.revoke,
-    fixed_launch=launch.launch_scope,
-  )
-  return (
-    ScopedLaunch(
-      scoped=scoped,
-      launch=launch.launch_scope,
-      store=store,
-      hydrated_kinds=store.kinds,
-    ),
-    scoped,
-  )
+  scoped = credentials_for(launch.record)
+  files, kinds = hydrate(scoped)
+  return ScopedLaunch(
+    scoped=scoped, store=files, hydrated_kinds=kinds, mission=launch.record
+  ), scoped
 
 
 def _lower_summon(
@@ -392,7 +297,7 @@ def _lower_summon(
       human_env=human_git_identity_env(repo),
       runtime_bundle=runtime_bundle,
       container_runtime=container_runtime,
-      env=summoned_child_env(launch.launch_scope, launch.summoner),
+      env=summoned_child_env(launch.summoner),
       mounts=mounts,
       credential_directory=(
         workspace.path / 'credentials' if temporary_store is None else temporary_store / 'store'
@@ -422,21 +327,38 @@ def _lower_summon(
 
 
 def _joined_ride_command(launch: SummonLaunchSpec) -> str:
-  parts = ['summon', '--join']
-  if launch.hold is not None:
-    parts.extend(['--hold', launch.hold])
-  for value in launch.grant:
-    parts.extend(['--grant', value])
-  for value in launch.revoke:
-    parts.extend(['--revoke', value])
-  for value in launch.passes:
-    parts.extend(['--pass', value])
-  for value in launch.share:
-    parts.extend(['--share', value])
-  if launch.llm is not None:
-    parts.extend(['--llm', launch.llm])
-  parts.extend(['--harness', launch.harness, launch.target, launch.prompt])
-  return ' '.join(parts)
+  import shlex
+
+  from bro.authority.authority import Entry, Pair, partition
+  from bro.authority.syntax import render_entry, render_permission
+
+  parts = ['summon', '--join', '--hold', launch.hold, '--harness', launch.harness]
+  requested = launch.record.request
+  reading = cast('Reading', launch.record.reading)
+  types = tuple(reading.installation.declarations)
+  for flag, authority in (('--grant', requested.gift), ('--limit', requested.cap)):
+    for region in partition(authority.permissions()):
+      pair = authority.evaluate_region(region, launch.record.descriptor, types)
+      if pair.is_empty:
+        if flag == '--limit':
+          parts.extend(['--revoke', render_permission(region)])
+      elif flag == '--grant' or pair != Pair.top(region.type, types):
+        parts.extend([flag, render_entry(Entry(region, pair), types)])
+  for name, value in requested.values.items():
+    if name.startswith('cred.'):
+      kind = name.removeprefix('cred.')
+      parts.extend(['--pass', f'{kind}+{value}'])
+    elif name in ('provider', 'model', 'effort'):
+      parts.extend(['--' + name, str(value)])
+    elif name == 'fast' and value is True:
+      parts.append('--fast')
+    elif name in ('add', 'drop'):
+      for kind in sorted(cast(frozenset[str], value)):
+        parts.extend(['--grant' if name == 'add' else '--revoke', kind])
+  for ref in launch.share:
+    parts.extend(['--share', ref])
+  parts.extend([launch.target, launch.prompt])
+  return shlex.join(parts)
 
 
 def _lower_join(
@@ -468,7 +390,7 @@ def _lower_join(
   member_env = {
     'RIDE_COMMAND': ride_command,
     PARTY_MEMBER_ENV: member,
-    **summoned_child_env(launch.launch_scope, launch.summoner),
+    **summoned_child_env(launch.summoner),
   }
 
   if workspace.isolation is Isolation.BOXED:
@@ -598,140 +520,9 @@ class BroFacts:
   placement: Placement = Placement('start', Isolation.BOXED)
 
 
-_BRO_ARGUMENTS = frozenset(
-  {
-    'target',
-    'prompt',
-    'into',
-    'hold',
-    'step_id',
-    'index',
-    'grant',
-    'revoke',
-    'llm',
-    'harness',
-    'party',
-    'isolation',
-  }
-)
-_MANUAL_LAUNCH_OWNED = ('hold', 'llm', 'harness', 'party', 'isolation')
-_DEFAULT_TALK = frozenset({'worker.say'})
-
-
-def _validate_bro_arguments(args: dict[str, Any], *, manual: bool) -> None:
-  from bro.llm.providers import LLMSelectionError, parse as parse_llm
-  from bro.mcp import HOLDS
-
-  unknown = sorted(set(args) - _BRO_ARGUMENTS)
-  if unknown:
-    raise LaunchDenied(f'unknown bro launch field(s): {", ".join(unknown)}')
-  for key in ('target', 'prompt'):
-    value = args.get(key)
-    if not isinstance(value, str) or value == '':
-      raise LaunchDenied(f'bro launch needs a non-empty string {key!r}')
-  into = args.get('into')
-  if into is not None and (not isinstance(into, str) or into == ''):
-    raise LaunchDenied("bro launch 'into' must be a non-empty git ref")
-  hold = args.get('hold')
-  if hold is not None and hold not in HOLDS:
-    raise LaunchDenied(f"bro launch 'hold' must be one of {', '.join(HOLDS)}")
-  step_id = args.get('step_id')
-  if step_id is not None and (
-    not isinstance(step_id, int) or isinstance(step_id, bool) or step_id < 0
-  ):
-    raise LaunchDenied("bro launch 'step_id' must be a non-negative int")
-  index = args.get('index')
-  if index is not None and (
-    step_id is None or not isinstance(index, int) or isinstance(index, bool) or index < 0
-  ):
-    raise LaunchDenied("bro launch 'index' requires step_id and must be a non-negative int")
-  for key in ('grant', 'revoke'):
-    if key in args and (
-      not isinstance(args[key], list)
-      or not all(isinstance(value, str) and value for value in args[key])
-    ):
-      raise LaunchDenied(f'bro launch {key!r} must be a list of non-empty names')
-  llm = args.get('llm')
-  if llm is not None:
-    if not isinstance(llm, str):
-      raise LaunchDenied("bro launch 'llm' must be a string")
-    try:
-      parse_llm(llm)
-    except LLMSelectionError as error:
-      raise LaunchDenied(f"bro launch 'llm': {error}") from error
-  harness = args.get('harness')
-  if harness is not None:
-    if not isinstance(harness, str):
-      raise LaunchDenied("bro launch 'harness' must be a string")
-    try:
-      get_harness(harness)
-    except (TypeError, ValueError) as error:
-      raise LaunchDenied(str(error)) from error
-  party = args.get('party')
-  if party is not None and party not in ('start', 'join'):
-    raise LaunchDenied("bro launch 'party' must be 'start' or 'join'")
-  isolation = args.get('isolation')
-  if isolation is not None and isolation not in {value.value for value in Isolation}:
-    raise LaunchDenied("bro launch 'isolation' must be 'boxed' or 'unboxed'")
-  if party == 'join':
-    refused = [key for key in ('isolation', 'into') if key in args]
-    if manual:
-      refused.append('manual')
-    if refused:
-      raise LaunchDenied(f"a party join shares the owner's tree; drop {', '.join(refused)}")
-  if manual:
-    refused = sorted(key for key in _MANUAL_LAUNCH_OWNED if key in args)
-    if refused:
-      raise LaunchDenied(f'a manual bro launch owns {", ".join(refused)}; drop the field(s)')
-
-
-def _placement(
-  payload: Mapping[str, object], *, party: str | None, isolation: str | None, manual: bool
-) -> Placement:
-  raw_party = payload.get('party', frozenset())
-  if not isinstance(raw_party, frozenset):
-    raise LaunchDenied("the bro launch payload's 'party' field is malformed")
-  held = ', '.join(f':launch.bro.party.{value}' for value in sorted(raw_party)) or '(none)'
-  starts = {PARTY_BOXED, PARTY_UNBOXED}
-  if manual:
-    if raw_party.isdisjoint(starts):
-      raise LaunchDenied(f'a manual summon needs a party start permission; launch held: {held}')
-    return Placement('start', None)
-  if party == 'join':
-    if PARTY_JOIN not in raw_party:
-      raise LaunchDenied(f'joining a party needs :launch.bro.party.join; launch held: {held}')
-    return Placement('join', None)
-  if isolation is None:
-    if PARTY_BOXED in raw_party:
-      return Placement('start', Isolation.BOXED)
-    if PARTY_UNBOXED in raw_party:
-      return Placement('start', Isolation.UNBOXED)
-    raise LaunchDenied(f'an unmarked summon needs a party start permission; launch held: {held}')
-  resolved = Isolation(isolation)
-  required = PARTY_BOXED if resolved is Isolation.BOXED else PARTY_UNBOXED
-  if required not in raw_party:
-    raise LaunchDenied(
-      f'starting a {isolation} party needs :launch.bro.party.{required}; launch held: {held}'
-    )
-  return Placement('start', resolved)
-
-
-def _known_bros() -> tuple[str, ...]:
-  from bro.registry import known_names
-
-  return tuple(known_names())
-
-
 class BroType(WorkerType):
   host: BroHost
   name = BRO
-  launch_schema = MappingProxyType(
-    {
-      'bros': LaunchSet(_known_bros),
-      'party': LaunchSet(lambda: PARTY_CHOICES),
-      'pass': LAUNCH_PASS,
-    }
-  )
   default_timeout = DEFAULT_TIMEOUT
   widens_talk = True
   manual = True
@@ -750,127 +541,57 @@ class BroType(WorkerType):
 
   def __init__(self, host: BroHost):
     super().__init__(cast(Any, host))
-    if (
-      not isinstance(host.depth_cap, int) or isinstance(host.depth_cap, bool) or host.depth_cap <= 0
-    ):
-      raise ValueError('summon depth cap must be a positive integer')
 
   def talk(self, request: LaunchRequest) -> Talk:
-    return cast('Talk', _DEFAULT_TALK | request.requested_talk)
+    return cast('Talk', DEFAULT_TALK | request.requested_talk)
 
   def launch(self, request: LaunchRequest) -> Spawn | Expect:
     args = request.args
-    _validate_bro_arguments(args, manual=request.manual)
-    if request.owner.depth + 1 > self.host.depth_cap:
-      raise LaunchDenied(f'summon depth cap ({self.host.depth_cap}) reached')
-    owner_payload = request.owner.launch.get(BRO)
-    if owner_payload is None:
-      raise LaunchDenied('the owner does not hold :launch.bro')
-    targets = owner_payload.get('bros', frozenset())
-    if not isinstance(targets, frozenset):
-      raise LaunchDenied("the bro launch payload's 'bros' field is malformed")
-    target = args['target']
-    if target not in targets:
-      from bro.registry import known_names
-
-      if target not in known_names():
-        raise LaunchDenied(f'unknown bro {target!r}')
-      owner_name = request.owner.bro if request.owner.bro is not None else request.owner.type
-      raise LaunchDenied(f"{target!r} is not in {owner_name}'s :launch.bro.bros set")
-    placement = _placement(
-      owner_payload,
-      party=args.get('party'),
-      isolation=args.get('isolation'),
-      manual=request.manual,
-    )
-    if placement.party == 'join':
-      placement = Placement('join', workspace_isolation(request.owner.workspace))
-    grant = args.get('grant', [])
-    revoke = args.get('revoke', [])
-    try:
-      grant_credentials, grant_launch = split_scope_overrides(grant)
-      revoke_credentials, _ = split_scope_overrides(revoke)
-      requested_credentials = sorted(set(grant_credentials) | set(revoke_credentials))
-      if requested_credentials:
-        names = ', '.join(requested_credentials)
-        raise LaunchDenied(
-          f'a summon request cannot grant or revoke credential kind(s): {names}; '
-          f'pass an instance when the owner holds its pass right, or configure the kind for '
-          f'the child in projects.<identity>.bros.{target}'
-        )
-      beyond = launch_covers(request.owner.launch, grant_launch)
-      if beyond:
-        raise LaunchDenied(
-          'cannot grant launch permission(s) the summoner does not hold: ' + ', '.join(beyond)
-        )
-      if not request.manual:
-        launch_llm_spec(
-          get_harness(args.get('harness') or self.host.summon_harness),
-          self.host.workspace.metadata.repo,
-          target,
-          args.get('llm'),
-        )
-      layers = configured_scope_layers(self.host.workspace.metadata.repo, target)
-      credential_store = credentials.Store(
-        credentials.default_registry(), credentials.STORE_DIR, {}
-      )
-      child_launch = effective_launch(
-        target,
-        layers,
-        grant=grant,
-        revoke=revoke,
-        credential_store=credential_store,
-        grant_source='summon request',
-      )
-    except LaunchDenied:
-      raise
-    except (RuntimeError, ValueError) as error:
-      raise LaunchDenied(str(error)) from error
+    record = request.record
+    if record is None:
+      raise ValueError('bro start requires an admitted record')
+    values = record.request.values if isinstance(record, Prepared) else record.descriptor.values
+    target = values.get('target')
+    if not isinstance(target, str) or not target:
+      raise LaunchDenied('preparation check: bro.target: target must be set')
+    prompt = args.get('prompt')
+    if not isinstance(prompt, str) or not prompt:
+      raise LaunchDenied('content check: bro.prompt must be a non-empty string')
     attribution = self.host.peers.attribution_for_mission(self.host.journal, request.owner.mission)
     summoned_by = self._summoned_by(attribution, args)
-    facts = BroFacts(bro=target, placement=placement)
-    if request.manual:
+    if isinstance(record, Prepared):
       return Expect(
         {
           'target': target,
-          'prompt': args['prompt'],
-          'launch': dump_launch(child_launch),
-          'grant': list(grant),
-          'revoke': list(revoke),
-          'pass': list(request.passes),
+          'prompt': prompt,
+          'request': dump_request(record.request, Descriptor('bro', {})),
           'summoner': summoned_by,
           'repo': self.host.workspace.metadata.repo,
           'into': args.get('into'),
+          'root': self.host.workspace.name,
         },
-        facts,
-        child_launch,
+        BroFacts(bro=target, placement=Placement('start', None)),
       )
+    placement_value = values['placement']
+    placement = (
+      Placement('join', None)
+      if placement_value == 'join'
+      else Placement('start', Isolation(cast(str, placement_value)))
+    )
     return Spawn(
       SummonLaunchSpec(
-        target=target,
-        prompt=args['prompt'],
+        prompt=prompt,
         parent=request.owner.workspace,
         parent_tree=request.owner.tree,
         repo=self.host.workspace.repository,
         summoner=summoned_by,
-        launch_scope=child_launch,
-        harness=args.get('harness') or self.host.summon_harness,
-        summon_depth=self.host.depth_cap,
-        summon_harness=self.host.summon_harness,
+        record=record,
         into=args.get('into'),
-        hold=args.get('hold'),
-        grant=tuple(grant),
-        revoke=tuple(revoke),
-        passes=request.passes,
         share=request.share,
-        llm=args.get('llm'),
-        party=placement.party,
-        isolation=None if placement.party == 'join' else placement.isolation,
         env=dict(self.host.session_env),
       ),
       self.host.summon_spawner,
-      facts,
-      child_launch,
+      BroFacts(bro=target, placement=placement),
     )
 
   @staticmethod
@@ -949,16 +670,11 @@ class PendingBro:
   launch: Any
   target: str
   prompt: str
-  launch_scope: Launch
-  grant: tuple[str, ...]
-  revoke: tuple[str, ...]
-  passes: tuple[str, ...]
+  request: dict[str, Any]
+  root: str
   summoner: dict[str, Any] | None
   repo: str | None
   into: str | None
-
-  def credential_scope_overrides(self) -> tuple[list[str], list[str]]:
-    return _pass_scope_overrides(self.passes)
 
   @property
   def token(self) -> str:
@@ -988,54 +704,18 @@ def pending_bro(launch: Any) -> PendingBro:
   if launch.type != BRO:
     raise ValueError(f'the launch token names worker type {launch.type!r}, not bro')
   data = launch.extension
-  expected = {
-    'target',
-    'prompt',
-    'launch',
-    'grant',
-    'revoke',
-    'pass',
-    'summoner',
-    'repo',
-    'into',
-  }
+  expected = {'target', 'prompt', 'request', 'root', 'summoner', 'repo', 'into'}
   if set(data) != expected:
     raise ValueError('pending bro launch carries an invalid extension shape')
-  for key in ('target', 'prompt'):
-    if not isinstance(data[key], str) or data[key] == '':
-      raise ValueError(f'pending bro launch carries no usable {key}')
-  for key in ('grant', 'revoke', 'pass'):
-    value = data[key]
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-      raise ValueError(f'pending bro launch carries invalid {key}')
-  try:
-    pass_picks, _ = _pass_scope_overrides(data['pass'])
-  except ValueError as error:
-    raise ValueError(f'pending bro launch carries invalid pass: {error}') from error
-  if len({credentials.parse_name(name)[0] for name in pass_picks}) != len(pass_picks):
-    raise ValueError('pending bro launch carries more than one pass for a credential kind')
-  credential_seeds = {
-    *split_scope_overrides(data['grant'])[0],
-    *split_scope_overrides(data['revoke'])[0],
-  }
-  if credential_seeds:
-    raise ValueError('pending bro launch carries credential seeds')
-  from bro.worker_types import parse_launch
-
-  launch_scope = parse_launch(data['launch'], subject='pending bro launch')
-  if data['summoner'] is not None and not isinstance(data['summoner'], dict):
-    raise ValueError('pending bro launch carries invalid summoner attribution')
-  for key in ('repo', 'into'):
-    if data[key] is not None and not isinstance(data[key], str):
+  for key in ('target', 'prompt', 'root'):
+    if not isinstance(data[key], str) or not data[key]:
       raise ValueError(f'pending bro launch carries invalid {key}')
   return PendingBro(
     launch,
     data['target'],
     data['prompt'],
-    launch_scope,
-    tuple(data['grant']),
-    tuple(data['revoke']),
-    tuple(pass_picks),
+    data['request'],
+    data['root'],
     data['summoner'],
     data['repo'],
     data['into'],

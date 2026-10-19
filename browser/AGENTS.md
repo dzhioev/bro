@@ -13,8 +13,7 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 
 ## Components
 
-- `bro/webview/worker.py` — the dependency-light registered type, its bounded `pass` and `vnc` launch schema, launch validation, and packaged container specification.
-  A caller needs `:launch.webview`, plus `:launch.webview.vnc` for the optional noVNC endpoint (`bro/reference/ride.md`, "Session permissions and credentials")
+- `bro/webview/worker.py` — the dependency-light registered type, its option declaration and wire mapping, and packaged container specification.
 - `bro/webview/profile.py` — the profile bound, envelope validation, and profile-version to Playwright MCP pin pairing
 - `bro/webview/container/Dockerfile` — the runtime-derived image with Xvfb, noVNC, Chromium, and the pinned Playwright MCP
 - `bro/webview/serve.py` — the shared display, VNC, and Playwright startup plus the container daemon, passed-profile loader, and command loop
@@ -87,7 +86,7 @@ The `ready` say is `{event: ready, vnc}`, and a close ends the mission with the 
 
 The daemon collects files new or changed anywhere under `/workspace` around each tool call, except the read-only artifact view, then mints and removes them.
 It withholds every tool in `WITHHELD_TOOLS` from both the live roster and calls.
-A webview peer's own `launch` section is empty, so the generic type-key check prevents it from launching another worker.
+A webview mission has an empty base authority.
 
 ## Image pin
 

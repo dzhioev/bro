@@ -50,7 +50,7 @@ def build_bundle(tree: Path) -> None:
 
 
 def run_host_job(
-  tree: Path, config: Path, jobs: Path, job_name: str, timeout: Optional[float]
+  tree: Path, config: Path, jobs: Path, job_name: str, timeout: Optional[int]
 ) -> Path:
   """run the job as a host process, the way the broker's benchmark kind runs it,
   answering with its job directory. Past `timeout` the whole process group goes,
@@ -157,7 +157,7 @@ def _in_session() -> bool:
   return BROKER_CHANNEL in os.environ or BROKER_UPSTREAM in os.environ
 
 
-def _through_broker(config: str, timeout: Optional[float]) -> tuple[Path, str]:
+def _through_broker(config: str, timeout: Optional[int]) -> tuple[Path, str]:
   """the job started through the session broker: its job directory, and the
   artifact ref retention resolves it from."""
   try:
@@ -174,7 +174,7 @@ def _through_broker(config: str, timeout: Optional[float]) -> tuple[Path, str]:
   return one_job(run / OUTPUT_DIRECTORY), ref
 
 
-def _on_host(tree: Path, config: Path, jobs: Path, timeout: Optional[float]) -> tuple[Path, str]:
+def _on_host(tree: Path, config: Path, jobs: Path, timeout: Optional[int]) -> tuple[Path, str]:
   """the job run as a host process: its job directory, which is also what
   retention resolves it from."""
   job = jobs / config.stem
@@ -194,7 +194,7 @@ def _run(
   settings: str,
   tasks: Optional[str],
   dataset: Optional[str],
-  timeout: Optional[float],
+  timeout: Optional[int],
   keep_bundle: bool,
   jobs_dir: Optional[str],
   retain: bool,
@@ -274,7 +274,7 @@ def main(argv: list[str]) -> Optional[int]:
     help='dataset pin, benchmark/datasets/NAME.json, for an ad hoc task selection',
   )
   parser.add_argument(
-    '--timeout', type=float, metavar='SECONDS', help='seconds before the job is killed'
+    '--timeout', type=int, metavar='SECONDS', help='seconds before the job is killed'
   )
   parser.add_argument(
     '--keep-bundle',

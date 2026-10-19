@@ -32,7 +32,7 @@ from bro.datasources.file import FileSource
 from bro.datasources.man import manual
 from bro.harness import Harness, get_harness
 from bro.launch.hold import UNATTENDED
-from bro.llm.llm import EFFORT_LEVELS, NativeLLMSpec
+from bro.llm.llm import NativeLLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
@@ -189,43 +189,31 @@ def _answer_tool(harness: Harness, variables: Variables) -> llm_mcp.Tool:
 
 
 _SUMMON_DESCRIPTION = (
-  'summon another bro: it runs your prompt in a new party or joins your party, as a quest '
-  'whose id every `quest_*` tool takes. this call returns after host acceptance. pass `target` '
-  '(a bro name; it must be in your `launch.bro.bros` set, and '
-  'a target outside it — or a summon nested past the depth cap — fails immediately '
-  'with the reason) and `prompt` (the full request, self-contained — the target '
-  'shares no context with you). optional `timeout` (seconds, default 1800) bounds '
-  'the run — an open-ended child (e.g. a dev run watching a PR through review) '
-  'outlives the default and needs an explicit value sized in hours; optional '
-  "`into` bases the child on a git ref instead of your workspace's "
-  'current HEAD (uncommitted changes never transfer); optional `hold` sets the '
-  "child's user-involvement level (default unattended). the child's run is shaped "
-  "by the optional `harness` — an installed driving loop, the project's summon harness "
-  'when omitted — and the optional '
-  '`llm` — the LLM recipe it runs within that harness, written `provider:model:effort` '
-  'with an optional `+fast` suffix and any field left empty '
-  f"(effort is one of {', '.join(EFFORT_LEVELS)}; `::high` keeps the target's own "
-  'provider and model, `:opus5` names a model; a recipe the harness cannot run fails the '
-  'summon rather than switching the harness). its scope is shaped by '
-  'the optional `grant` / `revoke` lists — entries are '
-  f'`@bro`, `:launch.<type>`, or payload names ({summon.party_launch_choices()} for bro placement). '
-  'a credential name is refused; use the optional `passes` list to make the child hold '
-  'a credential instance covered by your pass rights, or configure the kind for the target bro. '
-  'you can grant only launch names your own section covers; revokes are unrestricted, '
-  'and restating a grant or revoke is harmless. the '
-  'optional `share` list names artifact refs (from `artifact mint`) to hand the '
-  'child read access to — only refs this session can itself read. '
-  'the optional `talk` list widens the child quest from worker.say with owner.say, '
-  'owner.question, worker.say, or worker.question. the optional `party` (`start` or '
-  '`join`) and `isolation` (`boxed` or `unboxed`) fields place the child; an unmarked request '
-  'starts boxed when permitted, otherwise unboxed. a join shares your tree and refuses '
-  '`isolation`, `into`, and `manual`. acceptance returns the quest id; answers, questions, '
-  'replies, refusals, and terminal states arrive through the session watch, and `quest_check` '
-  'reads the retained outcome. `manual: true` registers a manual summon instead of spawning: '
-  'acceptance returns a token and `ride` command to relay to the user, who launches the child '
-  'session; manual refuses `timeout`/`hold`/`llm`/`harness`/`party`/`isolation` because the '
-  'user’s launch owns them, and refuses `share` because no child workspace exists yet. it '
-  'requires boxed or unboxed in its `launch.bro.party` set.'
+  'summon another bro with a self-contained `prompt`, returning its quest id after host '
+  'acceptance. `target` names the bro; the host checks the use rule for the start and '
+  'every option, the gift rule, and the depth cap. The banner reports your live authority. '
+  f'`timeout` bounds the run in whole seconds (default {summon.DEFAULT_TIMEOUT}); size it '
+  'in hours for a long-running review or deployment. `into` bases a new workspace on '
+  'a git ref instead of your current HEAD; uncommitted changes never transfer. `hold` '
+  'sets the child’s user-involvement level. `harness` selects its installed driving loop, '
+  'defaulting to the root reading’s summon harness. `llm` accepts a host preset or a '
+  '`provider:model:effort` recipe with optional `+fast` and empty fields that retain '
+  'the configured selection; an unsupported recipe fails rather than switching harness. '
+  '`placement` is `boxed` (the default), `unboxed`, or `join`. A join shares your tree '
+  'and refuses `into` and `manual`. '
+  '`grant` gives authority entries or adds credential kinds, `revoke` caps permissions '
+  'or drops credential kinds, and `limit` caps permissions with qualified use/give clauses. '
+  'Entries include `@bro`, mission types such as `webview`, `bro.placement=join`, and '
+  '`webview.cred=cookies+profile to @browser`. Plain gifts forward use with your own '
+  'recipient bounds; qualified gifts must fit those bounds. `passes` sets exact '
+  'credential picks as `kind+instance` or `kind+` for the empty instance. '
+  '`share` gives read access to artifact refs you can reach. `talk` widens the quest '
+  'from worker.say with owner.say, owner.question, worker.say, or worker.question. '
+  'Answers, questions, replies, refusals, and terminal states arrive through the session '
+  'watch; `quest_check` reads the retained outcome. `manual: true` prepares a joint start '
+  'and returns a token and `ride` command for the operator to launch it. Manual requests '
+  'refuse timeout, hold, llm, harness, placement, and share; the operator chooses launch '
+  'options and may replace credential picks at commit. A manual request needs no placement right.'
 )
 
 
@@ -296,9 +284,8 @@ _BANNER_DESCRIPTION = (
   "return this session's environment facts as `key: value` lines: `isolation` "
   '(`boxed` or `unboxed`), workspace name and paths, the bro persona, the launch '
   'command, joined-party membership, the bros it may delegate to (`may_summon`), its quest '
-  'chat rights (`talk`), launch permissions, and the trail it is recorded into (`trail_id`). call '
-  'it once at session start to detect your '
-  'environment.'
+  'chat rights (`talk`), usable authority (`permits`), give-only rights (`may_give`), '
+  'and the trail it is recorded into (`trail_id`). Call it once at session start.'
 )
 
 
@@ -323,17 +310,17 @@ async def _run_summon_request(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[float],
+  timeout: Optional[int],
   into: Optional[str],
   hold: Optional[str],
   grant: Optional[list[str]],
   revoke: Optional[list[str]],
+  limit: Optional[list[str]],
   passes: Optional[list[str]],
   share: Optional[list[str]],
   llm: Optional[str],
   harness: Optional[str],
-  party: Optional[Literal['start', 'join']],
-  isolation: Optional[Literal['boxed', 'unboxed']],
+  placement: Optional[Literal['boxed', 'unboxed', 'join']],
   talk: Optional[list[str]],
   manual: bool,
 ) -> dict[str, Any]:
@@ -348,8 +335,7 @@ async def _run_summon_request(
       'hold': hold,
       'llm': llm,
       'harness': harness,
-      'party': party,
-      'isolation': isolation,
+      'placement': placement,
     }
     passed = sorted(name for name, value in launch_owned.items() if value is not None)
     if passed:
@@ -365,6 +351,7 @@ async def _run_summon_request(
       into=into,
       grant=grant,
       revoke=revoke,
+      limit=limit,
       passes=passes,
       talk=talk,
       step_id=step_id,
@@ -384,12 +371,12 @@ async def _run_summon_request(
     hold=hold,
     grant=grant,
     revoke=revoke,
+    limit=limit,
     passes=passes,
     share=share,
     llm=llm,
     harness=harness,
-    party=party,
-    isolation=isolation,
+    placement=placement,
     talk=talk,
     step_id=step_id,
     index=index,
@@ -401,17 +388,17 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
   async def _summon(
     target: str,
     prompt: str,
-    timeout: Optional[float] = None,
+    timeout: Optional[int] = None,
     into: Optional[str] = None,
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
     revoke: Optional[list[str]] = None,
+    limit: Optional[list[str]] = None,
     passes: Optional[list[str]] = None,
     share: Optional[list[str]] = None,
     llm: Optional[str] = None,
     harness: Optional[str] = None,
-    party: Optional[Literal['start', 'join']] = None,
-    isolation: Optional[Literal['boxed', 'unboxed']] = None,
+    placement: Optional[Literal['boxed', 'unboxed', 'join']] = None,
     talk: Optional[list[str]] = None,
     manual: bool = False,
   ) -> dict[str, Any]:
@@ -424,12 +411,12 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
       hold=hold,
       grant=grant,
       revoke=revoke,
+      limit=limit,
       passes=passes,
       share=share,
       llm=llm,
       harness=harness,
-      party=party,
-      isolation=isolation,
+      placement=placement,
       talk=talk,
       manual=manual,
     )
@@ -976,15 +963,7 @@ class BaseBro(ABC):
   # needs. MRO-walked and unioned, so a subclass declares only what it adds.
   # folded into `needed_secrets()`.
   extra_secrets: tuple[str, ...] = ()
-  # bros this bro may summon — the targets seeded into a session's launch section. root sessions get
-  # it adjusted per session by `--grant @bro`/`--revoke @bro`; a summoned child
-  # follows the bare seeds, so summons chain transitively through seeded bros
-  # under the host's depth cap (see ride/ride/bro_worker.py). MRO-walked and
-  # unioned like `extra_secrets`.
   may_summon: tuple[str, ...] = ()
-  # worker types this bro may launch, seeded as whole `:launch.<type>` keys before
-  # the launch's configured layers fold. `bro` is always seeded by the framework.
-  # MRO-walked and unioned like `may_summon`.
   may_launch: tuple[str, ...] = ()
   # session-start steps for the session's workspace, applied to its root at
   # session start. every start of a session runs them, resumes included, so a
@@ -1188,7 +1167,7 @@ class BaseBro(ABC):
       spell.body,
       harness=harness,
       creds=credentials.known_names(),
-      may_summon=summon.effective_may_summon(),
+      may_summon=summon.may_summon() or (),
       hold=hold,
       extra=self._feature_vocabulary,
     ).strip()

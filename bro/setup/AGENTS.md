@@ -116,21 +116,21 @@ The optional host config selects stored credential instances and layers session 
 ```json
 {
   "defaults": {
-    "grant": [":launch.bro.party.join"]
+    "grant": ["bro.placement=join"]
   },
   "projects": {
     "https://github.com/me/bro": {
       "creds": ["brog+github", "github+dev"],
       "grant": ["@reviewer"],
       "bros": {
-        "bro-eyebro": {"creds": ["github+reviewer"], "grant": [":launch.bro.pass.github+reviewer"], "revoke": [":launch.bro.party.join"]},
+        "bro-eyebro": {"creds": ["github+reviewer"], "grant": ["bro.cred=github+reviewer"], "revoke": ["bro.placement=join"]},
         "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": ["anthropic:opus55:high", "openai:sol:xhigh", "default"]}
       }
     },
     "/home/me/projects/bro": {
       "creds": ["aws+laptop"],
-      "grant": [":launch.bro.party.unboxed"],
-      "revoke": [":launch.bro.party.boxed"]
+      "grant": ["bro.placement=unboxed"],
+      "revoke": ["bro.placement=boxed"]
     }
   },
   "user": {
@@ -147,15 +147,17 @@ An entry is `kind+instance`, its instance left empty (`kind+`) to select the kin
 one list may name a kind once.
 Project entries and `bros.<bro>` entries may carry `creds`, while `defaults` does not:
 the host store's `creds.json` `defaults` is the common base pick for managed sessions and operator commands alike.
-`defaults`, project entries, and bro entries may carry `grant` and `revoke` in the permission document's unified grammar.
-A bare credential kind changes `creds.use`, `@bro` changes `launch.bro.bros`, and `:launch.…` changes worker-launch authority.
-A pass right such as `:launch.bro.pass.github+reviewer` lets the bro pass that stored instance to missions of the named type without granting the bro credential use.
-Credential grants and revokes cannot otherwise name instances;
-use `creds` to pick an instance and add a bare grant only when the consumer does not already need the kind.
-A bro's `creds` selects only among the kinds its configured scope holds;
-a selection of any other kind fails the launch and names `grant`, since it would otherwise sit inert.
-The same entry may pick and grant a kind.
-The full name grammar, layer fold, worker schemas, delegation bound, and credential hydration are documented once in `bro/reference/ride.md`, "Session permissions and credentials".
+`defaults`, project entries, and bro entries take `grant`, `revoke`, and `limit` lists in the authority syntax.
+A bare credential kind holds or drops the kind;
+`creds` selects its instance without holding it.
+A permission names a mission type (`webview`), an option (`bro.placement=unboxed`), a flag (`webview.vnc`), a bro target (`@reviewer`), or a credential option (`webview.cred=cookies+assistant`).
+A plain grant gives full use and give;
+`for` and `to` clauses restrict use and recipients, such as `webview.cred=cookies+assistant to @browser` for give-only authority.
+`revoke` takes plain permissions, and `limit` takes qualified entries.
+A layer cannot grant and revoke overlapping permissions.
+The host-only `operator` object takes `revoke` and `limit`, restricting the operator's authority from its unrestricted default.
+The parser validates syntax without consulting installation registries;
+launches resolve only applicable layers, so shared dotfiles may name another installation's types or kinds in unrelated entries.
 A `bros` entry may also carry `llm`, the recipes the bro runs on this project: an ordered preference list in the `--llm` grammar.
 A launch runs the first entry its harness serves (`bro/reference/ride.md`, "Harness selection"), so one list can cover a bro launched on `claude` and summoned on `bro`.
 `default` stands for the harness's own recipe, the one a launch selecting nothing runs (`bro/reference/ride.md`, "Harness selection"), and may only come last, since it always runs.
@@ -166,19 +168,18 @@ naming a provider or a model keeps its own pair, and an effort or `+fast` it doe
 a result the harness does not serve fails the launch.
 The settled recipe is what the session records and forwards, so a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
 The retired `instances` field is rejected with `creds` named as its replacement.
-The file read validates credential and bro name grammar without consulting an installation's registries.
-Each launch then requires every credential name in every applicable layer to be registered.
-Every pass right under a held launch key must also name an instance present in the store, or the launch fails naming the layer that granted it.
-This lets one shared file carry consumer-specific names in project entries without letting an applicable misspelling pass silently.
+Each launch requires every credential name in its applicable layers to be registered.
+Authority may name absent instances;
+existence is checked only for the instances a start uses.
 A recipe is carried as written for the launch to parse.
 
 The store's `defaults` is the pick base both branches extend.
 `user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
 a session instead takes the matching project URL, project path, URL-bro, and path-bro layers in that order.
-The project layers' `grant` and `revoke` lists follow the same order after the repository's own `[tool.bro]` layer and the host's `defaults` scope layer.
-Credential grants and revokes are idempotent through project, host, launch, and resume layers;
-a summon request refuses them.
-Launch-authority grants and revokes are idempotent through those layers and the summon request.
+The project layers' `grant`, `revoke`, and `limit` lists follow the same order after the repository's own `[tool.bro]` layer and the host's `defaults` scope layer.
+Each layer caps the preceding authority, then adds its grants.
+A root takes one reading of these sources for its whole mission tree;
+a resume takes a new reading.
 The user and session branches are disjoint, so a `user` entry never reaches a session.
 A kind no layer selects reads the store's default, then its empty instance.
 The retired `defaults.creds` field fails with the store's `defaults` named as its replacement.
@@ -241,4 +242,4 @@ Common material paths and shapes:
 A managed session reads a synthesized store rather than the host's, in this same layout, and the directory is the bound:
 a name not hydrated resolves to `SecretNotFound`, while the code registry's full kind universe remains known for capability checks.
 The store keeps selected and transitively referenced instances under their own stored names, with its picks under `defaults` and typed annotations under `sources`.
-How `creds.use` is selected, hydrated, and delivered, install hooks included, is `bro/reference/ride.md`, "Session permissions and credentials".
+Credential selection, hydration, and delivery, including install hooks, are documented in `bro/reference/ride.md`, "Session permissions and credentials".

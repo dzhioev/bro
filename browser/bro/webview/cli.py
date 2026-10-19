@@ -54,7 +54,7 @@ def _launch_args(
   allowed_origins: list[str],
   blocked_origins: list[str],
   share: list[str],
-  timeout: Optional[float],
+  timeout: Optional[int],
 ) -> dict[str, Any]:
   args: dict[str, Any] = {
     'type': WEBVIEW,
@@ -65,7 +65,7 @@ def _launch_args(
   if vnc_port is not None:
     args['vnc_port'] = vnc_port
   if cookies is not None:
-    args['pass'] = [f'cookies+{cookies}']
+    args['cred.cookies'] = cookies
   if len(share) > 0:
     args['share'] = share
   if timeout is not None:
@@ -128,7 +128,7 @@ def open_webview(
   allowed_origins: Optional[list[str]] = None,
   blocked_origins: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
-  timeout: Optional[float] = None,
+  timeout: Optional[int] = None,
 ) -> OpenedWebview:
   """Launch a webview and wait through startup until its ready event."""
   from bro.broker.brotocol import Tag
@@ -269,10 +269,10 @@ def close_webview(mission_id: str) -> dict[str, Any]:
       return result
 
 
-def _positive_seconds(value: str) -> float:
-  seconds = float(value)
-  if not math.isfinite(seconds) or seconds <= 0:
-    raise ValueError('must be a finite positive number')
+def _positive_seconds(value: str) -> int:
+  seconds = int(value)
+  if seconds <= 0:
+    raise ValueError('must be positive whole seconds')
   return seconds
 
 
@@ -296,7 +296,7 @@ def _open(
   allowed_origins: Optional[list[str]],
   blocked_origins: Optional[list[str]],
   share: Optional[list[str]],
-  timeout: Optional[float],
+  timeout: Optional[int],
 ) -> int:
   try:
     opened = open_webview(

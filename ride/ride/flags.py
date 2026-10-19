@@ -1,7 +1,5 @@
 from bro.base import configs, log
 from bro.base.args import Parser
-from bro.base.scope import launch_choices
-from ride.harness import HARNESS_NAMES
 from ride.workspace.metadata import Isolation
 
 
@@ -22,7 +20,6 @@ def add_harness_flags(parser: Parser) -> None:
   """Register `--harness`."""
   parser.add_argument(
     '--harness',
-    choices=HARNESS_NAMES,
     default=None,
     help=(f'driving harness (default: project [tool.bro] harness, then {configs.DEFAULT_HARNESS})'),
   )
@@ -42,10 +39,7 @@ def add_scope_flags(parser: Parser) -> None:
     action='append',
     default=None,
     metavar='NAME',
-    help=(
-      f'add a credential kind (KIND) or launch permission ({launch_choices()}) to the '
-      'session scope; a pass right is :launch.<type>.pass.<kind>+<instance> (repeatable)'
-    ),
+    help=('add a credential kind or authority entry to the session (repeatable)'),
   )
   parser.add_argument(
     '--revoke',
@@ -53,6 +47,14 @@ def add_scope_flags(parser: Parser) -> None:
     default=None,
     metavar='NAME',
     help='remove a credential kind (KIND) or launch permission from the session scope (repeatable); credential instances cannot be revoked directly',
+  )
+
+  parser.add_argument(
+    '--limit',
+    action='append',
+    default=None,
+    metavar='ENTRY',
+    help='cap a permission with qualified use/give clauses (repeatable)',
   )
 
 

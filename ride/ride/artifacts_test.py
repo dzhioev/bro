@@ -53,7 +53,6 @@ def PeerIdentity(
     tree=tree,
     type='bro',
     bro='dev',
-    launch={},
     member=member,
     expected=manual,
     artifact_view=artifact_view,

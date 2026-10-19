@@ -200,3 +200,38 @@ def list_missions(root: str) -> int:
     raise RuntimeError(f'root {root!r} operator channel is unavailable') from None
   print(json.dumps(missions, indent=2))
   return 0
+
+
+def _request(root: str, kind: str, args: dict[str, Any]) -> dict[str, Any]:
+  from bro.broker.client import Client
+  from bro.broker.transport import connect
+
+  record = read_control(root)
+  try:
+    with Client(connect(record.address)) as client:
+      result = client.call(kind, args, timeout=30).payload
+  except (ConnectionError, OSError, TimeoutError):
+    raise RuntimeError(f'root {root!r} operator channel is unavailable for {kind}') from None
+  if result.get('outcome') != 'ok':
+    raise ValueError(f'{kind} refused: {result.get("error", result)}')
+  return result['value']
+
+
+def commit_launch(root: str, token: str, spec: Any) -> dict[str, Any]:
+  fields = {
+    'placement': spec.isolation.value,
+    **({'harness': spec.harness} if spec.harness_set else {}),
+    'hold': spec.hold,
+    'timeout': None,
+    'pass': spec.cred,
+    'grant': spec.grant,
+    'revoke': spec.revoke,
+  }
+  fields.update(spec.recipe_options)
+  if spec.llm is not None:
+    fields['llm'] = spec.llm
+  return _request(root, 'operator.commit', {'token': token, 'fields': fields})
+
+
+def claim_launch(root: str, token: str, commit: str, workspace: str) -> None:
+  _request(root, 'operator.claim', {'token': token, 'commit': commit, 'workspace': workspace})

@@ -24,11 +24,11 @@ from bro.authority.values import (
 )
 from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.bro import CredentialManifest
-from bro.broker.brotocol import TALK_RIGHTS
+from bro.broker.environment import TALK_RIGHTS
 from bro.llm import providers
 from bro.llm.llm import EFFORT_LEVELS, LLMSpec
 from bro.mcp import HOLDS
-from bro.summon import DEFAULT_TIMEOUT
+from bro.summon import DEFAULT_TALK, DEFAULT_TIMEOUT
 from ride.authority_reading import Reading
 
 DEFAULT = Symbol('default')
@@ -88,7 +88,7 @@ def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
     'placement': 'boxed',
     'harness': reading.summon_harness,
     'hold': 'unattended',
-    'talk': frozenset({'worker.say'}),
+    'talk': DEFAULT_TALK,
     'timeout': DEFAULT_TIMEOUT,
   }
   values = {**result, **fixed.values}
@@ -123,9 +123,15 @@ def configured_kinds(target: str, harness: str, provider: str, reading: Reading)
       raise ValueError(f'provider {provider!r} is not installed')
     kinds.update(installed.provider_needs[provider])
   for policy in reading.layers(target):
-    resolved = reading.resolve(policy)
-    kinds.difference_update(resolved.drop)
-    kinds.update(resolved.hold)
+    for entries, action in (
+      (policy.layer.revoke, kinds.difference_update),
+      (policy.layer.grant, kinds.update),
+    ):
+      action(
+        entry.permission.type
+        for entry in entries
+        if entry.permission.option is None and entry.permission.type in installed.credential_kinds
+      )
   unknown = kinds - installed.credential_kinds
   if unknown:
     raise ValueError(f'bro {target}: unknown credential kinds {sorted(unknown)}')
@@ -153,8 +159,9 @@ def validate(descriptor: Descriptor) -> None:
   if 'target' not in descriptor.values:
     raise ValueError('target must be set')
   dropped = cast(frozenset[str], descriptor.values.get('drop', frozenset()))
-  if any(f'cred.{kind}' in descriptor.values for kind in dropped):
-    raise ValueError('a credential cannot be both set and dropped')
+  for kind in sorted(dropped):
+    if f'cred.{kind}' in descriptor.values:
+      raise ValueError(f'bro.cred.{kind} cannot be both set and dropped through bro.drop')
 
 
 def declaration(kinds: frozenset[str]) -> Declaration:
@@ -271,6 +278,8 @@ def existence(
   *,
   explicit: frozenset[str] = frozenset(),
   into_exists: bool = True,
+  check_presence: bool = True,
+  recording: bool = True,
 ) -> CredentialManifest:
   values = descriptor.values
   target, harness = cast(str, values['target']), cast(str, values['harness'])
@@ -286,8 +295,9 @@ def existence(
   selected = installed.bros[target].credential_manifest(
     driver.harness, present & held, installed.credential_kinds
   )
-  required, optional = set(selected.required), set(selected.optional)
-  optional.update({'trails'} & held)
+  required, optional = set(selected.required), set(selected.optional) & held
+  if recording:
+    optional.update({'trails'} & held)
   if driver.auth_kind is not None:
     required.add(driver.auth_kind)
   if driver.llm_key:
@@ -310,9 +320,11 @@ def existence(
   optional.difference_update(required)
   if required - held:
     raise ValueError(f'required kinds are not held: {sorted(required - held)}')
-  if required - present:
+  if check_presence and required - present:
     raise ValueError(f'required credential instances are missing: {sorted(required - present)}')
-  return CredentialManifest(frozenset(required), frozenset(optional & present & held))
+  return CredentialManifest(
+    frozenset(required), frozenset(optional & held & (present if check_presence else held))
+  )
 
 
 def option_values(fields: Mapping[str, object], source: object):
@@ -322,13 +334,20 @@ def option_values(fields: Mapping[str, object], source: object):
   reading = _reading(source)
   options = set(reading.installation.declarations['bro'].options)
   content_names = {'prompt', 'into', 'share', 'step_id', 'index'}
-  unknown = (
-    fields.keys() - options - content_names - {'llm', 'pass', 'party', 'isolation', 'manual'}
-  )
+  unknown = fields.keys() - options - content_names - {'llm', 'pass', 'manual'}
   if unknown:
     raise ValueError(f'unknown bro fields: {sorted(unknown)}')
   values = {name: cast(Value, value) for name, value in fields.items() if name in options}
   content = {name: value for name, value in fields.items() if name in content_names}
+  if 'into' in content and (not isinstance(content['into'], str) or not content['into']):
+    raise ValueError('content check: bro.into must be a non-empty git ref')
+  for name in ('step_id', 'index'):
+    if name in content:
+      value = content[name]
+      if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f'content check: bro.{name} must be a non-negative int')
+  if 'index' in content and 'step_id' not in content:
+    raise ValueError('content check: bro.index requires step_id')
   manual = fields.get('manual', False)
   if type(manual) is not bool:
     raise ValueError('manual must be a flag')
@@ -349,20 +368,8 @@ def option_values(fields: Mapping[str, object], source: object):
     }
     if refused:
       raise ValueError(f'joint prepare cannot set launch-owned fields: {sorted(refused)}')
-  party = fields.get('party')
-  isolation = fields.get('isolation')
-  if party is not None and party not in ('start', 'join'):
-    raise ValueError('party must be start or join')
-  if isolation is not None and isolation not in ('boxed', 'unboxed'):
-    raise ValueError('isolation must be boxed or unboxed')
-  if 'placement' in fields and ('party' in fields or 'isolation' in fields):
-    raise ValueError('placement cannot be combined with party or isolation')
-  if party == 'join':
-    if manual or 'into' in fields or 'isolation' in fields:
-      raise ValueError('join refuses manual, into, and isolation')
-    values['placement'] = 'join'
-  elif isolation is not None:
-    values['placement'] = cast(str, isolation)
+  if fields.get('placement') == 'join' and (manual or 'into' in fields):
+    raise ValueError('validity check: bro.placement=join refuses manual and into')
   if 'timeout' in fields and fields['timeout'] is None:
     values['timeout'] = 'none'
   for name in ('talk', 'add', 'drop'):
@@ -400,10 +407,8 @@ def option_values(fields: Mapping[str, object], source: object):
     for name in ('provider', 'model', 'effort'):
       value = getattr(selection, name)
       if value is not None:
-        if name in values:
-          raise ValueError(f'{name} is set twice')
-        values[name] = value
-    if selection.fast:
+        values.setdefault(name, value)
+    if selection.fast and 'fast' not in fields:
       values['fast'] = True
   if 'model' in values and values['model'] != DEFAULT:
     spec = recipe(values, reading)

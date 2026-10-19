@@ -41,7 +41,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `show.py` — the `bro show` card, rendered from a bro's metadata alone:
   identity, features, credential manifest and optional tier, LLM key, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
-  common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
+  common admission lives in `ride/ride/launch_control.py`, and bro lowering in `ride/ride/bro_worker.py`
 - `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and ordered journal stream for every worker mission.
   The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
 - `quest.py` (`quest`) — the bro-only view over the mission surface and its shared stream, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
@@ -73,7 +73,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
   `WorkerContainer` is the validated, host-neutral container declaration:
   packaged build-context bytes over the runtime image, a command and environment, and container ports mapped to requested-or-available loopback host ports.
-  `authority_declaration` and `option_values` provide the use/give declaration and wire mapping beside `launch_schema`.
+  `authority_declaration` and `option_values` declare governed options and map wire fields to option values and ungoverned content.
   Installed types register through `bro.worker_types`, with ride contributing `bro`, bench contributing `benchmark`, and webview contributing `webview`.
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
   it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
@@ -82,6 +82,7 @@ A subpackage with a map of its own is pointed at, not described here.
   The shared answer bound is enforced at the `answer` tool while the run can react;
   terminal fallback output is truncated with a marker and its trail id.
   `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
+- `authority_view.py` — live and process-initial authority views over a mission’s own broker channel.
 - `authority/` — the pure symbolic use/give algebra and authorization transitions;
   see `authority/AGENTS.md`
 - `base/` — shared low-level utilities;
@@ -155,7 +156,7 @@ A harness mounts, for a bro, the servers its `serve` returns for that reach ahea
 `composed_prompt(harness, hold=…)` composes a system prompt around that persona using the explicitly selected harness.
 The composition starts with every `bro/prompts/shared/*.md`, then the persona and the tool-name rule (`bro/prompts/tool_names.md`).
 It adds a `## Data sources` block describing each declared `DataSource`, the `## Spells` contract when the bro has spells, and any instructions the selected harness supplies through `prompt_instructions()`.
-The composition renders with the registered harness object's own facts, the session's hold, the environment's credentials and `launch.bro.bros` members, and the `#features` vocabulary.
+The composition renders with the registered harness object's own facts, the session's hold, the environment's credentials and the mission's initial usable bro targets, and the `#features` vocabulary.
 Construction loads no harness and renders no composed prompt.
 A managed Claude session runs under a prompt of its own;
 its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`bro/reference/ride.md`, "Auto-injected system prompt").

@@ -4,10 +4,12 @@ import json
 import pytest
 
 from bro import mission
+from bro.authority.rules import Request, Rules
 from bro.broker import brotocol
 from bro.broker.brotocol import Tag
 from bro.quest_test_helper import next_message, quest_record, reply, running_server
 from bro.webview import cli
+from bro.webview.worker import WebviewType
 
 MISSION = 'WEB-1'
 REF = 'sha256:' + 'a' * 64 + '/upload.txt'
@@ -125,12 +127,19 @@ async def test_open_rides_the_launch_to_ready_and_prints_the_owner_handle(monkey
       'type': 'webview',
       'vnc': True,
       'vnc_port': 46080,
-      'pass': ['cookies+e2e'],
+      'cred.cookies': 'e2e',
       'allowed_origins': ['https://allowed.example'],
       'blocked_origins': ['https://blocked.example'],
       'share': [REF],
-      'timeout': 90.0,
+      'timeout': 90,
     }
+    mapped = WebviewType.option_values(
+      {name: value for name, value in launch.args.items() if name != 'type'}, None
+    )
+    descriptor = Rules(
+      {'webview': WebviewType.authority_declaration(frozenset({'cookies'}))}
+    ).normalize(Request('webview', mapped.values), None)
+    assert type(descriptor.values['timeout']) is int
     await server.transport.send(channel, brotocol.mark(launch.request_id, 'accepted'))
     await server.transport.send(channel, brotocol.mark(launch.request_id, 'started'))
     await server.transport.send(channel, brotocol.mark(launch.request_id, 'listening'))
@@ -175,13 +184,13 @@ async def test_open_fails_with_a_launch_denial(monkeypatch, capsys, caplog):
       brotocol.result(
         launch.request_id,
         'denied',
-        error='launch denied: the VNC view needs :launch.webview.vnc',
+        error='launch denied: use rule: webview.vnc: no matching use pattern',
       ),
     )
 
     assert await task == 1
     assert capsys.readouterr().out == ''
-    assert ':launch.webview.vnc' in caplog.text
+    assert 'use rule: webview.vnc' in caplog.text
 
 
 @pytest.mark.asyncio
@@ -274,3 +283,9 @@ def test_close_reports_a_failed_session_proxy(monkeypatch, caplog):
 def test_missing_verb_is_a_usage_error(capsys):
   assert cli.main(['webview']) == 1
   assert 'usage' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('seconds', ['0.5', '90.0', 'nan', 'inf'])
+def test_open_lifetime_requires_whole_seconds(seconds):
+  with pytest.raises(SystemExit):
+    cli.main(['webview', 'open', '--timeout', seconds])

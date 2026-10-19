@@ -336,7 +336,7 @@ class TestTaskSystem:
 
     with pytest.raises(
       dive_in.LaunchScopeError,
-      match="secret 'brog\\+missing' not found",
+      match='required credential instances are missing:.*brog',
     ):
       dive_in._task_system(
         fake_proj,
@@ -368,6 +368,9 @@ class TestTaskSystem:
       return 'base-scope'
 
     monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
+    monkeypatch.setattr(
+      dive_in, 'launch_llm_spec', lambda driver, attachment, bro, llm: driver.resolve_llm(llm, bro)
+    )
 
     def fake_view(scoped):
       calls['view'] = scoped
@@ -414,12 +417,17 @@ class TestTaskSystem:
 
     config = tmp_path / 'bro.json'
     config.write_text(
-      json.dumps({'projects': {'/repo': {'bros': {'bro-dev': {'llm': ['openai:sol:xhigh']}}}}})
+      json.dumps(
+        {'projects': {str(tmp_path): {'bros': {'bro-dev': {'llm': ['openai:sol:xhigh']}}}}}
+      )
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     calls: dict = {}
+    from ride.scope import launch_llm_spec
+
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system(Path('/repo'), [], [], [], None, 'bro', '::low')
+    monkeypatch.setattr(dive_in, 'launch_llm_spec', launch_llm_spec)
+    dive_in._task_system(tmp_path, [], [], [], None, 'bro', '::low')
     assert calls['llm_spec'] == get_harness('bro').resolve_llm('openai:sol:low', 'bro-dev')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
