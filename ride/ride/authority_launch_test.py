@@ -404,3 +404,43 @@ def test_manual_commit_can_replace_a_complete_subset_option(source, tmp_path):
   assert reply['outcome'] == 'ok', reply
   assert reply['value']['request']['values']['add'] == []
   assert 'cred.github' not in reply['value']['descriptor']['values']
+
+
+def test_repeated_operator_replacement_discards_superseded_structure_and_round_trips(source):
+  from bro.authority.authority import Cap
+  from bro.authority.records import load_authority
+  from ride.authority_launch import replace_operator_layer
+
+  descriptor = Descriptor('bro', {'target': 'browser'})
+  gift = source.syntax.layer(parse_layer(grant=['bro.placement=join'])).gift
+  cap = Cap()
+  granted = source.syntax.layer(parse_layer(grant=['@browser']))
+  revoked = source.syntax.layer(parse_layer(revoke=['@browser']))
+  atom = Atom('bro', 'target', 'browser')
+  types = source.installation.declarations
+  stable = None
+  for index in range(1500):
+    layer = revoked if index % 3 == 1 else granted
+    gift, cap = replace_operator_layer(gift, cap, layer.gift, layer.cap)
+    saved = json.loads(
+      json.dumps(
+        {
+          'gift': dump_authority(gift, descriptor),
+          'cap': dump_authority(cap, descriptor),
+        }
+      )
+    )
+    gift = load_authority(saved['gift'], source.syntax)
+    cap = load_authority(saved['cap'], source.syntax)
+    assert gift.meet(cap).evaluate(atom, descriptor, types).use.matches(descriptor) is (
+      index % 3 != 1
+    )
+    assert gift.evaluate(Atom('bro', 'placement', 'join'), descriptor, types).use.matches(
+      descriptor
+    )
+    if index == 2:
+      stable = saved
+  assert {
+    'gift': dump_authority(gift, descriptor),
+    'cap': dump_authority(cap, descriptor),
+  } == stable

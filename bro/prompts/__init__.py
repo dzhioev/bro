@@ -41,6 +41,8 @@ _loader = PromptLoader(Path(__file__).parent)
 get_prompt_path = _loader.get_prompt_path
 get_prompt = _loader.get_prompt
 
+_DEFERRED_CONTRACT_FILENAME = 'summoner-contract.md'
+
 
 def session_fragment(
   hold: str,
@@ -54,7 +56,7 @@ def session_fragment(
   contract when it owes a summoner an answer, their shared turn-end contract,
   then the hold fragment last, where instruction recency is strongest.
   """
-  from bro import mcp, summon
+  from bro import summon
 
   contracts = []
   can_summon = len(summon.effective_may_summon()) > 0
@@ -68,8 +70,7 @@ def session_fragment(
   if can_summon or is_summoned:
     contracts.append('turn_end.md')
   parts = [
-    mcp.render_text(get_prompt(name), harness=harness, creds=creds, talk=talk, hold=hold).strip()
-    for name in contracts
+    render_contract(name, harness=harness, creds=creds, talk=talk, hold=hold) for name in contracts
   ]
   parts.append(hold_fragment(hold, harness=harness, creds=creds))
   return '\n\n'.join(part for part in parts if len(part) > 0)
@@ -88,3 +89,53 @@ def hold_fragment(
   from bro import mcp
 
   return mcp.render_text(get_prompt('hold.md'), hold=hold, harness=harness, creds=creds).strip()
+
+
+def render_contract(name: str, *, harness: 'Harness', creds=None, talk=None, hold: str) -> str:
+  from bro import mcp, summon
+  from bro.base.condition import SetVariable
+
+  mounted = frozenset({'quest_watch'}) if summon.effective_may_summon() else frozenset()
+  return mcp.render_text(
+    get_prompt(name),
+    harness=harness,
+    creds=creds,
+    talk=talk,
+    hold=hold,
+    extra={'tools': SetVariable(mounted, universe=frozenset({'quest_watch'}))},
+  ).strip()
+
+
+def save_deferred_contract(*, harness: 'Harness', hold: str) -> None:
+  from bro import summon
+  from bro.monitor import session_dir
+
+  directory = session_dir()
+  if directory is None:
+    raise RuntimeError('a deferred contract needs a session directory')
+  path = directory / _DEFERRED_CONTRACT_FILENAME
+  path.unlink(missing_ok=True)
+  if summon.effective_may_summon():
+    return
+  names = ['summoner.md']
+  if not summon.summoned():
+    names.append('turn_end.md')
+  path.write_text(
+    '\n\n'.join(
+      render_contract(name, harness=harness, hold=hold, talk=summon.talk()) for name in names
+    )
+  )
+
+
+def take_deferred_contract() -> str | None:
+  from bro.monitor import session_dir
+
+  directory = session_dir()
+  if directory is None:
+    return None
+  path = directory / _DEFERRED_CONTRACT_FILENAME
+  if not path.exists():
+    return None
+  text = path.read_text()
+  path.unlink()
+  return text

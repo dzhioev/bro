@@ -3585,3 +3585,224 @@ def test_root_flags_are_checked_against_the_operator_authority(
     == 1
   )
   assert 'use rule' in caplog.text and 'bro.placement=unboxed' in caplog.text
+
+
+_OVERRIDE_ROOT = r"""
+import json
+import os
+import tempfile
+import time
+from pathlib import Path
+
+from bro import authority_view, watches
+from bro.bro import BaseBro
+from bro.harness import get_harness
+from bro.monitor import SESSION_DIR_ENV
+from bro.native.runner import Runner
+from bro.prompts import save_deferred_contract, session_fragment
+from bro.quest import QuestError
+from bro.summon import summon_and_wait
+from bro.workspace.banner import render_banner
+
+class OverrideBro(BaseBro):
+  name = 'e2e-override-root'
+  description = 'receives operator changes through the session watch'
+  system_prompt = 'observe authority changes'
+
+assert authority_view.initial()['may_summon'] == []
+assert '# Summoning session' not in session_fragment('unattended', harness=get_harness('bro'))
+notifications = []
+
+def receive(runner, marker):
+  deadline = time.monotonic() + 90
+  while not any(marker in text for text in notifications):
+    with runner.inbox.waiter() as cancelled:
+      if not runner.inbox.wait(deadline, cancelled):
+        raise TimeoutError(f'no notification containing {marker!r}: {notifications}')
+    batch = runner.inbox.drain()
+    if batch is not None:
+      notifications.append(batch.text)
+
+with tempfile.TemporaryDirectory() as directory:
+  os.environ[SESSION_DIR_ENV] = directory
+  authority_view.capture_initial()
+  save_deferred_contract(harness=get_harness('bro'), hold='unattended')
+  with watches.Owner.for_session(), Runner(OverrideBro()) as runner:
+    runner.watch_store.start(watches.SESSION_WATCH_COMMAND)
+    Path('/workspace/.override-ready').touch()
+    receive(runner, '# Summoning session')
+    assert 'bro::quest_watch' not in '\n'.join(notifications)
+    assert '# One-shot turn end' in '\n'.join(notifications)
+    assert 'bro' in authority_view.read()['may_summon']
+    assert 'may_summon: @bro' in render_banner(llm=True)
+    assert summon_and_wait('bro', 'answer', harness='bro', llm='echo', timeout=120) == 'granted child'
+    Path('/workspace/.override-summoned').touch()
+    receive(runner, '--revoke @bro')
+    assert authority_view.read()['may_summon'] == []
+    try:
+      summon_and_wait('bro', 'must refuse', harness='bro', llm='echo', timeout=120)
+    except QuestError as error:
+      assert 'use rule: @bro:' in str(error), error
+    else:
+      raise AssertionError('a revoked target was summoned')
+    Path('/workspace/.override-revoked').touch()
+    receive(runner, '--grant @browser')
+    assert 'browser' in authority_view.read()['may_summon']
+assert sum(text.count('# Summoning session') for text in notifications) == 1
+Path('/workspace/.override-report').write_text(json.dumps(notifications))
+"""
+
+
+def test_operator_override_grants_summons_revokes_and_delivers_the_deferred_contract(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+  from concurrent.futures import ThreadPoolExecutor
+
+  import ride.bro_worker as ride_spawn
+  import ride.broker_root as broker_root
+  import ride.cli as ride_cli
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+
+  env = isolated_env
+  name = f'{_NAME_PREFIX}override-targets'
+  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  runtime = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  container_runtime = ContainerRuntimeResolver.fixed(
+    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+  )
+  original_launch = ride_spawn.started_party_launch
+
+  def child_launch(*arguments, **keywords):
+    launch = original_launch(*arguments, **keywords)
+    return replace(
+      launch,
+      command=_session_broxy_probe("""
+import contextlib
+from bro.run_lifecycle import RunLifecycle
+with contextlib.closing(RunLifecycle.from_env()) as channel:
+  channel.completed('granted child', 'ok')
+"""),
+    )
+
+  monkeypatch.setattr(ride_spawn, 'started_party_launch', child_launch)
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args: None)
+  monkeypatch.setenv('HOME', str(env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
+  root_ended = threading.Event()
+
+  def override() -> None:
+    def wait_for(marker):
+      path = workspace.tree / marker
+      _wait_until(lambda: path.exists() or root_ended.is_set(), 150, marker, None)
+      assert path.exists(), f'root ended before {marker}'
+
+    wait_for('.override-ready')
+    with pytest.raises(SystemExit):
+      ride_cli.main(['ride', 'override', name, '--grant', 'bro.placement=join'])
+    assert ride_cli.main(['ride', 'override', name, '--grant', '@bro']) == 0
+    wait_for('.override-summoned')
+    assert ride_cli.main(['ride', 'override', name, '--revoke', '@bro']) == 0
+    wait_for('.override-revoked')
+    assert ride_cli.main(['ride', 'override', name, '--grant', '@browser']) == 0
+
+  launch = DockerLaunchSpec(
+    workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(_OVERRIDE_ROOT),
+      env={'RIDE_BRO': 'bro'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      repo=env.project,
+    )
+  )
+  with ThreadPoolExecutor(max_workers=1) as executor:
+    overridden = executor.submit(override)
+    with contextlib.ExitStack() as cleanup:
+      cleanup.callback(root_ended.set)
+      code = broker_root.run_root_via_broker(
+        launch,
+        workspace=workspace,
+        bro='bro',
+        mission=_root_mission(workspace.repository, target='bro'),
+        runtime_bundle=runtime,
+        container_runtime=container_runtime,
+      )
+    overridden.result(timeout=10)
+  assert code == 0
+  assert (workspace.tree / '.override-report').is_file()
+  assert env.live_containers() == []
+
+
+def test_override_refuses_old_roots_fixed_names_and_operator_gifts(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+  import ride.cli as ride_cli
+  from bro.base import host_config
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+
+  env = isolated_env
+  monkeypatch.setenv('HOME', str(env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args: None)
+  with pytest.raises(SystemExit):
+    ride_cli.main(['ride', 'override', 'before-switch', '--grant', '@bro'])
+  assert 'before-switch' in capsys.readouterr().err
+  config = env.root / 'override-policy.json'
+  config.write_text(json.dumps({'operator': {'revoke': ['@browser']}}))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  repository = _permission_repository(env, 'override-refusal')
+  workspace = Workspace.ensure(f'{_NAME_PREFIX}override-refusal', repository, Isolation.UNBOXED)
+  source = """
+import time
+from pathlib import Path
+from bro.authority_view import read
+
+assert read()['may_summon'] == []
+Path('.override-refusal-ready').touch()
+deadline = time.monotonic() + 60
+while not Path('.override-refusal-finished').exists():
+  if time.monotonic() >= deadline:
+    raise TimeoutError('operator did not finish the refusal checks')
+  time.sleep(0.1)
+assert read()['may_summon'] == []
+"""
+  from concurrent.futures import ThreadPoolExecutor
+
+  from ride import operator
+
+  root_ended = threading.Event()
+
+  def refused_overrides():
+    ready = workspace.tree / '.override-refusal-ready'
+    _wait_until(lambda: ready.exists() or root_ended.is_set(), 60, 'refusal root ready', None)
+    assert ready.exists(), 'root ended before refusal checks'
+    for name, rule in [('bro.placement=join', 'override check'), ('@browser', 'gift rule')]:
+      with pytest.raises(ValueError, match=rule):
+        operator._request(
+          workspace.name,
+          'operator.override',
+          {'name': workspace.name, 'changes': [['grant', name]]},
+        )
+    (workspace.tree / '.override-refusal-finished').touch()
+
+  with ThreadPoolExecutor(max_workers=1) as executor:
+    refused = executor.submit(refused_overrides)
+    with contextlib.ExitStack() as cleanup:
+      cleanup.callback(root_ended.set)
+      code = _host_root_route(
+        env,
+        workspace,
+        source,
+        mission=_root_mission(workspace.repository, target='bro', placement='unboxed'),
+      )
+    refused.result(timeout=10)
+  assert code == 0
