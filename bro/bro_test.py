@@ -16,6 +16,7 @@ import bro.llm.llms.echo as llm_llms_echo
 import bro.mcp as mcp
 import bro.workspace.banner as workspace_banner
 from bro import brash_policy, results, watches
+from bro.authority.client_test_helper import publish
 from bro.base import credentials
 from bro.base.condition import ConditionError, iff, var, when
 from bro.brash import REFUSED_STATUS
@@ -29,7 +30,7 @@ from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
 from bro.monitor import SESSION_DIR_ENV
-from bro.summon import LAUNCH_ENV, SUMMONED_ENV, encode_launch
+from bro.summon import SUMMONED_ENV
 
 
 class EchoBro(BaseBro):
@@ -59,6 +60,11 @@ def _native_servers(
     hold=hold,
     live_run=run if run is not None else StubRun(),
   )
+
+
+@pytest.fixture(autouse=True)
+def authority_view(monkeypatch):
+  publish(monkeypatch)
 
 
 def _service_server(
@@ -1786,7 +1792,7 @@ class TestShellRoster:
     assert ShellBro().reach().brash == mcp.Brash(commands=('git status', 'git diff'))
 
   def test_summoning_does_not_add_an_undeclared_shell_command(self, monkeypatch):
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    publish(monkeypatch, targets=('reviewer',))
     assert EchoBro().reach().brash is None
 
 
@@ -1938,13 +1944,13 @@ class TestWatchServiceTools:
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     assert 'quest_watch' not in await _collect_tool_names([_service_server(EchoBro())])
 
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    publish(monkeypatch, targets=('reviewer',))
     assert 'quest_watch' in await _collect_tool_names([_service_server(EchoBro())])
 
   @pytest.mark.asyncio
   async def test_quest_watch_sets_the_session_watch_to_wake_on_quiet_lines(self, monkeypatch):
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    publish(monkeypatch, targets=('reviewer',))
     with watches.Owner.temporary() as owner:
       session_watch = watches.Watch(
         watches.SESSION_WATCH_COMMAND,

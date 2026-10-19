@@ -2,25 +2,16 @@ import importlib.metadata
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from types import MappingProxyType
 
 import pytest
 
 import bro.worker_types as worker_types
-from bro.base.scope import split_scope_overrides
 from bro.worker_types import LaunchRequest, WorkerType
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 
 
 class AlphaType(WorkerType):
   name = 'alpha'
-  launch_schema = MappingProxyType(
-    {
-      'choice': worker_types.LaunchSet(lambda: {'one', 'two'}),
-      'enabled': worker_types.LAUNCH_FLAG,
-    }
-  )
-
   def talk(self, request: LaunchRequest):
     return frozenset()
 
@@ -34,40 +25,6 @@ class ZetaType(AlphaType):
 
 class MismatchedType(AlphaType):
   name = 'other'
-
-
-class PassType(AlphaType):
-  name = 'pass-type'
-  launch_schema = MappingProxyType({'pass': worker_types.LAUNCH_PASS})
-
-
-class BoundedPassType(AlphaType):
-  name = 'bounded-pass'
-  launch_schema = MappingProxyType(
-    {'pass': worker_types.LaunchPass(kinds=frozenset({'github', 'claude_code'}))}
-  )
-
-
-class InvalidBoundedPassType(AlphaType):
-  name = 'invalid-bounded-pass'
-  launch_schema = MappingProxyType(
-    {'pass': worker_types.LaunchPass(kinds=frozenset({'github+reviewer'}))}
-  )
-
-
-class MutableBoundedPassType(AlphaType):
-  name = 'mutable-bounded-pass'
-  launch_schema = MappingProxyType({'pass': worker_types.LaunchPass(kinds={'github'})})  # type: ignore[arg-type]
-
-
-class MisnamedPassType(AlphaType):
-  name = 'misnamed-pass'
-  launch_schema = MappingProxyType({'credentials': worker_types.LAUNCH_PASS})
-
-
-class WrongPassType(AlphaType):
-  name = 'wrong-pass'
-  launch_schema = MappingProxyType({'pass': worker_types.LaunchSet(lambda: {'value'})})
 
 
 class NotAType:
@@ -120,61 +77,6 @@ def test_entry_point_must_load_a_worker_type(monkeypatch):
     worker_types.installed_type('alpha')
 
 
-def test_pass_schema_is_reserved_for_the_pass_field(monkeypatch):
-  monkeypatch.setattr(
-    worker_types,
-    '_entry_points',
-    lambda: (_entry('misnamed-pass', f'{__name__}:MisnamedPassType'),),
-  )
-  with pytest.raises(ValueError, match="pass schema under field 'credentials'"):
-    worker_types.installed_type('misnamed-pass')
-
-
-def test_pass_field_requires_the_framework_pass_schema(monkeypatch):
-  monkeypatch.setattr(
-    worker_types,
-    '_entry_points',
-    lambda: (_entry('wrong-pass', f'{__name__}:WrongPassType'),),
-  )
-  with pytest.raises(ValueError, match='field "pass" must use the pass schema'):
-    worker_types.installed_type('wrong-pass')
-
-
-def test_pass_schema_loads_under_the_pass_field(monkeypatch):
-  monkeypatch.setattr(
-    worker_types,
-    '_entry_points',
-    lambda: (_entry('pass-type', f'{__name__}:PassType'),),
-  )
-  assert worker_types.installed_type('pass-type') is PassType
-
-
-def test_pass_schema_loads_a_bound_of_credential_kinds(monkeypatch):
-  monkeypatch.setattr(
-    worker_types,
-    '_entry_points',
-    lambda: (_entry('bounded-pass', f'{__name__}:BoundedPassType'),),
-  )
-  assert worker_types.installed_type('bounded-pass') is BoundedPassType
-
-
-@pytest.mark.parametrize(
-  ('name', 'type_name', 'message'),
-  [
-    ('invalid-bounded-pass', 'InvalidBoundedPassType', 'invalid credential kind'),
-    ('mutable-bounded-pass', 'MutableBoundedPassType', 'frozenset or None'),
-  ],
-)
-def test_pass_schema_refuses_an_invalid_kind_bound(monkeypatch, name, type_name, message):
-  monkeypatch.setattr(
-    worker_types,
-    '_entry_points',
-    lambda: (_entry(name, f'{__name__}:{type_name}'),),
-  )
-  with pytest.raises((TypeError, ValueError), match=message):
-    worker_types.installed_type(name)
-
-
 @pytest.mark.parametrize('name', ['', 'Alpha', 'alpha.beta', '-alpha', 'alpha_2'])
 def test_worker_type_name_grammar(name):
   with pytest.raises(ValueError, match='expected'):
@@ -192,58 +94,6 @@ def test_unknown_type_lists_installed_names_without_loading_them(monkeypatch):
   )
   with pytest.raises(KeyError, match='installed types: alpha, zeta'):
     worker_types.installed_type('missing')
-
-
-def test_launch_grammar_accepts_keys_members_flags_and_bros():
-  assert split_scope_overrides(
-    [
-      ':launch.alpha',
-      ':launch.alpha.choice.two',
-      ':launch.alpha.enabled',
-      ':launch.alpha.pass.claude_code+team',
-      ':launch.alpha.pass.github+',
-      '@reviewer',
-    ]
-  ) == (
-    [],
-    [
-      ':launch.alpha',
-      ':launch.alpha.choice.two',
-      ':launch.alpha.enabled',
-      ':launch.alpha.pass.claude_code+team',
-      ':launch.alpha.pass.github+',
-      '@reviewer',
-    ],
-  )
-
-
-@pytest.mark.parametrize(
-  'value',
-  [':launch', ':Launch.alpha', ':launch..choice', ':launch.alpha.one_2'],
-)
-def test_launch_grammar_rejects_malformed_names(value):
-  with pytest.raises(ValueError):
-    split_scope_overrides([value])
-
-
-@pytest.mark.parametrize('value', [':launch.alpha.pass.github', ':launch.alpha.pass'])
-def test_pass_right_requires_an_instance(value):
-  with pytest.raises(ValueError, match=r'github\+<instance>.*github\+|kind\+<instance>'):
-    split_scope_overrides([value])
-
-
-@pytest.mark.parametrize(
-  ('value', 'message'),
-  [
-    (':bro.party.join', ':launch.bro.party.join'),
-    (':webview.vnc', ':launch.webview.vnc'),
-    (':creds.github.dev', 'creds / --cred'),
-    (':launch.bro.bros.reviewer', '@<bro>'),
-  ],
-)
-def test_launch_grammar_names_replacements(value, message):
-  with pytest.raises(ValueError, match=message):
-    split_scope_overrides([value])
 
 
 def test_loading_the_bro_type_does_not_import_broker_machinery():

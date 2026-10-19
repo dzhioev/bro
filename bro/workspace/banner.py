@@ -203,7 +203,7 @@ class SessionFacts:
       rows.append(('summoned:', '', f'{dim}yes — a summoner is waiting on the answer{reset}'))
 
     if self.may_summon is not None:
-      targets = ', '.join(self.summon_entries) if self.summon_entries else '(none)'
+      targets = ', '.join(self.summon_entries) if self.summon_entries else _render_summon_targets(self.may_summon) if self.may_summon else '(none)'
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
 
     if self.talk is not None:
@@ -261,7 +261,7 @@ class SessionFacts:
     if self.may_summon is not None:
       # spelled out when empty: "this session may summon nobody" is a different
       # answer from a launch surface that publishes no list at all
-      targets = ', '.join(self.summon_entries) if self.summon_entries else 'none'
+      targets = ', '.join(self.summon_entries) if self.summon_entries else _render_summon_targets(self.may_summon) if self.may_summon else 'none'
       lines.append(f'may_summon: {targets}')
     if self.talk is not None:
       lines.append(f'talk: {", ".join(self.talk) or "none"}')

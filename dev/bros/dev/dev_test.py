@@ -2,9 +2,9 @@ from typing import ClassVar
 
 import pytest
 
+from bro.authority.client_test_helper import publish
 from bro.dev import references
 from bro.harness import get_harness
-from bro.summon import LAUNCH_ENV, encode_launch
 from bros.dev import Dev
 
 
@@ -76,19 +76,13 @@ def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
   assert 'summon' not in bro.get_spell_body('run-pr', harness='claude', hold='unattended').lower()
   assert 'eyebro' not in bro.get_spell_body('land', harness='claude', hold='unattended')
-  monkeypatch.setenv(
-    LAUNCH_ENV,
-    encode_launch({'bro': {'bros': frozenset({'eyebro'})}}),
-  )
+  publish(monkeypatch, targets=('eyebro',))
   assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude', hold='unattended')
   assert 'eyebro' in bro.get_spell_body('land', harness='claude', hold='unattended')
 
 
 def test_review_delegation_uses_one_asynchronous_tool_shape(monkeypatch):
-  monkeypatch.setenv(
-    LAUNCH_ENV,
-    encode_launch({'bro': {'bros': frozenset({'eyebro'})}}),
-  )
+  publish(monkeypatch, targets=('eyebro',))
   bro = _TrackerDev()
 
   native_body = bro.get_spell_body('run-pr', harness='bro', hold='unattended')

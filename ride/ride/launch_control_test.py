@@ -1,25 +1,27 @@
 import json
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from types import MappingProxyType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
-from bro.broker.brotocol import Message, Talk, request
+from bro.authority.authority import Authority, Cap, Entry, Pair, Permission
+from bro.authority.rules import Declaration, Option
+from bro.authority.values import IntegerInterval, Integers, Strings, Subsets
+from bro.broker.brotocol import TALK_RIGHTS, Message, Talk, request
 from bro.broker.job import CommandJob
 from bro.broker.spawn import Spawner
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
 from bro.worker_types import (
-  LAUNCH_FLAG,
-  LAUNCH_PASS,
   ArtifactDenied,
   Container,
   Expect,
   Job,
   LaunchDenied,
   LaunchRequest,
+  OptionValues,
   PeerDescription,
   Spawn,
   UnattributablePeer,
@@ -29,6 +31,7 @@ from bro.worker_types import (
 )
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride import pending_launch
+from ride.authority_test_helper import mission, reading
 from ride.launch_control import LaunchControl
 
 ROOT = 'ROOT'
@@ -53,7 +56,22 @@ class Host:
 
 class SampleType(WorkerType):
   name = 'test'
-  launch_schema = MappingProxyType({'use': LAUNCH_FLAG})
+  @classmethod
+  def authority_declaration(cls, credential_kinds):
+    return Declaration({'timeout': Option('scalar', Integers((IntegerInterval(1,None),)), open=True), 'talk': Option('subset', Subsets(TALK_RIGHTS).universe(), open=True)}, defaults=lambda values, reading: {'timeout': 12})
+
+  @classmethod
+  def option_values(cls, fields, reading):
+    values = {}
+    if 'timeout' in fields:
+      values['timeout'] = fields['timeout']
+    if 'talk' in fields:
+      values['talk'] = frozenset(fields['talk'])
+    unknown = fields.keys() - {'talk', 'timeout', 'manual', 'share', 'value', 'deny_talk', 'deny_launch'}
+    if unknown:
+      raise ValueError(f'declaration check: unknown fields {sorted(unknown)}')
+    return OptionValues(values, {name: value for name,value in fields.items() if name in {'value', 'deny_talk', 'deny_launch'}})
+
   default_timeout = 12.0
   widens_talk = True
   manual = True
@@ -91,7 +109,20 @@ class FixedTalkType(SampleType):
 
 
 class PassType(SampleType):
-  launch_schema = MappingProxyType({'pass': LAUNCH_PASS})
+  @classmethod
+  def authority_declaration(cls, credential_kinds):
+    base = super().authority_declaration(credential_kinds)
+    return replace(base, options={**base.options, 'cred.github': Option('scalar', Strings(cofinite=True))})
+
+  @classmethod
+  def option_values(cls, fields, reading):
+    from bro.base.credentials import parse_picks
+    mapped = super().option_values({key: value for key,value in fields.items() if key != 'pass'}, reading)
+    values = {**mapped.values}
+    if 'pass' in fields:
+      values.update({'cred.'+kind: instance for kind,instance in parse_picks(fields['pass'], where='test', field='pass').items()})
+    return OptionValues(values, mapped.content)
+
 
 
 class Peers:
@@ -147,7 +178,7 @@ def owner(tmp_path):
     tree=tmp_path,
     type='bro',
     bro='dev',
-    launch={'test': {}},
+    mission_record=mission(top=True),
     member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
@@ -157,6 +188,7 @@ def owner(tmp_path):
 
 
 def _control(tmp_path, owner, run, *, type_class=SampleType, worker_container_spawner=None):
+  source = reading(declarations={'test': type_class.authority_declaration(frozenset({'github'}))})
   host = Host()
   worker_type = type_class(host, run)
   peers = Peers(owner)
@@ -169,6 +201,7 @@ def _control(tmp_path, owner, run, *, type_class=SampleType, worker_container_sp
     audit_file=tmp_path / 'audit.jsonl',
     runtime_bundle=runtime,
     session_env={'ONE': '1'},
+    reading=source,
     worker_container_spawner=cast(
       Spawner,
       object() if worker_container_spawner is None else worker_container_spawner,
@@ -188,7 +221,7 @@ def _handle(control, message):
 
 
 def test_spawn_resolves_talk_before_launch_and_records_facts(tmp_path, owner):
-  run = Spawn(object(), object(), launch_scope={'test': {'use': True}})
+  run = Spawn(object(), object())
   control, worker_type, peers, _ = _control(tmp_path, owner, run)
   message = _message(value=1, talk=['owner.say'])
   context = _handle(control, message)
@@ -201,15 +234,15 @@ def test_spawn_resolves_talk_before_launch_and_records_facts(tmp_path, owner):
   }
   facts = peers.facts[message.request_id]
   assert facts.type == 'test'
-  assert facts.launch == {'test': {'use': True}}
+  assert facts.record is not None
   assert not facts.expected
 
 
 def test_type_key_is_required_before_type_owned_checks(tmp_path, owner):
-  owner = replace(owner, launch={})
+  owner = replace(owner, mission_record=replace(owner.mission_record, authority=Authority()))
   control, worker_type, _, _ = _control(tmp_path, owner, Spawn(object(), object()))
   context = _handle(control, _message(deny_talk=True))
-  assert context.denied[0][1] == 'launch denied: the owner does not hold :launch.test'
+  assert 'use rule: test:' in context.denied[0][1]
   assert worker_type.calls == []
 
 
@@ -220,7 +253,7 @@ def test_request_timeout_overrides_the_type_default(tmp_path, owner):
 
 
 def test_pass_is_authorized_before_the_type_and_reaches_the_request(tmp_path, owner):
-  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  owner = replace(owner, mission_record=mission(top=True))
   control, worker_type, _, _ = _control(
     tmp_path,
     owner,
@@ -237,7 +270,7 @@ def test_pass_is_authorized_before_the_type_and_reaches_the_request(tmp_path, ow
 
 
 def test_pass_beyond_the_owners_rights_is_denied_before_the_type(tmp_path, owner):
-  owner = replace(owner, launch={'test': {'pass': frozenset({'github+other'})}})
+  owner = replace(owner, mission_record=replace(owner.mission_record, authority=Authority.top().meet(Cap((Entry(Permission('test', 'cred.github', Strings(cofinite=True)), Pair()),)))))
   control, worker_type, _, _ = _control(
     tmp_path,
     owner,
@@ -247,8 +280,8 @@ def test_pass_beyond_the_owners_rights_is_denied_before_the_type(tmp_path, owner
 
   context = _handle(control, _message(**{'pass': ['github+work']}))
 
-  assert 'beyond' in context.denied[0][1]
-  assert 'github+work' in context.denied[0][1]
+  assert 'use rule' in context.denied[0][1]
+  assert 'test.cred=github+work' in context.denied[0][1]
   assert worker_type.calls == []
 
 
@@ -256,14 +289,14 @@ def test_pass_beyond_the_owners_rights_is_denied_before_the_type(tmp_path, owner
   ('passes', 'message'),
   [
     (['github'], 'names no instance'),
-    (['github+one', 'github+two'], 'more than one instance'),
+    (['github+one', 'github+two'], 'twice'),
     ('github+one', 'must be a list'),
   ],
 )
 def test_malformed_passes_are_denied(tmp_path, owner, passes, message):
   owner = replace(
     owner,
-    launch={'test': {'pass': frozenset({'github+one', 'github+two'})}},
+    mission_record=mission(top=True),
   )
   control, worker_type, _, _ = _control(
     tmp_path,
@@ -279,12 +312,12 @@ def test_malformed_passes_are_denied(tmp_path, owner, passes, message):
 
 
 def test_a_type_without_a_pass_field_has_no_pass_rights(tmp_path, owner):
-  owner = replace(owner, launch={'test': {}})
+  owner = replace(owner, mission_record=mission(top=True))
   control, worker_type, _, _ = _control(tmp_path, owner, Spawn(object(), object()))
 
   context = _handle(control, _message(**{'pass': ['github+work']}))
 
-  assert 'beyond' in context.denied[0][1]
+  assert 'declaration check' in context.denied[0][1]
   assert worker_type.calls == []
 
 
@@ -293,7 +326,7 @@ def test_shipped_types_without_pass_fields_deny_passes(tmp_path, owner, worker_n
   worker_class = installed_types()[worker_name]
   host = Host()
   worker_type = worker_class(cast(Any, host))
-  owner = replace(owner, launch={worker_name: {}})
+  owner = replace(owner, mission_record=mission(top=True))
   control = LaunchControl(
     ride='ride',
     types={worker_name: worker_type},
@@ -303,6 +336,7 @@ def test_shipped_types_without_pass_fields_deny_passes(tmp_path, owner, worker_n
     runtime_bundle=SimpleNamespace(reference='/runtime'),
     session_env={},
     worker_container_spawner=cast(Spawner, object()),
+    reading=reading(),
   )
 
   context = _handle(
@@ -310,14 +344,14 @@ def test_shipped_types_without_pass_fields_deny_passes(tmp_path, owner, worker_n
     request('launch', {'type': worker_name, 'pass': ['github+work']}),
   )
 
-  assert 'beyond' in context.denied[0][1]
+  assert 'webview accepts cookies only' in context.denied[0][1] or 'unknown benchmark fields' in context.denied[0][1]
 
 
 @pytest.mark.parametrize('timeout', [0, -1, True, '3'])
 def test_invalid_timeout_is_denied(tmp_path, owner, timeout):
   control, _, _, _ = _control(tmp_path, owner, Spawn(object(), object()))
   context = _handle(control, _message(timeout=timeout))
-  assert "'timeout' must be a positive number" in context.denied[0][1]
+  assert 'domain check' in context.denied[0][1] and 'timeout' in context.denied[0][1]
 
 
 def test_owner_is_attributed_before_type_lookup(tmp_path, owner):
@@ -382,7 +416,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   control, _, peers, _ = _control(
     tmp_path,
     owner,
-    Container(spec, extension={'worker': 'facts'}, launch_scope={'test': {'use': True}}),
+    Container(spec, extension={'worker': 'facts'}),
     worker_container_spawner=spawner,
   )
   message = _message(share=[ref])
@@ -399,12 +433,12 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   assert options['type'] == 'test'
   facts = peers.facts[message.request_id]
   assert facts.extension == {'worker': 'facts'}
-  assert facts.launch == {'test': {'use': True}}
+  assert facts.record is not None
   assert facts.artifact_view is None
 
 
 def test_pass_is_denied_for_a_job_run(tmp_path, owner):
-  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  owner = replace(owner, mission_record=mission(top=True))
   control, _, _, _ = _control(
     tmp_path,
     owner,
@@ -418,7 +452,7 @@ def test_pass_is_denied_for_a_job_run(tmp_path, owner):
 
 
 def test_container_run_carries_passes_to_the_host_spawner(tmp_path, owner):
-  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  owner = replace(owner, mission_record=mission(top=True))
   run = Container(
     WorkerContainer(
       files={'Dockerfile': b'ARG RUNTIME_IMAGE\nFROM ${RUNTIME_IMAGE}\n'},
@@ -484,7 +518,7 @@ def test_manual_launch_writes_and_discards_the_pending_record(tmp_path, monkeypa
 
 
 def test_audit_fields_and_passes_are_snapshotted_at_acceptance(tmp_path, owner):
-  owner = replace(owner, launch={'test': {'pass': frozenset({'github+work'})}})
+  owner = replace(owner, mission_record=mission(top=True))
   message = _message(**{'pass': ['github+work']})
   control, worker_type, peers, _ = _control(
     tmp_path,

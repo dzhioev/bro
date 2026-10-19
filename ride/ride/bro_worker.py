@@ -33,9 +33,6 @@ from bro.worker_types import (
   WorkerType,
 )
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
-from ride.authority_launch import credentials_for, hydrate
-from ride.authority_reading import Reading
-from ride.authority_scope import checked_recipe
 from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
@@ -44,6 +41,8 @@ if TYPE_CHECKING:
   from bro.broker.spawn import ChildHandle
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
+  from ride.authority_launch import credentials_for, hydrate
+  from ride.authority_reading import Reading
   from ride.peer_facts import PeerFacts
   from ride.repository import Repository
   from ride.runtime_bundle import RuntimeBundle
@@ -205,9 +204,9 @@ def _child_session_spec(
 
   A started party records its resume variant;
   a joined member uses the spec only to build its `do-ride` argv and environment."""
+  from ride.authority_scope import checked_recipe
   from ride.repository import as_repository
   from ride.session import SessionSpec
-
   harness = get_harness(launch.harness)
   resolved_isolation = launch.isolation if isolation is None else isolation
   if resolved_isolation is None:

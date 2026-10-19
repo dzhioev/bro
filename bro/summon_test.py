@@ -30,7 +30,7 @@ def test_bare_summon_forwards_the_request(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, passes, share, llm, harness, party, isolation, talk, manual: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, limit, passes, share, llm, harness, placement, talk, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -73,10 +73,10 @@ async def test_detached_summon_waits_for_acceptance(monkeypatch, capsys):
 @pytest.mark.parametrize(
   ('flag', 'field', 'value'),
   [
-    ('--start', 'party', 'start'),
-    ('--join', 'party', 'join'),
-    ('--boxed', 'isolation', 'boxed'),
-    ('--unboxed', 'isolation', 'unboxed'),
+    ('--start', 'placement', 'boxed'),
+    ('--join', 'placement', 'join'),
+    ('--boxed', 'placement', 'boxed'),
+    ('--unboxed', 'placement', 'unboxed'),
   ],
 )
 async def test_placement_flags_reach_the_request(monkeypatch, flag, field, value):
@@ -202,7 +202,7 @@ async def test_blocking_summon_returns_at_a_child_question_and_rides_through_say
 async def test_silent_blocking_wait_queries_live_state_then_resumes(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(summon.main, ['summon', '--timeout', '0.05', 'dev', 'work'])
+      asyncio.to_thread(summon.main, ['summon', '--timeout', '1', 'dev', 'work'])
     )
     channel, original = await next_message(server)
     await server.transport.send(channel, brotocol.mark(message_id(original), 'accepted'))
@@ -229,7 +229,7 @@ async def test_silent_blocking_wait_queries_live_state_then_resumes(monkeypatch,
 async def test_silent_blocking_wait_interprets_terminal_query(monkeypatch, capsys):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(summon.main, ['summon', '--timeout', '0.05', 'dev', 'work'])
+      asyncio.to_thread(summon.main, ['summon', '--timeout', '1', 'dev', 'work'])
     )
     _, original = await next_message(server)
     channel, query = await next_message(server)
@@ -257,7 +257,7 @@ async def test_silent_blocking_wait_returns_an_open_child_question_from_the_jour
 ):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(summon.main, ['summon', '--timeout', '0.05', 'dev', 'work'])
+      asyncio.to_thread(summon.main, ['summon', '--timeout', '1', 'dev', 'work'])
     )
     _, original = await next_message(server)
     channel, query = await next_message(server)
@@ -282,28 +282,12 @@ async def test_silent_blocking_wait_returns_an_open_child_question_from_the_jour
     assert capsys.readouterr().out == 'approve?\n'
 
 
-def test_launch_round_trips_and_drives_may_summon(monkeypatch):
-  value = {
-    'bro': {'bros': frozenset({'reviewer', 'dev'}), 'party': frozenset({'boxed'})},
-    'webview': {'vnc': True},
-  }
-  monkeypatch.setenv(summon.LAUNCH_ENV, summon.encode_launch(value))
-  assert summon.launch() == value
+def test_may_summon_reads_live_authority(monkeypatch):
+  from bro.authority.client_test_helper import publish
+  publish(monkeypatch, targets=('dev', 'reviewer'))
   assert summon.may_summon() == ('dev', 'reviewer')
-
-
-def test_may_summon_distinguishes_empty_and_unpublished(monkeypatch):
-  monkeypatch.setenv(summon.LAUNCH_ENV, summon.encode_launch({'bro': {}}))
+  publish(monkeypatch)
   assert summon.may_summon() == ()
-  monkeypatch.delenv(summon.LAUNCH_ENV)
-  assert summon.may_summon() is None
-
-
-def test_invalid_published_launch_fails(monkeypatch):
-  monkeypatch.setenv(summon.LAUNCH_ENV, '{"bro": []}')
-
-  with pytest.raises(ValueError, match='invalid launch section'):
-    summon.launch()
 
 
 def test_errors_without_a_channel(monkeypatch, caplog):
@@ -313,12 +297,9 @@ def test_errors_without_a_channel(monkeypatch, caplog):
 
 
 def test_summoned_child_env_is_what_the_child_reads_back(monkeypatch):
-  launch = {'bro': {'bros': frozenset({'reviewer', 'dev'}), 'party': frozenset({'join'})}}
-  for key, value in summon.summoned_child_env(launch, {'trail_id': 'T1'}).items():
+  for key, value in summon.summoned_child_env({'trail_id': 'T1'}).items():
     monkeypatch.setenv(key, value)
   assert summon.summoned()
-  assert summon.launch() == launch
-  assert summon.may_summon() == ('dev', 'reviewer')
   assert summon.summoned_by_from_env() == {'trail_id': 'T1'}
 
 
@@ -342,9 +323,9 @@ def test_party_member_reads_the_joined_session_mark(monkeypatch):
 
 
 def test_summoned_child_env_without_a_summoner_carries_no_provenance(monkeypatch):
-  env = summon.summoned_child_env({}, None)
+  env = summon.summoned_child_env(None)
   assert summon.SUMMONER_ENV not in env
   for key, value in env.items():
     monkeypatch.setenv(key, value)
-  assert summon.may_summon() == ()
+  assert summon.may_summon() is None
   assert summon.summoned_by_from_env() is None

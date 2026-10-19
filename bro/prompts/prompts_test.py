@@ -2,10 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from bro.authority.client_test_helper import publish
 from bro.broker.environment import BROKER_TALK
 from bro.harness import get_harness
 from bro.prompts import PromptLoader, get_prompt, get_prompt_path, hold_fragment, session_fragment
-from bro.summon import LAUNCH_ENV, PARTY_MEMBER_ENV, SUMMONED_ENV, encode_launch
+from bro.summon import PARTY_MEMBER_ENV, SUMMONED_ENV
 
 
 class TestContainment:
@@ -93,7 +94,7 @@ class TestHoldFragment:
 class TestSessionFragment:
   def test_an_unsummoned_run_gets_the_hold_fragment_alone(self, monkeypatch):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.delenv(LAUNCH_ENV, raising=False)
+    publish(monkeypatch)
     monkeypatch.delenv(PARTY_MEMBER_ENV, raising=False)
     assert session_fragment('attended', harness=get_harness('claude')) == hold_fragment(
       'attended', harness=get_harness('claude')
@@ -108,7 +109,7 @@ class TestSessionFragment:
   @pytest.mark.parametrize('harness', ['bro', 'claude'])
   def test_a_summoning_run_uses_the_runtime_owned_watch(self, monkeypatch, harness):
     monkeypatch.delenv(SUMMONED_ENV, raising=False)
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    publish(monkeypatch, targets=('reviewer',))
     fragment = session_fragment('attended', harness=get_harness(harness))
     assert fragment.startswith('# Summoning session')
     assert 'session keeps a quest watch' in fragment
@@ -128,7 +129,7 @@ class TestSessionFragment:
   def test_a_summoning_summoned_run_carries_both_contracts_in_order(self, monkeypatch):
     monkeypatch.setenv(SUMMONED_ENV, '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
-    monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+    publish(monkeypatch, targets=('reviewer',))
     fragment = session_fragment('attended', harness=get_harness('claude'), talk=('worker.say',))
     assert fragment.index('# Summoning session') < fragment.index('# Summoned session')
     assert fragment.count('# One-shot turn end') == 1
@@ -183,9 +184,9 @@ def test_the_session_texts_cast_no_spell(monkeypatch):
   talks = ((), ('owner.say', 'worker.say'), ('owner.question',), ('worker.say', 'worker.question'))
   for summoning, summoned in ((True, False), (False, True), (True, True)):
     if summoning:
-      monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
+      publish(monkeypatch, targets=('reviewer',))
     else:
-      monkeypatch.delenv(LAUNCH_ENV, raising=False)
+      publish(monkeypatch)
     if summoned:
       monkeypatch.setenv(SUMMONED_ENV, '1')
     else:
