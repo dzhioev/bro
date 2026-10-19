@@ -52,6 +52,7 @@ EVENTS = 'events'
 CANCEL = 'cancel'
 
 RequestHandler = Callable[['Dispatcher', Peer, Message], None]
+Lifetime = Callable[['Dispatcher'], contextlib.AbstractAsyncContextManager[None]]
 
 
 @dataclass
@@ -75,6 +76,23 @@ class _SupervisorEvents:
 
   def on_death(self, supervisor: Supervisor, report: DeathReport) -> None:
     self._dispatcher._on_death(supervisor, report)
+
+
+class _RequestChannel:
+  def __init__(self, dispatcher: 'Dispatcher'):
+    self.dispatcher = dispatcher
+    self.peer: Peer | None = None
+
+  def on_connect(self) -> None:
+    pass
+
+  def on_disconnect(self) -> None:
+    pass
+
+  def on_message(self, message: Message) -> None:
+    if self.peer is None:
+      raise RuntimeError('request channel has not been provisioned')
+    self.dispatcher.on_message(self.peer, message)
 
 
 class Dispatcher:
@@ -128,6 +146,16 @@ class Dispatcher:
     if kind in self._handlers:
       raise ValueError(f'kind {kind!r} already has a handler')
     self._handlers[kind] = handler
+
+  @contextlib.asynccontextmanager
+  async def request_channel(self) -> AsyncGenerator[Provisioned]:
+    events = _RequestChannel(self)
+    provisioned = await self.runtime.provision(events)
+    events.peer = provisioned.channel
+    try:
+      yield provisioned
+    finally:
+      await self.runtime.close(provisioned.channel)
 
   def deliver(self, peer: Peer, message: Message) -> None:
     delivered = brotocol.frame_safe_result(message) if message.type == Tag.RESULT else message
@@ -307,7 +335,13 @@ class Dispatcher:
       self._root_exit.set_result(report.exit_code if report.exit_code is not None else 1)
 
   async def run(
-    self, root: LaunchSpec, spawner: Spawner, *, type: str, end_on_sigterm: bool = False
+    self,
+    root: LaunchSpec,
+    spawner: Spawner,
+    *,
+    type: str,
+    end_on_sigterm: bool = False,
+    lifetime: Lifetime | None = None,
   ) -> int:
     """supervise `root` until it exits and answer its exit code.
 
@@ -321,6 +355,7 @@ class Dispatcher:
     async with (
       _ended_by_signal(loop, self._root_exit, enabled=end_on_sigterm),
       self._runtime_lifetime(),
+      lifetime(self) if lifetime is not None else contextlib.nullcontext(),
     ):
       mission_id = lulid()
       record = self.journal.open(mission_id, 'root', None, None, {}, type=type, talk=EMPTY_TALK)
@@ -800,10 +835,18 @@ class Broker:
     self._dispatcher.on(kind, handler)
 
   def run(
-    self, root: LaunchSpec, spawner: Spawner, *, type: str, end_on_sigterm: bool = False
+    self,
+    root: LaunchSpec,
+    spawner: Spawner,
+    *,
+    type: str,
+    end_on_sigterm: bool = False,
+    lifetime: Lifetime | None = None,
   ) -> int:
     return asyncio.run(
-      self._dispatcher.run(root, spawner, type=type, end_on_sigterm=end_on_sigterm)
+      self._dispatcher.run(
+        root, spawner, type=type, end_on_sigterm=end_on_sigterm, lifetime=lifetime
+      )
     )
 
   def stop(self) -> None:

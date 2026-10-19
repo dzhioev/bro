@@ -62,6 +62,7 @@ The module contains constants only, so launch paths may import it before the bro
   Every projection subscribes to its one append funnel;
   a raising subscriber is logged without breaking later subscribers.
 - `dispatcher.py` routes over journal records, binds one supervisor per worker-backed mission, synthesizes failure from supervisor death, and serves `query`, `events`, and `cancel`.
+  Its scoped request channels carry no worker binding, and its run lifetime can provision caller-owned resources before the root starts.
   Its handler vocabulary is `reply`, `deny`, `spawn`, `job`, and `expect`.
   `spawn`, `job`, and `expect` require the worker type they record;
   `spawn` also takes the spawner for its launch, while `spawn` and `job` require the caller-owned timeout (`None` is unbounded);

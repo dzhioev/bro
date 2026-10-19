@@ -120,6 +120,20 @@ The native recipe and implementation ship from `bro-native`;
 Claude's recipe and implementation ship from `bro-ride`.
 A Claude-only installation therefore registers only `claude`, while `bro-native` adds `bro` by depending on ride rather than ride importing the native engine.
 
+## Operator channel
+
+`ride missions <root>` lists a running root's mission tree as JSON, including each mission's id, target name, workspace, joined member, type, and state.
+The target name is the joined member's name, the workspace name for a started party, or the mission id for a worker without a workspace or an unclaimed manual launch.
+The command re-executes into the root's runtime before contacting its broker.
+A root with no operator control file is refused by name.
+
+A brokered root provisions a separate operator channel before starting its session.
+Its address, including its secret token, and runtime reference live in a 0600 file under `<runtime-root>/control/`, outside every container mount.
+The root removes the file when it ends;
+`ride clean` sweeps files whose root was hard-killed, leaving live roots' files alone.
+Operator requests are refused on every mission channel.
+Like unboxed credential scoping, this is no security boundary against an unboxed session running as the operator's own user.
+
 ## Session watches
 
 Every managed harness keeps its command watches in one store under the session state directory.

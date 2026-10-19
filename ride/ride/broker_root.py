@@ -21,6 +21,7 @@ from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, launch_dir
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
 from ride.bro_worker import BroFacts, Placement, SummonSpawner
 from ride.launch_control import LaunchControl
+from ride.operator import OperatorControl
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.runtime_bundle import RuntimeBundle
 from ride.worker_container import WorkerContainerSpawner
@@ -130,6 +131,9 @@ def run_root_via_broker(
     TcpServerTransport(broker_bind_hosts()),
     job_output=JobArtifacts(artifacts, facts),
   )
+  operator = OperatorControl(
+    facade, root=workspace.name, runtime=runtime_bundle.reference, peers=facts
+  )
   facts.bind_journal(facade.journal)
   host = RideHost(
     workspace=workspace,
@@ -169,4 +173,6 @@ def run_root_via_broker(
     for subscriber in worker_type.subscribers():
       facade.subscribe(subscriber)
   with contextlib.closing(artifacts):
-    return facade.run(launch, root_spawner, type=BRO, end_on_sigterm=True)
+    return facade.run(
+      launch, root_spawner, type=BRO, end_on_sigterm=True, lifetime=operator.lifetime
+    )

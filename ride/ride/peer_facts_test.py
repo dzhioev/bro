@@ -1,5 +1,6 @@
 from pathlib import PurePosixPath
 from typing import cast
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,6 +11,7 @@ from bro.worker_types import PeerDescription, UnattributablePeer
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_tree
 from ride import pending_launch
 from ride.bro_worker import BroFacts
+from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -179,3 +181,71 @@ def test_attribution_reads_the_current_pointer_then_the_journal_fallback(facts):
   assert table.attribution(context, ROOT)['trail_id'] == 'journal-trail'
   trail_pointer.write(trail_pointer.session_pointer(workspace.path), 'current-trail')
   assert table.attribution(context, ROOT)['trail_id'] == 'current-trail'
+
+
+def test_operator_listing_names_workspaces_members_and_unplaced_missions(facts, monkeypatch):
+  table, context, workspace = facts
+  _spawned(table, context, CHILD, 'child-mission', 'root-mission')
+  _spawned(table, context, GRANDCHILD, 'expected-mission', 'root-mission', expected=True)
+  table.add('joined-mission', WorkerFacts('bro', workspace.name, member='member-name'))
+  context.journal.open('joined-mission', 'launch', 'root-mission', ROOT, {}, type='bro')
+  table.add('job-mission', WorkerFacts('benchmark', None))
+  context.journal.open('job-mission', 'launch', 'root-mission', ROOT, {}, type='benchmark')
+  monkeypatch.setattr(pending_launch, 'claimed_workspace', lambda _mission: None)
+
+  rows = {row['id']: row for row in table.missions()}
+  assert rows['root-mission']['name'] == workspace.name
+  assert rows['child-mission']['name'] == f'broker-{CHILD}'
+  assert rows['joined-mission']['name'] == 'member-name'
+  assert rows['joined-mission']['workspace'] == workspace.name
+  assert rows['joined-mission']['member'] == 'member-name'
+  assert rows['expected-mission']['workspace'] is None
+  assert rows['expected-mission']['name'] == 'expected-mission'
+  assert rows['job-mission']['name'] == 'job-mission'
+  assert rows['job-mission']['type'] == 'benchmark'
+
+  monkeypatch.setattr(pending_launch, 'claimed_workspace', lambda _mission: 'manual-workspace')
+  claimed = {row['id']: row for row in table.missions()}
+  assert claimed['expected-mission']['name'] == 'manual-workspace'
+
+
+@pytest.mark.parametrize('attached', [False, True])
+def test_first_listing_after_manual_worker_ends_retains_claimed_workspace(facts, attached):
+  table, context, workspace = facts
+  mission = 'manual-mission'
+  table.add(mission, WorkerFacts('bro', None, expected=True))
+  record = context.journal.open(mission, 'launch', 'root-mission', ROOT, {}, type='bro')
+  control = LaunchControl(
+    ride=workspace.name,
+    types={},
+    peers=table,
+    journal=context.journal,
+    audit_file=workspace.path / 'audit.jsonl',
+    runtime_bundle=MagicMock(),
+    session_env={},
+    worker_container_spawner=MagicMock(),
+  )
+  context.journal.subscribe(control.observe_journal)
+  pending_launch.write(
+    pending_launch.PendingLaunch(
+      token=mission,
+      runtime='/runtime',
+      port=1234,
+      channel_token='secret',
+      type='bro',
+      talk=(),
+      owner_tree=str(workspace.tree),
+    )
+  )
+  pending_launch.claim(mission, workspace='manual-workspace')
+  if attached:
+    context.journal.bind(record, CHILD)
+    context.journal.started(record)
+    assert table.for_mission(mission).workspace == 'manual-workspace'
+  context.journal.end(record, {'outcome': 'ok'})
+
+  assert pending_launch.claimed_workspace(mission) is None
+  [row] = [row for row in table.missions() if row['id'] == mission]
+  assert row['state'] == 'ended'
+  assert row['workspace'] == 'manual-workspace'
+  assert row['name'] == 'manual-workspace'
