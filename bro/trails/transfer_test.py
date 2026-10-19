@@ -156,16 +156,15 @@ def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_p
   stored_rows = [json.loads(line) for line in rows_path.read_text().splitlines()]
   stored_rows[0].pop('format')
   rows_path.write_text(''.join(json.dumps(row) + '\n' for row in stored_rows))
-  recorded_format = model.TRAIL_FORMAT
   monkeypatch.setitem(
     formats.UPGRADES,
-    model.TRAIL_FORMAT,
+    1,
     formats.FormatUpgrade(
       header=lambda header: {**header, 'synthetic_header': True},
       row=lambda row: {**row, 'call_id': 'upgraded'},
     ),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
   destination = LocalStore(tmp_path / 'destination')
 
   transfer.import_layout(tmp_path / 'source', destination)
@@ -176,14 +175,10 @@ def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_p
     for line in (destination.trails_directory / trail_id / 'steps.jsonl').read_text().splitlines()
   ]
   assert 'format' not in written_header
-  assert [row.get('format') for row in written_rows] == [None, recorded_format]
+  assert [row.get('format') for row in written_rows] == [None, 1]
   assert [row.get('call_id') for row in written_rows] == [None, None]
   served = destination.get_trail(trail_id)
-  assert (served['format'], served['synthetic_header'], served['extent']) == (
-    model.TRAIL_FORMAT,
-    True,
-    2,
-  )
+  assert (served['format'], served['synthetic_header'], served['extent']) == (2, True, 2)
   assert destination.get_step(trail_id, 1)['call_id'] == 'upgraded'
 
 
@@ -209,10 +204,10 @@ def test_parents_first_uses_upgraded_parent_pointers(monkeypatch):
 
   monkeypatch.setitem(
     formats.UPGRADES,
-    model.TRAIL_FORMAT,
+    1,
     formats.FormatUpgrade(header=upgrade_header, row=lambda row: row),
   )
-  monkeypatch.setattr(model, 'TRAIL_FORMAT', model.TRAIL_FORMAT + 1)
+  monkeypatch.setattr(model, 'TRAIL_FORMAT', 2)
 
   assert [header['id'] for header in transfer.parents_first(headers)] == ['parent', 'child']
 

@@ -20,18 +20,8 @@ class FormatUpgrade:
   row: Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def _rename_claude_code_provider(header: dict[str, Any]) -> dict[str, Any]:
-  native = header.get('native')
-  llm = native.get('llm') if isinstance(native, dict) else None
-  if isinstance(llm, dict) and llm.get('type') == 'claude-code':
-    llm['type'] = 'anthropic'
-  return header
-
-
 # Key N transforms format N into N + 1.
-UPGRADES: dict[int, FormatUpgrade] = {
-  1: FormatUpgrade(header=_rename_claude_code_provider, row=lambda row: row),
-}
+UPGRADES: dict[int, FormatUpgrade] = {}
 
 
 def stored_format(record: dict[str, Any], *, description: str) -> int:
