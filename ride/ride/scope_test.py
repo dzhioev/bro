@@ -585,6 +585,7 @@ class TestScopeEvaluatesUnderTheLaunchSelection:
         name: credentials.CredentialKind(name, f'{name} credential') for name in ('gate', 'payload')
       },
     )
+    monkeypatch.setattr(credentials, '_default_store', None)
     config = tmp_path / 'bro.json'
     config.write_text(json.dumps({'projects': {str(tmp_path): {'bros': bros}}}))
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
