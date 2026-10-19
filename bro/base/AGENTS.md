@@ -28,7 +28,9 @@ run those with `--help` for flags.
   The code registry maps kinds to a required description, an optional install hook, and an optional literal-material marker;
   it is assembled from `bro/base/registry.json` and installed `bro.credentials` contributions.
   `Store(registry, store_dir, selection, readable=…)` reads one exclusive directory, a `readable` set withholding every other kind:
-  plain material is `creds/<name>.cred`, and `creds.json` carries the store's `defaults` plus typed annotations under `sources` (`ssm` or a `bro.credential_sources` minting type).
+  host material is `creds/<name>.cred`, and `creds.json` carries the store's `defaults` plus typed annotations under `sources` (`ssm` or a `bro.credential_sources` minting type).
+  A session index additionally maps readable names to immutable material files and advances its generation on publication;
+  reads refresh against that generation.
   A stored name is `kind+instance` spelled `kind` when the instance is empty, and a store carrying the other spelling of that name fails at construction.
   `get` / `get_json` / `try_get` / `available` address kinds through the explicit selection;
   the `get_instance` siblings address the stored name exactly.
@@ -45,6 +47,8 @@ run those with `--help` for flags.
   `scoped_view_store` applies the same presence rule to a lazy, kinds-bounded sibling over the passed store.
   `install_hooks(registry, kinds, store, directory, env)` applies only the named kinds and resolves hook values through that store.
   Schemas live in `bro/setup/AGENTS.md`.
+- `credential_apply.py` — staged session-store publication, targeted stable-path hooks, idempotent operation completion, and atomic files.
+- `credential_environment.py` — hook environment serialization and process-start overlays.
 - `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
 - `source_commit.py` — `installed_commit(distribution)`, the commit an installed distribution runs:
   the record its wheel carries in `.dist-info`, else the commit its version-control installation resolved, else the live checkout its editable installation runs from;

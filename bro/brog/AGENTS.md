@@ -47,7 +47,7 @@ the topic is stored as the body's leading `### <topic>` heading, while a heading
 ## Components
 
 - `model.py` — `Task` / `Project` / `Comment` / `Status`
-- `system.py` — the `System` ABC, config parsing and validation, backend discovery, and `build_system` / `default_system`;
+- `system.py` — the `System` ABC, config parsing and validation, backend discovery, and `build_system` / `default_system` / generation-refreshed `current_system`;
   author is the session persona from `RIDE_BRO`
 - `github.py` — built-in GitHub Issues backend
 - `mcp.py` — the brog `Toolset`, exported as `toolset` for persona mounts and the standalone entry point

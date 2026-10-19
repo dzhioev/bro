@@ -274,7 +274,8 @@ def test_override_rejects_a_fixed_name_before_runtime_reexec(monkeypatch, capsys
   monkeypatch.setattr(cli, 'reexec_from_runtime', reexec)
   with pytest.raises(SystemExit):
     cli.main(['ride', 'override', 'root', '--grant', 'bro.placement=join'])
-  assert 'only --grant/--revoke @<bro>' in capsys.readouterr().err
+  error = capsys.readouterr().err
+  assert 'override check' in error and 'bro.placement=join' in error
 
 
 def test_member_name_resolves_through_the_operator_listing(monkeypatch):

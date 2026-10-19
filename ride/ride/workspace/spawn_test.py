@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import os
 import signal
@@ -1307,3 +1308,72 @@ class TestDockerSpawnerModes:
     assert spawn_harness['prepare_threads'][0] != loop_thread
     assert spawn_harness['workspace_threads'][0] != loop_thread
     assert await handle.wait() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('member', [False, True])
+async def test_private_store_cleanup_closes_admission_and_waits_for_publication(
+  tmp_path, monkeypatch, member
+):
+  import threading
+
+  from bro.base.credential_apply import atomic_file
+  from ride.credential_applier import ApplierClosed, CredentialApplier
+
+  private = tmp_path / 'private'
+  private.mkdir()
+  records = tmp_path / 'records'
+  records.mkdir()
+  fifo = tmp_path / 'session-exit'
+  os.mkfifo(fifo)
+  writing, release = threading.Event(), threading.Event()
+  appliers = []
+
+  def publish(applier, request, receipt):
+    writing.set()
+    assert release.wait(10), 'test did not release publication'
+    atomic_file(private / 'store' / 'creds' / 'new.cred', b'new private material')
+    return 1
+
+  monkeypatch.setattr(CredentialApplier, '_apply', publish)
+  launch = workspace_spawn.ProcessLaunchSpec(
+    command=[
+      sys.executable,
+      '-c',
+      f'from pathlib import Path\nwith Path({str(fifo)!r}).open("rb") as stream:\n  assert stream.read(1) == b"X"\n',
+    ],
+    cwd=str(tmp_path),
+    env={},
+    interactive=False,
+    capture_output=True,
+    cleanup_directory=str(private),
+    party_workspace='party' if member else None,
+    records_directory=str(records) if member else None,
+  )
+  spawner = workspace_spawn.ProcessSpawner(
+    credentials=lambda mission, applier: appliers.append(applier)
+  )
+  channel = workspace_spawn.Provisioned(channel='CH', host_endpoint=Endpoint(port=7321, token='tk'))
+  child = await spawner.spawn(launch, channel, 'mission', frozenset())
+  applier = appliers[0]
+
+  def finish_session():
+    with fifo.open('wb') as writer:
+      writer.write(b'X')
+
+  async with contextlib.AsyncExitStack() as cleanup:
+    cleanup.push_async_callback(child.kill)
+    cleanup.callback(release.set)
+    publication = asyncio.create_task(asyncio.to_thread(applier.apply, {}, tmp_path / 'receipt'))
+    assert await asyncio.to_thread(writing.wait, 10), 'publication did not start'
+    reaped = asyncio.create_task(child.wait())
+    await asyncio.to_thread(finish_session)
+    assert await asyncio.to_thread(applier._closed.wait, 10), 'supervisor did not close admission'
+    assert not reaped.done()
+    release.set()
+    assert await asyncio.wait_for(publication, 10) == 1
+    assert await asyncio.wait_for(reaped, 10) == 0
+    assert not private.exists()
+    with pytest.raises(ApplierClosed):
+      applier.apply({}, tmp_path / 'receipt')
+    assert not private.exists()

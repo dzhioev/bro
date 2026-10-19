@@ -89,6 +89,9 @@ class LaunchControl:
     self._audit_passes: dict[str, tuple[str, ...]] = {}
     self._refusals: dict[str, dict[str, str]] = {}
     self._owners: dict[str, dict[str, str]] = {}
+    from ride.credential_overrides import CredentialOverrides
+
+    self.credential_overrides = CredentialOverrides(peers, journal, reading)
 
   def handle(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     requested_type = message.args.get('type')
@@ -280,13 +283,7 @@ class LaunchControl:
       context.reply(peer, {'outcome': 'denied', 'error': str(error)})
 
   def override(self, context: Dispatcher, peer: Peer, message: Message) -> None:
-    from ride.overrides import apply
-
-    try:
-      value = apply(self._peers, context.journal, self.reading, message.args)
-      context.reply(peer, {'outcome': 'ok', 'value': value})
-    except (ValueError, OSError, UnattributablePeer) as error:
-      context.reply(peer, {'outcome': 'denied', 'error': str(error)})
+    self.credential_overrides.handle(context, peer, message)
 
   def commit(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     from ride.authority_launch import credentials_for

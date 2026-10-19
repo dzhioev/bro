@@ -67,11 +67,17 @@ the launcher's own `--log` never reaches the session.
 
 - `ride resume <workspace>` relaunches the recorded session recipe, with optional `--cred`, `--grant`, and `--revoke` adjustments.
   Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
-- `ride override <name> --grant @<bro>` / `--revoke @<bro>` changes a running workspace or joined member's bro targets over its root's operator channel.
+- `ride override <name> --grant N` / `--revoke N` changes a running workspace or joined member's bro targets (`@<bro>`) or credential kinds;
+  `--cred kind+instance` changes a held instance and holds its kind.
+  Requests go through the root's operator channel.
   Names come from `ride missions <root>`;
-  repeated flags are applied in order, with the last flag per target winning.
+  repeated flags are applied in order, with the last flag per name winning.
   The banner reads the updated authority, and the next summon uses it.
   An override affects no already-running child and a resume retains it.
+  Credential replies name an operation and report `applied` on acknowledgement or `uncertain` without one.
+  Pending operations block further overrides of that session, not its own starts;
+  receipts settle uncertain operations while the applier is reachable, after the session ends, or at the workspace's next resume.
+  The reply lists effects that wait for the next start, including tool selection and process-latched clients.
 - `ride list` lists every workspace, its activity state, when its session last marked activity, its attachment, and its subject.
   Live badges are `[o]` boxed and `.o.` unboxed;
   idle badges are `[-]` boxed and `.-.` unboxed.
@@ -598,6 +604,10 @@ The resolver returns that kind's material without expanding any `$cred` referenc
 
 The session store materializes every `creds.use` instance under its own stored name, preserving an instance-spelled `$cred` target as that instance.
 Its `creds.json` records the launch's pick in `defaults` for every loaded kind and every kind reached by a kind-spelled preserved reference, and copies the typed source annotations under `sources`.
+The session index also carries `generation`, `kinds`, and `material`, mapping each readable stored name to an immutable file under `creds/`.
+Files outside that mapping are unreadable through the resolver.
+Readers refresh their selection and cached material when the generation advances;
+explicit-instance reads never substitute the current pick.
 An optional kind is skipped only when no layer picked it and its empty instance is absent;
 every required or explicitly picked name must be present and load successfully before launch.
 A missing source, minting failure, malformed value, or unresolved reference fails the launch under that stored name.
@@ -606,6 +616,15 @@ A missing source, minting failure, malformed value, or unresolved reference fail
 Both isolations publish those through `BRO_INSTALL_KINDS` beside `BRO_STORE`, and `do-ride` runs install hooks for those kinds only, each reading the session store's default instance.
 Kinds pulled in only through `$cred` references receive no install hook of their own.
 The hook directory is recreated for each launch, and two hooks claiming the same file, variable, or command fail.
+A credential override stages changed kinds without touching other kinds, then replaces the index by rename as its commit point.
+It replaces the changed hook files, wrappers and environment file, removes material the index no longer names, and writes a host-side receipt after completion.
+Publication after the commit point is idempotent and retried;
+completed operation ids prevent stale retries from undoing later changes.
+The hooks' `bin` directory is on PATH even when empty.
+Claude's shell prefix sources the current environment file, and framework watch producers, CLI tools and bro-harness jobs apply it as an overlay.
+A running command keeps material it already opened;
+new commands and store reads use the published state.
+Workspaces with credential-operation records are kept after a spawned session ends, so settlement records remain available without retaining its private store.
 A boxed session receives the store in its writable container layer at `/home/ride/.bro`;
 an unboxed session and its hook output live under one private temporary root removed by its supervisor.
 Unboxed scoping remains a convenience rather than a security boundary because the process runs as the host user.
@@ -762,13 +781,13 @@ Layout:
 - a per-launch **scoped credential store** injected into `/home/ride/.bro`.
   Before the container starts, the host resolves only the secrets the session actually uses into an **in-memory** tar and `docker cp`s it into the created-but-unstarted container
   — there is no host-side store and no bind mount.
-  It carries one convention-named file per resolved stored name plus its default picks and typed-source annotations in `creds.json`.
-  The code registry stays in the frozen runtime bundle, so the store directory bounds the in-container resolver to the scoped set
+  Its authoritative `creds.json` maps readable stored names to material files and records the picks, source annotations and generation.
+  The code registry stays in the frozen runtime bundle, and the index bounds the in-container resolver to the scoped set
   — any other secret resolves to a clean `SecretNotFound`.
   Hydration is **strict** — a missing secret raises on the launcher before the container is created.
   Living in the container's own writable layer, the store dies with the container:
   `--rm` removes it on normal exit, and an orphaned container (a killed `ride`) is reclaimed by `ride clean`'s container GC
-  — secret cleanup piggybacks on the container lifecycle, so no host directory ever holds plaintext and no exit-sweep or signal handlers are needed.
+  — temporary override payloads on the host are private to the supervisor and removed with their operation or root lifetime.
   See "Session permissions and credentials" above.
 - **github** and **aws** are ordinary scoped secrets
   — no out-of-band `/run/secrets/github_token` mount, no `~/.aws` mount.
@@ -1546,9 +1565,9 @@ Wrappers and session daemons rely on a small set of env vars:
   `bro/workspace/paths.py:trails_dir` uses it only to resolve the image's fixed trails mount.
   Session placement comes from `RIDE_ISOLATION` instead.
 - `BRO_STORE` — the exclusive scoped credential-store directory delivered by the launcher.
-- `BRO_INSTALL_KINDS` — the space-separated declared kinds hydrated into that store, including an empty value when none resolved.
+- `BRO_INSTALL_KINDS` — the space-separated declared kinds hydrated at launch, including an empty value when none resolved.
   `do-ride` requires these two variables together and installs only those kinds' hooks.
-- `BRO_INSTALL_DIR` — the session's directory for credential-hook output.
+- `BRO_INSTALL_DIR` — the session's directory for credential-hook output and its current environment overlay.
   Each launcher sets its own value, overriding ambient session state;
   a direct `do-ride` invocation derives the current isolation's session environment directory and exports it.
 - `RIDE_RESOLVED_LLM` — the JSON encoding of the exact LLM recipe the launcher validated, scoped, and recorded.

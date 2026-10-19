@@ -5,7 +5,7 @@ from pydantic import Field
 
 from bro.base.text_window import numbered
 from bro.brog.model import Comment, Status, Task
-from bro.brog.system import System, default_system
+from bro.brog.system import System, current_system
 from bro.llm.mcp import Context
 from bro.mcp import Toolset
 
@@ -16,7 +16,7 @@ class _Toolset(Toolset[System]):
   secrets = ('brog',)
 
 
-toolset = _Toolset('brog', state=default_system)
+toolset = _Toolset('brog', state=current_system)
 
 _TASK_ID_FIELD = Field(
   description=(

@@ -25,11 +25,14 @@ class WebSearch(SearchableDataSource):
     # be listed (`bro list`, `bro show`) when the key is not present
     self._store = store if store is not None else credentials.default_store()
     self._api_key: Optional[str] = None
+    self._generation = -1
 
   def _resolve_api_key(self) -> str:
-    if self._api_key is None:
+    generation = self._store.generation
+    if self._api_key is None or self._generation != generation:
       key: str = self._store.get_json('brave')['api_key']
       self._api_key = key
+      self._generation = generation
     return self._api_key
 
   async def search(self, query: str, limit: int = 5) -> list[Hit]:

@@ -6,7 +6,7 @@ import binascii
 import contextlib
 import json
 import signal
-from collections.abc import AsyncGenerator, Callable, Generator
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -171,6 +171,22 @@ class Dispatcher:
     self.deliver(
       peer, brotocol.Message(type=Tag.RESULT, payload=payload, request=self._request_id())
     )
+
+  def defer(self, peer: Peer, answer: Awaitable[dict[str, Any]]) -> None:
+    request_id = self._request_id()
+
+    async def deliver() -> None:
+      try:
+        payload = await answer
+      except Exception as error:
+        log.exception('broker dispatcher: deferred request %s failed', request_id)
+        payload = {
+          'outcome': 'denied',
+          'error': f'deferred request failed: {type(error).__name__}: {error}',
+        }
+      self.deliver(peer, brotocol.Message(type=Tag.RESULT, payload=payload, request=request_id))
+
+    self._track_read(deliver())
 
   def deny(self, peer: Peer, error: str, *, type: Optional[str] = None) -> None:
     """Refuse worker-backed work and record the denial through the journal."""

@@ -110,17 +110,19 @@ def build_parser() -> Parser:
   missions = subparsers.add_parser('missions', help="list a running root's missions by name")
   missions.add_argument('root', help='root workspace name')
 
-  override = subparsers.add_parser('override', help="change a running session's bro targets")
+  override = subparsers.add_parser(
+    'override', help="change a running session's bro targets or credentials"
+  )
   override.add_argument('name', help='workspace or member name from `ride missions`')
-  for verb in ('grant', 'revoke'):
+  for verb in ('grant', 'revoke', 'cred'):
     override.add_argument(
       '--' + verb,
       dest='changes',
       action='append',
       default=[],
-      metavar='@BRO',
+      metavar='NAME',
       type=lambda value, verb=verb: (verb, value),
-      help=f'{verb} a bro target (latest flag per target wins)',
+      help=f'{verb} a bro target or credential (latest flag per name wins)',
     )
 
   clean = subparsers.add_parser(

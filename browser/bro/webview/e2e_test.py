@@ -1380,7 +1380,7 @@ channel.close()
       assert arguments[0].bro == 'browser'
       return replace(
         original_started_party_launch(*arguments, **keywords),
-        command=_session_broxy_probe(child_source),
+        command=_session_broxy_probe(child_source, install_credentials=True),
       )
 
     monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
@@ -1416,7 +1416,9 @@ def test_spawned_child_opens_a_granted_webview(
 
   def started_party_launch(*arguments, **keywords):
     launch = original_started_party_launch(*arguments, **keywords)
-    return replace(launch, command=_session_broxy_probe(_SUMMON_WEBVIEW_CHILD))
+    return replace(
+      launch, command=_session_broxy_probe(_SUMMON_WEBVIEW_CHILD, install_credentials=True)
+    )
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   code, workspace = _run_route(
@@ -1443,7 +1445,9 @@ def test_browser_one_shot_uses_its_seeded_webview_and_checked_snapshot_refs(
   def started_party_launch(*arguments, **keywords):
     launch = original_started_party_launch(*arguments, **keywords)
     assert arguments[0].bro == 'browser'
-    return replace(launch, command=_session_broxy_probe(_BROWSER_ONE_SHOT_CHILD))
+    return replace(
+      launch, command=_session_broxy_probe(_BROWSER_ONE_SHOT_CHILD, install_credentials=True)
+    )
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   code, workspace = _run_route(
@@ -1472,7 +1476,9 @@ def test_browser_browse_thread_routes_clarification_live_share_upload_and_log(
   def started_party_launch(*arguments, **keywords):
     launch = original_started_party_launch(*arguments, **keywords)
     assert arguments[0].bro == 'browser'
-    return replace(launch, command=_session_broxy_probe(_BROWSER_THREAD_CHILD))
+    return replace(
+      launch, command=_session_broxy_probe(_BROWSER_THREAD_CHILD, install_credentials=True)
+    )
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
   code, workspace = _run_route(
