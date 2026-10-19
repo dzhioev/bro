@@ -30,8 +30,10 @@ _IDLE = 'while true; do sleep 0.05; done\n'
 
 
 def _fake_claude(tmp_path: Path, script: str) -> list[str]:
+  ready = tmp_path / 'stop-ready'
+  os.mkfifo(ready)
   fake = tmp_path / 'claude'
-  fake.write_text(f'#!/usr/bin/env bash\n{script}')
+  fake.write_text(f'#!/usr/bin/env bash\nread -r < {shlex.quote(str(ready))}\n{script}')
   fake.chmod(0o755)
   return [str(fake)]
 
@@ -378,9 +380,20 @@ class TestRunStreaming:
 def _interactive(
   argv: list[str], tmp_path: Path, waiters: WaiterState, stopped_calls: StoppedCallMark
 ) -> interrupt.Run:
-  return interrupt.run_interactive(
-    argv, os.environ, tmp_path / 'projects', waiters=waiters, stopped_calls=stopped_calls
-  )
+  original = interrupt.stopped_on_sigterm
+
+  @contextlib.contextmanager
+  def stopped_on_sigterm(stop):
+    with original(stop) as stopped:
+      with (tmp_path / 'stop-ready').open('w') as ready:
+        ready.write('\n')
+      yield stopped
+
+  with pytest.MonkeyPatch.context() as patch:
+    patch.setattr(interrupt, 'stopped_on_sigterm', stopped_on_sigterm)
+    return interrupt.run_interactive(
+      argv, os.environ, tmp_path / 'projects', waiters=waiters, stopped_calls=stopped_calls
+    )
 
 
 class TestRunInteractive:
@@ -395,7 +408,6 @@ class TestRunInteractive:
       # for claude's own TUI
       'stty raw -echo\n'
       "trap 'exit 9' INT\n"
-      'sleep 0.2\n'
       'kill -TERM $PPID\n'
       "key=$(dd bs=1 count=1 2>/dev/null | od -An -tx1 | tr -d ' \\n')\n"
       f'[ "$key" = 03 ] && echo interrupted > {seen_key}\n' + _IDLE,
@@ -414,7 +426,6 @@ class TestRunInteractive:
       tmp_path,
       'stty raw -echo\n'
       "trap 'exit 0' INT\n"
-      'sleep 0.2\n'
       'kill -TERM $PPID\n'
       'dd bs=1 count=1 >/dev/null 2>&1\n' + _IDLE,
     )
