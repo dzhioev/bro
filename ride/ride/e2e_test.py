@@ -53,18 +53,24 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import pytest
 
 import bro.workspace.paths as workspace_paths
 import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
+from bro.authority.rules import Mission
 from bro.broker.brotocol import Message
 from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_handler
 from bro.broker.runtime import Peer
 from bro.broker.transports.tcp import TcpServerTransport, parse_address
+from bro.worker_types import WorkerType
+from ride.authority_launch import request as authority_request
+from ride.authority_reading import Reading
+from ride.bro_worker import BroType
 from ride.broker_root import broker_bind_hosts
+from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import CONTAINER_BROKER_HOST, find_container_id
 from ride.workspace.spawn import DockerLaunchSpec, DockerSpawner
@@ -82,14 +88,50 @@ _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 _WEDGED_MISSION_TIMEOUT = 2
 
 
-def _bro_launch(*, targets=(), party=('boxed',), passes=(), extra=None):
-  payload = {'bros': frozenset(targets), 'party': frozenset(party)}
-  if passes:
-    payload['pass'] = frozenset(passes)
-  launch = {'bro': payload}
-  if extra is not None:
-    launch.update(extra)
-  return launch
+def _root_mission(
+  repository: Repository | None,
+  grants=(),
+  *,
+  targets=(),
+  placements=('boxed',),
+  passes=(),
+  depth: int | None = None,
+  types: dict[str, type[WorkerType]] | None = None,
+  target: str = 'bro-dev',
+  placement: str = 'boxed',
+) -> Mission:
+  reading = Reading.take(repository)
+  if depth is not None:
+    reading = replace(reading, project={**reading.project, 'summon-depth': depth})
+  if types is not None:
+    reading = replace(
+      reading,
+      installation=replace(
+        reading.installation,
+        declarations={
+          **reading.installation.declarations,
+          **{
+            name: worker.authority_declaration(reading.installation.credential_kinds)
+            for name, worker in types.items()
+          },
+        },
+      ),
+    )
+  entries = [
+    *grants,
+    *(f'@{name}' for name in targets),
+    *(f'bro.placement={placement}' for placement in placements),
+    *(f'bro.cred={name}' for name in passes),
+  ]
+  operator = reading.operator()
+  request, _ = authority_request(
+    BroType,
+    {'target': target, 'harness': 'bro', 'llm': 'echo', 'grant': entries, 'placement': placement},
+    reading,
+    operator,
+    forward=False,
+  )
+  return reading.rules.start(request, operator, reading)
 
 
 def _broxy_probe(python: str, source: str) -> list[str]:
@@ -198,7 +240,7 @@ try:
   accepted = summon_and_wait(
     'bro',
     'accepted',
-    grant=[':launch.benchmark'],
+    grant=['benchmark'],
     llm='echo',
     harness='bro',
     timeout=120,
@@ -587,13 +629,22 @@ if child_command is not None:
         command=json.loads(child_command),
     )
   ride_spawn.started_party_launch = started_party_launch
+from ride.authority_reading import Reading
+from ride.authority_launch import request as authority_request
+from ride.bro_worker import BroType
+reading = Reading.take(workspace.repository)
+operator = reading.operator()
+request, _ = authority_request(
+    BroType,
+    {'target': 'bro-dev', 'harness': 'bro', 'llm': 'echo',
+     'grant': ['@' + target for target in json.loads(os.environ.get('RIDE_E2E_TARGETS', '[]'))]},
+    reading, operator, forward=False,
+)
+mission = reading.rules.start(request, operator, reading)
 code = run_started_party(
     launch,
     workspace,
-    launch_scope={'bro': {
-        'bros': frozenset(json.loads(os.environ.get('RIDE_E2E_TARGETS', '[]'))),
-        'party': frozenset({'boxed'}),
-    }},
+    mission=mission,
     credential_scope=ScopedSecrets(set(launch.secrets), set()),
     container_runtime=ContainerRuntimeResolver.fixed(
         ContainerRuntime(
@@ -706,6 +757,17 @@ def isolated_env() -> Iterator[IsolatedEnv]:
         )
         yield env
         _remove_stray_containers(env)
+
+
+@pytest.fixture(autouse=True)
+def route_environment(isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+  from bro.base import configs, credentials
+
+  monkeypatch.setenv('HOME', str(isolated_env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(isolated_env.data_home))
+  monkeypatch.setattr(configs, 'STORE_DIR', str(isolated_env.home / '.bro'))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(isolated_env.home / '.bro'))
+  monkeypatch.setattr(credentials, '_default_store', None)
 
 
 def _wait_until(
@@ -1923,7 +1985,7 @@ answer = summon_and_wait(
   passes=['github+passed'],
   llm='openai:sol',
   harness='bro',
-  isolation={child_isolation!r},
+  placement={child_placement!r},
   timeout=120,
 )
 Path('/workspace/.summon-credential-report').write_text(answer)
@@ -1945,12 +2007,12 @@ Path('/workspace/.summon-credential-report').write_text(answer)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(
+    mission=_root_mission(
+      workspace.repository,
       targets=('bro',),
-      party=('boxed', 'unboxed'),
+      placements=('boxed', 'unboxed'),
       passes=('github+passed',),
     ),
-    summon_depth=2,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -1962,129 +2024,189 @@ Path('/workspace/.summon-credential-report').write_text(answer)
     entry for entry in audit if entry.get('kind') == 'launch' and entry.get('type') == 'bro'
   ]
   assert summon_events
-  assert all(entry['pass'] == ['github+passed'] for entry in summon_events)
+  assert all(entry['descriptor']['values']['cred.github'] == 'passed' for entry in summon_events)
   assert env.live_containers() == []
 
 
-def test_manual_summon_argv_layers_over_the_passed_credential(
-  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
-) -> None:
+_MANUAL_PREPARE_ROOT = r"""
+import json
+from pathlib import Path
+from bro.quest import check
+from bro.summon import summon_manual
+
+token = summon_manual('bro', 'inspect the manual scope', passes=['github+passed'])
+Path('.manual-token').write_text(token)
+outcome = check(token, wait=True, timeout=120)
+assert outcome.state == 'completed', outcome
+Path('.manual-report').write_text(outcome.answer)
+"""
+
+_MANUAL_CREDENTIAL_CHILD = r"""
+import json
+from bro.base import credentials
+from bro.run_lifecycle import RunLifecycle
+
+assert credentials.get('github') == 'manual-github'
+assert credentials.try_get('cookies') is None
+channel = RunLifecycle.from_env()
+assert channel is not None
+channel.trail('manual-credentials-child')
+channel.completed(json.dumps({'github': credentials.get('github')}), 'ok')
+channel.close()
+"""
+
+
+def _permission_repository(env: IsolatedEnv, suffix: str, policy: dict | None = None) -> Repository:
+  directory = env.root / f'permission-project-{suffix}'
+  directory.mkdir()
+  project = '[tool.bro]\n'
+  for name, values in (policy or {}).items():
+    project += f'{name} = {json.dumps(values)}\n'
+  (directory / 'pyproject.toml').write_text(project)
+  subprocess.run(['git', 'init', '--quiet', str(directory)], check=True)
+  subprocess.run(
+    ['git', 'remote', 'add', 'origin', 'https://example.test/permissions.git'],
+    cwd=directory,
+    check=True,
+  )
+  subprocess.run(['git', 'add', 'pyproject.toml'], cwd=directory, check=True)
+  subprocess.run(
+    ['git', 'commit', '--quiet', '-m', 'permission fixture'], cwd=directory, check=True
+  )
+  return Repository(str(directory), directory)
+
+
+def _host_root_route(
+  env: IsolatedEnv,
+  workspace,
+  source: str,
+  *,
+  mission: Mission,
+) -> int:
+  from ride.broker_root import run_root_via_broker
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.clones import ensure_clone
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.spawn import ProcessLaunchSpec
+
+  assert workspace.repository is not None and workspace.metadata.branch is not None
+  ensure_clone(workspace.repository, workspace.tree, workspace.metadata.branch, None)
+  bundle = RuntimeBundle(
+    env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+    f'{sys.version_info.major}.{sys.version_info.minor}',
+  )
+  return run_root_via_broker(
+    ProcessLaunchSpec(
+      command=_broxy_probe(str(bundle.host_venv / 'bin' / 'python'), source),
+      cwd=str(workspace.tree),
+      env={
+        **bundle.host_session_env(workspace.tree, tty=False),
+        'RIDE_BRO': cast(str, mission.descriptor.values['target']),
+      },
+      interactive=False,
+    ),
+    workspace=workspace,
+    bro=cast(str, mission.descriptor.values['target']),
+    mission=mission,
+    runtime_bundle=bundle,
+    container_runtime=ContainerRuntimeResolver.fixed(
+      ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ),
+  )
+
+
+def _replace_unboxed_session(monkeypatch: pytest.MonkeyPatch, source: str) -> None:
   import ride.cli as ride_cli
-  import ride.scope as ride_scope
+  import ride.session as ride_session
+  from ride.root import ProcessLaunch
+
+  original_started_party_launch = ride_session.started_party_launch
+
+  def started_party_launch(*arguments, **keywords):
+    launch = original_started_party_launch(*arguments, **keywords)
+    assert isinstance(launch, ProcessLaunch)
+    runtime = keywords['runtime_bundle']
+    return replace(launch, command=_broxy_probe(str(runtime.host_venv / 'bin' / 'python'), source))
+
+  monkeypatch.setattr(ride_session, 'started_party_launch', started_party_launch)
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_arguments: None)
+  monkeypatch.setattr(ride_session, 'reexec_from_runtime', lambda *_arguments: None)
+
+
+def test_manual_summon_commits_over_the_operator_channel_through_credential_picks(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+  from concurrent.futures import ThreadPoolExecutor
+
+  import ride.cli as ride_cli
   from bro.base import credentials, host_config
-  from ride import pending_launch
-  from ride.bro_worker import pending_bro
-  from ride.harness import get_harness
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
 
   env = isolated_env
+  monkeypatch.setenv('HOME', str(env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
   config = env.root / 'manual-credentials.json'
-  config.write_text(json.dumps({'defaults': {'revoke': ['github']}}))
-  (env.home / '.bro' / 'creds' / 'github+passed.cred').write_text('passed-github')
-  (env.home / '.bro' / 'creds' / 'github+manual.cred').write_text('manual-github')
-  (env.home / '.bro' / credentials.STORE_FILE).write_text(
-    json.dumps({'defaults': ['github+configured']})
+  config.write_text(
+    json.dumps(
+      {
+        'defaults': {'revoke': ['github']},
+        'operator': {'revoke': ['bro.cred=github+forbidden']},
+      }
+    )
   )
+  for instance in ('passed', 'manual', 'forbidden'):
+    (env.home / '.bro' / 'creds' / f'github+{instance}.cred').write_text(f'{instance}-github')
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
   monkeypatch.setattr(credentials, 'STORE_DIR', str(env.home / '.bro'))
-  record = pending_launch.PendingLaunch(
-    token='manual-credential-e2e',
-    runtime=env.runtime_bundle_hash,
-    port=7321,
-    channel_token='token',
-    type='bro',
-    talk=('worker.say',),
-    owner_tree=str(env.project),
-    extension={
-      'target': 'bro',
-      'prompt': 'inspect the manual scope',
-      'launch': {'bro': {'bros': [], 'party': ['boxed']}},
-      'grant': [],
-      'revoke': [],
-      'pass': ['github+passed'],
-      'summoner': None,
-      'repo': None,
-      'into': None,
-    },
+  _replace_unboxed_session(monkeypatch, _MANUAL_CREDENTIAL_CHILD)
+  repository = _permission_repository(env, 'manual')
+  workspace = Workspace.ensure(f'{_NAME_PREFIX}manual-prepare', repository, Isolation.UNBOXED)
+  child_name = f'{_NAME_PREFIX}manual-commit'
+  mission = _root_mission(
+    workspace.repository, targets=('bro',), passes=('github+passed',), placement='unboxed'
   )
-  captured: dict = {}
 
-  def capture_start(spec, repository=None, summoned=None):
-    harness = get_harness(spec.harness)
-    scoped = ride_scope.scoped_secrets(
-      spec.bro,
-      harness.scope_recipe(),
-      llm_spec=spec.llm_spec,
-      cred=spec.cred,
-      grant=spec.grant,
-      revoke=spec.revoke,
-      recording=not spec.no_trails,
-    )
-    _, store = ride_scope.preflight_scoped_launch(
-      scoped,
-      spec.bro,
-      grant=spec.grant,
-      revoke=spec.revoke,
-    )
-    captured.update(spec=spec, store=store, summoned=summoned)
-    return 0
+  root_ended = threading.Event()
 
-  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda runtime, argv: None)
-  monkeypatch.setattr(ride_cli, 'start_session', capture_start)
-
-  with contextlib.ExitStack() as cleanup:
-    pending_launch.write(record)
-    cleanup.callback(pending_launch.discard, record.token)
-    assert pending_bro(record).passes == ('github+passed',)
-    code = ride_cli.main(
-      [
-        'ride',
-        'solo',
-        '--summoned',
-        record.token,
-        '--harness',
-        'bro',
-        '--llm',
-        'echo',
-        '--unboxed',
-        '--cred',
-        'github+manual',
-        '--revoke',
-        'trails',
-        'bro',
-      ]
+  def commit() -> None:
+    token_path = workspace.tree / '.manual-token'
+    _wait_until(
+      lambda: token_path.is_file() or root_ended.is_set(), 20, 'manual prepare acceptance', None
     )
-    assert code == 0
-    assert captured['spec'].cred == ['github+manual']
-    assert captured['spec'].grant == ['github']
-    assert captured['store'].kinds == {'github'}
-    assert captured['store']['creds/github+manual.cred'] == b'manual-github'
-    assert captured['summoned'].token == record.token
+    assert token_path.is_file(), 'root ended before preparing the manual summon'
+    token = token_path.read_text()
+    arguments = [
+      'ride',
+      'solo',
+      '--summoned',
+      token,
+      '--workspace',
+      child_name,
+      '--harness',
+      'bro',
+      '--llm',
+      'echo',
+      '--unboxed',
+    ]
+    assert ride_cli.main([*arguments, '--cred', 'github+forbidden', 'bro']) == 1
+    assert 'use rule' in caplog.text and 'bro.cred=github+forbidden' in caplog.text
+    assert ride_cli.main([*arguments, '--cred', 'github+manual', 'bro']) == 0
 
-    captured.clear()
-    code = ride_cli.main(
-      [
-        'ride',
-        'solo',
-        '--summoned',
-        record.token,
-        '--harness',
-        'bro',
-        '--llm',
-        'echo',
-        '--unboxed',
-        '--revoke',
-        'github',
-        '--revoke',
-        'trails',
-        'bro',
-      ]
-    )
+  with ThreadPoolExecutor(max_workers=1) as executor:
+    committed = executor.submit(commit)
+    with contextlib.ExitStack() as cleanup:
+      cleanup.callback(root_ended.set)
+      code = _host_root_route(env, workspace, _MANUAL_PREPARE_ROOT, mission=mission)
+    committed.result(timeout=10)
 
   assert code == 0
-  assert captured['spec'].cred == []
-  assert captured['spec'].grant == []
-  assert captured['spec'].revoke == ['github', 'trails']
-  assert captured['store'].kinds == set()
+  assert json.loads((workspace.tree / '.manual-report').read_text()) == {'github': 'manual-github'}
+  child = Workspace.open(child_name)
+  record = json.loads(child.resume_file.read_text())
+  assert record['runtime_bundle'] is None
+  assert record['authority_request']['values']['cred.github'] == 'manual'
+  assert env.live_containers() == []
 
 
 def _cross_isolation_member(prompt: str) -> str:
@@ -2103,8 +2225,8 @@ if prompt == 'boxed-member':
   answer = summon_and_wait(
     'bro',
     'unboxed-owner',
-    isolation='unboxed',
-    grant=['@bro', ':launch.bro.party.join'],
+    placement='unboxed',
+    grant=['@bro', 'bro.placement=join'],
     llm='echo',
     harness='bro',
     timeout=120,
@@ -2113,7 +2235,7 @@ elif prompt == 'unboxed-owner':
   answer = summon_and_wait(
     'bro',
     'unboxed-member',
-    party='join',
+    placement='join',
     grant=['@bro'],
     llm='echo',
     harness='bro',
@@ -2123,7 +2245,7 @@ elif prompt == 'unboxed-member':
   answer = summon_and_wait(
     'bro',
     'boxed-final',
-    isolation='boxed',
+    placement='boxed',
     llm='echo',
     harness='bro',
     timeout=120,
@@ -2230,9 +2352,9 @@ assert not credentials.available('github')
 answer = summon_and_wait(
   'bro',
   'boxed-member',
-  party='join',
+  placement='join',
   passes=['github+passed'],
-  grant=['@bro', ':launch.bro.party.unboxed', ':launch.bro.party.join'],
+  grant=['@bro', 'bro.placement=unboxed', 'bro.placement=join'],
   llm='echo',
   harness='bro',
   timeout=120,
@@ -2259,12 +2381,13 @@ time.sleep(2)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(
+    mission=_root_mission(
+      workspace.repository,
       targets=('bro',),
-      party=('boxed', 'unboxed', 'join'),
+      placements=('boxed', 'unboxed', 'join'),
+      depth=5,
       passes=('github+passed',),
     ),
-    summon_depth=5,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -2476,8 +2599,7 @@ def _run_watch_route(
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(targets=('bro',)),
-    summon_depth=2,
+    mission=_root_mission(workspace.repository, targets=('bro',)),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -2683,7 +2805,7 @@ _NATIVE_REMIND_CHILD = """
 import asyncio
 import json
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, cast
 
 from bro.bro import BaseBro
 from bro.llm.llms.echo import LLMSpec as EchoSpec
@@ -2848,8 +2970,7 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(targets=('bro',)),
-    summon_depth=3,
+    mission=_root_mission(workspace.repository, targets=('bro',), depth=3),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -2959,8 +3080,7 @@ Path('/workspace/.quest-chat-report').write_text(outcome.answer)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(targets=('bro',)),
-    summon_depth=2,
+    mission=_root_mission(workspace.repository, targets=('bro',)),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -3056,8 +3176,7 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope=_bro_launch(targets=('bro',)),
-    summon_depth=2,
+    mission=_root_mission(workspace.repository, targets=('bro',)),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -3110,7 +3229,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
       ),
       env=run.command.env,
     )
-    return Job(command, run.extension, run.launch_scope)
+    return Job(command, run.extension)
 
   monkeypatch.setattr(BenchmarkType, 'launch', quick_launch)
   original_started_party_launch = ride_spawn.started_party_launch
@@ -3137,7 +3256,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
   code = run_started_party(
     launch,
     workspace,
-    launch_scope=_bro_launch(targets=('bro',), extra={'benchmark': {}}),
+    mission=_root_mission(workspace.repository, grants=('benchmark',), targets=('bro',)),
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -3146,7 +3265,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
   diagnostic = error_report.read_text() if error_report.is_file() else 'no root error report'
   assert code == 0, diagnostic
   result = json.loads(report.read_text())
-  assert ':launch.benchmark' in result['denied']
+  assert 'benchmark' in result['denied']
   assert result['accepted'].startswith('accepted:sha256:')
   assert env.live_containers() == []
 
@@ -3171,6 +3290,16 @@ def test_worker_container_runs_through_the_live_broker(
   class ContainerType(WorkerType):
     name = 'container-e2e'
     default_timeout = 120.0
+
+    @classmethod
+    def authority_declaration(cls, credential_kinds):
+      from bro.authority.rules import Declaration, Option
+      from bro.authority.values import IntegerInterval, Integers
+
+      return Declaration(
+        {'timeout': Option('scalar', Integers((IntegerInterval(1, None),)), open=True)},
+        defaults=lambda values, reading: {'timeout': 120},
+      )
 
     def talk(self, request: LaunchRequest) -> Talk:
       return frozenset({'worker.say'})
@@ -3223,7 +3352,9 @@ def test_worker_container_runs_through_the_live_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
-    launch_scope={ContainerType.name: {}},
+    mission=_root_mission(
+      workspace.repository, grants=(ContainerType.name,), types={ContainerType.name: ContainerType}
+    ),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
     types={ContainerType.name: ContainerType},
@@ -3251,3 +3382,199 @@ def test_worker_container_runs_through_the_live_broker(
     entry['published_ports'] == [[int(report['worker']['port']), 8080]] for entry in worker_events
   )
   assert env.live_containers() == []
+
+
+_PERMISSION_REFUSAL_ROOT = r"""
+import asyncio
+import json
+import subprocess
+from pathlib import Path
+
+from bro.bro import _summon_tool
+from bro.broker.client import Client
+from bro.quest import QuestError
+
+refusals = {}
+cli = subprocess.run(
+  ['summon', '--detach', '--harness', 'bro', '--llm', 'echo', 'bro', 'refuse this'],
+  capture_output=True, text=True,
+)
+assert cli.returncode == 1, cli
+refusals['cli'] = cli.stderr
+
+async def tool_refusal():
+  try:
+    await _summon_tool({}, None).call({
+      'target': 'bro', 'prompt': 'refuse this', 'harness': 'bro', 'llm': 'echo',
+    })
+  except QuestError as error:
+    return str(error)
+  raise AssertionError('summon tool admitted a forbidden target')
+
+refusals['tool'] = asyncio.run(tool_refusal())
+client = Client.from_env()
+assert client is not None
+with client:
+  refused = client.call('launch', {
+    'type': 'bro', 'target': 'bro', 'prompt': 'refuse this',
+    'harness': 'bro', 'llm': 'echo',
+  }, 30)
+  assert refused.payload['outcome'] == 'denied', refused.payload
+  refusals['wire'] = refused.payload['error']
+  gift = client.call('launch', {
+    'type': 'bro', 'target': 'browser', 'prompt': 'refuse the gift',
+    'harness': 'bro', 'llm': 'echo', 'grant': ['webview.cred=cookies+e2e'],
+  }, 30)
+  assert gift.payload['outcome'] == 'denied', gift.payload
+  refusals['gift'] = gift.payload['error']
+for surface in ('cli', 'tool', 'wire'):
+  assert 'use rule' in refusals[surface] and 'use rule: @bro:' in refusals[surface], refusals
+assert 'gift rule' in refusals['gift'] and 'webview.cred=cookies+e2e' in refusals['gift'], refusals
+Path('.permission-refusals').write_text(json.dumps(refusals))
+"""
+
+
+@pytest.mark.parametrize('layer', ['host', 'project'])
+def test_configuration_rules_refuse_cli_tool_and_wire_starts(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, layer: str, register_test_bros
+) -> None:
+  from bro.base import host_config
+  from bro.bro import BaseBro
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+
+  class PermissionOwner(BaseBro):
+    name = 'permission-owner'
+    may_summon = ('bro', 'browser')
+
+  register_test_bros(PermissionOwner)
+  env = isolated_env
+  monkeypatch.setenv('HOME', str(env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
+  policy = {'limit': ['@bro for bro{placement=unboxed}']}
+  config = env.root / 'refusal-policy.json'
+  config.write_text(json.dumps({'defaults': policy} if layer == 'host' else {}))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  repository = _permission_repository(env, layer, policy if layer == 'project' else None)
+  workspace = Workspace.ensure(f'{_NAME_PREFIX}refusals-{layer}', repository, Isolation.UNBOXED)
+  mission = _root_mission(
+    workspace.repository,
+    grants=('webview.cred=cookies+e2e to @bro',),
+    placement='unboxed',
+    target=PermissionOwner.name,
+  )
+  code = _host_root_route(env, workspace, _PERMISSION_REFUSAL_ROOT, mission=mission)
+  assert code == 0
+  report = json.loads((workspace.tree / '.permission-refusals').read_text())
+  assert set(report) == {'cli', 'tool', 'wire', 'gift'}
+
+
+_RESUME_PICK_PROBE = r"""
+import json
+from pathlib import Path
+from bro.base import credentials
+from bro.monitor import trail_pointer
+
+path = Path('.resume-picks')
+picks = json.loads(path.read_text()) if path.is_file() else []
+picks.append(credentials.get('github'))
+path.write_text(json.dumps(picks))
+trail_pointer.publish('resume-pick-probe')
+"""
+
+
+def test_resume_rechecks_operator_rules_and_recomputes_the_default_credential_pick(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+  import ride.cli as ride_cli
+  from bro.base import credentials, host_config
+  from ride.workspace.model import Workspace
+
+  env = isolated_env
+  monkeypatch.setenv('HOME', str(env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
+  config = env.root / 'resume-picks.json'
+  config.write_text(json.dumps({'defaults': {'creds': ['github+first']}}))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(env.home / '.bro'))
+  for instance in ('first', 'second'):
+    (env.home / '.bro' / 'creds' / f'github+{instance}.cred').write_text(f'{instance}-github')
+  _replace_unboxed_session(monkeypatch, _RESUME_PICK_PROBE)
+  repository = _permission_repository(env, 'resume')
+  name = f'{_NAME_PREFIX}resume-picks'
+  assert (
+    ride_cli.main(
+      [
+        'ride',
+        'solo',
+        '--workspace',
+        name,
+        '--repo',
+        repository.identity,
+        '--unboxed',
+        '--harness',
+        'bro',
+        '--llm',
+        'echo',
+        '--no-trails',
+        '--grant',
+        'github',
+        'bro',
+        'read the pick',
+      ]
+    )
+    == 0
+  )
+  workspace = Workspace.open(name)
+  report = workspace.tree / '.resume-picks'
+  assert json.loads(report.read_text()) == ['first-github']
+  recorded = json.loads(workspace.resume_file.read_text())
+  assert 'cred.github' not in recorded['authority_request']['values']
+
+  config.write_text(
+    json.dumps(
+      {
+        'defaults': {'creds': ['github+second']},
+        'operator': {'revoke': ['bro.cred=github+second']},
+      }
+    )
+  )
+  assert ride_cli.main(['ride', 'resume', name]) == 1
+  assert 'use rule' in caplog.text and 'bro.cred=github+second' in caplog.text
+  assert json.loads(report.read_text()) == ['first-github']
+
+  config.write_text(json.dumps({'defaults': {'creds': ['github+second']}}))
+  assert ride_cli.main(['ride', 'resume', name]) == 0
+  assert json.loads(report.read_text()) == ['first-github', 'second-github']
+
+
+def test_root_flags_are_checked_against_the_operator_authority(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+  import ride.cli as ride_cli
+  from bro.base import host_config
+
+  env = isolated_env
+  monkeypatch.setenv('HOME', str(env.home))
+  monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
+  config = env.root / 'root-refusal.json'
+  config.write_text(json.dumps({'operator': {'revoke': ['bro.placement=unboxed']}}))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
+  _replace_unboxed_session(monkeypatch, "raise AssertionError('a refused root started')")
+  assert (
+    ride_cli.main(
+      [
+        'ride',
+        'solo',
+        '--unboxed',
+        '--harness',
+        'bro',
+        '--llm',
+        'echo',
+        'bro',
+        'refuse this',
+      ]
+    )
+    == 1
+  )
+  assert 'use rule' in caplog.text and 'bro.placement=unboxed' in caplog.text
