@@ -41,7 +41,6 @@ if TYPE_CHECKING:
   from bro.broker.spawn import ChildHandle
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
-  from ride.authority_launch import credentials_for, hydrate
   from ride.authority_reading import Reading
   from ride.peer_facts import PeerFacts
   from ride.repository import Repository
@@ -253,6 +252,7 @@ def _child_launch_scope(
   spec: SessionSpec,
   repository: Optional[Repository],
 ) -> tuple[ScopedLaunch, ScopedSecrets]:
+  from ride.authority_launch import credentials_for, hydrate
   from ride.session import ScopedLaunch
 
   scoped = credentials_for(launch.record)
