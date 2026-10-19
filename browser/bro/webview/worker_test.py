@@ -7,12 +7,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from bro.authority.authority import Authority
+from bro.authority.rules import Request, Rules
 from bro.base import credentials
 from bro.webview import profile, worker
 from bro.worker_types import (
   Host,
   LaunchDenied,
-  LaunchPass,
   LaunchRequest,
   PeerDescription,
   installed_type,
@@ -27,7 +28,6 @@ def _owner(
   *,
   mission: str = 'owner',
   type: str = 'bro',
-  vnc: bool = False,
 ) -> PeerDescription:
   return PeerDescription(
     mission=mission,
@@ -35,7 +35,6 @@ def _owner(
     tree=tmp_path,
     type=type,
     bro='bro-dev' if type == 'bro' else None,
-    launch={'webview': {'vnc': True} if vnc else {}},
     member=None,
     expected=False,
     artifact_view=None,
@@ -50,19 +49,24 @@ def _request(
   *,
   mission: str = 'owner',
   type: str = 'bro',
-  vnc: bool = False,
   request_id: str = 'webview-1',
 ) -> LaunchRequest:
+  declaration = worker.WebviewType.authority_declaration(frozenset({'cookies'}))
+  mapped = worker.WebviewType.option_values(args, None)
+  record = Rules({'webview': declaration}).start(
+    Request('webview', mapped.values), Authority.top(), None
+  )
   return LaunchRequest(
     id=request_id,
     type=worker.WEBVIEW,
-    args=args,
-    owner=_owner(tmp_path, mission=mission, type=type, vnc=vnc),
+    args=dict(mapped.content),
+    owner=_owner(tmp_path, mission=mission, type=type),
     requested_talk=frozenset(),
     timeout=None,
     passes=(),
     share=(),
     manual=False,
+    record=record,
   )
 
 
@@ -82,10 +86,6 @@ class TestWebviewType:
 
     assert installed_type(worker.WEBVIEW) is worker.WebviewType
     assert worker_type.name == 'webview'
-    assert worker_type.launch_schema == {
-      'vnc': worker.LAUNCH_FLAG,
-      'pass': LaunchPass(kinds=frozenset({'cookies'})),
-    }
     assert worker_type.default_timeout is None
     assert worker_type.widens_talk is False
     assert worker_type.manual is False
@@ -112,7 +112,6 @@ class TestWebviewType:
       'blocked_origins': [],
     }
     assert run.extension == worker.WebviewFacts(False, None, (), ())
-    assert run.launch_scope == {}
 
   def test_vnc_and_origins_reach_the_container_facts(self, tmp_path):
     run = _worker_type().launch(
@@ -123,7 +122,6 @@ class TestWebviewType:
           'allowed_origins': ['https://one.example', '*.trusted.example'],
           'blocked_origins': ['https://blocked.example'],
         },
-        vnc=True,
       )
     )
 
@@ -141,7 +139,7 @@ class TestWebviewType:
     )
 
   def test_vnc_port_pins_the_published_host_port(self, tmp_path):
-    run = _worker_type().launch(_request(tmp_path, {'vnc': True, 'vnc_port': 46080}, vnc=True))
+    run = _worker_type().launch(_request(tmp_path, {'vnc': True, 'vnc_port': 46080}))
 
     assert run.spec.published_ports == {worker.VNC_PORT: 46080}
     assert run.extension.vnc_port == 46080
@@ -149,11 +147,6 @@ class TestWebviewType:
   @pytest.mark.parametrize(
     ('args', 'message'),
     [
-      ({'unknown': True}, 'unknown webview field'),
-      ({'vnc': 1}, "'vnc' must be a boolean"),
-      ({'vnc': True, 'vnc_port': True}, "'vnc_port' must be an integer"),
-      ({'vnc': True, 'vnc_port': 1023}, "'vnc_port' must be an integer"),
-      ({'vnc_port': 46080}, "'vnc_port' requires 'vnc'"),
       ({'allowed_origins': 'https://example.com'}, "'allowed_origins' must be a list"),
       ({'allowed_origins': ['']}, 'non-empty strings'),
       ({'blocked_origins': ['https://a;https://b']}, "without ';'"),
@@ -163,11 +156,21 @@ class TestWebviewType:
   def test_invalid_arguments_are_denied(self, tmp_path, args, message):
     assert message in _denial(tmp_path, args)
 
-  def test_vnc_needs_its_launch_flag(self, tmp_path):
-    message = _denial(tmp_path, {'vnc': True})
-    assert ':launch.webview.vnc' in message
+  @pytest.mark.parametrize(
+    ('args', 'message'),
+    [
+      ({'unknown': True}, 'unknown webview fields'),
+      ({'vnc': 1}, 'vnc must be a flag'),
+      ({'vnc': True, 'vnc_port': True}, 'domain check'),
+      ({'vnc': True, 'vnc_port': 1023}, 'domain check'),
+      ({'vnc_port': 46080}, 'validity check.*vnc_port requires vnc'),
+    ],
+  )
+  def test_invalid_options_are_refused_before_building_the_container(self, tmp_path, args, message):
+    with pytest.raises(ValueError, match=message):
+      _request(tmp_path, args)
 
-  def test_webview_owner_may_open_another_when_its_launch_section_allows_it(self, tmp_path):
+  def test_webview_builds_an_admitted_request_from_a_webview_owner(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {}, type=worker.WEBVIEW))
     assert run.extension == worker.WebviewFacts(False, None, (), ())
 

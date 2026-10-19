@@ -342,6 +342,7 @@ class Dispatcher:
     type: str,
     end_on_sigterm: bool = False,
     lifetime: Lifetime | None = None,
+    timeout: float | None = None,
   ) -> int:
     """supervise `root` until it exits and answer its exit code.
 
@@ -367,7 +368,7 @@ class Dispatcher:
         root,
         spawner,
         talk=EMPTY_TALK,
-        timeout=None,
+        timeout=timeout,
         launch_timeout=None,
         schedule=self._schedule,
       )
@@ -842,10 +843,11 @@ class Broker:
     type: str,
     end_on_sigterm: bool = False,
     lifetime: Lifetime | None = None,
+    timeout: float | None = None,
   ) -> int:
     return asyncio.run(
       self._dispatcher.run(
-        root, spawner, type=type, end_on_sigterm=end_on_sigterm, lifetime=lifetime
+        root, spawner, type=type, end_on_sigterm=end_on_sigterm, lifetime=lifetime, timeout=timeout
       )
     )
 

@@ -664,6 +664,30 @@ def render_values(values: ValueSet) -> str:
   raise TypeError(f'unknown value-set family {type(values).__name__}')
 
 
+def render_atom(atom) -> str:
+  if atom.option is None:
+    return atom.type
+  if atom.type == 'bro' and atom.option == 'target':
+    return '@' + str(atom.value)
+  if atom.option.startswith('cred.'):
+    return (
+      atom.type
+      + '.cred='
+      + atom.option.removeprefix('cred.')
+      + '+'
+      + ('' if atom.value == '' else _scalar(atom.value))
+    )
+  if atom.value is True:
+    return atom.type + '.' + atom.option
+  return (
+    atom.type
+    + '.'
+    + atom.option
+    + '='
+    + (_subset(atom.value) if isinstance(atom.value, frozenset) else _scalar(atom.value))
+  )
+
+
 def render_permission(permission: Permission) -> str:
   if permission.option is None:
     return permission.type

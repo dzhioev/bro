@@ -15,7 +15,16 @@ from .values import Subsets, Value, ValueSet
 class Refusal(ValueError):
   def __init__(self, rule: str, subject: object, reason: str):
     self.rule, self.subject, self.reason = rule, subject, reason
-    super().__init__(f'{rule}: {subject}: {reason}')
+    from .syntax import render_atom, render_permission
+
+    rendered = (
+      render_atom(subject)
+      if isinstance(subject, Atom)
+      else render_permission(subject)
+      if isinstance(subject, Permission)
+      else str(subject)
+    )
+    super().__init__(f'{rule}: {rendered}: {reason}')
 
 
 @dataclass(frozen=True)

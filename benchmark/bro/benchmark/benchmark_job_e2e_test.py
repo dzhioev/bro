@@ -40,8 +40,12 @@ from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.quest import LAUNCH
 from bro.worker_types import ArtifactResolver, PeerDescription
+from ride.authority_launch import request as authority_request
+from ride.authority_reading import Reading
+from ride.bro_worker import BroType
 from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
+from ride.repository import Repository
 
 pytestmark = LIVE_TRIAL
 
@@ -179,8 +183,18 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
   broker = Broker(TcpServerTransport([LOCAL_HOST]), job_output=runs)
+  reading = Reading.take(Repository(str(tree), tree))
+  operator = reading.operator()
+  requested, _ = authority_request(
+    BroType,
+    {'target': 'bro', 'harness': 'claude', 'grant': ['benchmark']},
+    reading,
+    operator,
+    forward=False,
+  )
+  mission = reading.rules.start(requested, operator, reading)
   facts = PeerFacts(
-    WorkerFacts(type='bro', workspace='benchmark-e2e', tree=tree),
+    WorkerFacts(type='bro', workspace='benchmark-e2e', tree=tree, record=mission),
     root_tree=tree,
     root_path=tmp_path / 'root',
   )
@@ -195,6 +209,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
     runtime_bundle=object(),
     session_env={},
     worker_container_spawner=cast(Spawner, object()),
+    reading=reading,
   )
   broker.on(GET, runs.get)
   broker.on(LAUNCH, control.handle)

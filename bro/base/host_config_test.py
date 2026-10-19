@@ -298,22 +298,90 @@ class TestLaunchSelection:
 
 
 class TestScopeLayers:
-  def test_a_retired_permit_names_its_replacement(self, config_file):
+  def test_a_colon_permission_is_rejected(self, config_file):
     config_file({'defaults': {'grant': [':webview.vnc']}})
-    with pytest.raises(host_config.CLIError, match=':launch.webview.vnc'):
+    with pytest.raises(host_config.CLIError, match="invalid name ':webview'"):
       host_config.launch_selection(None, 'developer')
+
+  def test_limits_keep_their_layer_and_leave_credential_picks_unchanged(
+    self, config_file, tmp_path
+  ):
+    config_file(
+      {
+        'defaults': {'limit': ['@* for bro{placement=boxed}']},
+        'projects': {
+          str(tmp_path): {
+            'limit': ['webview.cred=cookies+* to @browser'],
+            'bros': {'dev': {'creds': ['github+work'], 'limit': ['@reviewer for *']}},
+          }
+        },
+      }
+    )
+    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'dev')
+    assert selected.instances == {'github': 'work'}
+    assert [layer.source for layer in selected.scope_layers] == [
+      host_config.DEFAULTS_LAYER,
+      host_config.PROJECT_PATH_LAYER,
+      host_config.PROJECT_PATH_BRO_LAYER,
+    ]
+    assert [layer.limit for layer in selected.scope_layers] == [
+      ('@* for bro{placement=boxed}',),
+      ('webview.cred=cookies+* to @browser',),
+      ('@reviewer for *',),
+    ]
+
+  @pytest.mark.parametrize(
+    'field, entries',
+    [
+      ('revoke', ['@reviewer to *']),
+      ('limit', ['@reviewer']),
+      ('grant', [':launch.bro']),
+    ],
+  )
+  @pytest.mark.parametrize('section', ['defaults', 'project', 'bro', 'operator'])
+  def test_every_policy_layer_is_validated_on_an_unrelated_read(
+    self, config_file, field, entries, section
+  ):
+    policy = {field: entries}
+    data = {
+      'defaults': {'defaults': policy},
+      'operator': {'operator': policy},
+      'project': {'projects': {'/other': policy}},
+      'bro': {'projects': {'/other': {'bros': {'other': policy}}}},
+    }[section]
+    config_file(data)
+    with pytest.raises(host_config.CLIError):
+      host_config.tool_selection(None)
+
+  def test_operator_caps_do_not_change_credential_selection(self, config_file):
+    config_file(
+      {
+        'operator': {'revoke': ['@uninstalled'], 'limit': ['bro.placement=* for bro{target=dev}']},
+        'user': {'creds': ['github+work']},
+      }
+    )
+    assert host_config.tool_selection(None).instances == {'github': 'work'}
+    assert host_config.launch_selection(None, 'dev').scope_layers == ()
+
+  @pytest.mark.parametrize(
+    'value', [[], {'grant': ['@dev']}, {'creds': ['github+work']}, {'limit': '@dev for *'}]
+  )
+  def test_operator_accepts_only_cap_lists(self, config_file, value):
+    config_file({'operator': value})
+    with pytest.raises(host_config.CLIError, match='operator'):
+      host_config.llm_presets()
 
   def test_defaults_project_and_bro_layers_stay_in_precedence_order(self, config_file, tmp_path):
     config_file(
       {
-        'defaults': {'grant': [':launch.bro.party.join', '@reviewer']},
+        'defaults': {'grant': ['bro.placement=join', '@reviewer']},
         'projects': {
           str(tmp_path): {
-            'revoke': [':launch.bro.party.join'],
+            'revoke': ['bro.placement=join'],
             'bros': {
               'dev': {
                 'creds': ['github+work'],
-                'grant': ['github', ':launch.bro.party.unboxed'],
+                'grant': ['github', 'bro.placement=unboxed'],
                 'revoke': ['@reviewer'],
               }
             },
@@ -326,10 +394,10 @@ class TestScopeLayers:
 
     assert selected.instances == {'github': 'work'}
     assert selected.scope_layers == (
-      host_config.ScopeLayer(grant=(':launch.bro.party.join', '@reviewer')),
-      host_config.ScopeLayer(revoke=(':launch.bro.party.join',)),
+      host_config.ScopeLayer(grant=('bro.placement=join', '@reviewer')),
+      host_config.ScopeLayer(revoke=('bro.placement=join',)),
       host_config.ScopeLayer(
-        grant=('github', ':launch.bro.party.unboxed'),
+        grant=('github', 'bro.placement=unboxed'),
         revoke=('@reviewer',),
         creds=('github+work',),
       ),
@@ -342,8 +410,8 @@ class TestScopeLayers:
       {
         'projects': {
           str(tmp_path): {
-            'grant': [':launch.bro.party.join'],
-            'bros': {'dev': {'revoke': [':launch.bro.party.boxed']}},
+            'grant': ['bro.placement=join'],
+            'bros': {'dev': {'revoke': ['bro.placement=boxed']}},
           }
         }
       }
@@ -351,11 +419,11 @@ class TestScopeLayers:
     attachment = host_config.Attachment(path=str(tmp_path))
 
     assert host_config.launch_selection(attachment, 'reviewer').scope_layers == (
-      host_config.ScopeLayer(grant=(':launch.bro.party.join',)),
+      host_config.ScopeLayer(grant=('bro.placement=join',)),
     )
     assert host_config.launch_selection(attachment, 'dev').scope_layers == (
-      host_config.ScopeLayer(grant=(':launch.bro.party.join',)),
-      host_config.ScopeLayer(revoke=(':launch.bro.party.boxed',)),
+      host_config.ScopeLayer(grant=('bro.placement=join',)),
+      host_config.ScopeLayer(revoke=('bro.placement=boxed',)),
     )
 
 
@@ -481,23 +549,21 @@ class TestValidation:
 
     assert host_config.tool_selection(None).instances == {'consumer_only': 'special'}
 
-  def test_pass_right_requires_an_instance(self, config_file):
-    config_file({'defaults': {'grant': [':launch.bro.pass.github']}})
-
-    with pytest.raises(ValueError, match=r'github\+<instance>.*github\+'):
+  @pytest.mark.parametrize(
+    'name', [':launch.bro', ':launch.bro.party.boxed', ':launch.bro.pass.github+']
+  )
+  def test_old_launch_grammar_is_rejected(self, config_file, name):
+    config_file({'defaults': {'grant': [name]}})
+    with pytest.raises(ValueError):
       host_config.launch_selection(None, 'dev')
 
-  def test_pass_right_unknown_kind_is_carried_to_the_launch_fold(self, config_file):
+  def test_unknown_option_kind_is_carried_to_the_launch(self, config_file):
     config_file(
-      {
-        'projects': {
-          '/repo': {'bros': {'dev': {'grant': [':launch.bro.pass.consumer_only+special']}}}
-        }
-      }
+      {'projects': {'/repo': {'bros': {'dev': {'grant': ['bro.cred=consumer_only+special']}}}}}
     )
 
     selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
-    assert selected.scope_layers[-1].grant == (':launch.bro.pass.consumer_only+special',)
+    assert selected.scope_layers[-1].grant == ('bro.cred=consumer_only+special',)
 
   def test_retired_instances_field_names_its_replacement(self, config_file, tmp_path):
     config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})

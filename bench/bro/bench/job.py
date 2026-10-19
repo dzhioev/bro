@@ -199,14 +199,14 @@ def _relay(await_outcome: Callable[[], str]) -> int:
   return 0
 
 
-def _job_args(config: str, timeout: Optional[float]) -> dict[str, Any]:
+def _job_args(config: str, timeout: Optional[int]) -> dict[str, Any]:
   args: dict[str, Any] = {'type': BENCHMARK, 'config': config}
   if timeout is not None:
     args['timeout'] = timeout
   return args
 
 
-def run_job(config: str, timeout: Optional[float] = None) -> str:
+def run_job(config: str, timeout: Optional[int] = None) -> str:
   """start a benchmark job and block until the host answers, returning the ref
   of its collected run. Raises `JobError` with the operator-facing reason."""
   from bro.quest import LAUNCH
@@ -217,7 +217,7 @@ def run_job(config: str, timeout: Optional[float] = None) -> str:
     return _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
-def _start(config: str, timeout: Optional[float], detach: bool) -> int:
+def _start(config: str, timeout: Optional[int], detach: bool) -> int:
   from bro.broker.brotocol import Tag
   from bro.quest import ACCEPT_TIMEOUT, LAUNCH
 
@@ -362,7 +362,7 @@ def main(argv: list[str]) -> Optional[int]:
     )
     parser.add_argument(
       '--timeout',
-      type=float,
+      type=int,
       metavar='SECONDS',
       help=f'seconds before the host kills the job (default: {DEFAULT_TIMEOUT:.0f})',
     )

@@ -3,9 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from bro import summon
-from bro.base.scope import launch_names
 from bro.monitor import health, trail_pointer
-from bro.worker_types import Launch
 from bro.workspace.paths import ISOLATION_ENV
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
@@ -35,30 +33,7 @@ def _render_summon_targets(names: tuple[str, ...]) -> str:
 
 @dataclass(frozen=True)
 class SessionFacts:
-  """the session facts `ride banner` renders, collected from the session environment.
-
-  The fields are the documentation — what each renderer may show:
-    - isolation — boxed or unboxed (RIDE_ISOLATION), or None outside a ride
-    - name — workspace name (RIDE_WORKSPACE)
-    - repo — resolved repository attachment (RIDE_REPO), or None when detached
-    - bro — the bro the session runs as (RIDE_BRO)
-    - host_workspace — launcher-side path to the workspace tree
-    - container_workspace — '/workspace' in a managed container session, else None
-    - exec_command — `ride exec <name>` for container sessions
-    - ride_command — the canonical `ride solo|along …` invocation (RIDE_COMMAND)
-    - recording_problem — set when the session-recorder health file reports a
-      failing or a stopped recorder, so the banner can warn that the transcript
-      is not being recorded
-    - may_summon — the bros the session may summon, as its launch fixed them;
-      empty when it may summon none, None when it was launched by a surface that
-      publishes no list
-    - talk — the fixed chat rights of this run's own quest, under the same publication rule
-    - launch — the mission types and payload values the session may launch
-    - party_member — the member name when this session joined an existing party
-    - summoned — whether another session summoned this one and waits on its result
-    - trail_id — the trail the session is being recorded into; None when nothing
-      publishes one (recording off, or not started yet)
-  """
+  """Session-local environment, live authority, and recording facts."""
 
   isolation: Optional[str]
   name: Optional[str]
@@ -72,7 +47,9 @@ class SessionFacts:
   summoned: bool
   trail_id: Optional[str]
   repo: Optional[str] = None
-  launch: Optional[Launch] = None
+  permits: Optional[tuple[str, ...]] = None
+  may_give: Optional[tuple[str, ...]] = None
+  summon_entries: Optional[tuple[str, ...]] = None
   party_member: Optional[str] = None
   talk: Optional[tuple[str, ...]] = None
 
@@ -108,6 +85,9 @@ class SessionFacts:
       pointer = trail_pointer.path()
       trail_id = trail_pointer.read(pointer) if pointer is not None else None
 
+    from bro.authority_view import read
+
+    authority = read()
     return cls(
       isolation=isolation,
       name=name,
@@ -118,8 +98,10 @@ class SessionFacts:
       exec_command=exec_command,
       ride_command=ride_command,
       recording_problem=health.problem(),
-      may_summon=summon.may_summon(),
-      launch=summon.launch(),
+      may_summon=None if authority is None else tuple(authority['may_summon']),
+      permits=None if authority is None else tuple(authority['permits']),
+      may_give=None if authority is None else tuple(authority['may_give']),
+      summon_entries=None if authority is None else tuple(authority['summon_entries']),
       talk=summon.talk(),
       party_member=summon.party_member(),
       summoned=summon.summoned(),
@@ -198,16 +180,22 @@ class SessionFacts:
       rows.append(('summoned:', '', f'{dim}yes — a summoner is waiting on the answer{reset}'))
 
     if self.may_summon is not None:
-      targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else '(none)'
+      targets = (
+        ', '.join(self.summon_entries)
+        if self.summon_entries
+        else _render_summon_targets(self.may_summon)
+        if self.may_summon
+        else '(none)'
+      )
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
 
     if self.talk is not None:
       rights = ', '.join(self.talk) or '(none)'
       rows.append(('talk:', '', f'{dim}{rights}{reset}'))
 
-    if self.launch is not None:
-      permissions = ', '.join(launch_names(self.launch, include_bros=False)) or '(none)'
-      rows.append(('permits:', '', f'{dim}{permissions}{reset}'))
+    for label, entries in (('permits:', self.permits), ('may give:', self.may_give)):
+      if entries is not None:
+        rows.append((label, '', f'{dim}{", ".join(entries) or "(none)"}{reset}'))
 
     if self.trail_id is not None:
       rows.append(('trail:', '', f'{dim}{self.trail_id}{reset}'))
@@ -256,13 +244,19 @@ class SessionFacts:
     if self.may_summon is not None:
       # spelled out when empty: "this session may summon nobody" is a different
       # answer from a launch surface that publishes no list at all
-      targets = _render_summon_targets(self.may_summon) if len(self.may_summon) > 0 else 'none'
+      targets = (
+        ', '.join(self.summon_entries)
+        if self.summon_entries
+        else _render_summon_targets(self.may_summon)
+        if self.may_summon
+        else 'none'
+      )
       lines.append(f'may_summon: {targets}')
     if self.talk is not None:
       lines.append(f'talk: {", ".join(self.talk) or "none"}')
-    if self.launch is not None:
-      permissions = ', '.join(launch_names(self.launch, include_bros=False)) or 'none'
-      lines.append(f'permits: {permissions}')
+    for label, entries in (('permits', self.permits), ('may_give', self.may_give)):
+      if entries is not None:
+        lines.append(f'{label}: {", ".join(entries) or "none"}')
     trail = self.trail_id if self.trail_id is not None else 'none (not published)'
     lines.append(f'trail_id: {trail}')
     return '\n'.join(lines)

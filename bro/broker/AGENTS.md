@@ -37,7 +37,8 @@ An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters re
 
 `environment.py` owns the broker's four environment names:
 `BROKER_CHANNEL`, `BROKER_UPSTREAM`, `BROKER_MISSION`, and `BROKER_TALK`.
-The module contains constants only, so launch paths may import it before the broker-enabled gate without loading broker machinery.
+It also carries the talk vocabulary used by launch declarations.
+The module contains constants and type aliases only, so launch paths may import it before the broker-enabled gate without loading broker machinery.
 `BROKER_MISSION` names the mission the process undertakes.
 `BROKER_TALK` is the mission's sorted, comma-separated talk rights.
 `BROKER_CHANNEL` is the address clients connect to.

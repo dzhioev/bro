@@ -9,13 +9,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from bro.authority.authority import Authority
 from bro.authority.rules import Declaration, Rules
 from bro.authority.syntax import Layer, Syntax, parse_layer
 from bro.base import configs, credentials, host_config
-from bro.base.git_url import canonical_github_url, is_git_url, normalize_git_url
 from bro.bro import BaseBro
 from bro.harness import Harness, harness_name
 from bro.llm import providers
@@ -101,14 +100,6 @@ class ProjectPolicy:
     object.__setattr__(self, 'bros', MappingProxyType(dict(self.bros)))
 
 
-def _identity(value: str) -> str:
-  if not value:
-    raise ValueError('project identity must not be empty')
-  if is_git_url(value):
-    return canonical_github_url(value) or normalize_git_url(value)
-  return str(Path(value).expanduser().resolve())
-
-
 @dataclass(frozen=True)
 class Configuration:
   raw: Mapping[str, Any]
@@ -122,46 +113,42 @@ class Configuration:
 
   @classmethod
   def parse(cls, value: object) -> Configuration:
-    data = _object(
-      value, '~/.bro.json', {'defaults', 'user', 'projects', 'llm', 'summon-depth', 'operator'}
-    )
-    defaults = _policy(data.get('defaults', {}), 'defaults')
-    projects: dict[str, ProjectPolicy] = {}
-    for key, entry in _object(data.get('projects', {}), 'projects').items():
-      project = _object(entry, f'projects.{key}', {'grant', 'revoke', 'limit', 'creds', 'bros'})
-      bros = {
-        name: _policy(policy, f'projects.{key}.bros.{name}', bro=True)
-        for name, policy in _object(project.get('bros', {}), 'bros').items()
-      }
-      for name in bros:
+    parsed = host_config.parse(value)
+
+    def policy(entry: host_config.ScopeEntry, source: str) -> Policy:
+      scope = entry.scope
+      recipes = entry.llm if isinstance(entry, host_config.BroEntry) else None
+      for recipe in recipes or ():
+        if recipe != 'default':
+          providers.parse(recipe)
+      return Policy(
+        parse_layer(grant=scope.grant, revoke=scope.revoke, limit=scope.limit),
+        entry.selection,
+        recipes,
+        source,
+      )
+
+    projects = {
+      identity: ProjectPolicy(
+        policy(project.entry, f'projects.{identity}'),
+        {
+          name: policy(entry, f'projects.{identity}.bros.{name}')
+          for name, entry in project.bros.items()
+        },
+      )
+      for identity, project in parsed.projects.items()
+    }
+    for project in projects.values():
+      for name in project.bros:
         if re.fullmatch(r'[a-z][a-z0-9-]*', name) is None:
           raise ValueError(f'invalid bro name {name!r}')
-      identity = _identity(key)
-      if identity in projects:
-        raise ValueError(f'duplicate project identity {identity!r}')
-      projects[identity] = ProjectPolicy(
-        _policy({key: item for key, item in project.items() if key != 'bros'}, f'projects.{key}'),
-        bros,
-      )
-    user = _object(data.get('user', {}), 'user', {'creds', 'tools'})
-    credentials.parse_picks(user.get('creds', []), where='user', field='creds')
-    for name, entry in _object(user.get('tools', {}), 'user.tools').items():
+    for name, recipe in parsed.llm.items():
       if not name:
-        raise ValueError('tool name must not be empty')
-      tool = _object(entry, f'user.tools.{name}', {'creds'})
-      credentials.parse_picks(tool.get('creds', []), where=f'user.tools.{name}', field='creds')
-    for name, recipe in _object(data.get('llm', {}), 'llm').items():
-      if not name or not isinstance(recipe, str):
-        raise ValueError('llm presets require names and string recipes')
+        raise ValueError('llm presets require non-empty names')
       providers.parse(recipe)
-    if 'summon-depth' in data:
-      _positive(data['summon-depth'], 'summon-depth')
-    operator = _object(data.get('operator', {}), 'operator', {'revoke', 'limit'})
-    layer = parse_layer(
-      operator=True,
-      **{key: _strings(operator.get(key, []), 'operator.' + key) for key in ('revoke', 'limit')},
+    return cls(
+      cast(dict[str, Any], value), policy(parsed.defaults, 'defaults'), projects, parsed.operator
     )
-    return cls(data, defaults, projects, layer)
 
 
 @dataclass(frozen=True)
@@ -252,7 +239,7 @@ class Reading:
       if (host or Path(host_config.HOST_CONFIG_FILE)).is_file()
       else {}
     )
-    directory = store or configs.STORE_DIR
+    directory = store or Path(credentials.STORE_DIR)
     index = Path(directory) / credentials.STORE_FILE
     data = _object(json.loads(index.read_text()), str(index)) if index.is_file() else {}
     defaults = credentials.parse_picks(data.get('defaults', []), where=str(index), field='defaults')
@@ -322,7 +309,7 @@ class Reading:
     if self.attachment is not None:
       for identity in (self.attachment.url, self.attachment.path):
         if identity is not None:
-          match = self.configuration.projects.get(_identity(identity))
+          match = self.configuration.projects.get(host_config.project_identity(identity))
           if match is not None:
             matches.append(match)
     return (

@@ -5,7 +5,7 @@ separate stored instances of one credential kind.
 Selections live outside repositories and merge from general to specific:
 
     {
-      "defaults": {"grant": [":launch.webview"]},
+      "defaults": {"grant": ["webview"]},
       "user": {
         "creds": ["github+dev"],
         "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
@@ -30,9 +30,9 @@ Selections live outside repositories and merge from general to specific:
 Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
 select the kind's empty instance.
 A list may name each kind once.
-`defaults`, project entries, and `bros` entries may carry unified `grant` and
-`revoke` lists: credential names, `@bro` targets, and `:launch.…` names.
-Credential grants and revokes name bare kinds only.
+`defaults`, project entries, and `bros` entries may carry unified `grant`,
+`revoke`, and `limit` lists in the authority syntax.
+A bare credential kind in `grant` or `revoke` holds or drops that kind.
 `creds` picks without adding a kind, so one entry may pick and grant the same kind.
 A `bros` entry may also carry `llm`: the recipes the bro runs on this project,
 an ordered preference list in the `--llm` grammar, beneath the launch's own
@@ -42,7 +42,8 @@ The grammar is installation-independent, so unknown credential and bro names
 remain valid until a launch resolves them against its installation, and a
 recipe is carried as written for the launch to parse.
 
-`defaults` is the root of the grant/revoke scope every managed session extends.
+`operator` takes only `revoke` and `limit`, restricting operator starts.
+`defaults` is the root of the policy every managed session extends.
 The store's own `creds.json` defaults are the base credential picks beneath
 `user` for an operator command and `projects` for a managed session.
 A project key is an identity a session names the repository by: the filesystem
@@ -61,7 +62,7 @@ A command's credential selection applies `user`, then its `user.tools` entry,
 over the store's defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the ordered scope
-layers retain each pick, grant, and revoke for the launch fold.
+layers retain each pick, grant, revoke, and limit for the launch fold.
 `launch_llm` returns the list of the most specific matching `bros` entry naming
 one, with its layer: a more specific list replaces a less specific one whole.
 
@@ -75,14 +76,14 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
+from bro.authority.syntax import Layer, parse_layer
 from bro.base import configs, credentials
 from bro.base.args import CLIError
 from bro.base.git_url import canonical_github_url, is_git_url, normalize_git_url
-from bro.base.scope import ScopeLayer, validate_scope_layer
 
 # Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
@@ -103,6 +104,8 @@ _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
 _GRANT_KEY = 'grant'
 _REVOKE_KEY = 'revoke'
+_LIMIT_KEY = 'limit'
+_OPERATOR_KEY = 'operator'
 _BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
 _SUMMON_DEPTH_KEY = 'summon-depth'
@@ -129,6 +132,17 @@ class Attachment:
 
 
 @dataclass(frozen=True)
+class ScopeLayer:
+  """One attributed host policy layer with credential selections."""
+
+  grant: tuple[str, ...] = ()
+  revoke: tuple[str, ...] = ()
+  creds: tuple[str, ...] = ()
+  source: str = field(default='', compare=False)
+  limit: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class CredentialSelection:
   """A merged selection, its provenance, and its ordered scope layers."""
 
@@ -147,29 +161,29 @@ class LLMDefault:
 
 
 @dataclass(frozen=True)
-class _ScopeEntry:
+class ScopeEntry:
   selection: dict[str, str]
   scope: ScopeLayer
 
 
 @dataclass(frozen=True)
-class _BroEntry(_ScopeEntry):
+class BroEntry(ScopeEntry):
   """A `bros` entry: a scope entry plus the recipes it lists."""
 
   llm: Optional[tuple[str, ...]]
 
 
 @dataclass(frozen=True)
-class _Project:
-  entry: _ScopeEntry
-  bros: dict[str, _BroEntry]
+class ProjectEntry:
+  entry: ScopeEntry
+  bros: dict[str, BroEntry]
 
 
 @dataclass(frozen=True)
 class _Match:
   layer: str
   bro_layer: str
-  project: _Project
+  project: ProjectEntry
 
 
 @dataclass(frozen=True)
@@ -179,33 +193,41 @@ class _User:
 
 
 @dataclass(frozen=True)
-class _Config:
-  defaults: _ScopeEntry
+class Configuration:
+  defaults: ScopeEntry
   user: _User
-  projects: dict[str, _Project]
+  projects: dict[str, ProjectEntry]
   llm: dict[str, str]
   summon_depth: Optional[int]
+  operator: Layer
 
 
-def _read() -> _Config:
+def _read() -> Configuration:
   try:
     return _read_unchecked()
   except ValueError as error:
     raise CLIError(str(error)) from error
 
 
-def _read_unchecked() -> _Config:
+def _read_unchecked() -> Configuration:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
-    return _Config(_ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None)
+    return Configuration(ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None, Layer())
   try:
     data = json.loads(path.read_text())
   except json.JSONDecodeError as error:
     raise ValueError(f'{path} is not valid json') from error
+  return parse(data, source=str(path))
+
+
+def parse(value: object, *, source: str = '~/.bro.json') -> Configuration:
+  path = Path(source)
+  data = value
   if not isinstance(data, dict):
     raise ValueError(f'{path} must hold a json object')
   unknown = sorted(
-    set(data) - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY, _SUMMON_DEPTH_KEY}
+    set(data)
+    - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY, _SUMMON_DEPTH_KEY, _OPERATOR_KEY}
   )
   if _TOOLS_KEY in unknown:
     raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
@@ -220,7 +242,9 @@ def _read_unchecked() -> _Config:
     if _SUMMON_DEPTH_KEY in data
     else None
   )
-  return _Config(defaults, user, projects, llm, summon_depth)
+  return Configuration(
+    defaults, user, projects, llm, summon_depth, _operator(path, data.get(_OPERATOR_KEY, {}))
+  )
 
 
 def llm_presets() -> dict[str, str]:
@@ -297,7 +321,7 @@ def tool_selection(
   return _merged(layers)
 
 
-def _matches(config: _Config, attachment: Optional[Attachment]) -> list[_Match]:
+def _matches(config: Configuration, attachment: Optional[Attachment]) -> list[_Match]:
   """The entries the attachment's identities name, least specific first."""
   if attachment is None:
     return []
@@ -314,52 +338,52 @@ def _matches(config: _Config, attachment: Optional[Attachment]) -> list[_Match]:
 
 
 def _merged(
-  layers: Sequence[tuple[str, dict[str, str] | _ScopeEntry]],
+  layers: Sequence[tuple[str, dict[str, str] | ScopeEntry]],
 ) -> CredentialSelection:
   instances: dict[str, str] = {}
   sources: dict[str, str] = {}
   scope_layers: list[ScopeLayer] = []
   for layer, entry in layers:
-    selection = entry.selection if isinstance(entry, _ScopeEntry) else entry
+    selection = entry.selection if isinstance(entry, ScopeEntry) else entry
     instances.update(selection)
     sources.update(dict.fromkeys(selection, layer))
-    if isinstance(entry, _ScopeEntry) and entry.scope != ScopeLayer():
+    if isinstance(entry, ScopeEntry) and entry.scope != ScopeLayer():
       scope_layers.append(replace(entry.scope, source=layer))
   return CredentialSelection(instances, sources, tuple(scope_layers))
 
 
-def _projects(path: Path, value: object) -> dict[str, _Project]:
+def _projects(path: Path, value: object) -> dict[str, ProjectEntry]:
   if not isinstance(value, dict):
     raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')
-  projects: dict[str, _Project] = {}
+  projects: dict[str, ProjectEntry] = {}
   for key, entry in value.items():
-    identity = _project_key(key)
+    identity = project_identity(key)
     if identity in projects:
       raise ValueError(f'{path}: two project keys name the same identity {identity}')
     projects[identity] = _project(path, key, entry)
   return projects
 
 
-def _project(path: Path, project: str, value: object) -> _Project:
+def _project(path: Path, project: str, value: object) -> ProjectEntry:
   where = f'{path}: project {project!r}'
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _BROS_KEY}, where)
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _LIMIT_KEY, _BROS_KEY}, where)
   project_entry = _scope_entry(
     where, {key: entry for key, entry in value.items() if key != _BROS_KEY}
   )
   bros = value.get(_BROS_KEY, {})
   if not isinstance(bros, dict):
     raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
-  parsed_bros: dict[str, _BroEntry] = {}
+  parsed_bros: dict[str, BroEntry] = {}
   for bro, bro_entry in bros.items():
     if bro == '':
       raise ValueError(f'{where}: bro name must not be empty')
     parsed_bros[bro] = _bro_entry(f'{where}: bro {bro!r}', bro_entry)
-  return _Project(project_entry, parsed_bros)
+  return ProjectEntry(project_entry, parsed_bros)
 
 
-def _defaults_entry(path: Path, value: object) -> _ScopeEntry:
+def _defaults_entry(path: Path, value: object) -> ScopeEntry:
   where = f'{path}: {_DEFAULTS_KEY}'
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
@@ -371,28 +395,44 @@ def _defaults_entry(path: Path, value: object) -> _ScopeEntry:
   return _scope_entry(where, value)
 
 
-def _scope_entry(where: str, value: object) -> _ScopeEntry:
+def _scope_entry(where: str, value: object) -> ScopeEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY}, where)
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _LIMIT_KEY}, where)
   credential_names = _scope_values(where, value.get(_CREDS_KEY, []), _CREDS_KEY)
   selection = _selection_entries(where, list(credential_names))
   grant = _scope_values(where, value.get(_GRANT_KEY, []), _GRANT_KEY)
   revoke = _scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY)
-  scope = ScopeLayer(grant, revoke, credential_names)
+  limit = _scope_values(where, value.get(_LIMIT_KEY, []), _LIMIT_KEY)
+  scope = ScopeLayer(grant, revoke, credential_names, limit=limit)
   try:
-    validate_scope_layer(scope)
+    parse_layer(grant=grant, revoke=revoke, limit=limit)
   except ValueError as error:
     raise ValueError(f'{where}: {error}') from error
-  return _ScopeEntry(selection, scope)
+  return ScopeEntry(selection, scope)
 
 
-def _bro_entry(where: str, value: object) -> _BroEntry:
+def _operator(path: Path, value: object) -> Layer:
+  where = f'{path}: {_OPERATOR_KEY}'
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  _reject_unknown_fields(value, {_REVOKE_KEY, _LIMIT_KEY}, where)
+  try:
+    return parse_layer(
+      revoke=_scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY),
+      limit=_scope_values(where, value.get(_LIMIT_KEY, []), _LIMIT_KEY),
+      operator=True,
+    )
+  except ValueError as error:
+    raise ValueError(f'{where}: {error}') from error
+
+
+def _bro_entry(where: str, value: object) -> BroEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
   llm = None if _LLM_KEY not in value else _recipes(where, value[_LLM_KEY])
   entry = _scope_entry(where, {key: field for key, field in value.items() if key != _LLM_KEY})
-  return _BroEntry(entry.selection, entry.scope, llm)
+  return BroEntry(entry.selection, entry.scope, llm)
 
 
 def _recipes(where: str, value: object) -> tuple[str, ...]:
@@ -465,7 +505,7 @@ def _selection_entries(where: str, entries: object) -> dict[str, str]:
   return credentials.parse_picks(entries, where=where, field=_CREDS_KEY)
 
 
-def _project_key(key: str) -> str:
+def project_identity(key: str) -> str:
   """Reduce a `projects` key to the identity an attachment matches it on."""
   if not isinstance(key, str) or key == '':
     raise ValueError('project key must be a non-empty string')

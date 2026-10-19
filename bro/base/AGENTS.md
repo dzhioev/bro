@@ -49,23 +49,16 @@ run those with `--help` for flags.
 - `source_commit.py` — `installed_commit(distribution)`, the commit an installed distribution runs:
   the record its wheel carries in `.dist-info`, else the commit its version-control installation resolved, else the live checkout its editable installation runs from;
   `checkout_commit(directory)` reads a checkout's `HEAD` and whether its tree under `directory` differs from it.
-- `scope.py` — the unified credential / `@bro` / `:launch.…` grant grammar, including credential-instance pass rights, retired-name checks, project-layer refusal of pass rights, and idempotent scope layers;
-  it also renders a `launch` section back to grant spelling.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
-  `project_selection(attachment)` merges `defaults` and the projects an `Attachment`'s identities name,
-  `launch_selection(attachment, bro)` adds their per-bro selections and ordered scope layers,
-  and `tool_selection(command)` merges `defaults`, `user`, and the `user.tools` entry for one command's canonical console-script name.
-  An `Attachment` carries a checkout path, a git URL, or both, and every entry either identity names applies
-  — which is what lets a `projects` key written as a repository URL follow the checkout across machines.
-  The caller supplies both identities, since this layer invokes no git.
-  Every result carries kind → instance, kind → choosing layer, and the matching credential-pick/grant/revoke layers.
-  File reads validate grammar without installation registries;
-  a managed launch validates every credential name in its applicable layers so consumer-specific project entries can coexist in shared dotfiles.
-  `llm_presets()` reads the host-wide `--llm` preset names (`bro/launch/llm_flags.py` merges them over the operated project's own table),
-  `launch_llm(attachment, bro)` the ordered recipe list of the most specific matching `bros` entry for one bro, carried as written for `ride.scope.bind_launch_llm` to pick from,
+  `launch_selection(attachment, bro)` merges matching project and per-bro credential selections and attributed policy layers,
+  and `tool_selection(command)` merges `user` and the `user.tools` entry for one command's canonical console-script name.
+  An `Attachment` carries a checkout path, a git URL, or both;
+  every matching entry applies, with path entries over URL entries.
+  `parse` validates configuration content through the installation-independent authority syntax; file reads and root readings share it.
+  `llm_presets()` reads host-wide `--llm` presets,
+  `launch_llm(attachment, bro)` returns the most specific matching per-bro recipe list,
   and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
-  The scheme and its precedence are `bro/setup/AGENTS.md`, "Host config";
-  `ride.scope.scoped_secrets` carries the project-level result to each explicitly constructed credential store
+  The schema is `bro/setup/AGENTS.md`, "Host config".
 - `git_url.py` — git remote URL grammar:
   `is_git_url`, `is_network_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), `sanitize_git_url` (the credential-free recorded spelling), and `git_url_path`,
   plus the github.com grammar: `github_repository` (the `owner/name` any spelling names) and `canonical_github_url` (the one https spelling they all map to).

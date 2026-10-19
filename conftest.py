@@ -75,6 +75,13 @@ def _reset_log_level():
   os.environ.pop(log.LEVEL_ENV, None)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_bro_registry(monkeypatch):
+  import bro.registry
+
+  monkeypatch.setattr(bro.registry, '_REGISTRY', dict(bro.registry._REGISTRY))
+
+
 @pytest.fixture
 def register_test_bros():
   import bro.registry

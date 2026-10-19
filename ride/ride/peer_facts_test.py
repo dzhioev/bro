@@ -10,6 +10,7 @@ from bro.monitor import party_member_dir
 from bro.worker_types import PeerDescription, UnattributablePeer
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_tree
 from ride import pending_launch
+from ride.authority_test_helper import mission, reading
 from ride.bro_worker import BroFacts
 from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
@@ -36,7 +37,7 @@ def facts(tmp_path, monkeypatch):
       type='bro',
       workspace='ws',
       tree=workspace.tree,
-      launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}},
+      record=mission(grant=('@dev',)),
       artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
       extension=BroFacts('bro-dev'),
     ),
@@ -85,7 +86,7 @@ def test_root_row_is_seeded_by_the_host_anchored_mission(facts):
     tree=workspace.tree,
     type='bro',
     bro='bro-dev',
-    launch={'bro': {'bros': frozenset({'dev'}), 'party': frozenset({'boxed'})}},
+    mission_record=table.for_mission('root-mission').record,
     member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
@@ -216,6 +217,7 @@ def test_first_listing_after_manual_worker_ends_retains_claimed_workspace(facts,
   table.add(mission, WorkerFacts('bro', None, expected=True))
   record = context.journal.open(mission, 'launch', 'root-mission', ROOT, {}, type='bro')
   control = LaunchControl(
+    reading=reading(),
     ride=workspace.name,
     types={},
     peers=table,

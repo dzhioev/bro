@@ -132,48 +132,47 @@ class TestProjectConfig:
     (project_dir / 'pyproject.toml').write_text(
       '[tool.bro]\n'
       'default = "foo"\n'
-      'grant = ["github", "@reviewer", ":launch.bro.party.join"]\n'
-      'revoke = ["openai", ":launch.bro.party.boxed"]\n'
+      'grant = ["github", "@reviewer", "bro.placement=join"]\n'
+      'revoke = ["openai", "bro.placement=boxed"]\n'
     )
 
     config = project_config()
 
-    assert config.grant == ('github', '@reviewer', ':launch.bro.party.join')
-    assert config.revoke == ('openai', ':launch.bro.party.boxed')
+    assert config.grant == ('github', '@reviewer', 'bro.placement=join')
+    assert config.revoke == ('openai', 'bro.placement=boxed')
 
-  def test_project_grant_refuses_a_host_specific_credential_instance(self, project_dir):
+  def test_uninstalled_names_are_validated_without_registry_resolution(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "foo"\ngrant = ["github+reviewer"]\n'
+      '[tool.bro]\ndefault = "foo"\n'
+      'grant = ["consumer.unknown=some-value to @missing"]\n'
+      'limit = ["consumer.unknown=* for consumer{option?=*}"]\n'
     )
+    config = project_config()
+    assert config.grant == ('consumer.unknown=some-value to @missing',)
+    assert config.limit == ('consumer.unknown=* for consumer{option?=*}',)
 
-    with pytest.raises(
-      ValueError,
-      match=r"grant bare kind 'github'.*host config.*--cred",
-    ):
+  @pytest.mark.parametrize(
+    'field, value',
+    [
+      ('grant', ':launch.bro'),
+      ('revoke', ':launch.bro.party.boxed'),
+      ('grant', 'github+reviewer'),
+      ('revoke', '@reviewer to *'),
+      ('limit', '@reviewer'),
+    ],
+  )
+  def test_invalid_policy_names_its_source(self, project_dir, field, value):
+    (project_dir / 'pyproject.toml').write_text(
+      f'[tool.bro]\ndefault = "foo"\n{field} = ["{value}"]\n'
+    )
+    with pytest.raises(ValueError, match=r'\[tool.bro\].*pyproject.toml'):
       project_config()
 
-  @pytest.mark.parametrize('value', ['":launch"', '":launch..party"', '":Launch.bro"'])
-  def test_project_scope_requires_a_launch_name(self, project_dir, value):
-    (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\ngrant = [{value}]\n')
-
-    with pytest.raises(ValueError):
-      project_config()
-
-  @pytest.mark.parametrize('field', ['grant', 'revoke'])
-  def test_project_scope_refuses_pass_rights(self, project_dir, field):
-    (project_dir / 'pyproject.toml').write_text(
-      f'[tool.bro]\ndefault = "foo"\n{field} = [":launch.bro.pass.github+work"]\n'
-    )
-
-    with pytest.raises(ValueError, match=r'\[tool.bro\].*cannot name.*pass right'):
-      project_config()
-
-  def test_project_scope_names_a_retired_permits_replacement(self, project_dir):
-    (project_dir / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "foo"\ngrant = [":bro.party.join"]\n'
-    )
-
-    with pytest.raises(ValueError, match=':launch.bro.party.join'):
+  @pytest.mark.parametrize('field', ['grant', 'revoke', 'limit'])
+  @pytest.mark.parametrize('value', ['"@reviewer"', '[7]', '[""]'])
+  def test_scope_lists_require_non_empty_strings(self, project_dir, field, value):
+    (project_dir / 'pyproject.toml').write_text(f'[tool.bro]\ndefault = "foo"\n{field} = {value}\n')
+    with pytest.raises(ValueError, match=field):
       project_config()
 
   def test_unknown_key_raises(self, project_dir):

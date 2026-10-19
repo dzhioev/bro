@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from bro.authority.rules import Mission, Prepared
 from bro.monitor import party_member_dir
 from bro.monitor.trail_pointer import read, session_pointer
-from bro.worker_types import Launch, PeerDescription, UnattributablePeer
+from bro.worker_types import PeerDescription, UnattributablePeer
 from bro.workspace.paths import workspace_dir
 from ride import pending_launch
 from ride.workspace.model import Workspace
@@ -27,11 +28,11 @@ class WorkerFacts:
   workspace: str | None
   tree: Path | None = None
   member: str | None = None
-  launch: Launch = field(default_factory=dict)
   expected: bool = False
   artifact_view: PurePosixPath | None = None
   published_ports: tuple[tuple[int, int], ...] = ()
   extension: Any = None
+  record: Mission | Prepared | None = None
 
 
 class PeerFacts:
@@ -124,13 +125,13 @@ class PeerFacts:
       tree=tree,
       type=facts.type,
       bro=bro,
-      launch=facts.launch,
       member=facts.member,
       expected=facts.expected,
       artifact_view=facts.artifact_view,
       published_ports=facts.published_ports,
       depth=len(journal.ancestry(mission)),
       extension=facts.extension,
+      mission_record=facts.record if isinstance(facts.record, Mission) else None,
     )
 
   def missions(self) -> list[dict[str, Any]]:
