@@ -161,15 +161,11 @@ def _reasoning_item(*texts: str):
 
 
 def _message_item(text: str, *, phase: Optional[str] = None):
-  # the default carries no `phase` attribute at all, matching the SDK's
-  # ResponseOutputMessage; gpt-5.6 payloads add it as an extra field.
-  item = SimpleNamespace(
+  return SimpleNamespace(
     type='message',
+    phase=phase,
     content=[SimpleNamespace(type='output_text', text=text)],
   )
-  if phase is not None:
-    item.phase = phase
-  return item
 
 
 def _function_call_item(name: str, *, call_id: str, arguments='{}'):
@@ -516,6 +512,32 @@ class TestSendTrackerEmission:
     ]
 
   @pytest.mark.asyncio
+  async def test_commentary_in_the_final_response_drives_the_observer(self):
+    gpt, _, captured = _make_openai_with_tracker()
+    observer = MagicMock(spec=Observer)
+    gpt.observer = observer
+    terminal = _fake_response(
+      output=[
+        _reasoning_item('scoping'),
+        _message_item(
+          'migration rewrites 5,260 trails; (1) migrate or (2) stop', phase='commentary'
+        ),
+        _reasoning_item('asking'),
+        _message_item('Waiting for your choice: (1) or (2).', phase='final_answer'),
+      ]
+    )
+    _install_responses(gpt, [terminal], captured)
+
+    reply = await gpt.send([{'role': 'user', 'content': 'go'}])
+
+    assert reply == 'Waiting for your choice: (1) or (2).'
+    assert observer.on_event.call_args_list == [
+      call(ReasoningEvent('scoping')),
+      call(InterimAssistantTextEvent('migration rewrites 5,260 trails; (1) migrate or (2) stop')),
+      call(ReasoningEvent('asking')),
+    ]
+
+  @pytest.mark.asyncio
   async def test_executing_tool_exposes_its_llm_call_source(self):
     sources = []
 
@@ -762,9 +784,7 @@ class TestParseResponse:
     response = _fake_response(output=[_message_item('hello')])
     assert parse_response(response) == 'hello'
 
-  def test_final_answer_phase_preferred_over_commentary(self):
-    # the gpt-5.6 multi-message shape: a commentary-phase progress note, a
-    # reasoning item, then the final_answer-phase reply
+  def test_commentary_is_not_part_of_the_reply(self):
     response = _fake_response(
       output=[
         _message_item('closing the task out', phase='commentary'),
@@ -774,23 +794,30 @@ class TestParseResponse:
     )
     assert parse_response(response) == 'PR merged; task closed'
 
+  def test_commentary_alone_raises(self):
+    response = _fake_response(output=[_message_item('still working', phase='commentary')])
+    with pytest.raises(RuntimeError, match="doesn't contain reply messages"):
+      parse_response(response)
+
   def test_multiple_messages_without_phase_concatenated_in_order(self):
     response = _fake_response(output=[_message_item('part one'), _message_item('part two')])
     assert parse_response(response) == 'part one\n\npart two'
 
   def test_no_message_items_raises(self):
     response = _fake_response(output=[_reasoning_item('only thinking')])
-    with pytest.raises(RuntimeError, match="doesn't contain output messages"):
+    with pytest.raises(RuntimeError, match="doesn't contain reply messages"):
       parse_response(response)
 
   def test_messages_without_text_raise(self):
-    response = _fake_response(output=[SimpleNamespace(type='message', content=[])])
+    response = _fake_response(output=[SimpleNamespace(type='message', phase=None, content=[])])
     with pytest.raises(RuntimeError, match='no output texts'):
       parse_response(response)
 
   def test_refusal_raises_with_refusal_text(self):
     refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
-    response = _fake_response(output=[SimpleNamespace(type='message', content=[refusal])])
+    response = _fake_response(
+      output=[SimpleNamespace(type='message', phase=None, content=[refusal])]
+    )
     with pytest.raises(RuntimeError, match='cannot help with that'):
       parse_response(response)
 
@@ -805,7 +832,8 @@ class TestReplyExtractionFallback:
     refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
     terminal = _fake_response(
       output=[
-        SimpleNamespace(type='message', content=[refusal]),
+        _message_item('wrapping up', phase='commentary'),
+        SimpleNamespace(type='message', phase=None, content=[refusal]),
         _message_item('the work landed'),
       ]
     )
@@ -816,7 +844,9 @@ class TestReplyExtractionFallback:
   async def test_send_raises_when_terminal_response_has_no_text(self):
     gpt, _, captured = _make_openai_with_tracker()
     refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
-    terminal = _fake_response(output=[SimpleNamespace(type='message', content=[refusal])])
+    terminal = _fake_response(
+      output=[SimpleNamespace(type='message', phase=None, content=[refusal])]
+    )
     _install_responses(gpt, [terminal], captured)
     with pytest.raises(RuntimeError, match='cannot help with that'):
       await gpt.send([{'role': 'user', 'content': 'hi'}])
