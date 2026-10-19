@@ -324,7 +324,9 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
     tty=False,
     image='bro/webview:image-hash',
     runtime_bundle_hash='bundle-hash',
-    credential_store={'creds.json': b'{"defaults": [], "sources": {}}'},
+    credential_store={
+      'creds.json': b'{"defaults": [], "sources": {}, "generation": 0, "material": {}, "kinds": []}'
+    },
     hydrated_kinds=frozenset(),
     extra_mounts=(f'{tmp_path}/ride/artifacts/root/shared/webview-CH:/workspace/shared:ro',),
     published_ports=((49152, 8080), (49153, 9090)),
@@ -372,6 +374,9 @@ def test_lowering_hydrates_the_passed_instances_into_the_container_store(monkeyp
     assert json.loads(lowered.launch.credential_store['creds.json']) == {
       'defaults': ['github+work'],
       'sources': {},
+      'generation': 0,
+      'material': {'github+work': 'creds/github+work.cred'},
+      'kinds': ['github'],
     }
     assert lowered.launch.hydrated_kinds == frozenset({'github'})
 

@@ -18,7 +18,9 @@ _STORAGE_ADDRESSED = frozenset(
     'resolve_instance',
   }
 )
-_RESOLVER = frozenset({'bro/base/credentials.py', 'bro/base/credentials_test.py'})
+_RESOLVER = frozenset(
+  {'bro/base/credentials.py', 'bro/base/credentials_test.py', 'bro/base/credential_apply_test.py'}
+)
 
 
 def _python_modules(root: Path) -> list[str]:

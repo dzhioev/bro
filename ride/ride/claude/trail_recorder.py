@@ -538,8 +538,8 @@ def record_session(
   try:
     client = default_store()
   except credentials.SecretNotFound:
-    material_path = credentials.default_store().material_path('trails')
-    log.error('config not found: trails (expected %s)', material_path)
+    selected = credentials.default_store().selected_name('trails')
+    log.error('config not found: trails (selected %s)', selected)
     health.write('error', 'config not found: trails', interval=None, diagnostics=str(log_path))
     return 1
 

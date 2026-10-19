@@ -151,7 +151,11 @@ def _broxy_probe(python: str, source: str) -> list[str]:
   return [python, '-c', wrapper, source]
 
 
-def _session_broxy_probe(source: str) -> list[str]:
+def _session_broxy_probe(source: str, *, install_credentials: bool = False) -> list[str]:
+  if install_credentials:
+    source = (
+      'from ride.do_ride import _install_credential_hooks\n_install_credential_hooks()\n' + source
+    )
   return _broxy_probe(_RUNTIME_PYTHON, source)
 
 
@@ -2551,7 +2555,9 @@ Path('/workspace/.native-child-watch-report').write_text(outcome.answer)
 
 def _child_probe(source: str) -> Callable[[workspace_docker.Launch], workspace_docker.Launch]:
   """a summoned child's launch running `source` in place of its session."""
-  return lambda launch: replace(launch, command=_session_broxy_probe(source))
+  return lambda launch: replace(
+    launch, command=_session_broxy_probe(source, install_credentials=True)
+  )
 
 
 def _run_watch_route(
@@ -2952,9 +2958,13 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
     launch = original_started_party_launch(*arguments, **keywords)
     prompt = arguments[0].prompt
     if prompt == 'remind-child':
-      return replace(launch, command=_session_broxy_probe(_NATIVE_REMIND_CHILD))
+      return replace(
+        launch, command=_session_broxy_probe(_NATIVE_REMIND_CHILD, install_credentials=True)
+      )
     if prompt == 'grandchild result':
-      return replace(launch, command=_session_broxy_probe(_NATIVE_REMIND_GRANDCHILD))
+      return replace(
+        launch, command=_session_broxy_probe(_NATIVE_REMIND_GRANDCHILD, install_credentials=True)
+      )
     raise ValueError(f'unexpected summon prompt {prompt!r}')
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', started_party_launch)
@@ -3806,3 +3816,458 @@ assert read()['may_summon'] == []
       )
     refused.result(timeout=10)
   assert code == 0
+
+
+_CREDENTIAL_OVERRIDE_SETUP = r"""
+import asyncio
+import contextlib
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from bro.base import credentials, spawn
+from bro.base.credential_environment import overlay
+from bro.datasources import web_search
+from bro.summon import PARTY_MEMBER_ENV
+from bro.run_lifecycle import RunLifecycle
+
+name = os.environ.get(PARTY_MEMBER_ENV, os.environ['RIDE_WORKSPACE'])
+directory = Path(os.environ['BRO_INSTALL_DIR'])
+from ride.do_ride import _install_credential_hooks
+_install_credential_hooks()
+store = credentials.default_store()
+source = web_search.WebSearch(store)
+server = source.as_mcp_server()
+tool = next(tool for tool in asyncio.run(server.list_tools()) if tool.name == 'search')
+
+async def request(url, parameters, headers):
+  return {'web': {'results': [{'url': headers['X-Subscription-Token'], 'title': 'key'}]}}
+
+web_search.get_json = request
+
+def unreadable(name):
+  result = spawn.run(['credentials', 'get', '--instance', name], env=overlay(), capture_output=True, text=True, timeout=10)
+  assert result.returncode == 1 and 'not found' in result.stderr
+
+def check(expected):
+  value = spawn.run(['credentials', 'get', 'github'], env=overlay(), capture_output=True, text=True, timeout=10)
+  assert value.returncode == 0, value.stderr
+  assert value.stdout.strip() == expected + '-git'
+  value = spawn.run(['git', 'credential', 'fill'], input='protocol=https\nhost=github.com\n\n', env=overlay(), capture_output=True, text=True, timeout=10)
+  assert value.returncode == 0, value.stderr
+  assert 'password=' + expected + '-git' in value.stdout
+  hits = json.loads(asyncio.run(tool.call({'query': 'refresh'})))
+  assert hits[0]['id'] == expected + '-search', hits
+  assert credentials.get('aws') == 'unrelated-aws'
+
+unrelated_path = Path(overlay()['AWS_SHARED_CREDENTIALS_FILE'])
+inode = unrelated_path.stat().st_ino
+subject = '''import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+with path.open() as stream:
+  assert stream.read() == 'unrelated-aws'
+  print('ready', flush=True)
+  assert sys.stdin.readline() == 'finish\\n'
+  stream.seek(0)
+  assert stream.read() == 'unrelated-aws'
+'''
+
+def exchange(stage):
+  Path('.credential-' + name + '-ready-' + str(stage)).touch()
+  deadline = time.monotonic() + 150
+  go = Path('.credential-' + name + '-go-' + str(stage))
+  while not go.exists():
+    if time.monotonic() > deadline:
+      raise TimeoutError('operator did not complete stage ' + str(stage))
+    time.sleep(0.02)
+
+"""
+
+_CREDENTIAL_OVERRIDE_PROBE = (
+  _CREDENTIAL_OVERRIDE_SETUP
+  + r"""
+with contextlib.closing(RunLifecycle.from_env()) as channel:
+  with subprocess.Popen([sys.executable, '-c', subject, str(unrelated_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) as unrelated:
+    assert unrelated.stdout.readline().strip() == 'ready'
+    check('first')
+    exchange(0)
+    check('second')
+    unreadable('github+one')
+    unreadable('brave+one')
+    exchange(1)
+    assert store.try_get('github') is None
+    unreadable('github+two')
+    assert store.try_get('brave') is None
+    try:
+      asyncio.run(tool.call({'query': 'revoked'}))
+    except credentials.SecretNotFound:
+      pass
+    else:
+      raise AssertionError('MCP returned a cached revoked key')
+    assert 'GIT_CONFIG_COUNT' not in overlay()
+    exchange(2)
+    check('first')
+    assert unrelated_path.stat().st_ino == inode
+    unrelated.stdin.write('finish\n')
+    unrelated.stdin.flush()
+    assert unrelated.wait(timeout=10) == 0
+  Path('.credential-' + name + '-verified').touch()
+  deadline = time.monotonic() + 150
+  while not Path('.credential-' + name + '-finish').exists():
+    if time.monotonic() > deadline:
+      raise TimeoutError('operator did not finish the probe')
+    time.sleep(0.02)
+  channel.completed('credential override verified', 'ok')
+"""
+)
+
+
+def _credential_override_route(
+  isolated_env: IsolatedEnv,
+  monkeypatch: pytest.MonkeyPatch,
+  isolation: str,
+  shape: str,
+  fault: str | None = None,
+  receipt_first: bool = True,
+) -> None:
+  from concurrent.futures import ThreadPoolExecutor
+
+  import ride.bro_worker as bro_worker
+  import ride.cli as ride_cli
+  import ride.session as ride_session
+  from bro.base import credentials
+  from ride.operator import _request, mission_rows
+  from ride.root import ProcessLaunch
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+
+  env = isolated_env
+  host_store = env.home / '.bro'
+  material = host_store / 'creds'
+  for name, value in {
+    'github+one': 'first-git',
+    'github+two': 'second-git',
+    'brave+one': '{"api_key":"first-search"}',
+    'brave+two': '{"api_key":"second-search"}',
+    'aws+one': 'unrelated-aws',
+  }.items():
+    (material / (name + '.cred')).write_text(value)
+  (host_store / 'creds.json').write_text(
+    json.dumps({'defaults': ['github+one', 'brave+one', 'aws+one']})
+  )
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args: None)
+  monkeypatch.setattr(ride_session, 'reexec_from_runtime', lambda *_args: None)
+  probe = _CREDENTIAL_OVERRIDE_PROBE if fault is None else _CREDENTIAL_OVERRIDE_ONCE_PROBE
+  publication_finished, release_completion = threading.Event(), threading.Event()
+  if fault is not None:
+    from ride import credential_overrides
+    from ride.credential_applier import CredentialApplier
+
+    original_apply = CredentialApplier.apply
+    attempts = set()
+
+    def lost_acknowledgement(applier, request, receipt):
+      generation = original_apply(applier, request, receipt)
+      if request['operation'] not in attempts:
+        attempts.add(request['operation'])
+        publication_finished.set()
+        assert release_completion.wait(150), 'operator did not release the lost acknowledgement'
+        raise ConnectionError('injected lost acknowledgement')
+      return generation
+
+    if receipt_first:
+      monkeypatch.setattr(CredentialApplier, 'apply', lost_acknowledgement)
+    else:
+      import ride.credential_applier as appliers
+
+      write = appliers.atomic_file
+
+      def delayed_receipt(path, *args, **kwargs):
+        if path.parent.name == 'credential-receipts':
+          publication_finished.set()
+          assert release_completion.wait(150), 'operator did not release receipt publication'
+        return write(path, *args, **kwargs)
+
+      monkeypatch.setattr(appliers, 'atomic_file', delayed_receipt)
+    monkeypatch.setattr(credential_overrides, 'ACK_TIMEOUT', 0.1)
+  original_start = ride_session.started_party_launch
+  original_host = ride_session.prepared_unboxed_session_launch
+  original_member = ride_session.boxed_member_launch
+
+  def replace_start(*args, **kwargs):
+    launch = original_start(*args, **kwargs)
+    python = (
+      str(kwargs['runtime_bundle'].host_venv / 'bin' / 'python')
+      if isinstance(launch, ProcessLaunch)
+      else _RUNTIME_PYTHON
+    )
+    return replace(
+      launch,
+      command=_broxy_probe(python, probe),
+      env={**launch.env, 'RIDE_WORKSPACE': args[0].name},
+    )
+
+  def replace_host(*args, **kwargs):
+    launch = original_host(*args, **kwargs)
+    return replace(
+      launch,
+      command=_broxy_probe(str(kwargs['runtime_bundle'].host_venv / 'bin' / 'python'), probe),
+      env={**launch.env, 'RIDE_WORKSPACE': args[0].name},
+    )
+
+  def replace_member(*args, **kwargs):
+    return replace(original_member(*args, **kwargs), command=_session_broxy_probe(probe))
+
+  monkeypatch.setattr(ride_session, 'started_party_launch', replace_start)
+  monkeypatch.setattr(bro_worker, 'started_party_launch', replace_start)
+  monkeypatch.setattr(bro_worker, 'prepared_unboxed_session_launch', replace_host)
+  monkeypatch.setattr(bro_worker, 'boxed_member_launch', replace_member)
+  suffix = f'credential-{shape}-{isolation}-{fault or "normal"}'
+  if not receipt_first:
+    suffix += '-late-receipt'
+  repository = _permission_repository(env, suffix)
+  root_isolation = Isolation(isolation) if shape == 'join' else Isolation.UNBOXED
+  workspace = Workspace.ensure(f'{_NAME_PREFIX}{suffix}', repository, root_isolation)
+  passes = ['github+one', 'brave+one', 'aws+one']
+  if shape == 'manual':
+    parent = f"""
+import contextlib
+from pathlib import Path
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import summon_manual
+from bro.quest import check
+with contextlib.closing(RunLifecycle.from_env()) as channel:
+  Path('.credential-parent-ready').touch()
+  token = summon_manual('bro', 'credential probe', passes={passes!r})
+  Path('.credential-manual-token').write_text(token)
+  outcome = check(token, wait=True, timeout=180)
+  assert outcome.answer == 'credential override verified', outcome
+  channel.completed('parent verified', 'ok')
+"""
+  else:
+    placement = 'join' if shape == 'join' else isolation
+    parent = f"""
+import contextlib
+from pathlib import Path
+from bro.run_lifecycle import RunLifecycle
+from bro.summon import summon_and_wait
+with contextlib.closing(RunLifecycle.from_env()) as channel:
+  Path('.credential-parent-ready').touch()
+  assert summon_and_wait('bro', 'credential probe', placement={placement!r}, harness='bro', llm='echo', timeout=180, passes={passes!r}) == 'credential override verified'
+  channel.completed('parent verified', 'ok')
+"""
+  root_mission = _root_mission(
+    repository,
+    targets=('bro',),
+    placements=('boxed', 'unboxed', 'join'),
+    passes=passes,
+    target='bro',
+    placement=root_isolation.value,
+  )
+  root_ended = threading.Event()
+
+  with ThreadPoolExecutor(max_workers=2) as executor:
+
+    def operate():
+      parent_ready = workspace.tree / '.credential-parent-ready'
+      _wait_until(
+        lambda: parent_ready.exists() or root_ended.is_set(), 90, 'parent channel readiness', None
+      )
+      assert parent_ready.exists(), 'root ended before channel readiness'
+      manual = None
+      if shape == 'manual':
+        token_path = workspace.tree / '.credential-manual-token'
+        _wait_until(lambda: token_path.exists() or root_ended.is_set(), 90, 'manual token', None)
+        assert token_path.exists(), 'root ended before manual prepare'
+        arguments = [
+          'ride',
+          'solo',
+          '--summoned',
+          token_path.read_text(),
+          '--workspace',
+          f'{workspace.name}-child',
+          '--no-trails',
+          '--harness',
+          'bro',
+          '--llm',
+          'echo',
+        ]
+        if isolation == 'unboxed':
+          arguments.append('--unboxed')
+        manual = executor.submit(ride_cli.main, [*arguments, 'bro'])
+      target = None
+
+      def ready():
+        nonlocal target
+        if root_ended.is_set():
+          return True
+        for row in mission_rows(workspace.name):
+          if row['workspace'] is not None:
+            path = workspace_paths.workspace_dir(row['workspace']) / 'tree'
+            if (path / ('.credential-' + row['name'] + '-ready-0')).exists():
+              target = row
+              return True
+        return False
+
+      _wait_until(ready, 150, 'credential probe readiness', None)
+      assert target is not None, 'root ended before credential probe readiness'
+      tree = workspace_paths.workspace_dir(target['workspace']) / 'tree'
+      name = target['name']
+      operations = [
+        [('cred', 'github+two'), ('cred', 'brave+two')],
+        [('revoke', 'github'), ('revoke', 'brave')],
+        [('grant', 'github'), ('grant', 'brave')],
+      ]
+      if fault is not None:
+        operations = operations[:1]
+      for stage, changes in enumerate(operations):
+        if stage:
+          marker = tree / ('.credential-' + name + '-ready-' + str(stage))
+          _wait_until(
+            lambda marker=marker: marker.exists() or root_ended.is_set(),
+            150,
+            f'credential stage {stage}',
+            None,
+          )
+          assert marker.exists(), 'session ended before checking the prior override'
+        result = _request(workspace.name, 'operator.override', {'name': name, 'changes': changes})
+        assert result['status'] == ('applied' if fault is None else 'uncertain'), result
+        if fault is not None:
+          assert publication_finished.wait(90), 'applier did not publish its receipt'
+          if fault == 'alive':
+            release_completion.set()
+            resume_file = workspace_paths.workspace_dir(target['workspace']) / 'resume.json'
+            _wait_until(
+              lambda resume_file=resume_file: (
+                json.loads(resume_file.read_text())['override_operation']['state'] == 'applied'
+              ),
+              90,
+              'receipt settlement while alive',
+              None,
+            )
+        assert set(result['next_start']) == {'github', 'brave'}
+        (tree / ('.credential-' + name + '-go-' + str(stage))).touch()
+      marker = tree / ('.credential-' + name + '-verified')
+      _wait_until(
+        lambda: marker.exists() or root_ended.is_set(), 150, 'credential verification', None
+      )
+      assert marker.exists(), 'session ended without verifying credential overrides'
+      (tree / ('.credential-' + name + '-finish')).touch()
+      if fault == 'ended':
+        target_id = target['id']
+        _wait_until(
+          lambda: any(
+            row['id'] == target_id and row['state'] not in ('accepted', 'started')
+            for row in mission_rows(workspace.name)
+          ),
+          90,
+          'mission terminal settlement',
+          None,
+        )
+        release_completion.set()
+      if fault is not None:
+        resume_file = workspace_paths.workspace_dir(target['workspace']) / 'resume.json'
+        _wait_until(
+          lambda resume_file=resume_file: (
+            json.loads(resume_file.read_text())['override_operation']['state'] == 'applied'
+          ),
+          90,
+          'receipt settlement',
+          None,
+        )
+        saved = json.loads(resume_file.read_text())
+        assert saved['authority_request']['values']['cred.github'] == 'two'
+        assert (
+          resume_file.parent / 'credential-receipts' / (saved['override_operation']['id'] + '.json')
+        ).is_file()
+      if manual is not None:
+        assert manual.result(timeout=30) == 0
+
+    future = executor.submit(operate)
+    with contextlib.ExitStack() as cleanup:
+      cleanup.callback(root_ended.set)
+      if root_isolation is Isolation.UNBOXED:
+        code = _host_root_route(env, workspace, parent, mission=root_mission)
+      else:
+        from ride.broker_root import run_root_via_broker
+
+        runtime = RuntimeBundle(
+          env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+          f'{sys.version_info.major}.{sys.version_info.minor}',
+        )
+        party_directory = workspace.path / 'party'
+        party_directory.mkdir(parents=True, exist_ok=True)
+        code = run_root_via_broker(
+          DockerLaunchSpec(
+            workspace_docker.Launch(
+              name=workspace.name,
+              command=_session_broxy_probe(parent),
+              env={'RIDE_BRO': 'bro'},
+              secrets=(),
+              tty=False,
+              image=env.image,
+              runtime_bundle_hash=env.runtime_bundle_hash,
+              repo=repository,
+              extra_mounts=(f'{party_directory}:{workspace_paths.CONTAINER_PARTY_DIR}',),
+            )
+          ),
+          workspace=workspace,
+          bro='bro',
+          mission=root_mission,
+          runtime_bundle=runtime,
+          container_runtime=ContainerRuntimeResolver.fixed(
+            ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), repository
+          ),
+        )
+    future.result(timeout=30)
+  assert code == 0
+  assert env.live_containers() == []
+
+
+_CREDENTIAL_OVERRIDE_ONCE_PROBE = (
+  _CREDENTIAL_OVERRIDE_SETUP
+  + r"""
+with contextlib.closing(RunLifecycle.from_env()) as channel:
+  check('first')
+  exchange(0)
+  check('second')
+  Path('.credential-' + name + '-verified').touch()
+  deadline = time.monotonic() + 150
+  while not Path('.credential-' + name + '-finish').exists():
+    if time.monotonic() > deadline:
+      raise TimeoutError('operator did not finish the probe')
+    time.sleep(0.02)
+  channel.completed('credential override verified', 'ok')
+"""
+)
+
+
+@pytest.mark.parametrize('isolation', ['boxed', 'unboxed'])
+@pytest.mark.parametrize('shape', ['start', 'join', 'manual'])
+def test_credential_overrides_reach_commands_mcp_and_git_in_each_session_shape(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, isolation: str, shape: str
+) -> None:
+  _credential_override_route(isolated_env, monkeypatch, isolation, shape)
+
+
+@pytest.mark.parametrize('fault', ['alive', 'ended'])
+def test_lost_credential_acknowledgement_settles_from_receipt(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+  _credential_override_route(isolated_env, monkeypatch, 'unboxed', 'start', fault)
+
+
+@pytest.mark.parametrize('fault', ['alive', 'ended'])
+def test_lost_manual_credential_acknowledgement_with_late_receipt(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+  _credential_override_route(
+    isolated_env, monkeypatch, 'unboxed', 'manual', fault, receipt_first=False
+  )

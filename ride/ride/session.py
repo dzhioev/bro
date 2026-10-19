@@ -675,6 +675,8 @@ def _launch_session(
           workspace,
           credential_scope=launch_scope.scoped,
           claim=lambda: claim_launch(summoned.root, summoned.token, commit_id, spec.name),
+          applier_root=summoned.root,
+          applier_mission=summoned.token,
         )
       except (pending_launch.UnknownToken, ValueError, RuntimeError) as error:
         log.error('%s', error)
@@ -1003,7 +1005,15 @@ def resume_session(
   except ValueError as error:
     log.error('%s', error)
     return 1
-  spec = load_resume_spec(workspace)
+  from ride.credential_overrides import settle_resume
+
+  try:
+    with workspace.hold_session_lock():
+      settle_resume(workspace.path)
+      spec = load_resume_spec(workspace)
+  except (RuntimeError, ValueError, OSError) as error:
+    log.error('%s', error)
+    return 1
   if spec is None:
     log.error('no session recorded for %s; start a new one instead', name)
     return 1

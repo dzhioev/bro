@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import BinaryIO, Optional, Self
 
 from bro.base import spawn
+from bro.base.credential_environment import overlay
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, format_size
 from bro.monitor import SESSION_DIR_ENV, session_dir
 
@@ -671,7 +672,7 @@ class Store:
         ):
           process = subprocess.Popen(
             spawn.module_argv('bro.watch_run'),
-            env=environment,
+            env=overlay(environment),
             pass_fds=(ready_write_fd,),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,

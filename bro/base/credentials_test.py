@@ -461,7 +461,7 @@ class TestScopedStore:
     files, kinds = credentials.build_scoped_store(source, {'openai'})
 
     assert files['creds/openai+benchmark.cred'] == b'key'
-    assert json.loads(files['creds.json']) == {
+    assert _scoped_index(files) == {
       'defaults': ['openai+benchmark'],
       'sources': {},
     }
@@ -473,14 +473,14 @@ class TestScopedStore:
     files, kinds = credentials.build_scoped_store(_store(tmp_path, 'github'), {'github+reviewer'})
 
     assert files['creds/github+reviewer.cred'] == b'token'
-    assert json.loads(files['creds.json'])['defaults'] == ['github+reviewer']
+    assert _scoped_index(files)['defaults'] == ['github+reviewer']
     assert kinds == frozenset({'github'})
 
   def test_optional_absence_is_skipped_and_required_absence_fails(self, tmp_path: Path):
     source = _store(tmp_path, 'openai')
 
     files, kinds = credentials.build_scoped_store(source, set(), optional={'openai'})
-    assert json.loads(files['creds.json']) == {'defaults': [], 'sources': {}}
+    assert _scoped_index(files) == {'defaults': [], 'sources': {}}
     assert kinds == frozenset()
     with pytest.raises(credentials.SecretNotFound):
       credentials.build_scoped_store(source, {'openai'})
@@ -503,7 +503,7 @@ class TestScopedStore:
 
     assert files['creds/github.cred'] == b'default'
     assert files['creds/github+reviewer.cred'] == b'reviewer'
-    assert json.loads(files['creds.json'])['defaults'] == ['github+']
+    assert _scoped_index(files)['defaults'] == ['github+']
     assert kinds == frozenset({'github'})
 
   def test_a_picked_optional_instance_must_be_present(self, tmp_path: Path):
@@ -585,7 +585,7 @@ class TestScopedStore:
     files, _ = credentials.build_scoped_store(_store(tmp_path, 'github'), {'github'})
 
     assert files['creds/github.cred'] == b'{"seed": "abc"}'
-    assert json.loads(files['creds.json']) == {
+    assert _scoped_index(files) == {
       'defaults': ['github+'],
       'sources': {'github': {'type': 'ticket', 'prefix': 'minted'}},
     }
@@ -601,7 +601,7 @@ class TestScopedStore:
 
     assert set(files) == {'creds/brog.cred', 'creds/github.cred', 'creds.json'}
     assert kinds == frozenset({'brog'})
-    assert json.loads(files['creds.json']) == {
+    assert _scoped_index(files) == {
       'defaults': ['brog+', 'github+'],
       'sources': {'github': {'type': 'ticket', 'prefix': 'minted'}},
     }
@@ -616,7 +616,7 @@ class TestScopedStore:
     files, kinds = credentials.build_scoped_store(_store(tmp_path, 'brog', 'github'), {'brog'})
 
     assert files['creds/github+reviewer.cred'] == b'{"seed": "abc"}'
-    assert json.loads(files['creds.json']) == {
+    assert _scoped_index(files) == {
       'defaults': ['brog+'],
       'sources': {'github+reviewer': {'type': 'ticket', 'prefix': 'minted'}},
     }
@@ -749,9 +749,8 @@ class TestInstallHooks:
     _write_material(tmp_path / 'store', 'openai', 'key')
     store = credentials.Store(registry, tmp_path / 'store', {})
 
-    assert (
-      credentials.install_hooks(registry, {'openai'}, store, tmp_path / 'environment', {}) == {}
-    )
+    exported = credentials.install_hooks(registry, {'openai'}, store, tmp_path / 'environment', {})
+    assert Path(exported['PATH'].split(os.pathsep)[0]).is_dir()
 
   def test_hook_contention_fails(self, tmp_path: Path):
     registry = {
@@ -972,3 +971,11 @@ class TestCli:
 
     assert credentials.main(['credentials', 'get', '--instance', 'github']) is None
     assert capsys.readouterr().out == 'bare\n'
+
+
+def _scoped_index(files):
+  index = json.loads(files['creds.json'])
+  assert index.pop('generation') == 0
+  assert set(index.pop('material').values()) == set(files) - {'creds.json'}
+  index.pop('kinds')
+  return index

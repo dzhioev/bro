@@ -44,7 +44,10 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/worker_container.py` — container execution for core `WorkerContainer` declarations:
   off-loop broker lowering with coordinated image builds and pruning, detached throwaway workspaces, passed-instance store hydration, artifact views, and requested-or-available loopback port allocation and facts;
   plus a no-workspace foreground run whose piped exchange belongs to a host command.
-- `ride/overrides.py` — ordered operator target changes and atomic workspace/member operation records.
+- `ride/overrides.py` — ordered operator changes, checked candidates, and atomic authority-only operation records.
+- `ride/credential_overrides.py` — pending credential operations, receipt settlement, and the manual applier's operator-channel protocol.
+- `ride/credential_applier.py` — supervisor-owned publication into a process's private root or its container.
+- `ride/manual_credentials.py` — the manual launcher's retained applier connection.
 - `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the mission-listing and joint-start commit/claim clients.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.

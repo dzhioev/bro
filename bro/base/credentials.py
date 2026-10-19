@@ -173,7 +173,7 @@ class Source(Protocol):
 def _fetch_source(source: Source, material_path: Path, name: str) -> Optional[str]:
   try:
     return source.fetch(material_path)
-  except ValueError:
+  except (ValueError, FileNotFoundError):
     raise
   except Exception as error:
     raise ValueError(f'secret {name!r} failed to load: {error}') from error
@@ -459,9 +459,12 @@ class Store:
   ):
     self.registry = dict(registry)
     self.store_dir = Path(store_dir)
+    self._generation = 0
+    self._material: dict[str, str] | None = None
+    self._config_bytes: bytes | None = None
+    self._caller_selection = _validate_selection(selection, self.registry)
     self.defaults, self._sources = self._load_config()
-    caller_selection = _validate_selection(selection, self.registry)
-    self.selection = {**self.defaults, **caller_selection}
+    self.selection = {**self.defaults, **self._caller_selection}
     self._readable = None if readable is None else frozenset(readable)
     if self._readable is not None:
       unknown = sorted(self._readable - self.registry.keys())
@@ -481,25 +484,50 @@ class Store:
     self._reject_noncanonical_material()
     self._cache: dict[str, str] = {}
     self._winners: dict[str, Source] = {}
-    self._lock = threading.Lock()
+    self._lock = threading.RLock()
 
   def _load_config(self) -> tuple[dict[str, str], dict[str, Source]]:
     path = self.store_dir / STORE_FILE
     if not path.is_file():
       return {}, {}
     try:
-      data = json.loads(path.read_text())
+      self._config_bytes = path.read_bytes()
+      data = json.loads(self._config_bytes)
     except json.JSONDecodeError as error:
       raise ValueError(f'credential store file {path} is not valid json') from error
     if not isinstance(data, dict):
       raise ValueError(f'credential store file {path} must be a json object')
-    unknown = sorted(set(data) - {'defaults', 'sources'})
+    unknown = sorted(
+      set(data) - {'defaults', 'sources', 'generation', 'material', 'operation', 'kinds'}
+    )
     if len(unknown) > 0:
       raise ValueError(
         f'{path} has credential entries outside "sources": {", ".join(unknown)}; '
         'move typed source annotations under "sources"'
       )
+    material = data.get('material')
+    if 'material' in data:
+      generation = data.get('generation')
+      if type(generation) is not int or generation < 0 or not isinstance(material, dict):
+        raise ValueError(f'{path}: indexed stores require material and a generation')
+      for name, filename in material.items():
+        _require_canonical_name(name, f'{path}: material names')
+        if not isinstance(filename, str) or PurePosixPath(filename).parts != (
+          MATERIAL_DIR,
+          PurePosixPath(filename).name,
+        ):
+          raise ValueError(f'{path}: invalid material path {filename!r}')
+      self._material = dict(material)
+      self._generation = generation
+    elif {'generation', 'operation', 'kinds'} & data.keys():
+      raise ValueError(f'{path}: generation requires a material index')
     defaults = _store_defaults(path, data.get('defaults', []), self.registry)
+    if self._material is not None:
+      missing = {
+        storage_name(kind, instance) for kind, instance in defaults.items()
+      } - self._material.keys()
+      if missing:
+        raise ValueError(f'{path}: defaults name unindexed material: {sorted(missing)}')
     source_data = data.get('sources', {})
     if not isinstance(source_data, dict):
       raise ValueError(f'{path}: sources must be a json object')
@@ -525,16 +553,47 @@ class Store:
     return defaults, sources
 
   def _reject_noncanonical_material(self) -> None:
+    if self._material is not None:
+      return
     material_dir = self.store_dir / MATERIAL_DIR
     if not material_dir.is_dir():
       return
     for path in sorted(material_dir.glob(f'*{MATERIAL_SUFFIX}')):
       _require_canonical_name(path.name.removesuffix(MATERIAL_SUFFIX), f'{material_dir} holds')
 
+  @property
+  def generation(self) -> int:
+    with self._lock:
+      self._refresh()
+      return self._generation
+
+  def _refresh(self) -> None:
+    if self._material is None:
+      return
+    content = (self.store_dir / STORE_FILE).read_bytes()
+    if content == self._config_bytes:
+      return
+    previous = self._generation
+    self.defaults, self._sources = self._load_config()
+    if self._generation <= previous:
+      raise ValueError('credential index changed without advancing its generation')
+    self.selection = {**self.defaults, **self._caller_selection}
+    self._cache.clear()
+    self._winners.clear()
+
   def _material_path(self, storage_name: str) -> Path:
+    if self._material is not None:
+      if storage_name not in self._material:
+        raise SecretNotFound(storage_name)
+      return self.store_dir / self._material[storage_name]
     return self.store_dir / MATERIAL_DIR / f'{storage_name}{MATERIAL_SUFFIX}'
 
   def selected_name(self, name: str) -> str:
+    with self._lock:
+      self._refresh()
+      return self._selected_name(name)
+
+  def _selected_name(self, name: str) -> str:
     kind, instance = parse_name(name)
     return storage_name(kind, self.selection.get(kind, '') if instance is None else instance)
 
@@ -542,8 +601,7 @@ class Store:
     return self._sources.get(storage_name, LocalSource())
 
   def resolve(self, name: str) -> Optional[tuple[str, bool]]:
-    storage_name = self.selected_name(name)
-    resolved = self._resolution(storage_name, requested=name)
+    resolved = self._resolution(name, requested=name, selected=True)
     return None if isinstance(resolved, _Unresolved) else resolved
 
   def resolve_instance(self, name: str) -> Optional[tuple[str, bool]]:
@@ -552,24 +610,42 @@ class Store:
     return None if isinstance(resolved, _Unresolved) else resolved
 
   def require_resolution(self, name: str) -> tuple[str, bool]:
-    resolved = self._resolution(self.selected_name(name), requested=name)
+    resolved = self._resolution(name, requested=name, selected=True)
     if isinstance(resolved, _Unresolved):
       raise SecretNotFound(resolved.name)
     return resolved
 
-  def _resolution(self, name: str, *, requested: str) -> _Resolution:
-    storage_name = _stored_spelling(name)
+  def _resolution(self, name: str, *, requested: str, selected: bool = False) -> _Resolution:
+    with self._lock:
+      while True:
+        self._refresh()
+        generation = self._generation
+        stored = self._selected_name(name) if selected else _stored_spelling(name)
+        if self._readable_names is not None and stored not in self._readable_names:
+          return _Unresolved(requested)
+        try:
+          result = self._resolve(stored, chain=())
+        except FileNotFoundError:
+          if self._material is None:
+            return _Unresolved(stored)
+          self._refresh()
+          if self._generation != generation:
+            continue
+          raise ValueError(
+            f'credential store corruption: indexed material for {stored!r} is absent'
+          ) from None
+        self._refresh()
+        if self._generation == generation:
+          return result
+
+  def _resolve(self, storage_name: str, chain: tuple[str, ...]) -> _Resolution:
     kind, _ = parse_name(storage_name)
     if (
       kind not in self.registry
       or (self._readable is not None and kind not in self._readable)
-      or (self._readable_names is not None and storage_name not in self._readable_names)
+      or (self._material is not None and storage_name not in self._material)
     ):
-      return _Unresolved(requested)
-    with self._lock:
-      return self._resolve(storage_name, chain=())
-
-  def _resolve(self, storage_name: str, chain: tuple[str, ...]) -> _Resolution:
+      return _Unresolved(storage_name)
     cached = self._cache.get(storage_name)
     if cached is not None:
       return cached, True
@@ -579,6 +655,8 @@ class Store:
     source = self._source(storage_name)
     raw = _fetch_source(source, self._material_path(storage_name), storage_name)
     if raw is None:
+      if self._material is not None:
+        raise FileNotFoundError(self._material_path(storage_name))
       return _Unresolved(storage_name)
     literal = self.registry[kind].literal
     text = raw if literal else raw.strip()
@@ -645,7 +723,7 @@ class Store:
     field = node.get(_REFERENCE_FIELD)
     if field is not None and not isinstance(field, str):
       raise ValueError(f'secret {referrer!r}: reference field must be a string, got {field!r}')
-    target_storage = self.selected_name(target)
+    target_storage = self._selected_name(target)
     if target_storage in chain:
       raise ValueError(f'credential reference cycle: {" -> ".join((*chain, target_storage))}')
     resolved = self._resolve(target_storage, chain)
@@ -684,7 +762,7 @@ class Store:
 
   def get(self, name: str) -> str:
     _require_kind(name)
-    resolved = self._resolution(self.selected_name(name), requested=name)
+    resolved = self._resolution(name, requested=name, selected=True)
     if isinstance(resolved, _Unresolved):
       raise SecretNotFound(resolved.name)
     return resolved[0]
@@ -712,6 +790,10 @@ class Store:
     return frozenset(self.registry)
 
   def instance_names(self) -> frozenset[str]:
+    with self._lock:
+      self._refresh()
+      if self._material is not None:
+        return frozenset(name for name in self._material if parse_name(name)[0] in self.registry)
     names = set(self._sources)
     material_dir = self.store_dir / MATERIAL_DIR
     if material_dir.is_dir():
@@ -1046,7 +1128,17 @@ def build_scoped_store(
     _selection_spelling(kind, parse_name(storage)[1] or '')
     for kind, storage in sorted(default_names.items())
   ]
-  files[STORE_FILE] = json.dumps({'defaults': defaults, 'sources': typed_sources}).encode()
+  files[STORE_FILE] = json.dumps(
+    {
+      'defaults': defaults,
+      'sources': typed_sources,
+      'generation': 0,
+      'material': {
+        name: f'{MATERIAL_DIR}/{name}{MATERIAL_SUFFIX}' for name in sorted(scoped_names)
+      },
+      'kinds': sorted(declared_hydrated),
+    }
+  ).encode()
   return files, frozenset(declared_hydrated)
 
 
@@ -1155,46 +1247,9 @@ def install_hooks(
   directory: Path,
   env: Mapping[str, str],
 ) -> dict[str, str]:
-  hooks: dict[str, dict] = {}
-  for kind in sorted(set(kinds)):
-    _require_kind(kind)
-    entry = registry.get(kind)
-    if entry is None:
-      raise ValueError(f'install hook requested for unknown credential kind {kind!r}')
-    store.get(kind)
-    if entry.install is not None:
-      hooks[kind] = entry.install
-  if directory.exists():
-    shutil.rmtree(directory)
-  directory.mkdir(parents=True)
-  directory.chmod(0o700)
-  if len(hooks) == 0:
-    return {}
-  log.verbose('installing credential hooks into %s', directory)
-  exported: dict[str, str] = {}
-  owners: dict[str, str] = {}
-  binaries = directory / 'bin'
-  for name, hook in hooks.items():
-    for path, value in hook.get('files', {}).items():
-      _claim(owners, f'file {path}', name)
-      file = directory / path
-      file.parent.mkdir(parents=True, exist_ok=True)
-      file.write_text(_install_value(value, directory, store))
-      file.chmod(0o600)
-    for variable, value in hook.get('env', {}).items():
-      _claim(owners, f'variable {variable}', name)
-      exported[variable] = _install_value(value, directory, store)
-    for command, spec in hook.get('commands', {}).items():
-      _claim(owners, f'command {command}', name)
-      binaries.mkdir(exist_ok=True)
-      wrapper = binaries / command
-      wrapper.write_text(
-        _command_wrapper(name, command, spec.get('env', {}), directory, env, store)
-      )
-      wrapper.chmod(0o700)
-  if binaries.is_dir():
-    exported['PATH'] = os.pathsep.join([str(binaries), env.get('PATH', '')])
-  return exported
+  from bro.base.credential_apply import install
+
+  return install(registry, set(kinds), store, directory, env)
 
 
 def _claim(owners: dict[str, str], subject: str, name: str) -> None:
@@ -1222,7 +1277,12 @@ def _command_wrapper(
   env: Mapping[str, str],
   store: Store,
 ) -> str:
-  target = shutil.which(command, path=env.get('PATH'))
+  search_path = os.pathsep.join(
+    part
+    for part in env.get('PATH', os.defpath).split(os.pathsep)
+    if Path(part) != directory / 'bin'
+  )
+  target = shutil.which(command, path=search_path)
   if target is None:
     raise RuntimeError(
       f'the install hook for {name!r} shadows {command!r}, which is not on the '
@@ -1281,6 +1341,15 @@ def _install_hooks(directory: str, kinds: list[str]) -> None:
     print(f'export {name}={shlex.quote(exported[name])}')
 
 
+def _apply(directory: str, request: str) -> None:
+  from bro.base.credential_apply import apply_request
+
+  generation = apply_request(
+    Path(os.environ['BRO_STORE']), Path(directory), json.loads(Path(request).read_text())
+  )
+  print(json.dumps({'generation': generation}))
+
+
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='resolve credentials from the default store')
   subparser = parser.add_subparsers(dest='action', required=True)
@@ -1309,4 +1378,8 @@ def main(argv: list[str]) -> Optional[int]:
   hooks_parser.add_argument('directory', help='directory the hooks may write into')
   hooks_parser.add_argument('kinds', nargs='*', help='hydrated credential kinds whose hooks apply')
   hooks_parser.set_handler(_install_hooks)
+  apply_parser = subparser.add_parser('apply', help='publish a staged session credential change')
+  apply_parser.add_argument('directory')
+  apply_parser.add_argument('request')
+  apply_parser.set_handler(_apply)
   return parser.dispatch(argv)
