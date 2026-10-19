@@ -22,6 +22,11 @@ class TurnEnd(Protocol):
 
   def background_work(self) -> tuple[str, ...]: ...
 
+  @property
+  def background_wait_hint(self) -> str | None:
+    """How to wait on background work without this notice, where the harness offers a way."""
+    ...
+
   def notify(self, text: str) -> None: ...
 
   def end(self) -> None: ...
@@ -128,7 +133,7 @@ def _live_work(port: TurnEnd) -> LiveWork:
   )
 
 
-def _notice(work: LiveWork, *, waits: bool) -> str:
+def _notice(work: LiveWork, *, waits: bool, wait_hint: str | None) -> str:
   lines = ['[notification: the turn ended with work still live]']
   lines.extend(f'background work: {item}' for item in work.background_work)
   lines.extend(mission.live_mission_line(item) for item in work.uncovered_missions)
@@ -143,6 +148,8 @@ def _notice(work: LiveWork, *, waits: bool) -> str:
     lines.append(f'the session watch `{watches.SESSION_WATCH_COMMAND}` is down{detail}')
   if any(item.type == mission.BRO for item in work.uncovered_missions):
     lines.append('Use `bro::quest_cancel` to cancel an uncovered quest.')
+  if len(work.background_work) > 0 and wait_hint is not None:
+    lines.append(wait_hint)
   if waits:
     lines.append('Ending the turn again keeps waiting for this work.')
   else:
@@ -169,12 +176,12 @@ def settle(port: TurnEnd) -> None:
 
   if len(work.background_work) > 0 or work.summoner_can_speak:
     if port.watch_store.mark_notified(work.key()):
-      port.notify(_notice(work, waits=True))
+      port.notify(_notice(work, waits=True, wait_hint=port.background_wait_hint))
     return
 
   if len(work.uncovered_missions) > 0 or work.session_watch_down:
     if port.watch_store.mark_notified(work.key()):
-      port.notify(_notice(work, waits=False))
+      port.notify(_notice(work, waits=False, wait_hint=port.background_wait_hint))
       return
 
   port.end()

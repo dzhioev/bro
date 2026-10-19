@@ -768,6 +768,7 @@ class TestNativeTurnEnd:
     [notice] = llm.drained
     assert notice.startswith('[notification: the turn ended with work still live]')
     assert 'background work: job-1 bg `sleep 30`' in notice
+    assert runner.background_wait_hint in notice
     assert 'Ending the turn again keeps waiting' in notice
     assert observer.events == [
       TurnStartedEvent('go'),

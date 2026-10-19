@@ -61,11 +61,18 @@ class FakeStore:
 
 @dataclass(eq=True)
 class FakePort:
-  def __init__(self, store: FakeStore, background: tuple[str, ...] = ()) -> None:
+  def __init__(
+    self, store: FakeStore, background: tuple[str, ...] = (), wait_hint: str | None = None
+  ) -> None:
     self.watch_store = cast(watches.Store, store)
     self.background = background
+    self.wait_hint = wait_hint
     self.notifications: list[str] = []
     self.ends = 0
+
+  @property
+  def background_wait_hint(self) -> str | None:
+    return self.wait_hint
 
   def background_work(self) -> tuple[str, ...]:
     return self.background
@@ -150,6 +157,23 @@ def test_owner_led_background_work_notifies_then_keeps_waiting(monkeypatch):
   port.background = ('another task',)
   turn_end.settle(port)
   assert len(port.notifications) == 2
+
+
+def test_the_wait_hint_follows_the_background_work_it_is_for(monkeypatch):
+  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+  monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say',))
+  hinted = FakePort(FakeStore(), ('job-1',), wait_hint='use chill')
+  unhinted = FakePort(FakeStore(), ('job-1',))
+  speaking_only = FakePort(
+    FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]), (), wait_hint='use chill'
+  )
+
+  for port in (hinted, unhinted, speaking_only):
+    turn_end.settle(port)
+
+  assert 'use chill' in hinted.notifications[0]
+  assert 'use chill' not in unhinted.notifications[0]
+  assert 'use chill' not in speaking_only.notifications[0]
 
 
 def test_uncovered_mission_notifies_once_then_ends(monkeypatch):

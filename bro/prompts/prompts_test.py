@@ -114,7 +114,6 @@ class TestSessionFragment:
     assert 'session keeps a quest watch' in fragment
     assert 'end the turn' in fragment
     assert 'watch-next' not in fragment
-    assert 'bro::chill' not in fragment
     assert '{{' not in fragment
     assert fragment.endswith(hold_fragment('attended', harness=get_harness(harness)))
 

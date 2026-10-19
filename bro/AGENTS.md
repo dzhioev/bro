@@ -197,7 +197,7 @@ the spell tools and `cast` render spell bodies under that hold.
   `watch` starts its line in brash under the live run's policy, or the published one where the process runs none, or in bash under `brash(ANY)`;
   `unwatch` stops the named producer without checking the command list and refuses the runtime-owned session watch.
 - the bro harness's own tools:
-  `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
+  `job`, `poll`, `kill`, `jobs`, and `chill` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
 - `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 
