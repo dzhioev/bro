@@ -5,7 +5,7 @@ separate stored instances of one credential kind.
 Selections live outside repositories and merge from general to specific:
 
     {
-      "defaults": {"grant": [":launch.webview"]},
+      "defaults": {"grant": ["webview"]},
       "user": {
         "creds": ["github+dev"],
         "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
@@ -30,9 +30,9 @@ Selections live outside repositories and merge from general to specific:
 Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
 select the kind's empty instance.
 A list may name each kind once.
-`defaults`, project entries, and `bros` entries may carry unified `grant` and
-`revoke` lists: credential names, `@bro` targets, and `:launch.…` names.
-Credential grants and revokes name bare kinds only.
+`defaults`, project entries, and `bros` entries may carry unified `grant`,
+`revoke`, and `limit` lists in the authority syntax.
+A bare credential kind in `grant` or `revoke` holds or drops that kind.
 `creds` picks without adding a kind, so one entry may pick and grant the same kind.
 A `bros` entry may also carry `llm`: the recipes the bro runs on this project,
 an ordered preference list in the `--llm` grammar, beneath the launch's own
@@ -42,7 +42,8 @@ The grammar is installation-independent, so unknown credential and bro names
 remain valid until a launch resolves them against its installation, and a
 recipe is carried as written for the launch to parse.
 
-`defaults` is the root of the grant/revoke scope every managed session extends.
+`operator` takes only `revoke` and `limit`, restricting operator starts.
+`defaults` is the root of the policy every managed session extends.
 The store's own `creds.json` defaults are the base credential picks beneath
 `user` for an operator command and `projects` for a managed session.
 A project key is an identity a session names the repository by: the filesystem
@@ -61,7 +62,7 @@ A command's credential selection applies `user`, then its `user.tools` entry,
 over the store's defaults.
 A kind no layer selects reads its empty instance.
 The returned layer map attributes every explicit selection, and the ordered scope
-layers retain each pick, grant, and revoke for the launch fold.
+layers retain each pick, grant, revoke, and limit for the launch fold.
 `launch_llm` returns the list of the most specific matching `bros` entry naming
 one, with its layer: a more specific list replaces a less specific one whole.
 
@@ -75,14 +76,14 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional
 
+from bro.authority.syntax import Layer, parse_layer
 from bro.base import configs, credentials
 from bro.base.args import CLIError
 from bro.base.git_url import canonical_github_url, is_git_url, normalize_git_url
-from bro.base.scope import ScopeLayer, validate_scope_layer
 
 # Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
@@ -103,6 +104,8 @@ _TOOLS_KEY = 'tools'
 _CREDS_KEY = 'creds'
 _GRANT_KEY = 'grant'
 _REVOKE_KEY = 'revoke'
+_LIMIT_KEY = 'limit'
+_OPERATOR_KEY = 'operator'
 _BROS_KEY = 'bros'
 _LLM_KEY = 'llm'
 _SUMMON_DEPTH_KEY = 'summon-depth'
@@ -126,6 +129,17 @@ class Attachment:
       raise ValueError(f'attachment path must be a filesystem path, not {self.path!r}')
     if self.url is not None and not is_git_url(self.url):
       raise ValueError(f'attachment url must be a git URL, not {self.url!r}')
+
+
+@dataclass(frozen=True)
+class ScopeLayer:
+  """One attributed host policy layer with credential selections."""
+
+  grant: tuple[str, ...] = ()
+  revoke: tuple[str, ...] = ()
+  creds: tuple[str, ...] = ()
+  source: str = field(default='', compare=False)
+  limit: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +199,7 @@ class _Config:
   projects: dict[str, _Project]
   llm: dict[str, str]
   summon_depth: Optional[int]
+  operator: Layer
 
 
 def _read() -> _Config:
@@ -197,7 +212,7 @@ def _read() -> _Config:
 def _read_unchecked() -> _Config:
   path = Path(HOST_CONFIG_FILE)
   if not path.is_file():
-    return _Config(_ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None)
+    return _Config(_ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None, Layer())
   try:
     data = json.loads(path.read_text())
   except json.JSONDecodeError as error:
@@ -205,7 +220,8 @@ def _read_unchecked() -> _Config:
   if not isinstance(data, dict):
     raise ValueError(f'{path} must hold a json object')
   unknown = sorted(
-    set(data) - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY, _SUMMON_DEPTH_KEY}
+    set(data)
+    - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY, _SUMMON_DEPTH_KEY, _OPERATOR_KEY}
   )
   if _TOOLS_KEY in unknown:
     raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
@@ -220,7 +236,9 @@ def _read_unchecked() -> _Config:
     if _SUMMON_DEPTH_KEY in data
     else None
   )
-  return _Config(defaults, user, projects, llm, summon_depth)
+  return _Config(
+    defaults, user, projects, llm, summon_depth, _operator(path, data.get(_OPERATOR_KEY, {}))
+  )
 
 
 def llm_presets() -> dict[str, str]:
@@ -344,7 +362,7 @@ def _project(path: Path, project: str, value: object) -> _Project:
   where = f'{path}: project {project!r}'
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _BROS_KEY}, where)
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _LIMIT_KEY, _BROS_KEY}, where)
   project_entry = _scope_entry(
     where, {key: entry for key, entry in value.items() if key != _BROS_KEY}
   )
@@ -374,17 +392,33 @@ def _defaults_entry(path: Path, value: object) -> _ScopeEntry:
 def _scope_entry(where: str, value: object) -> _ScopeEntry:
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY}, where)
+  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _LIMIT_KEY}, where)
   credential_names = _scope_values(where, value.get(_CREDS_KEY, []), _CREDS_KEY)
   selection = _selection_entries(where, list(credential_names))
   grant = _scope_values(where, value.get(_GRANT_KEY, []), _GRANT_KEY)
   revoke = _scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY)
-  scope = ScopeLayer(grant, revoke, credential_names)
+  limit = _scope_values(where, value.get(_LIMIT_KEY, []), _LIMIT_KEY)
+  scope = ScopeLayer(grant, revoke, credential_names, limit=limit)
   try:
-    validate_scope_layer(scope)
+    parse_layer(grant=grant, revoke=revoke, limit=limit)
   except ValueError as error:
     raise ValueError(f'{where}: {error}') from error
   return _ScopeEntry(selection, scope)
+
+
+def _operator(path: Path, value: object) -> Layer:
+  where = f'{path}: {_OPERATOR_KEY}'
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must hold a json object')
+  _reject_unknown_fields(value, {_REVOKE_KEY, _LIMIT_KEY}, where)
+  try:
+    return parse_layer(
+      revoke=_scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY),
+      limit=_scope_values(where, value.get(_LIMIT_KEY, []), _LIMIT_KEY),
+      operator=True,
+    )
+  except ValueError as error:
+    raise ValueError(f'{where}: {error}') from error
 
 
 def _bro_entry(where: str, value: object) -> _BroEntry:
