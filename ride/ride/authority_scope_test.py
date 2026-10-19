@@ -412,7 +412,7 @@ def test_wire_mapping_separates_values_from_content_and_checks_sentinels(install
       'talk': ['worker.question'],
       'timeout': None,
       'pass': ['cookies+profile'],
-      'isolation': 'unboxed',
+      'placement': 'unboxed',
     },
     source,
   )
@@ -426,7 +426,7 @@ def test_wire_mapping_separates_values_from_content_and_checks_sentinels(install
   for fields in (
     {'manual': True, 'timeout': 1},
     {'manual': True, 'placement': 'join'},
-    {'party': 'join', 'into': 'ref'},
+    {'placement': 'join', 'into': 'ref'},
     {'unknown': 'value'},
   ):
     with pytest.raises(ValueError):

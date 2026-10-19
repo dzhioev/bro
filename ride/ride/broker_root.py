@@ -8,17 +8,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 from bro.artifact import GET, MINT, SHARE
-from bro.base import configs, log
+from bro.authority.rules import Mission
+from bro.base import log
 from bro.broker.dispatcher import PING, Broker, ping_handler
 from bro.broker.spawn import LaunchSpec, Spawner
 from bro.broker.transports.tcp import LOCAL_HOST, TcpServerTransport
 from bro.quest import BRO, LAUNCH
-from bro.worker_types import Launch, WorkerType, installed_types
+from bro.worker_types import WorkerType, installed_types
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, launch_dir
 from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
+from ride.authority_reading import Reading
 from ride.bro_worker import BroFacts, Placement, SummonSpawner
 from ride.launch_control import LaunchControl
 from ride.operator import OperatorControl
@@ -48,6 +50,7 @@ class RideHost:
   session_env: dict[str, str]
   runtime_bundle: RuntimeBundle
   summon_spawner: SummonSpawner
+  reading: Reading
 
 
 def broker_bind_hosts() -> list[str]:
@@ -69,19 +72,14 @@ def run_root_via_broker(
   *,
   workspace: Workspace,
   bro: str,
-  launch_scope: Launch,
-  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
-  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
+  mission: Mission,
   session_env: Mapping[str, str] = MappingProxyType({}),
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
   types: Mapping[str, type[WorkerType]] | None = None,
 ) -> int:
   """Run a root peer and serve launch through the installed worker types."""
-  raw_targets = launch_scope.get(BRO, {}).get('bros', frozenset())
-  targets = sorted(raw_targets) if isinstance(raw_targets, frozenset) else []
-  if targets:
-    log.info('session may summon: %s', ', '.join(targets))
+  reading = cast(Reading, mission.reading)
   party_members = PartyMembers()
   docker_spawner = DockerSpawner(host_log=workspace.host_log, party_members=party_members)
   process_spawner = ProcessSpawner(host_log=workspace.host_log, party_members=party_members)
@@ -95,7 +93,7 @@ def run_root_via_broker(
       type=BRO,
       workspace=workspace.name,
       tree=workspace.tree,
-      launch=launch_scope,
+      record=mission,
       artifact_view=(
         PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if isinstance(launch, DockerLaunchSpec) else None
       ),
@@ -140,8 +138,9 @@ def run_root_via_broker(
     peers=facts,
     artifacts=artifact_control,
     journal=facade.journal,
-    depth_cap=summon_depth,
-    summon_harness=summon_harness,
+    depth_cap=reading.summon_depth,
+    summon_harness=reading.summon_harness,
+    reading=reading,
     session_env=dict(session_env),
     runtime_bundle=runtime_bundle,
     summon_spawner=summon_spawner,
@@ -160,9 +159,12 @@ def run_root_via_broker(
     runtime_bundle=runtime_bundle,
     session_env=session_env,
     worker_container_spawner=worker_container_spawner,
+    reading=reading,
   )
   facade.on(PING, ping_handler)
   facade.on(LAUNCH, control.handle)
+  facade.on('authority', control.authority)
+  operator.on('operator.commit', control.commit)
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
   facade.on(SHARE, artifact_control.share)

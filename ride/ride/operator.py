@@ -200,3 +200,26 @@ def list_missions(root: str) -> int:
     raise RuntimeError(f'root {root!r} operator channel is unavailable') from None
   print(json.dumps(missions, indent=2))
   return 0
+
+
+def commit_launch(root: str, token: str, spec: Any) -> dict[str, Any]:
+  from bro.broker.client import Client
+  from bro.broker.transport import connect
+
+  fields = {
+    'placement': spec.isolation.value,
+    'harness': spec.harness,
+    'hold': spec.hold,
+    'timeout': None,
+    'pass': spec.cred,
+    'grant': spec.grant,
+    'revoke': spec.revoke,
+  }
+  if spec.llm is not None:
+    fields['llm'] = spec.llm
+  record = read_control(root)
+  with Client(connect(record.address)) as client:
+    result = client.call('operator.commit', {'token': token, 'fields': fields}, timeout=30).payload
+  if result.get('outcome') != 'ok':
+    raise ValueError(f'joint commit refused: {result.get("error", result)}')
+  return result['value']

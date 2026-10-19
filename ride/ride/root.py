@@ -4,9 +4,8 @@ from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 from types import MappingProxyType
 
-from bro.base import configs
+from bro.authority.rules import Mission
 from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
-from bro.worker_types import Launch
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.containers import attach_interactive, broker_enabled
 from ride.workspace.docker import (
@@ -32,21 +31,17 @@ def _run_via_broker(
   launch: DockerLaunch | ProcessLaunch,
   workspace: Workspace,
   *,
-  launch_scope: Launch,
-  summon_depth: int,
-  summon_harness: str,
+  mission: Mission,
   session_env: Mapping[str, str],
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
 ) -> int:
-  from bro.summon import LAUNCH_ENV, encode_launch
   from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
   from ride.artifacts import view_mount
   from ride.broker_root import run_root_via_broker
   from ride.workspace.spawn import DockerLaunchSpec, ProcessLaunchSpec
 
   launch_env = dict(launch.env)
-  launch_env[LAUNCH_ENV] = encode_launch(launch_scope)
   if isinstance(launch, DockerLaunch):
     artifacts_mount = view_mount(
       workspace.name,
@@ -72,9 +67,7 @@ def _run_via_broker(
     broker_launch,
     workspace=workspace,
     bro=launch.env['RIDE_BRO'],
-    launch_scope=launch_scope,
-    summon_depth=summon_depth,
-    summon_harness=summon_harness,
+    mission=mission,
     session_env=session_env,
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -97,9 +90,7 @@ def run_started_party(
   launch: DockerLaunch | ProcessLaunch,
   workspace: Workspace,
   *,
-  launch_scope: Launch,
-  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH,
-  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS,
+  mission: Mission,
   session_env: Mapping[str, str] = MappingProxyType({}),
   credential_scope: ScopedSecrets,
   container_runtime: ContainerRuntimeResolver,
@@ -115,22 +106,12 @@ def run_started_party(
     credential_scope.optional,
   )
   workspace.clear_session_end()
-  from bro.summon import LAUNCH_ENV, encode_launch
 
-  launch = replace(
-    launch,
-    env={
-      **launch.env,
-      LAUNCH_ENV: encode_launch(launch_scope),
-    },
-  )
   if broker_enabled():
     code = _run_via_broker(
       launch,
       workspace,
-      launch_scope=launch_scope,
-      summon_depth=summon_depth,
-      summon_harness=summon_harness,
+      mission=mission,
       session_env=session_env,
       container_runtime=container_runtime,
       runtime_bundle=runtime_bundle,

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from bro.artifact import is_ref
+from bro.authority.patterns import Descriptor
+from bro.authority.records import dump_request
+from bro.authority.rules import Admission, Mission, Prepared
 from bro.base import credentials, log
 from bro.broker.brotocol import TALK_RIGHTS, Talk
 from bro.worker_types import (
@@ -18,7 +20,6 @@ from bro.worker_types import (
   Expect,
   Job,
   LaunchDenied,
-  LaunchPass,
   LaunchRequest,
   PeerDescription,
   Spawn,
@@ -27,6 +28,8 @@ from bro.worker_types import (
   type_name,
 )
 from ride import pending_launch
+from ride.authority_launch import mission_view, request as authority_request
+from ride.authority_reading import Reading
 from ride.peer_facts import WorkerFacts
 from ride.worker_container import WorkerContainerLaunch
 
@@ -69,7 +72,9 @@ class LaunchControl:
     runtime_bundle: Any,
     session_env: Mapping[str, str],
     worker_container_spawner: Spawner,
+    reading: Reading,
   ):
+    self.reading = reading
     self._ride = ride
     self._types = dict(types)
     self._peers = peers
@@ -111,17 +116,16 @@ class LaunchControl:
           pending=_json_object(run.pending, 'an expected worker pending value'),
         )
       fields = _json_object(worker_type.audit_fields(run.extension), 'worker audit fields')
-    except LaunchDenied as error:
+    except (LaunchDenied, ValueError) as error:
       self._deny(context, peer, str(error), self._usable_type(requested_type))
       return
 
-    launch_scope = run.launch_scope
     self._peers.add(
       request.id,
       WorkerFacts(
         type=request.type,
         workspace=None,
-        launch=launch_scope,
+        record=request.record,
         expected=isinstance(run, Expect),
         extension=run.extension,
       ),
@@ -183,51 +187,6 @@ class LaunchControl:
     if worker_type is None:
       available = ', '.join(sorted(self._types)) or '(none)'
       raise LaunchDenied(f'unknown worker type {name!r}; installed types: {available}')
-    if name not in owner.launch:
-      raise LaunchDenied(f'the owner does not hold :launch.{name}')
-
-    pass_value = args.get('pass', [])
-    if not isinstance(pass_value, list) or not all(isinstance(value, str) for value in pass_value):
-      raise LaunchDenied("launch 'pass' must be a list of credential instance names")
-    pass_kinds: set[str] = set()
-    for value in pass_value:
-      try:
-        kind, instance = credentials.parse_name(value)
-      except ValueError as error:
-        raise LaunchDenied(f"launch 'pass': {error}") from error
-      if instance is None:
-        raise LaunchDenied(
-          f"launch 'pass' value {value!r} names no instance; write {kind}+<instance>, "
-          f'or {kind}+ for the empty instance'
-        )
-      if kind in pass_kinds:
-        raise LaunchDenied(
-          f"launch 'pass' names more than one instance of credential kind {kind!r}"
-        )
-      pass_kinds.add(kind)
-    passable: frozenset[str] = frozenset()
-    if isinstance(worker_type.launch_schema.get('pass'), LaunchPass):
-      raw_passable = owner.launch[name].get('pass', frozenset())
-      if not isinstance(raw_passable, frozenset):
-        raise LaunchDenied(f"the owner's {name!r} launch payload has a malformed 'pass' field")
-      passable = raw_passable
-    beyond = sorted(set(pass_value) - passable)
-    if beyond:
-      raise LaunchDenied(
-        f"cannot pass credential instance(s) beyond the owner's :launch.{name}.pass rights: "
-        + ', '.join(beyond)
-      )
-
-    timeout_value = args.get('timeout', worker_type.default_timeout)
-    if timeout_value is not None and (
-      not isinstance(timeout_value, (int, float))
-      or isinstance(timeout_value, bool)
-      or not math.isfinite(timeout_value)
-      or timeout_value <= 0
-    ):
-      raise LaunchDenied("launch 'timeout' must be a positive number of seconds")
-    timeout = None if timeout_value is None else float(timeout_value)
-
     share_value = args.get('share', [])
     if not isinstance(share_value, list) or not all(is_ref(value) for value in share_value):
       raise LaunchDenied("launch 'share' must be a list of artifact refs")
@@ -259,21 +218,118 @@ class LaunchControl:
           f'a manual launch cannot name {", ".join(sorted(refused))}; drop the field(s)'
         )
 
-    owned_args = {key: value for key, value in args.items() if key not in _COMMON_FIELDS}
+    if owner.mission_record is None:
+      raise LaunchDenied('starter check: requesting mission has no authority record')
+    try:
+      requested, content = authority_request(
+        type(worker_type),
+        {key: value for key, value in args.items() if key != 'type'},
+        self.reading,
+        owner.mission_record.authority,
+      )
+      if manual_value:
+        record = self.reading.rules.prepare(requested, owner.mission_record.authority, self.reading)
+        values = requested.values
+      else:
+
+        def depth(descriptor: Descriptor) -> None:
+          if owner.depth + 1 > self.reading.summon_depth:
+            raise ValueError(f'chain exceeds {self.reading.summon_depth}')
+
+        record = self.reading.rules.start(
+          requested, owner.mission_record.authority, self.reading, (Admission('depth cap', depth),)
+        )
+        values = record.descriptor.values
+    except ValueError as error:
+      raise LaunchDenied(str(error)) from error
+    timeout_value = values.get('timeout', 'none')
+    passes = (
+      tuple(
+        credentials.storage_name(key.removeprefix('cred.'), cast(str, value))
+        + ('+' if value == '' else '')
+        for key, value in values.items()
+        if key.startswith('cred.')
+      )
+      if name != 'bro'
+      else ()
+    )
     return (
       LaunchRequest(
         id=message.request_id,
         type=name,
-        args=owned_args,
+        args=dict(content),
         owner=owner,
-        requested_talk=cast(Talk, frozenset(talk_value)),
-        timeout=timeout,
-        passes=tuple(pass_value),
+        requested_talk=cast(Talk, values.get('talk', frozenset())),
+        timeout=None if timeout_value == 'none' else cast(int, timeout_value),
+        passes=passes,
         share=tuple(share_value),
         manual=manual_value,
+        record=record,
       ),
       worker_type,
     )
+
+  def authority(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    try:
+      owner = self._peers.resolve(context, peer)
+      if message.args or owner.mission_record is None:
+        raise ValueError('authority check: mission record required without arguments')
+      context.reply(peer, {'outcome': 'ok', 'value': mission_view(owner.mission_record)})
+    except (ValueError, UnattributablePeer) as error:
+      context.reply(peer, {'outcome': 'denied', 'error': str(error)})
+
+  def commit(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    from ride.authority_launch import credentials_for
+    from ride.authority_scope import checked_recipe
+
+    try:
+      if set(message.args) != {'token', 'fields'}:
+        raise ValueError('commit check: token and fields required')
+      token = message.args['token']
+      facts = self._peers.for_mission(token)
+      prepared = facts.record
+      if not isinstance(prepared, Prepared):
+        raise ValueError('commit check: token has no prepared request')
+      journal_record = context.journal.records[token]
+      if journal_record.state != 'accepted':
+        raise ValueError('commit check: token is not pending')
+      starter = self._peers.for_mission(journal_record.parent).record
+      if not isinstance(starter, Mission):
+        raise ValueError('commit check: starter record missing')
+      fields = message.args['fields']
+      mapped, _ = authority_request(
+        type(self._types[prepared.request.type]),
+        fields,
+        self.reading,
+        self.reading.operator(),
+        forward=False,
+      )
+      if mapped.gift.permissions() or mapped.cap.permissions():
+        raise ValueError('commit check: authority entries belong to the prepared request')
+
+      def depth(descriptor: Descriptor) -> None:
+        if len(context.journal.ancestry(token)) > self.reading.summon_depth:
+          raise ValueError(f'chain exceeds {self.reading.summon_depth}')
+
+      mission = self.reading.rules.commit(
+        prepared,
+        mapped.values,
+        starter.authority,
+        self.reading.operator(),
+        (Admission('depth cap', depth),),
+      )
+      scoped = credentials_for(mission)
+      value = {
+        **mission_view(mission),
+        'request': dump_request(mission.request, mission.descriptor),
+        'required': sorted(scoped.required),
+        'optional': sorted(scoped.optional),
+        'resolved_llm': checked_recipe(mission.request, mission.descriptor, self.reading).dump(),
+      }
+      facts.record = mission
+      context.reply(peer, {'outcome': 'ok', 'value': value})
+    except (ValueError, KeyError, UnattributablePeer, credentials.SecretNotFound) as error:
+      context.reply(peer, {'outcome': 'denied', 'error': str(error)})
 
   def _ready(self, request: LaunchRequest, run: Expect, talk: Talk, provisioned: Any) -> None:
     pending_launch.write(
@@ -314,6 +370,9 @@ class LaunchControl:
       facts = None
     if facts is not None:
       entry['published_ports'] = [list(pair) for pair in facts.published_ports]
+      if isinstance(facts.record, Mission):
+        entry.update(mission_view(facts.record))
+        entry['request'] = dump_request(facts.record.request, facts.record.descriptor)
     fields = self._audit_fields.get(event.mission)
     if fields:
       entry['extension'] = fields

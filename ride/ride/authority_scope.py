@@ -271,6 +271,7 @@ def existence(
   *,
   explicit: frozenset[str] = frozenset(),
   into_exists: bool = True,
+  check_presence: bool = True,
 ) -> CredentialManifest:
   values = descriptor.values
   target, harness = cast(str, values['target']), cast(str, values['harness'])
@@ -310,9 +311,11 @@ def existence(
   optional.difference_update(required)
   if required - held:
     raise ValueError(f'required kinds are not held: {sorted(required - held)}')
-  if required - present:
+  if check_presence and required - present:
     raise ValueError(f'required credential instances are missing: {sorted(required - present)}')
-  return CredentialManifest(frozenset(required), frozenset(optional & present & held))
+  return CredentialManifest(
+    frozenset(required), frozenset(optional & held & (present if check_presence else held))
+  )
 
 
 def option_values(fields: Mapping[str, object], source: object):
@@ -322,9 +325,7 @@ def option_values(fields: Mapping[str, object], source: object):
   reading = _reading(source)
   options = set(reading.installation.declarations['bro'].options)
   content_names = {'prompt', 'into', 'share', 'step_id', 'index'}
-  unknown = (
-    fields.keys() - options - content_names - {'llm', 'pass', 'party', 'isolation', 'manual'}
-  )
+  unknown = fields.keys() - options - content_names - {'llm', 'pass', 'manual'}
   if unknown:
     raise ValueError(f'unknown bro fields: {sorted(unknown)}')
   values = {name: cast(Value, value) for name, value in fields.items() if name in options}
@@ -349,20 +350,8 @@ def option_values(fields: Mapping[str, object], source: object):
     }
     if refused:
       raise ValueError(f'joint prepare cannot set launch-owned fields: {sorted(refused)}')
-  party = fields.get('party')
-  isolation = fields.get('isolation')
-  if party is not None and party not in ('start', 'join'):
-    raise ValueError('party must be start or join')
-  if isolation is not None and isolation not in ('boxed', 'unboxed'):
-    raise ValueError('isolation must be boxed or unboxed')
-  if 'placement' in fields and ('party' in fields or 'isolation' in fields):
-    raise ValueError('placement cannot be combined with party or isolation')
-  if party == 'join':
-    if manual or 'into' in fields or 'isolation' in fields:
-      raise ValueError('join refuses manual, into, and isolation')
-    values['placement'] = 'join'
-  elif isolation is not None:
-    values['placement'] = cast(str, isolation)
+  if fields.get('placement') == 'join' and (manual or 'into' in fields):
+    raise ValueError('validity check: bro.placement=join refuses manual and into')
   if 'timeout' in fields and fields['timeout'] is None:
     values['timeout'] = 'none'
   for name in ('talk', 'add', 'drop'):

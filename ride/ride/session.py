@@ -8,10 +8,17 @@ import tempfile
 from collections.abc import Collection, Generator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
+from bro.authority.authority import Authority, Cap
+from bro.authority.records import (
+  dump_authority,
+  dump_request,
+  load_authority,
+  load_request,
+)
+from bro.authority.rules import Mission
 from bro.base import configs, credentials, log
-from bro.base.scope import scope_override_key, scope_revoke_key
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM
 from bro.harness import harness_name
 from bro.llm.llm import LLMSpec
@@ -36,6 +43,9 @@ from bro.workspace.paths import (
   workspace_dir,
 )
 from ride import pending_launch
+from ride.authority_launch import credentials_for, hydrate, request as authority_request
+from ride.authority_reading import Reading
+from ride.authority_scope import checked_recipe
 from ride.bro_worker import PendingBro
 from ride.do_ride import (
   CONTAINER_INSTALL_DIRECTORY,
@@ -64,8 +74,6 @@ from ride.runtime_bundle import (
 from ride.scope import (
   LaunchScopeError,
   launch_scope_errors,
-  preflight_scoped_launch,
-  scoped_secrets,
 )
 from ride.session_env import env_additions
 from ride.trails import local_trails_mounts
@@ -115,6 +123,11 @@ class SessionSpec:
   tree: Optional[str] = None
   runtime_bundle: Optional[str] = None
   env: dict[str, str] = field(default_factory=dict)
+  limit: list[str] = field(default_factory=list)
+  authority_request: dict = field(default_factory=dict)
+  operator_gift: dict = field(default_factory=dict)
+  operator_cap: dict = field(default_factory=dict)
+  mission: Mission | None = field(default=None, repr=False, compare=False)
 
   def __post_init__(self) -> None:
     if not isinstance(self.isolation, Isolation):
@@ -199,94 +212,59 @@ class SessionSpec:
   def with_scope_overrides(
     self, *, cred: list[str], grant: list[str], revoke: list[str]
   ) -> 'SessionSpec':
-    def credential_values(values: list[str]) -> list[str]:
-      return [value for value in values if not value.startswith(('@', ':'))]
-
-    def authority_values(values: list[str]) -> list[str]:
-      return [value for value in values if value.startswith(('@', ':'))]
-
-    new_grant_credentials = credential_values(grant)
-    new_revoke_credentials = credential_values(revoke)
-    changed_credential_kinds = {
-      *(credentials.parse_name(value)[0] for value in new_grant_credentials),
-      *(credentials.parse_name(value)[0] for value in new_revoke_credentials),
-    }
-    kept_grant_credentials = [
-      value
-      for value in credential_values(self.grant)
-      if credentials.parse_name(value)[0] not in changed_credential_kinds
-    ]
-    kept_revoke_credentials = [
-      value
-      for value in credential_values(self.revoke)
-      if credentials.parse_name(value)[0] not in changed_credential_kinds
-    ]
-
-    new_grant_authority = authority_values(grant)
-    new_revoke_authority = authority_values(revoke)
-    recorded_grant_authority = authority_values(self.grant)
-    recorded_revoke_authority = authority_values(self.revoke)
-    grant_keys = {scope_override_key(value) for value in new_grant_authority}
-    revoke_keys = {scope_revoke_key(value) for value in new_revoke_authority}
-    kept_grant_authority = [
-      value
-      for value in recorded_grant_authority
-      if scope_override_key(value) not in grant_keys | revoke_keys
-    ]
-    kept_revoke_authority = [
-      value
-      for value in recorded_revoke_authority
-      if scope_revoke_key(value) not in grant_keys | revoke_keys
-    ]
-
-    new_pick_kinds = {credentials.parse_name(value)[0] for value in cred}
-    revoked_kinds = {credentials.parse_name(value)[0] for value in new_revoke_credentials}
-    kept_cred = [
-      value
-      for value in self.cred
-      if credentials.parse_name(value)[0] not in new_pick_kinds | revoked_kinds
-    ]
-    return replace(
-      self,
-      cred=[*kept_cred, *cred],
-      grant=[
-        *kept_grant_credentials,
-        *new_grant_credentials,
-        *kept_grant_authority,
-        *new_grant_authority,
-      ],
-      revoke=[
-        *kept_revoke_credentials,
-        *new_revoke_credentials,
-        *kept_revoke_authority,
-        *new_revoke_authority,
-      ],
-    )
+    return replace(self, cred=cred, grant=grant, revoke=revoke)
 
   def dump(self) -> dict:
-    return dataclasses.asdict(self)
+    removed = {
+      'cred',
+      'grant',
+      'revoke',
+      'limit',
+      'llm',
+      'resolved_llm',
+      'summon_depth',
+      'summon_harness',
+      'mission',
+    }
+    return {
+      item.name: getattr(self, item.name)
+      for item in dataclasses.fields(self)
+      if item.name not in removed
+    }
 
   @classmethod
   def load(cls, data: dict) -> 'SessionSpec':
-    # an older ride's record carries `arguments`, always empty in the resume
-    # variant a record holds
-    if 'arguments' in data:
-      if data['arguments'] != []:
-        raise ValueError(f'a session takes no harness arguments: {data["arguments"]!r}')
-      data = {name: value for name, value in data.items() if name != 'arguments'}
-    fields = {field.name for field in dataclasses.fields(cls)}
-    if data.keys() != fields:
-      raise ValueError(f'unexpected fields: {sorted(data.keys() ^ fields)}')
-    values = {**data, 'isolation': Isolation(data['isolation'])}
-    return cls(**values)
+    fields = {item.name for item in dataclasses.fields(cls)} - {
+      'cred',
+      'grant',
+      'revoke',
+      'limit',
+      'llm',
+      'resolved_llm',
+      'summon_depth',
+      'summon_harness',
+      'mission',
+    }
+    if data.keys() != fields or not data.get('authority_request'):
+      raise ValueError(
+        f'unreadable session record: unexpected fields {sorted(data.keys() ^ fields)}'
+      )
+    return cls(
+      **{**data, 'isolation': Isolation(data['isolation'])},
+      cred=[],
+      grant=[],
+      revoke=[],
+      llm=None,
+      resolved_llm={},
+    )
 
 
 @dataclass(frozen=True)
 class ScopedLaunch:
   scoped: ScopedSecrets
-  launch: dict[str, dict[str, frozenset[str] | bool]]
   store: dict[str, bytes]
   hydrated_kinds: frozenset[str] = frozenset()
+  mission: Mission | None = None
 
 
 def record_resume_spec(workspace: Workspace, spec: SessionSpec) -> None:
@@ -345,7 +323,7 @@ def _summoned_env(summoned: PendingBro, spec: SessionSpec, address: str) -> dict
     BROKER_MISSION: summoned.token,
     BROKER_TALK: encode_talk(summoned.talk),
     'RIDE_WORKSPACE': spec.name,
-    **summoned_child_env(summoned.launch_scope, summoned.summoner),
+    **summoned_child_env(summoned.summoner),
   }
 
 
@@ -699,9 +677,7 @@ def _launch_session(
     return run_started_party(
       launch,
       workspace,
-      launch_scope=launch_scope.launch,
-      summon_depth=spec.summon_depth,
-      summon_harness=spec.summon_harness,
+      mission=cast(Mission, launch_scope.mission),
       session_env=spec.env,
       credential_scope=launch_scope.scoped,
       container_runtime=container_runtime,
@@ -781,35 +757,90 @@ def _start_session(
     log.error("a manual summon child needs the summoner's broker channel")
     return 1
 
-  recipe = harness.scope_recipe()
   try:
-    scoped = scoped_secrets(
-      spec.bro,
-      recipe,
-      attachment=spec.repo,
-      attachment_repository=repository,
-      llm_spec=spec.llm_spec,
-      cred=spec.cred,
-      grant=spec.grant,
-      revoke=spec.revoke,
-      recording=not spec.no_trails,
-    )
+    if summoned is None:
+      reading = Reading.take(repository)
+      if spec.authority_request:
+        requested = load_request(spec.authority_request, reading.syntax)
+        if spec.cred or spec.grant or spec.revoke or spec.limit:
+          from ride.authority_launch import resume_request
+
+          requested, operator_gift, operator_cap = resume_request(requested, spec, reading)
+        else:
+          operator_gift = (
+            load_authority(spec.operator_gift, reading.syntax)
+            if spec.operator_gift
+            else Authority()
+          )
+          operator_cap = (
+            load_authority(spec.operator_cap, reading.syntax) if spec.operator_cap else Cap()
+          )
+      else:
+        from ride.bro_worker import BroType
+
+        fields = {
+          'target': spec.bro,
+          'harness': spec.harness,
+          'hold': spec.hold,
+          'placement': spec.isolation.value,
+          'timeout': None,
+          'pass': spec.cred,
+          'grant': spec.grant,
+          'revoke': spec.revoke,
+          'limit': spec.limit,
+        }
+        if spec.llm is not None:
+          fields['llm'] = spec.llm
+        requested, _ = authority_request(
+          BroType, fields, reading, reading.operator(), forward=False
+        )
+        operator_gift, operator_cap = Authority(), Cap()
+      mission = reading.rules.start(requested, reading.operator(), reading)
+      reading.rules.gift(reading.operator(), operator_gift, mission.descriptor)
+      mission = replace(
+        mission,
+        authority=mission.authority.join(operator_gift).meet(operator_cap),
+        operator_values=frozenset(requested.values),
+        operator_gift=operator_gift,
+        operator_cap=operator_cap,
+      )
+      scoped = credentials_for(mission)
+      files, kinds = hydrate(scoped)
+      spec = replace(
+        spec,
+        mission=mission,
+        authority_request=dump_request(requested, mission.descriptor),
+        operator_gift=dump_authority(operator_gift, mission.descriptor),
+        operator_cap=dump_authority(operator_cap, mission.descriptor),
+        resolved_llm=checked_recipe(requested, mission.descriptor, reading).dump(),
+        summon_depth=reading.summon_depth,
+        summon_harness=reading.summon_harness,
+      )
+    else:
+      from bro.authority.records import load_values
+      from ride.operator import commit_launch
+
+      committed = commit_launch(summoned.root, summoned.token, spec)
+      values = load_values(committed['descriptor']['values'])
+      selection = {
+        name.removeprefix('cred.'): cast(str, value)
+        for name, value in values.items()
+        if name.startswith('cred.')
+      }
+      scoped = ScopedSecrets(set(committed['required']), set(committed['optional']), selection)
+      files, kinds = hydrate(scoped)
+      mission = None
+      spec = replace(
+        spec,
+        resolved_llm=committed['resolved_llm'],
+        authority_request=committed['request'],
+        runtime_bundle=None,
+      )
     with launch_scope_errors():
       auth_error = harness.preflight_auth(spec, scoped)
     if auth_error is not None:
-      log.error('%s', auth_error)
-      return 1
-    computed_launch, store = preflight_scoped_launch(
-      scoped,
-      spec.bro,
-      attachment=spec.repo,
-      attachment_repository=repository,
-      grant=spec.grant,
-      revoke=spec.revoke,
-      fixed_launch=None if summoned is None else summoned.launch_scope,
-    )
-    launch_scope = computed_launch
-  except LaunchScopeError as error:
+      raise ValueError(auth_error)
+  except (LaunchScopeError, ValueError, credentials.SecretNotFound, RuntimeError) as error:
     log.error('%s', error)
     return 1
 
@@ -866,9 +897,9 @@ def _start_session(
     return 1
   launch = ScopedLaunch(
     scoped=scoped,
-    launch=launch_scope,
-    store=store,
-    hydrated_kinds=store.kinds,
+    store=files,
+    hydrated_kinds=kinds,
+    mission=mission,
   )
   try:
     with workspace.hold_session_lock():
@@ -889,17 +920,27 @@ def _start_session(
     return 1
 
 
-def _resume_argv(name: str, *, cred: list[str], grant: list[str], revoke: list[str]) -> list[str]:
+def _resume_argv(
+  name: str, *, cred: list[str], grant: list[str], revoke: list[str], limit: list[str]
+) -> list[str]:
   parts = ['ride', 'resume']
-  for flag, values in (('--cred', cred), ('--grant', grant), ('--revoke', revoke)):
+  for flag, values in (
+    ('--cred', cred),
+    ('--grant', grant),
+    ('--revoke', revoke),
+    ('--limit', limit),
+  ):
     for value in values:
       parts.extend([flag, value])
   parts.append(name)
   return parts
 
 
-def resume_session(name: str, *, cred: list[str], grant: list[str], revoke: list[str]) -> int:
-  reexec_argv = _resume_argv(name, cred=cred, grant=grant, revoke=revoke)
+def resume_session(
+  name: str, *, cred: list[str], grant: list[str], revoke: list[str], limit: list[str] | None = None
+) -> int:
+  limit = [] if limit is None else limit
+  reexec_argv = _resume_argv(name, cred=cred, grant=grant, revoke=revoke, limit=limit)
   try:
     workspace = Workspace.open(name)
   except ValueError as error:
@@ -910,7 +951,7 @@ def resume_session(name: str, *, cred: list[str], grant: list[str], revoke: list
     log.error('no session recorded for %s; start a new one instead', name)
     return 1
   try:
-    spec = spec.with_scope_overrides(cred=cred, grant=grant, revoke=revoke)
+    spec = replace(spec.with_scope_overrides(cred=cred, grant=grant, revoke=revoke), limit=limit)
   except ValueError as error:
     log.error('%s', error)
     return 1

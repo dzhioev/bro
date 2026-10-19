@@ -65,7 +65,7 @@ def _launch_args(
   if vnc_port is not None:
     args['vnc_port'] = vnc_port
   if cookies is not None:
-    args['pass'] = [f'cookies+{cookies}']
+    args['cred.cookies'] = cookies
   if len(share) > 0:
     args['share'] = share
   if timeout is not None:

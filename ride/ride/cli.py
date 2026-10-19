@@ -8,7 +8,6 @@ from bro.base import configs, host_config, log
 from bro.base.args import REMAINDER, Parser
 from bro.launch.llm_flags import canonicalize, drop_piece_flags, selection_from_args
 from bro.llm.providers import LLMSelectionError
-from bro.registry import get_class
 from bro.workspace.banner import banner
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
@@ -27,7 +26,6 @@ from ride.harness import get_harness
 from ride.listing import list_workspaces
 from ride.repository import Repository, is_git_url, resolve_repository
 from ride.runtime_bundle import reexec_from_runtime
-from ride.scope import bind_launch_llm
 from ride.session import SessionSpec, recorded_runtime_reference, resume_session, start_session
 from ride.session_env import env_assignments
 from ride.workspace.containers import exec_in_workspace
@@ -252,7 +250,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
     config.harness if config is not None else configs.DEFAULT_HARNESS
   )
   try:
-    harness = get_harness(harness_name)
+    get_harness(harness_name)
     canonicalize(args, selection_from_args(args, project=config))
     summon_depth = host_config.summon_depth(None if config is None else config.summon_depth)
     summon_harness = config.summon_harness if config is not None else configs.DEFAULT_SUMMON_HARNESS
@@ -263,6 +261,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   args['cred'] = args['cred'] or []
   args['grant'] = args['grant'] or []
   args['revoke'] = args['revoke'] or []
+  args['limit'] = args['limit'] or []
   bro = args.pop('bro')
   prompt = args.pop('prompt')
   session_log = args.pop('session_log')
@@ -272,25 +271,13 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if summoned is not None:
     _validate_summoned(parser, summoned, bro=bro, prompt=prompt, args=args)
     prompt = summoned.prompt
-    user_scope_overrides = (args['cred'], args['grant'], args['revoke'])
-    pass_picks, pass_grants = summoned.credential_scope_overrides()
-    args['cred'] = pass_picks
-    args['grant'] = [*pass_grants, *summoned.grant]
-    args['revoke'] = list(summoned.revoke)
     args['env'] = dict(summoned.env)
   elif solo and prompt is None:
     parser.error('ride solo requires a prompt unless --summoned supplies it')
   if session_log is not None:
     # after the party's additions: a manual child's own launch owns its level
     args['env'][log.LEVEL_ENV] = session_log.upper()
-  try:
-    # not every harness's llm resolution consults the registry, so the launch
-    # checks the name itself
-    get_class(bro)
-    args['llm'] = bind_launch_llm(harness, repo, bro, args['llm'])
-    resolved_llm = harness.resolve_llm(args['llm'], bro)
-  except (KeyError, LLMSelectionError, ValueError) as error:
-    parser.error(str(error))
+  resolved_llm = {}
   name = workspace if workspace is not None else fresh_workspace_name(f'ride-{bro}')
   spec = SessionSpec(
     name=name,
@@ -302,7 +289,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
     bro=bro,
     prompt=prompt,
     subject=prompt,
-    resolved_llm=resolved_llm.dump(),
+    resolved_llm=resolved_llm,
     solo=solo,
     resume=False,
     summon_depth=summon_depth,
@@ -333,23 +320,25 @@ def _validate_summoned(
   args: dict,
 ) -> None:
   """validate a manual child launch against the request's fixed shape."""
-  from ride.scope import split_scope_overrides
-
   if prompt is not None:
     parser.error('--summoned takes its initial prompt from the summon request; drop the prompt')
   if args['into'] is not None:
     parser.error('--summoned takes its base from the summon request; drop --into')
-  if len(args['env']) > 0:
+  if args['env']:
     parser.error("a manual child's environment additions are the party's; drop --env")
+  from bro.authority.syntax import parse_layer
+  from bro.base.credentials import default_registry
+
   try:
-    _, launch_overrides = split_scope_overrides([*args['grant'], *args['revoke']])
+    layer = parse_layer(grant=args['grant'], revoke=args['revoke'], limit=args['limit'])
+    kinds = default_registry()
+    entries = (*layer.grant, *layer.revoke, *layer.limit)
+    if any(
+      entry.permission.option is not None or entry.permission.type not in kinds for entry in entries
+    ):
+      parser.error('commit check: authority entries belong to the prepared request')
   except ValueError as error:
     parser.error(str(error))
-  if launch_overrides:
-    parser.error(
-      "a manual child's launch section was fixed by the summon request; drop the "
-      f'@bro/:launch override(s): {", ".join(sorted(launch_overrides))}'
-    )
   if bro != pending.target:
     parser.error(f'the summon token names bro {pending.target!r}, not {bro!r}')
 
@@ -403,6 +392,7 @@ def main(argv: list[str]) -> Optional[int]:
       cred=args['cred'] or [],
       grant=args['grant'] or [],
       revoke=args['revoke'] or [],
+      limit=args['limit'] or [],
     )
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
