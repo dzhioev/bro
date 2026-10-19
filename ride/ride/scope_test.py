@@ -1,906 +1,256 @@
 import json
-import subprocess
-from typing import Any, ClassVar
+from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import pytest
 
-import ride.scope
-from bro.base import credentials
+from bro.authority.authority import Atom
+from bro.authority.patterns import Descriptor
+from bro.authority.syntax import parse_layer
+from bro.base import credentials, host_config
 from bro.base.condition import when
-from bro.bro import feature
-from bro.datasources.web_search import WebSearch
+from bro.bro import BaseBro, feature
 from bro.harness import Harness
-from bro.llm.mcp import InProcessMCPServer
-from bro.llm.providers import LLMSelectionError
-from bro.mcp import MCPServerSpec, ToolLayer, creds, source
-from bros.bro import Bro
-from ride.harness import get_harness
-from ride.scope import ScopeRecipe
-
-BRO_RUN_RECIPE = ScopeRecipe(
-  name='test-bro-run',
-  harness=Harness('bro'),
-  auth_secret=None,
-  llm_key=True,
-)
-CLAUDE_RECIPE = ScopeRecipe(
-  name='test-claude',
-  harness=Harness('claude'),
-  auth_secret='claude_code',
-  llm_key=False,
-)
+from bro.llm.llms.echo import LLMSpec
+from bro.mcp import MCPServerSpec, ToolLayer, creds
+from bro.worker_types import installed_types
+from ride import scope
+from ride.authority_reading import Configuration, HarnessReading, Installation, Policy, Reading
+from ride.workspace.store import ScopedSecrets
 
 
-class SearchBro(Bro):
-  name = 'scope-search'
-  description = 'searchable bro for launch scope tests'
-  tools: ClassVar = [source(WebSearch())]
-  extra_secrets = ('catalog',)
+class ScopedBro(BaseBro):
+  name = 'scoped'
+  extra_secrets = ('github',)
+  may_summon = ('reviewer',)
+  may_launch = ('webview',)
 
 
-class _PayloadServer(InProcessMCPServer):
-  needed_secrets = ('payload',)
-
-  def __init__(self):
-    super().__init__('payload-srv', [])
-
-
-class GatedBro(Bro):
-  name = 'scope-gated'
-  description = 'feature-gated bro for launch scope tests'
-  features: ClassVar = {'x': creds.contains('gate')}
+class GatedBro(BaseBro):
+  name = 'gated'
+  features: ClassVar = {'payload': creds.contains('gate')}
   tools: ClassVar = [
-    when(feature('x'), ToolLayer(server_specs=(MCPServerSpec.of('payload-srv', _PayloadServer),)))
+    when(
+      feature('payload'),
+      ToolLayer(
+        server_specs=(
+          MCPServerSpec(
+            'payload',
+            build=lambda: pytest.fail('manifest built a server'),
+            needed_secrets=('payload',),
+          ),
+        )
+      ),
+    )
   ]
 
 
-@pytest.fixture(autouse=True)
-def registered_scope_bros(register_test_bros):
-  register_test_bros(SearchBro, GatedBro)
-
-
-def _credential_store(tmp_path, *names: str) -> credentials.Store:
-  material = tmp_path / credentials.MATERIAL_DIR
+@pytest.fixture
+def scoped_installation(monkeypatch, tmp_path):
+  kinds = frozenset({'github', 'cookies', 'auth', 'trails', 'provider_key', 'gate', 'payload'})
+  registry = {kind: credentials.CredentialKind(kind, kind) for kind in kinds}
+  monkeypatch.setattr(credentials, 'default_registry', lambda: registry)
+  store = tmp_path / 'store'
+  material = store / credentials.MATERIAL_DIR
   material.mkdir(parents=True)
-  for name in names:
-    (material / f'{name}{credentials.MATERIAL_SUFFIX}').write_text(name)
-  return credentials.Store(credentials.default_registry(), tmp_path, {})
+  for name in ('github', 'github+reviewer', 'auth', 'provider_key'):
+    (material / f'{name}.cred').write_text(name)
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'host.json'))
+  harness = Harness('test')
+  harness.llm_providers = ('echo',)
+  installation = Installation(
+    {
+      bro.name: bro(credential_presence=kinds, credential_kinds=kinds)
+      for bro in (ScopedBro, GatedBro)
+    },
+    {
+      'test': HarnessReading(
+        harness, {'scoped': LLMSpec(), 'gated': LLMSpec()}, auth_kind='auth', llm_key=True
+      )
+    },
+    kinds,
+    {'echo': frozenset({'provider_key'})},
+    {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
+  )
+  monkeypatch.setattr(Installation, 'take', lambda: installation)
+  return installation
+
+
+def _recipe(installation):
+  return scope.ScopeRecipe('test', installation.harnesses['test'].harness, 'auth', True)
+
+
+def _reading(installation, configuration=None, project=None):
+  return Reading(
+    Configuration.parse(configuration or {}),
+    {},
+    installation,
+    project={'summon-harness': 'test'},
+    project_policy=project or Policy(),
+  )
+
+
+def _pair(reading, atom):
+  descriptor = Descriptor('bro', {'target': 'scoped'})
+  authority = reading.installation.declarations['bro'].base(descriptor, reading)
+  return authority.evaluate(atom, descriptor, reading.installation.declarations)
 
 
 class TestScopedSecrets:
-  def test_ride_session_set(self):
-    # ride-session themed as bro-dev: the claude-harness manifest — extra_secrets
-    # (github) and the session-local brog server's self-contained backend config
-    # — + the claude_code OAuth token (the session's only auth).
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
-    assert {'github', 'brog', 'claude_code'} <= scoped.required
-    # required (strict), not optional: no .credentials.json fallback in the
-    # container, so a missing token must fail loudly on the host
-    assert 'claude_code' not in scoped.optional
-    # spell casting advertises openai best-effort, and the session-wide baseline
-    # adds the recording credential in the same tier
-    assert scoped.optional == {'openai', 'trails'}
+  def test_manifest_includes_harness_auth_and_provider_needs(self, scoped_installation):
+    result = scope.scoped_secrets('scoped', _recipe(scoped_installation))
+    assert result.required == {'github', 'auth', 'provider_key'}
+    assert 'trails' not in result.optional
 
-  def test_ride_session_set_covers_the_bros_manifest(self):
-    scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE)
-    assert {'catalog', 'brave'} <= scoped.required
+  def test_pick_holds_a_kind_and_selects_its_instance(self, scoped_installation):
+    result = scope.scoped_secrets('scoped', _recipe(scoped_installation), cred=['github+reviewer'])
+    assert result.selection['github'] == 'reviewer'
+    assert 'github' in result.required
 
-  def test_bro_run_manifest_plus_llm_key(self):
-    # dev runs as an LLM process: its manifest plus its LLM key (openai →
-    # openai, which needed_secrets() omits)
-    scoped = ride.scope.scoped_secrets('dev', BRO_RUN_RECIPE)
-    assert 'openai' in scoped.required
-
-  def test_a_required_llm_need_outranks_the_bros_optional_need(self):
-    scoped = ride.scope.scoped_secrets('scope-search', BRO_RUN_RECIPE)
-    assert 'openai' in scoped.required
-
-  def test_project_scope_layer_changes_the_required_credential_tier(self, tmp_path):
-    (tmp_path / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "scope-search"\ngrant = ["github"]\nrevoke = ["brave"]\n'
+  def test_store_defaults_are_read_under_the_selected_instance(self, scoped_installation):
+    (Path(credentials.STORE_DIR) / credentials.STORE_FILE).write_text(
+      json.dumps({'defaults': ['github+reviewer']})
     )
+    result = scope.scoped_secrets('scoped', _recipe(scoped_installation))
+    assert scope.credential_store(result).get('github') == 'github+reviewer'
 
-    scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE, attachment=str(tmp_path))
+  def test_missing_required_instance_is_a_scope_error(self, scoped_installation):
+    with pytest.raises(scope.LaunchScopeError, match='required credential instances.*github'):
+      scope.scoped_secrets('scoped', _recipe(scoped_installation), cred=['github+absent'])
 
-    assert 'github' in scoped.required
-    assert 'brave' not in scoped.required | scoped.optional
-
-  def test_computing_a_scope_binds_the_project_and_bro_instances(self, tmp_path, monkeypatch):
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'projects': {
-            str(tmp_path): {
-              'creds': ['brog+github'],
-              'bros': {'bro-dev': {'creds': ['github+reviewer']}},
-            }
-          }
-        }
+  def test_explicit_pick_conflicting_with_drop_is_refused(self, scoped_installation):
+    with pytest.raises(scope.LaunchScopeError, match='both set and dropped'):
+      scope.scoped_secrets(
+        'scoped', _recipe(scoped_installation), cred=['github+reviewer'], revoke=['github']
       )
-    )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path))
-    assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
-    assert 'brog' in scoped.required
-    assert 'brog+github' not in scoped.required
 
-  def test_a_url_attachment_binds_its_own_entry(self, tmp_path, monkeypatch):
-    url = 'https://github.com/foo/api.git'
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {url: {'creds': ['brog+github']}}}))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    with patch('ride.scope.open_repository') as opened:
-      opened.return_value.read_file.return_value = None
-      scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=url)
-    assert scoped.selection == {'brog': 'github'}
+  def test_operator_caps_apply_to_the_root_request(self, scoped_installation):
+    Path(host_config.HOST_CONFIG_FILE).write_text(json.dumps({'operator': {'revoke': ['@scoped']}}))
+    with pytest.raises(scope.LaunchScopeError, match='use rule.*scoped'):
+      scope.scoped_secrets('scoped', _recipe(scoped_installation))
 
-  def test_a_checkout_binds_the_entry_keyed_by_its_origin_url(self, tmp_path, monkeypatch):
-    url = 'https://github.com/foo/api.git'
-    checkout = tmp_path / 'api'
-    subprocess.run(['git', 'init', '-q', checkout], check=True)
-    subprocess.run(['git', '-C', checkout, 'remote', 'add', 'origin', url], check=True)
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'projects': {
-            url: {'creds': ['brog+github'], 'bros': {'bro-dev': {'creds': ['github+reviewer']}}},
-            str(checkout): {'creds': ['aws+laptop']},
-          }
-        }
-      )
-    )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+  def test_malformed_permission_is_a_scope_error(self, scoped_installation):
+    with pytest.raises(scope.LaunchScopeError, match='invalid name'):
+      scope.scoped_secrets('scoped', _recipe(scoped_installation), grant=[':launch.bro'])
 
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(checkout))
+  def test_a_revoked_optional_kind_is_not_promoted_to_required(self, scoped_installation):
+    result = scope.scoped_secrets('scoped', _recipe(scoped_installation), revoke=['trails'])
+    assert 'trails' not in result.selection
+    assert 'trails' not in result.required | result.optional
 
-    assert scoped.selection == {'brog': 'github', 'github': 'reviewer', 'aws': 'laptop'}
+  def test_disabled_recording_does_not_hydrate_the_recorder_kind(self, scoped_installation):
+    (Path(credentials.STORE_DIR) / credentials.MATERIAL_DIR / 'trails.cred').write_text('recorder')
+    enabled = scope.scoped_secrets('scoped', _recipe(scoped_installation))
+    disabled = scope.scoped_secrets('scoped', _recipe(scoped_installation), recording=False)
+    assert 'trails' in enabled.optional
+    assert 'trails' not in disabled.required | disabled.optional
 
-  def test_a_detached_scope_ignores_another_projects_selection(self, tmp_path, monkeypatch):
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+github']}}}))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
-
-    assert 'brog' in scoped.required
-    assert scoped.selection == {}
-
-  def test_store_defaults_select_for_a_detached_scope(self, tmp_path, monkeypatch):
-    store = tmp_path / 'store'
-    store.mkdir()
-    (store / credentials.STORE_FILE).write_text(json.dumps({'defaults': ['brog+default']}))
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'creds': ['brog+project']}}}))
-    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE)
-
-    assert scoped.selection == {}
-    assert ride.scope.credential_store(scoped).selection['brog'] == 'default'
-
-  @pytest.mark.parametrize('recipe', [CLAUDE_RECIPE, BRO_RUN_RECIPE])
-  def test_unknown_bro_fails_the_scope(self, recipe):
-    with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'nonexistent-bro'"):
-      ride.scope.scoped_secrets('nonexistent-bro', recipe)
-
-
-class TestBindLaunchLLM:
-  def _config(self, tmp_path, monkeypatch, bros: dict) -> None:
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'bros': bros}}}))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-  def _bind(self, harness: str, tmp_path, llm=None):
-    return ride.scope.bind_launch_llm(get_harness(harness), str(tmp_path), 'bro-dev', llm)
-
-  def test_the_launch_settles_its_flags_over_the_listed_recipe(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['openai:sol:xhigh']}})
-
-    assert self._bind('bro', tmp_path, '::low') == 'openai:sol:low'
-
-  def test_each_harness_runs_the_first_recipe_it_serves(self, tmp_path, monkeypatch):
-    recipes = ['anthropic:opus55:high+fast', 'openai:sol:xhigh', 'default']
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': recipes}})
-
-    assert self._bind('claude', tmp_path) == 'anthropic:opus55:high+fast'
-    assert self._bind('bro', tmp_path) == 'openai:sol:xhigh'
-
-  def test_a_model_named_alone_is_served_by_the_harness_carrying_it(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': [':opus55', 'default']}})
-
-    assert self._bind('claude', tmp_path) == ':opus55'
-    assert self._bind('bro', tmp_path) is None
-
-  def test_default_keeps_the_harness_own_recipe_beneath_the_flags(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['anthropic:opus55', 'default']}})
-
-    assert self._bind('bro', tmp_path) is None
-    assert self._bind('bro', tmp_path, '::low') == '::low'
-
-  def test_a_list_naming_nothing_the_harness_runs_fails_naming_it(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['anthropic:opus55:high+fast']}})
-
-    with pytest.raises(
-      LLMSelectionError,
-      match='bros.bro-dev.llm \\(project-path-bro\\) lists no recipe the bro harness can run '
-      '\\(it serves openai, echo\\); add "default" to fall back to its own',
-    ):
-      self._bind('bro', tmp_path)
-
-  def test_a_malformed_recipe_fails_past_the_one_picked(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['openai:sol', '::ludicrous']}})
-
-    with pytest.raises(
-      LLMSelectionError, match="bros.bro-dev.llm '::ludicrous' \\(project-path-bro\\)"
-    ):
-      self._bind('bro', tmp_path)
-
-  def test_nothing_listed_anywhere_is_none(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'other': {'llm': ['openai:sol:xhigh']}})
-
-    assert self._bind('bro', tmp_path) is None
-    assert ride.scope.bind_launch_llm(get_harness('bro'), None, 'bro-dev', None) is None
-
-  def test_a_detached_launch_keeps_its_own_value(self, tmp_path, monkeypatch):
-    self._config(tmp_path, monkeypatch, {'bro-dev': {'llm': ['openai:sol:xhigh']}})
-
-    assert ride.scope.bind_launch_llm(get_harness('bro'), None, 'bro-dev', '::low') == '::low'
-
-
-class TestLaunchLLMSpec:
-  def test_a_selection_only_the_settled_recipe_reads_is_read(self, tmp_path, monkeypatch):
-    from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
-    from bro.registry import get_class
-
-    BRO = get_harness('bro')
-
-    monkeypatch.setattr(get_class('bro-dev'), 'llm_spec', EchoLLMSpec())
-    # spells put the cast key in the optional tier, which would read the
-    # selection on its own
-    for base in get_class('bro-dev').__mro__:
-      if 'spells' in vars(base):
-        monkeypatch.setattr(base, 'spells', ())
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'projects': {
-            str(tmp_path): {'bros': {'bro-dev': {'creds': ['openai+work'], 'llm': ['openai:sol']}}}
-          }
-        }
-      )
-    )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    attachment = str(tmp_path)
-
-    llm_spec = ride.scope.launch_llm_spec(BRO, attachment, 'bro-dev', None)
-    scoped = ride.scope.scoped_secrets(
-      'bro-dev', BRO_RUN_RECIPE, attachment=attachment, llm_spec=llm_spec
-    )
-
-    assert 'openai' in scoped.required
-    assert scoped.selection['openai'] == 'work'
-    with pytest.raises(ride.scope.LaunchScopeError, match='move the entry from "creds" to "grant"'):
-      ride.scope.scoped_secrets('bro-dev', BRO_RUN_RECIPE, attachment=attachment)
-
-  def test_an_unknown_bro_fails_the_launch(self):
-    BRO = get_harness('bro')
-
-    with pytest.raises(ride.scope.LaunchScopeError, match="unknown bro 'no-such-bro'"):
-      ride.scope.launch_llm_spec(BRO, None, 'no-such-bro', None)
-
-
-class TestHostConfigBroLayer:
-  # scope-search (above) declares no github and reads openai best-effort
-  def _host_config(self, tmp_path, monkeypatch, entry):
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'projects': {
-            str(tmp_path): {'creds': ['github+project'], 'bros': {'scope-search': entry}}
-          }
-        }
-      )
-    )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-  def _scope(self, tmp_path, recipe=CLAUDE_RECIPE):
-    return ride.scope.scoped_secrets('scope-search', recipe, attachment=str(tmp_path))
-
-  def test_a_pick_and_grant_add_an_undeclared_kind_to_the_required_tier(
-    self, tmp_path, monkeypatch
+  def test_credential_presence_selects_components_without_loading_material(
+    self, scoped_installation, monkeypatch
   ):
-    self._host_config(
-      tmp_path,
-      monkeypatch,
-      {'creds': ['github+reviewer'], 'grant': ['github']},
+    material = Path(credentials.STORE_DIR) / credentials.MATERIAL_DIR
+    (material / 'gate+reviewer.cred').write_bytes(b'\xff')
+    (material / 'payload.cred').write_text('payload')
+    monkeypatch.setattr(credentials.LocalSource, 'fetch', lambda *_: pytest.fail('material read'))
+    result = scope.scoped_secrets('gated', _recipe(scoped_installation), cred=['gate+reviewer'])
+    assert 'payload' in result.required
+    assert result.selection['gate'] == 'reviewer'
+
+  def test_an_absent_gate_does_not_hydrate_its_component(self, scoped_installation):
+    result = scope.scoped_secrets('gated', _recipe(scoped_installation))
+    assert 'payload' in result.selection
+    assert 'payload' not in result.required | result.optional
+
+  def test_a_missing_selected_components_requirement_is_named(self, scoped_installation):
+    material = Path(credentials.STORE_DIR) / credentials.MATERIAL_DIR
+    (material / 'gate+reviewer.cred').write_text('gate')
+    with pytest.raises(scope.LaunchScopeError, match='missing:.*payload'):
+      scope.scoped_secrets('gated', _recipe(scoped_installation), cred=['gate+reviewer'])
+
+
+class TestAuthorityLayers:
+  def test_declaration_seeds_type_and_target_permissions(self, scoped_installation):
+    reading = _reading(scoped_installation)
+    assert not _pair(reading, Atom('webview')).use.is_empty
+    assert not _pair(reading, Atom('bro', 'target', 'reviewer')).use.is_empty
+
+  def test_caps_precede_grants_in_each_layer(self, scoped_installation):
+    reading = _reading(
+      scoped_installation,
+      {'defaults': {'grant': ['webview']}},
+      Policy(parse_layer(revoke=['webview'])),
     )
+    assert not _pair(reading, Atom('webview')).use.is_empty
+    reading = _reading(scoped_installation, {'defaults': {'revoke': ['webview']}})
+    assert _pair(reading, Atom('webview')).use.is_empty
 
-    scoped = self._scope(tmp_path)
-
-    assert 'github' in scoped.required
-    assert scoped.selection['github'] == 'reviewer'
-
-  def test_a_bare_grant_reads_the_projects_instance(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'grant': ['github']})
-
-    scoped = self._scope(tmp_path)
-
-    assert 'github' in scoped.required
-    assert scoped.selection['github'] == 'project'
-
-  def test_a_grant_does_not_promote_an_optional_need(self, tmp_path, monkeypatch):
-    self._host_config(
-      tmp_path,
-      monkeypatch,
-      {'creds': ['openai+work'], 'grant': ['openai']},
-    )
-
-    scoped = self._scope(tmp_path)
-
-    assert 'openai' in scoped.optional
-    assert 'openai' not in scoped.required
-    assert scoped.selection['openai'] == 'work'
-
-  def test_a_pick_selects_the_instance_of_a_declared_kind(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'creds': ['brave+shared']})
-
-    scoped = self._scope(tmp_path)
-
-    assert 'brave' in scoped.required
-    assert scoped.selection['brave'] == 'shared'
-
-  def test_a_flag_grant_of_a_granted_kind_is_harmless(self, tmp_path, monkeypatch):
-    self._host_config(
-      tmp_path,
-      monkeypatch,
-      {'creds': ['github+reviewer'], 'grant': ['github']},
-    )
-
-    scoped = ride.scope.scoped_secrets(
-      'scope-search',
-      CLAUDE_RECIPE,
-      attachment=str(tmp_path),
-      grant=['github'],
-      revoke=[],
-    )
-
-    assert 'github' in scoped.required
-    assert scoped.selection['github'] == 'reviewer'
-
-  def test_a_selection_of_an_unread_kind_fails_naming_grant(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'creds': ['github+reviewer']})
-
-    with pytest.raises(
-      ride.scope.LaunchScopeError,
-      match=r'bros\.scope-search selects github\+reviewer \(project-path-bro\).*"grant"',
-    ):
-      self._scope(tmp_path)
-
-  def test_a_selection_of_an_optional_kind_is_read(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {'creds': ['openai+work']})
-
-    scoped = self._scope(tmp_path)
-
-    assert 'openai' in scoped.optional
-    assert scoped.selection['openai'] == 'work'
-
-  def test_a_trails_selection_is_valid_even_when_this_launch_does_not_record(
-    self, tmp_path, monkeypatch
-  ):
-    self._host_config(tmp_path, monkeypatch, {'creds': ['trails+review']})
-
-    scoped = ride.scope.scoped_secrets(
-      'scope-search', CLAUDE_RECIPE, attachment=str(tmp_path), recording=False
-    )
-
-    assert 'trails' not in scoped.optional
-    assert scoped.selection['trails'] == 'review'
-
-  def test_a_bro_pick_rejected_by_the_configured_fold_fails(self, tmp_path, monkeypatch):
-    self._host_config(
-      tmp_path,
-      monkeypatch,
-      {'creds': ['trails+review'], 'revoke': ['trails']},
-    )
-
-    with pytest.raises(ride.scope.LaunchScopeError, match=r'selects trails\+review.*"grant"'):
-      ride.scope.scoped_secrets(
-        'scope-search', CLAUDE_RECIPE, attachment=str(tmp_path), recording=False
-      )
-
-  def test_a_project_selection_of_an_unread_kind_is_carried(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {})
-
-    assert self._scope(tmp_path).selection == {'github': 'project'}
-
-  def test_a_malformed_host_config_fails_the_scope(self, tmp_path, monkeypatch):
-    config = tmp_path / 'bro.json'
-    config.write_text('{"projects": []}')
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-    with pytest.raises(ride.scope.LaunchScopeError, match='projects must be a json object'):
-      self._scope(tmp_path)
-
-
-class TestUnifiedScopeGrammar:
-  def test_split_has_credentials_and_launch_names(self):
-    assert ride.scope.split_scope_overrides(
-      ['github+work', '@reviewer', ':launch.bro.party.unboxed']
-    ) == (['github+work'], ['@reviewer', ':launch.bro.party.unboxed'])
-
-  @pytest.mark.parametrize('value', [':launch', ':launch..party', ':Launch.bro', ':other'])
-  def test_launch_names_use_the_section_grammar(self, value):
-    with pytest.raises(ValueError):
-      ride.scope.split_scope_overrides([value])
-
-
-class TestScopeOverrides:
-  def _host_config(self, tmp_path, monkeypatch, projects):
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': projects}))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-  def test_the_roots_attachment_selects_the_childs_project_bro_instances(
-    self, tmp_path, monkeypatch
-  ):
-    self._host_config(
-      tmp_path,
-      monkeypatch,
+  def test_limit_restricts_usable_starts(self, scoped_installation):
+    reading = _reading(
+      scoped_installation,
       {
-        str(tmp_path): {
-          'creds': ['brog+github', 'github+dev'],
-          'bros': {'bro-dev': {'creds': ['github+reviewer']}},
-        }
+        'defaults': {'limit': ['@reviewer for bro{placement=boxed}']},
       },
     )
-    scoped = ride.scope.scoped_secrets(
-      'bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
-    )
-    assert scoped.selection == {'brog': 'github', 'github': 'reviewer'}
-    assert 'brog' in scoped.required
+    pair = _pair(reading, Atom('bro', 'target', 'reviewer'))
+    assert pair.use.matches(Descriptor('bro', {'placement': 'boxed'}))
+    assert not pair.use.matches(Descriptor('bro', {'placement': 'unboxed'}))
+    assert pair.give.is_empty
 
-  def test_project_selection_outweighs_the_store_default(self, tmp_path, monkeypatch):
-    store = tmp_path / 'store'
-    store.mkdir()
-    (store / credentials.STORE_FILE).write_text(json.dumps({'defaults': ['github+default']}))
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'defaults': {'grant': ['github']},
-          'projects': {str(tmp_path): {'creds': ['github+project']}},
-        }
-      )
-    )
-    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-    scoped = ride.scope.scoped_secrets('scope-search', CLAUDE_RECIPE, attachment=str(tmp_path))
-
-    assert scoped.selection['github'] == 'project'
-    assert ride.scope.credential_store(scoped).selection['github'] == 'project'
-    assert 'github' in scoped.required
-
-  def test_a_child_target_uses_a_different_instance_than_its_parent(self, tmp_path, monkeypatch):
-    self._host_config(
-      tmp_path,
-      monkeypatch,
-      {
-        str(tmp_path): {
-          'creds': ['github+dev'],
-          'bros': {'bro-eyebro': {'creds': ['github+reviewer']}},
-        }
-      },
-    )
-    parent = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, attachment=str(tmp_path))
-    child = ride.scope.scoped_secrets(
-      'bro-eyebro', CLAUDE_RECIPE, attachment=str(tmp_path), grant=[], revoke=[]
-    )
-    assert parent.selection['github'] == 'dev'
-    assert child.selection['github'] == 'reviewer'
-
-  def test_a_root_whose_attachment_names_no_entry_gets_no_other_projects_instance(
-    self, tmp_path, monkeypatch
+  def test_give_only_instance_needs_neither_start_permission_nor_material(
+    self, scoped_installation
   ):
-    self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
-    for attachment in (None, str(tmp_path)):
-      scoped = ride.scope.scoped_secrets(
-        'bro-dev', CLAUDE_RECIPE, attachment=attachment, grant=[], revoke=[]
-      )
-      assert 'brog' in scoped.required
-      assert scoped.selection == {}
-    with patch('ride.scope.open_repository') as opened:
-      opened.return_value.read_file.return_value = None
-      scoped = ride.scope.scoped_secrets(
-        'bro-dev',
-        CLAUDE_RECIPE,
-        attachment='https://github.com/foo/api.git',
-        grant=[],
-        revoke=[],
-      )
-    assert 'brog' in scoped.required
-    assert scoped.selection == {}
-
-  def test_a_launch_pick_selects_the_held_kind_for_the_child(self, tmp_path, monkeypatch):
-    self._host_config(tmp_path, monkeypatch, {str(tmp_path / 'other'): {'creds': ['brog+github']}})
-    scoped = ride.scope.scoped_secrets(
-      'bro-dev', CLAUDE_RECIPE, attachment=None, cred=['brog+github'], revoke=[]
-    )
-    assert 'brog' in scoped.required
-    assert scoped.selection['brog'] == 'github'
-
-  def test_a_bare_grant_of_a_scoped_kind_is_harmless(self):
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['github'])
-    assert 'github' in scoped.required
-
-  def test_repeated_grants_and_absent_revokes_are_harmless(self):
-    scoped = ride.scope.scoped_secrets(
-      'bro-dev',
-      CLAUDE_RECIPE,
-      grant=['github', 'github'],
-      revoke=['aws', 'aws'],
-    )
-    assert 'github' in scoped.required
-    assert 'aws' not in scoped.required | scoped.optional
-
-  def test_an_instance_spelled_grant_names_the_flag_replacement(self):
-    with pytest.raises(
-      ride.scope.LaunchScopeError,
-      match=r'--grant github\+work.*--cred github\+work plus --grant github',
-    ):
-      ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['github+work'])
-
-  def test_a_pick_of_an_unheld_kind_names_the_grant(self):
-    with pytest.raises(
-      ride.scope.LaunchScopeError,
-      match=r'--cred selects aws\+work.*add --grant aws',
-    ):
-      ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, cred=['aws+work'])
-
-  def test_the_bro_halves_of_the_overrides_do_not_reach_the_scope(self):
-    scoped = ride.scope.scoped_secrets('bro-dev', CLAUDE_RECIPE, grant=['@dev'], revoke=['@bro'])
-    assert '@dev' not in scoped.required
-    assert 'github' in scoped.required
-
-
-class TestScopeEvaluatesUnderTheLaunchSelection:
-  # the gate credential is stored under one instance only, so it resolves for a
-  # launch exactly when a layer or --cred selects that instance
-  def _host(self, tmp_path, monkeypatch, *, bros):
-    store = tmp_path / 'store'
-    material = store / credentials.MATERIAL_DIR / f'gate+reviewer{credentials.MATERIAL_SUFFIX}'
-    material.parent.mkdir(parents=True)
-    material.write_text('secret')
-    monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
-    monkeypatch.setattr(
-      credentials,
-      'default_registry',
-      lambda: {
-        name: credentials.CredentialKind(name, f'{name} credential') for name in ('gate', 'payload')
+    reading = _reading(
+      scoped_installation,
+      {
+        'defaults': {
+          'revoke': ['webview'],
+          'grant': ['webview.cred=cookies+absent to @reviewer'],
+        }
       },
     )
-    monkeypatch.setattr(credentials, '_default_store', None)
-    config = tmp_path / 'bro.json'
-    config.write_text(json.dumps({'projects': {str(tmp_path): {'bros': bros}}}))
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
+    assert _pair(reading, Atom('webview')).use.is_empty
+    pair = _pair(reading, Atom('webview', 'cred.cookies', 'absent'))
+    assert pair.use.is_empty
+    assert pair.give.matches(Descriptor('bro', {'target': 'reviewer', 'placement': 'boxed'}))
+    assert not pair.give.matches(Descriptor('bro', {'target': 'reviewer', 'placement': 'join'}))
 
-  def test_a_gate_the_bros_layer_resolves_selects_its_component(self, tmp_path, monkeypatch):
-    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
-    scoped = ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
-    assert 'payload' in scoped.required
-    assert 'gate' in scoped.optional
+  def test_unknown_names_fail_only_when_their_layer_applies(self, scoped_installation):
+    reading = _reading(scoped_installation, {'projects': {'/other': {'grant': ['unknown']}}})
+    assert not _pair(reading, Atom('bro')).use.is_empty
+    reading = _reading(scoped_installation, {'defaults': {'grant': ['unknown']}})
+    with pytest.raises(ValueError, match='unknown mission type'):
+      _pair(reading, Atom('bro'))
 
-  def test_a_gate_no_layer_resolves_leaves_its_component_out(self, tmp_path, monkeypatch):
-    self._host(tmp_path, monkeypatch, bros={})
-    scoped = ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
-    assert 'payload' not in scoped.required
-    assert 'gate' in scoped.optional
-
-  def test_a_pick_and_grant_select_the_gated_component(self, tmp_path, monkeypatch):
-    self._host(tmp_path, monkeypatch, bros={})
-    scoped = ride.scope.scoped_secrets(
-      'scope-gated',
-      CLAUDE_RECIPE,
-      attachment=str(tmp_path),
-      cred=['gate+reviewer'],
-      grant=['gate'],
-    )
-    assert 'payload' in scoped.required
-    assert 'gate' in scoped.optional
-    assert scoped.selection['gate'] == 'reviewer'
-
-  def test_a_revoked_gate_leaves_its_component_out(self, tmp_path, monkeypatch):
-    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
-    scoped = ride.scope.scoped_secrets(
-      'scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path), revoke=['gate']
-    )
-    assert 'payload' not in scoped.required
-    assert 'gate' not in scoped.required | scoped.optional
-
-  def test_a_non_value_gate_load_failure_is_a_named_launch_scope_error(self, tmp_path, monkeypatch):
-    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
-
-    def fail_load(self, path):
-      raise RuntimeError('source unavailable')
-
-    monkeypatch.setattr(credentials.LocalSource, 'fetch', fail_load)
-
-    with pytest.raises(
-      ride.scope.LaunchScopeError,
-      match="secret 'gate\\+reviewer' failed to load: source unavailable",
-    ):
-      ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
-
-  def test_the_process_store_is_restored_after_the_computation(self, tmp_path, monkeypatch):
-    self._host(tmp_path, monkeypatch, bros={'scope-gated': {'creds': ['gate+reviewer']}})
-    ride.scope.scoped_secrets('scope-gated', CLAUDE_RECIPE, attachment=str(tmp_path))
-    assert not credentials.available('gate')
-
-
-class TestPreflightScopedLaunch:
-  def _preflight(self, scoped, **overrides):
-    kwargs: dict[str, Any] = {'grant': [], 'revoke': []}
-    kwargs.update(overrides)
-    return ride.scope.preflight_scoped_launch(scoped, 'bro-dev', **kwargs)
-
-  def test_returns_the_launch_section_and_the_store(self):
-    expected_launch = {'bro': {'party': frozenset({'boxed'})}}
-    with (
-      patch('ride.scope.effective_launch', return_value=expected_launch) as fold,
-      patch(
-        'ride.scope.credentials.build_scoped_store',
-        return_value=({'creds/x.cred': b'v'}, frozenset({'x'})),
-      ) as build,
-    ):
-      launch, store = self._preflight(
-        ride.scope.ScopedSecrets({'github', 'gmail_creds'}, {'openai'}),
-        grant=['gmail_creds', '@dev'],
-        revoke=['@bro'],
-      )
-    assert launch == expected_launch
-    assert store == {'creds/x.cred': b'v'}
-    assert store.kinds == frozenset({'x'})
-    assert fold.call_args.args[:2] == ('bro-dev', ())
-    assert fold.call_args.kwargs['grant'] == ['gmail_creds', '@dev']
-    assert fold.call_args.kwargs['revoke'] == ['@bro']
-    assert fold.call_args.kwargs['credential_store'] is build.call_args.args[0]
-    assert build.call_args.args[1] == {'github', 'gmail_creds'}
-    assert build.call_args.kwargs == {'optional': {'openai'}}
-
-  def test_bare_bro_mark_raises_launch_scope_error(self):
-    with pytest.raises(ride.scope.LaunchScopeError, match="malformed grant/revoke '@'"):
-      self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=['@'])
-
-  def test_launch_flag_names_a_retired_permits_replacement(self):
-    with pytest.raises(ride.scope.LaunchScopeError, match=':launch.bro.party.join'):
-      self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=[':bro.party.join'])
-
-  def test_bad_summon_target_raises_launch_scope_error(self):
-    with pytest.raises(ride.scope.LaunchScopeError, match='rejects'):
-      self._preflight(ride.scope.ScopedSecrets(set(), set()), grant=['@devoop'])
-
-  def test_unresolvable_secret_raises_launch_scope_error(self):
-    from bro.base import credentials
-
-    with patch(
-      'ride.scope.credentials.build_scoped_store',
-      side_effect=credentials.SecretNotFound('github'),
-    ):
-      with pytest.raises(ride.scope.LaunchScopeError, match="secret 'github' not found"):
-        self._preflight(ride.scope.ScopedSecrets({'github'}, set()))
-
-
-class TestLaunchLayers:
-  def test_declared_worker_type_is_seeded(self):
-    declared = type('DeclaredBro', (), {'_may_summon': (), '_may_launch': ('webview',)})()
-    with patch('bro.registry.create_bro', return_value=declared):
-      launch = ride.scope.effective_launch(
-        'declared', (), grant=[], revoke=[], credential_store=None
-      )
-
-    assert launch['webview'] == {}
-
-  def test_layer_can_revoke_a_declared_worker_type(self):
-    declared = type('DeclaredBro', (), {'_may_summon': (), '_may_launch': ('webview',)})()
-    layers = (ride.scope.ScopeLayer(revoke=(':launch.webview',)),)
-    with patch('bro.registry.create_bro', return_value=declared):
-      launch = ride.scope.effective_launch(
-        'declared', layers, grant=[], revoke=[], credential_store=None
-      )
-
-    assert 'webview' not in launch
-
-  def test_unknown_declared_worker_type_fails_the_launch_fold(self):
-    declared = type('DeclaredBro', (), {'_may_summon': (), '_may_launch': ('missing',)})()
-    with patch('bro.registry.create_bro', return_value=declared):
-      with pytest.raises(ValueError, match="unknown worker type 'missing'.*installed types"):
-        ride.scope.effective_launch('declared', (), grant=[], revoke=[], credential_store=None)
-
-  def test_project_host_and_launch_layers_apply_name_by_name(self, tmp_path, monkeypatch):
-    (tmp_path / 'pyproject.toml').write_text(
-      '[tool.bro]\n'
-      'default = "bro-dev"\n'
-      'grant = [":launch.bro.party.join"]\n'
-      'revoke = [":launch.bro.party.boxed"]\n'
-    )
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps(
-        {
-          'defaults': {'grant': [':launch.bro.party.boxed']},
-          'projects': {
-            str(tmp_path): {'bros': {'bro-dev': {'grant': [':launch.bro.party.unboxed']}}}
-          },
+  def test_overlapping_grant_and_revoke_are_refused_on_resolution(self, scoped_installation):
+    reading = _reading(
+      scoped_installation,
+      {
+        'defaults': {
+          'grant': ['bro.placement=*'],
+          'revoke': ['bro.placement=join'],
         }
-      )
+      },
     )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-
-    launch = ride.scope.effective_launch(
-      'bro-dev',
-      ride.scope.configured_scope_layers(str(tmp_path), 'bro-dev'),
-      grant=[],
-      revoke=[':launch.bro.party.boxed'],
-      credential_store=None,
-    )
-
-    assert launch['bro']['party'] == frozenset({'join', 'unboxed'})
-
-  def test_redundant_launch_overrides_are_harmless(self):
-    launch = ride.scope.effective_launch(
-      'bro-dev',
-      (),
-      grant=[':launch.bro', ':launch.bro.party.boxed'],
-      revoke=[':launch.webview'],
-      credential_store=None,
-    )
-    assert launch['bro']['party'] == frozenset({'boxed'})
-    assert 'webview' not in launch
-
-  def test_one_layer_cannot_grant_and_revoke_the_same_name(self):
     with pytest.raises(ValueError, match='cannot grant and revoke'):
-      ride.scope.effective_launch(
-        'bro-dev',
-        (),
-        grant=[':launch.webview'],
-        revoke=[':launch.webview'],
-        credential_store=None,
-      )
-
-  def test_unknown_type_lists_the_installed_types(self):
-    with pytest.raises(ValueError, match="unknown worker type 'missing'.*installed types"):
-      ride.scope.effective_launch(
-        'bro-dev', (), grant=[':launch.missing'], revoke=[], credential_store=None
-      )
-
-  def test_undeclared_field_is_refused(self):
-    with pytest.raises(ValueError, match="no launch field 'unknown'"):
-      ride.scope.effective_launch(
-        'bro-dev', (), grant=[':launch.bro.unknown'], revoke=[], credential_store=None
-      )
-
-  def test_set_member_and_flag_shapes_are_checked(self):
-    with pytest.raises(ValueError, match='must name a value'):
-      ride.scope.effective_launch(
-        'bro-dev', (), grant=[':launch.bro.party'], revoke=[], credential_store=None
-      )
-    with pytest.raises(ValueError, match='cannot name a value'):
-      ride.scope.effective_launch(
-        'bro-dev', (), grant=[':launch.webview.vnc.extra'], revoke=[], credential_store=None
-      )
-
-  def test_pass_right_is_kept_when_its_instance_is_present(self, tmp_path):
-    launch = ride.scope.effective_launch(
-      'bro-dev',
-      (),
-      grant=[':launch.bro.pass.github+work', ':launch.bro.pass.trails+'],
-      revoke=[],
-      credential_store=_credential_store(tmp_path, 'github+work', 'trails'),
-    )
-
-    assert launch['bro']['pass'] == frozenset({'github+work', 'trails+'})
-
-  def test_missing_pass_instance_names_the_launch_flags(self, tmp_path):
-    with pytest.raises(
-      ValueError,
-      match=r':launch\.bro\.pass\.github\+absent.*launch flags.*missing',
-    ):
-      ride.scope.effective_launch(
-        'bro-dev',
-        (),
-        grant=[':launch.bro.pass.github+absent'],
-        revoke=[],
-        credential_store=_credential_store(tmp_path),
-      )
-
-  def test_missing_pass_instance_names_the_last_config_layer(self, tmp_path):
-    layers = (
-      ride.scope.ScopeLayer(grant=(':launch.bro.pass.github+absent',), source='project-path-bro'),
-    )
-    with pytest.raises(ValueError, match=r'github\+absent.*project-path-bro.*missing'):
-      ride.scope.effective_launch(
-        'bro-dev',
-        layers,
-        grant=[],
-        revoke=[],
-        credential_store=_credential_store(tmp_path),
-      )
-
-  def test_unregistered_pass_kind_fails_only_the_launch_fold(self, tmp_path):
-    with pytest.raises(ValueError, match="unregistered credential kind 'not_registered'"):
-      ride.scope.effective_launch(
-        'bro-dev',
-        (ride.scope.ScopeLayer(grant=(':launch.bro.pass.not_registered+work',)),),
-        grant=[],
-        revoke=[],
-        credential_store=_credential_store(tmp_path),
-      )
-
-  def test_pass_kind_outside_the_worker_types_bound_fails_the_launch_fold(
-    self, tmp_path, monkeypatch
-  ):
-    from bro.worker_types import LaunchPass
-
-    worker_class = type(
-      'BoundedWorker',
-      (),
-      {'launch_schema': {'pass': LaunchPass(kinds=frozenset({'trails'}))}},
-    )
-    bro_class = ride.scope.installed_types()['bro']
-    monkeypatch.setattr(
-      ride.scope,
-      'installed_types',
-      lambda: {'bro': bro_class, 'bounded': worker_class},
-    )
-
-    with pytest.raises(
-      ValueError,
-      match=r"worker type 'bounded' rejects 'github'.*choices: trails",
-    ):
-      ride.scope.effective_launch(
-        'bro-dev',
-        (),
-        grant=[':launch.bounded', ':launch.bounded.pass.github+work'],
-        revoke=[],
-        credential_store=_credential_store(tmp_path, 'github+work'),
-      )
-
-  def test_pass_under_a_revoked_type_key_is_inactive(self, tmp_path):
-    launch = ride.scope.effective_launch(
-      'bro-dev',
-      (ride.scope.ScopeLayer(grant=(':launch.bro.pass.github+absent',)),),
-      grant=[],
-      revoke=[':launch.bro'],
-      credential_store=_credential_store(tmp_path),
-    )
-
-    assert 'bro' not in launch
-
-  def test_scope_fold_keeps_a_missing_pass_for_reporting(self):
-    launch = ride.scope.effective_launch(
-      'bro-dev',
-      (),
-      grant=[':launch.bro.pass.github+absent'],
-      revoke=[],
-      credential_store=None,
-    )
-
-    assert launch['bro']['pass'] == frozenset({'github+absent'})
+      _pair(reading, Atom('bro'))
 
 
 class TestLaunchViewStore:
-  def test_binds_the_view_to_the_scope(self):
-    with patch('ride.scope.credentials.scoped_view_store', return_value='the-view') as view:
-      store = ride.scope.launch_view_store(
-        ride.scope.ScopedSecrets({'brog', 'github'}, {'openai'}, {'brog': 'github'})
+  def test_view_is_bounded_by_the_credential_manifest(self):
+    with patch('ride.scope.credentials.scoped_view_store', return_value='view') as view:
+      assert (
+        scope.launch_view_store(ScopedSecrets({'github'}, {'trails'}, {'github': 'reviewer'}))
+        == 'view'
       )
-    assert store == 'the-view'
-    assert view.call_args.args[0].selection['brog'] == 'github'
-    assert view.call_args.args[1] == {'brog', 'github'}
-    assert view.call_args.kwargs == {'optional': {'openai'}}
+    assert view.call_args.args[0].selection == {'github': 'reviewer'}
+    assert view.call_args.args[1] == {'github'}
+    assert view.call_args.kwargs == {'optional': {'trails'}}
+
+  def test_missing_secret_becomes_a_scope_error(self):
+    with patch(
+      'ride.scope.credentials.scoped_view_store', side_effect=credentials.SecretNotFound('github')
+    ):
+      with pytest.raises(scope.LaunchScopeError, match='github'):
+        scope.launch_view_store(ScopedSecrets({'github'}, set()))

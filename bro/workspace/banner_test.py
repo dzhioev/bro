@@ -2,6 +2,7 @@ import pytest
 
 import bro.workspace.banner as workspace_banner
 from bro import registry, summon
+from bro.authority_view_test_helper import publish
 from bro.broker.environment import BROKER_TALK
 from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
@@ -21,7 +22,6 @@ class TestSessionFacts:
       'RIDE_COMMAND',
       'RIDE_HOST_WORKSPACE',
       'RIDE_REPO',
-      summon.LAUNCH_ENV,
       summon.PARTY_MEMBER_ENV,
       summon.SUMMONED_ENV,
       BROKER_TALK,
@@ -89,14 +89,11 @@ class TestSessionFacts:
     assert facts.trail_id is None
 
   def test_may_summon_reads_the_launch_published_list(self, monkeypatch):
-    monkeypatch.setenv(
-      summon.LAUNCH_ENV,
-      summon.encode_launch({'bro': {'bros': frozenset({'dev', 'reviewer'})}}),
-    )
+    publish(monkeypatch, targets=('dev', 'reviewer'))
     assert SessionFacts.collect().may_summon == ('dev', 'reviewer')
 
   def test_may_summon_distinguishes_an_empty_list_from_an_unset_one(self, monkeypatch):
-    monkeypatch.setenv(summon.LAUNCH_ENV, summon.encode_launch({'bro': {}}))
+    publish(monkeypatch, targets=())
     assert SessionFacts.collect().may_summon == ()
 
   def test_talk_reads_the_launch_published_rights(self, monkeypatch):
@@ -223,18 +220,11 @@ class TestRenderBanner:
 
   def test_llm_lists_launch_permissions_except_bro_targets(self):
     facts = _facts(
-      launch={
-        'bro': {
-          'bros': frozenset({'reviewer'}),
-          'party': frozenset({'join', 'unboxed'}),
-        },
-        'benchmark': {},
-        'webview': {'vnc': True},
-      }
+      permits=('benchmark', 'bro.placement=join', 'bro.placement=unboxed', 'webview.vnc')
     )
     assert (
-      'permits: :launch.benchmark, :launch.bro.party.join, '
-      ':launch.bro.party.unboxed, :launch.webview.vnc' in facts.render_llm()
+      'permits: benchmark, bro.placement=join, '
+      'bro.placement=unboxed, webview.vnc' in facts.render_llm()
     )
     assert '@reviewer' not in facts.render_llm()
 

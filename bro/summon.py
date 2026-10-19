@@ -21,7 +21,7 @@ broker implementation on pre-gate launch paths.
 import json
 import os
 import shlex
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
@@ -32,13 +32,10 @@ from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
   add_llm_flags,
-  canonicalize,
-  selection_from_args,
 )
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.quest import BRO, LAUNCH, QuestError
-from bro.worker_types import Launch, dump_launch, parse_launch
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
@@ -49,23 +46,14 @@ __cli_name__ = 'summon'
 SUMMONER_ENV = 'RIDE_SUMMONER'
 # marks a run as a summoned child, written by the surface that launches it
 SUMMONED_ENV = 'RIDE_SUMMONED'
-# carries a run's own launch section into it, written by the launch surface
-LAUNCH_ENV = 'RIDE_LAUNCH'
 PARTY_MEMBER_ENV = 'RIDE_PARTY_MEMBER'
-PARTY_BOXED = 'boxed'
-PARTY_UNBOXED = 'unboxed'
-PARTY_JOIN = 'join'
-PARTY_CHOICES = frozenset({PARTY_BOXED, PARTY_UNBOXED, PARTY_JOIN})
 RUNTIME_ENV = 'RIDE_RUNTIME'
-
-
-def party_launch_choices() -> str:
-  return ', '.join(f':launch.bro.party.{value}' for value in sorted(PARTY_CHOICES))
 
 
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800
+DEFAULT_TALK = frozenset({'worker.say'})
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
 MANUAL_HELP = (
   'register a manual summon instead of spawning: the quest id becomes the token '
@@ -76,15 +64,9 @@ HARNESS_HELP = (
   'the installed harness the child runs under '
   f'({", ".join(installed_harness_names()) or "none"}); omitted uses the project summon harness'
 )
-GRANT_HELP = (
-  'add a launch permission (@BRO, :launch.<type>[.<field>[.<value>]], including '
-  ':launch.<type>.pass.<kind>+<instance>, or one of '
-  f'{party_launch_choices()}) to the child (repeatable)'
-)
-REVOKE_HELP = "remove a launch permission from the child's authority (repeatable)"
-PASS_HELP = (
-  'make the child hold a credential instance covered by this session’s pass rights (repeatable)'
-)
+GRANT_HELP = 'give the child an authority entry or add a held credential kind (repeatable)'
+REVOKE_HELP = 'cap a child permission or drop a credential kind (repeatable)'
+PASS_HELP = 'set the child credential kind to this stored instance (repeatable)'
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'
 )
@@ -106,11 +88,6 @@ def manual_launch_command(quest_id: str, target: str) -> str:
   return f'{executable} along --summoned {quest_id} {target}'
 
 
-def encode_launch(value: Mapping[str, Mapping[str, frozenset[str] | bool]]) -> str:
-  """Encode a launch section for the managed-session environment."""
-  return json.dumps(dump_launch(value), ensure_ascii=False, separators=(',', ':'), sort_keys=True)
-
-
 def parse_talk(values: Optional[list[str]]) -> Optional[list[str]]:
   """Validate comma-separated talk flags and return their request-field shape."""
   if values is None:
@@ -129,13 +106,11 @@ def parse_talk(values: Optional[list[str]]) -> Optional[list[str]]:
 
 
 def summoned_child_env(
-  launch_scope: Mapping[str, Mapping[str, frozenset[str] | bool]],
   summoner: Optional[dict[str, Any]],
 ) -> dict[str, str]:
   """Build the environment that marks and scopes a summoned child."""
   env = {
     SUMMONED_ENV: '1',
-    LAUNCH_ENV: encode_launch(launch_scope),
   }
   if summoner is not None:
     env[SUMMONER_ENV] = json.dumps(summoner, ensure_ascii=False, separators=(',', ':'))
@@ -148,30 +123,11 @@ def summoned() -> bool:
   return os.environ.get(SUMMONED_ENV) is not None
 
 
-def launch() -> Optional[Launch]:
-  """The launch section fixed by this run's launcher."""
-  raw = os.environ.get(LAUNCH_ENV)
-  if raw is None:
-    return None
-  try:
-    value = json.loads(raw)
-  except json.JSONDecodeError as error:
-    raise ValueError(f'{LAUNCH_ENV} is not valid JSON') from error
-  try:
-    return parse_launch(value, subject=LAUNCH_ENV)
-  except ValueError as error:
-    raise ValueError(f'{LAUNCH_ENV} carries an invalid launch section: {error}') from error
-
-
 def may_summon() -> Optional[tuple[str, ...]]:
-  """The bro targets in the published launch section."""
-  value = launch()
-  if value is None:
-    return None
-  bros = value.get(BRO, {}).get('bros', frozenset())
-  if not isinstance(bros, frozenset):
-    raise ValueError(f'{LAUNCH_ENV}.{BRO}.bros must be a set of strings')
-  return tuple(sorted(bros))
+  from bro.authority_view import read
+
+  value = read()
+  return None if value is None else tuple(value['may_summon'])
 
 
 def talk() -> Optional[tuple[str, ...]]:
@@ -187,10 +143,11 @@ def talk() -> Optional[tuple[str, ...]]:
 
 
 def effective_may_summon() -> tuple[str, ...]:
-  """the published `launch.bro.bros` set as the `#may_summon` rendering fact,
-  with an unpublished one collapsed to empty — a run whose launcher
-  published no list should plan no delegation."""
-  return may_summon() or ()
+  """The initial authority's usable bro targets for prompt and tool assembly."""
+  from bro.authority_view import initial
+
+  value = initial()
+  return () if value is None else tuple(value['may_summon'])
 
 
 def party_member() -> Optional[str]:
@@ -237,19 +194,23 @@ def _payload(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[float] = None,
+  timeout: Optional[int] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  limit: Optional[list[str]] = None,
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  provider: Optional[str] = None,
+  model: Optional[str] = None,
+  effort: Optional[str] = None,
+  fast: Optional[bool] = None,
   harness: Optional[str] = None,
-  party: Optional[str] = None,
-  isolation: Optional[str] = None,
+  placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
   manual: bool = False,
 ) -> dict[str, Any]:
@@ -268,18 +229,21 @@ def _payload(
     payload['grant'] = list(grant)
   if revoke is not None:
     payload['revoke'] = list(revoke)
+  if limit is not None:
+    payload['limit'] = list(limit)
   if passes is not None:
     payload['pass'] = list(passes)
   if share is not None:
     payload['share'] = list(share)
   if llm is not None:
     payload['llm'] = llm
+  for name, value in (('provider', provider), ('model', model), ('effort', effort), ('fast', fast)):
+    if value is not None:
+      payload[name] = value
   if harness is not None:
     payload['harness'] = harness
-  if party is not None:
-    payload['party'] = party
-  if isolation is not None:
-    payload['isolation'] = isolation
+  if placement is not None:
+    payload['placement'] = placement
   if talk is not None:
     payload['talk'] = list(talk)
   if manual:
@@ -358,17 +322,21 @@ def summon_and_wait(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[float] = None,
+  timeout: Optional[int] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  limit: Optional[list[str]] = None,
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  provider: Optional[str] = None,
+  model: Optional[str] = None,
+  effort: Optional[str] = None,
+  fast: Optional[bool] = None,
   harness: Optional[str] = None,
-  party: Optional[str] = None,
-  isolation: Optional[str] = None,
+  placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
@@ -387,12 +355,16 @@ def summon_and_wait(
     index=index,
     grant=grant,
     revoke=revoke,
+    limit=limit,
     passes=passes,
     share=share,
     llm=llm,
+    provider=provider,
+    model=model,
+    effort=effort,
+    fast=fast,
     harness=harness,
-    party=party,
-    isolation=isolation,
+    placement=placement,
     talk=talk,
   )
   with quest.connection(client) as connection:
@@ -430,17 +402,21 @@ def summon_detached(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[float] = None,
+  timeout: Optional[int] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  limit: Optional[list[str]] = None,
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  provider: Optional[str] = None,
+  model: Optional[str] = None,
+  effort: Optional[str] = None,
+  fast: Optional[bool] = None,
   harness: Optional[str] = None,
-  party: Optional[str] = None,
-  isolation: Optional[str] = None,
+  placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
   index: Optional[int] = None,
@@ -456,12 +432,16 @@ def summon_detached(
     index=index,
     grant=grant,
     revoke=revoke,
+    limit=limit,
     passes=passes,
     share=share,
     llm=llm,
+    provider=provider,
+    model=model,
+    effort=effort,
+    fast=fast,
     harness=harness,
-    party=party,
-    isolation=isolation,
+    placement=placement,
     talk=talk,
   )
   with quest.open_client() as client:
@@ -477,6 +457,7 @@ def summon_manual(
   into: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  limit: Optional[list[str]] = None,
   passes: Optional[list[str]] = None,
   talk: Optional[list[str]] = None,
   step_id: Optional[int] = None,
@@ -489,6 +470,7 @@ def summon_manual(
     into=into,
     grant=grant,
     revoke=revoke,
+    limit=limit,
     passes=passes,
     talk=talk,
     manual=True,
@@ -505,17 +487,21 @@ def relay_summon(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[float] = None,
+  timeout: Optional[int] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
+  limit: Optional[list[str]] = None,
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
+  provider: Optional[str] = None,
+  model: Optional[str] = None,
+  effort: Optional[str] = None,
+  fast: Optional[bool] = None,
   harness: Optional[str] = None,
-  party: Optional[str] = None,
-  isolation: Optional[str] = None,
+  placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
   manual: bool = False,
 ) -> int:
@@ -533,12 +519,16 @@ def relay_summon(
     hold=hold,
     grant=grant,
     revoke=revoke,
+    limit=limit,
     passes=passes,
     share=share,
     llm=llm,
+    provider=provider,
+    model=model,
+    effort=effort,
+    fast=fast,
     harness=harness,
-    party=party,
-    isolation=isolation,
+    placement=placement,
     talk=talk,
     manual=manual,
   )
@@ -606,6 +596,13 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument(
+    '--limit',
+    action='append',
+    default=None,
+    metavar='ENTRY',
+    help='cap a child permission with qualified clauses (repeatable)',
+  )
+  parser.add_argument(
     '--pass', action='append', default=None, metavar='KIND+INSTANCE', help=PASS_HELP
   )
   parser.add_argument('--share', action='append', default=None, metavar='REF', help=SHARE_HELP)
@@ -617,49 +614,51 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--harness', default=None, help=HARNESS_HELP)
   parser.add_argument(
     '--timeout',
-    type=float,
+    type=int,
     metavar='SECONDS',
     help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f})',
   )
   placement = parser.add_mutually_exclusive_group()
   placement.add_argument(
     '--start',
-    dest='party',
+    dest='placement',
     action='store_const',
-    const='start',
+    const='boxed',
     help='start a party, choosing the first permitted isolation',
   )
   placement.add_argument(
     '--join',
-    dest='party',
+    dest='placement',
     action='store_const',
     const='join',
-    help='join the summoner’s party (requires :launch.bro.party.join)',
+    help='join the summoner’s party (requires bro.placement=join)',
   )
   placement.add_argument(
     '--boxed',
-    dest='isolation',
+    dest='placement',
     action='store_const',
     const='boxed',
-    help='start a boxed party (requires :launch.bro.party.boxed)',
+    help='start a boxed party (requires bro.placement=boxed)',
   )
   placement.add_argument(
     '--unboxed',
-    dest='isolation',
+    dest='placement',
     action='store_const',
     const='unboxed',
-    help='start an unboxed party (requires :launch.bro.party.unboxed)',
+    help='start an unboxed party (requires bro.placement=unboxed)',
   )
   parser.add_argument('--manual', action='store_true', help=MANUAL_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
   args = parser.parse(argv)
   try:
-    canonicalize(args, selection_from_args(args))
     args['talk'] = parse_talk(args['talk'])
   except (LLMSelectionError, ValueError) as error:
     log.error('%s', error)
     return 1
-  if args['party'] == 'join' and args['into'] is not None:
+  recipe_options = {
+    name: args[name] for name in ('provider', 'model', 'effort', 'fast') if args.get(name)
+  }
+  if args['placement'] == 'join' and args['into'] is not None:
     log.error('--join shares the summoner’s tree; drop --into')
     return 1
   if args['manual']:
@@ -668,8 +667,9 @@ def main(argv: list[str]) -> Optional[int]:
       '--hold': args['hold'],
       '--harness': args['harness'],
       '--llm': args['llm'],
-      '--start/--join': args['party'],
-      '--boxed/--unboxed': args['isolation'],
+      **{f'--{name}': value for name, value in recipe_options.items()},
+      '--start/--join': args['placement'],
+      '--boxed/--unboxed': args['placement'],
     }
     passed = sorted(flag for flag, value in launch_owned.items() if value is not None)
     if len(passed) > 0:
@@ -687,6 +687,7 @@ def main(argv: list[str]) -> Optional[int]:
           into=args['into'],
           grant=args['grant'],
           revoke=args['revoke'],
+          limit=args['limit'],
           passes=args['pass'],
           talk=args['talk'],
         )
@@ -700,12 +701,13 @@ def main(argv: list[str]) -> Optional[int]:
           hold=args['hold'],
           grant=args['grant'],
           revoke=args['revoke'],
+          limit=args['limit'],
           passes=args['pass'],
           share=args['share'],
           llm=args['llm'],
           harness=args['harness'],
-          party=args['party'],
-          isolation=args['isolation'],
+          placement=args['placement'],
+          **recipe_options,
           talk=args['talk'],
         )
     except QuestError as error:
@@ -721,12 +723,13 @@ def main(argv: list[str]) -> Optional[int]:
     hold=args['hold'],
     grant=args['grant'],
     revoke=args['revoke'],
+    limit=args['limit'],
     passes=args['pass'],
     share=args['share'],
     llm=args['llm'],
     harness=args['harness'],
-    party=args['party'],
-    isolation=args['isolation'],
+    placement=args['placement'],
+    **recipe_options,
     talk=args['talk'],
     manual=args['manual'],
   )

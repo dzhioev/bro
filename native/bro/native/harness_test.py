@@ -23,6 +23,7 @@ from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.native import dev_mcp
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
+from ride.authority_test_helper import mission
 from ride.do_ride import SessionRun
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
@@ -97,7 +98,7 @@ def _container_runtime() -> ContainerRuntimeResolver:
 def _scope(**overrides) -> ScopedLaunch:
   values = {
     'scoped': ScopedSecrets({'openai'}, {'trails'}),
-    'launch': {'bro': {'bros': frozenset({'reviewer'}), 'party': frozenset({'boxed'})}},
+    'mission': mission(target='dev', values={'harness': 'bro', 'timeout': None}),
     'store': {'creds.json': b'{}'},
   }
   values.update(overrides)
@@ -241,12 +242,13 @@ class TestContainerSession:
 
     monkeypatch.setattr(ride_session, 'run_started_party', run)
     spec = _spec(solo=True, hold='unattended')
+    scope = _scope()
     assert (
       ride_session._launch_session(
         spec,
         workspace,
         'abc123',
-        _scope(),
+        scope,
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
@@ -272,7 +274,7 @@ class TestContainerSession:
     assert launch.base_ref == 'abc123'
     assert not launch.tty
     assert captured['workspace'] is workspace
-    assert captured['launch_scope'] == _scope().launch
+    assert captured['mission'] is scope.mission
 
   def test_no_trails_disables_recording_in_the_container_env(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', tmp_path, Isolation.BOXED)

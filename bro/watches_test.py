@@ -659,21 +659,23 @@ class TestOwner:
     assert _taken(member) == '[member command] member'
 
 
-@pytest.mark.parametrize(
-  'may_summon,summoned,talk,expected',
-  [
-    (('reviewer',), False, None, True),
-    ((), True, ('owner.say',), True),
-    ((), True, ('owner.question',), True),
-    ((), True, ('worker.question',), True),
-    ((), True, ('worker.say',), False),
-    ((), False, ('owner.say',), False),
-  ],
-)
-def test_session_watch_admission(may_summon, summoned, talk, expected):
-  assert (
-    watches.session_watch_admitted(may_summon=may_summon, summoned=summoned, talk=talk) is expected
+@pytest.mark.parametrize('channel', [False, True])
+@pytest.mark.parametrize('summoned', [False, True])
+@pytest.mark.parametrize('talk', [None, 'worker.say', 'owner.say'])
+def test_every_brokered_session_arms_its_watch(monkeypatch, channel, summoned, talk):
+  monkeypatch.delenv('BROKER_CHANNEL', raising=False)
+  monkeypatch.delenv('RIDE_SUMMONED', raising=False)
+  monkeypatch.delenv('BROKER_TALK', raising=False)
+  if channel:
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@localhost:1')
+  if summoned:
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+  if talk is not None:
+    monkeypatch.setenv('BROKER_TALK', talk)
+  monkeypatch.setattr(
+    'bro.summon.effective_may_summon', lambda: pytest.fail('start-time target read')
   )
+  assert watches.session_watch_admitted() is channel
 
 
 def test_slugs_keep_commands_apart_and_out_of_subdirectories():

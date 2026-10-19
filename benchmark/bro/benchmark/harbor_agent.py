@@ -238,9 +238,9 @@ def ride_command(*, bro: str, instruction: str, harness: str, llm: Optional[str]
     '--runtime-bundle',
     str(BUNDLE.root),
     '--revoke',
-    ':launch.bro.party.boxed',
+    'bro.placement=boxed',
     '--grant',
-    ':launch.bro.party.join',
+    'bro.placement=join',
     # the task container is thrown away after the verifier and its agent phase
     # runs as root: the declaration under which claude accepts
     # `--dangerously-skip-permissions` from uid 0

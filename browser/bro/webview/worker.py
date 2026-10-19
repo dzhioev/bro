@@ -7,11 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import PurePosixPath
-from types import MappingProxyType
-from typing import Any, override
+from typing import Any, cast, override
 
 from bro.authority.patterns import Descriptor
-from bro.authority.rules import Declaration, Option
+from bro.authority.rules import Declaration, Mission, Option
 from bro.authority.values import (
   Finite,
   IntegerInterval,
@@ -22,10 +21,8 @@ from bro.authority.values import (
 )
 from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.worker_types import (
-  LAUNCH_FLAG,
   Container,
   LaunchDenied,
-  LaunchPass,
   LaunchRequest,
   OptionValues,
   WorkerContainer,
@@ -33,7 +30,6 @@ from bro.worker_types import (
 )
 
 WEBVIEW = 'webview'
-VNC_PERMISSION = ':launch.webview.vnc'
 ARTIFACT_VIEW = PurePosixPath('/workspace/artifacts')
 VNC_PORT = 6080
 
@@ -65,9 +61,6 @@ def _dockerfile() -> bytes:
 
 class WebviewType(WorkerType):
   name = WEBVIEW
-  launch_schema = MappingProxyType(
-    {'vnc': LAUNCH_FLAG, 'pass': LaunchPass(kinds=frozenset({'cookies'}))}
-  )
   default_timeout = None
   widens_talk = False
   manual = False
@@ -111,7 +104,7 @@ class WebviewType(WorkerType):
 
   @classmethod
   def option_values(cls, fields: Mapping[str, Any], reading: object) -> OptionValues:
-    options = {'vnc', 'vnc_port', 'timeout'}
+    options = {'vnc', 'vnc_port', 'timeout', 'cred.cookies'}
     content_names = {'allowed_origins', 'blocked_origins', 'share'}
     if fields.keys() - options - content_names - {'pass', 'cookies'}:
       raise ValueError('unknown webview fields')
@@ -146,25 +139,13 @@ class WebviewType(WorkerType):
 
   @override
   def launch(self, request: LaunchRequest) -> Container:
-    unknown = sorted(set(request.args) - {'vnc', 'vnc_port', 'allowed_origins', 'blocked_origins'})
-    if len(unknown) > 0:
-      raise LaunchDenied(f'unknown webview field(s): {", ".join(unknown)}')
-    vnc = request.args.get('vnc', False)
-    if not isinstance(vnc, bool):
-      raise LaunchDenied("webview 'vnc' must be a boolean")
-    vnc_port = request.args.get('vnc_port')
-    if vnc_port is not None and (
-      not isinstance(vnc_port, int) or isinstance(vnc_port, bool) or not 1024 <= vnc_port <= 65535
-    ):
-      raise LaunchDenied("webview 'vnc_port' must be an integer in 1024..65535")
-    if vnc_port is not None and not vnc:
-      raise LaunchDenied("webview 'vnc_port' requires 'vnc'")
+    if not isinstance(request.record, Mission):
+      raise ValueError('webview start requires an admitted record')
+    values = request.record.descriptor.values
+    vnc = values.get('vnc') is True
+    vnc_port = None if values['vnc_port'] == 'auto' else cast(int, values['vnc_port'])
     allowed_origins = _origins(request.args, 'allowed_origins')
     blocked_origins = _origins(request.args, 'blocked_origins')
-    payload = request.owner.launch[WEBVIEW]
-    if vnc and payload.get('vnc') is not True:
-      raise LaunchDenied(f'the VNC view needs {VNC_PERMISSION}')
-
     facts = WebviewFacts(vnc, vnc_port, allowed_origins, blocked_origins)
     options = json.dumps(
       {
