@@ -104,8 +104,8 @@ The current passages are `tool_name_rule`, which spells canonical tool names on 
 
 Three more facts sit outside the framework pair and harness vocabulary.
 
-`may_summon` — the bros in the session's fixed `launch.bro.bros` set
-(`bro.summon.effective_may_summon()` off `RIDE_LAUNCH`, an unpublished section collapsed to empty).
+`may_summon` — the usable bro targets read from host authority, empty without a mission channel.
+Prompt composition uses the initial cached view (`bro.summon.effective_may_summon()`); spell casts read live authority after overrides.
 The session-level text surfaces
 — prompt composition, spell bodies, ride's append prompt
 — supply it, so a spell can gate a delegation branch on a target being summonable:
@@ -114,7 +114,7 @@ Membership is is-a rather than verbatim:
 a granted bro answers to every registered bro it derives from (`bro.registry.lineage`),
 so an `AcmeReviewer(Reviewer)` grant satisfies `contains reviewer`.
 Only the fact widens
-— the host authorizes a summon against the names in `launch.bro.bros` themselves, so a text that resolves a role reads the concrete members off the banner.
+— the host authorizes a summon against the concrete target option values, so a text that resolves a role reads the concrete members off the banner.
 The universe is the installed persona names plus the list itself, so a typo'd target fails every render while a granted-but-uninstalled one still tests.
 No ready-made placeholder is exported.
 

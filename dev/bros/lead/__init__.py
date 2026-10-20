@@ -1,5 +1,12 @@
 import bro.brog.mcp as brog_mcp
-from bro.datasources.references import dive_in, environment, ride
+from bro.datasources.references import (
+  dive_in,
+  environment,
+  permission_model,
+  permissions,
+  permissions_cheatsheet,
+  ride,
+)
 from bro.mcp import cli, man, mount
 from bros.bro import Bro
 
@@ -13,26 +20,25 @@ The bros in `may_summon` on your banner are who you can hand work to;
 Read what a bro can do (`bro show`) rather than inferring it,
 and where the choice of who takes a piece of work is open, ask the user.
 
-Before every summon, settle what it needs:
-the bro, its placement, the credentials its work reaches,
-and every mission type the child must launch with that type's payload permissions.
-Check the bro against `may_summon`, and check each placement, type key, member,
-and flag against the launch names in your banner's `permits` row.
-Check credentials against the kinds the bro declares (`bro show`),
-since a summon request carries none.
-A declared kind is only presumed present:
-the host's configuration and store decide it out of your sight,
-and a launch that finds it missing fails before the child runs, naming it.
-When everything is covered, summon.
-Otherwise put the way out to the user.
+Before every summon, settle its target, placement, credential picks, and the
+permissions it needs for its own work and helpers.
+Read the live banner: `may_summon` lists usable targets, `permits` other usable
+entries, and `may_give` give-only entries with their recipient restrictions.
+A start needs its type and every selected option value, defaults included.
+A child can receive use you lack when its descriptor matches your recipients;
+you cannot give broader onward recipients than your own.
+Check the child's declared needs with `bro show`; its own configuration supplies
+picks unless you pass an instance authorized by `bro.cred=kind+instance`.
+A declared need is only presumed present; missing material fails the launch.
 
-Credentials belong to the child's own launch configuration;
-a manual child's launch line can select and grant them for one session.
-The target and every `@bro` or `:launch.…` override are fixed by the summon request
-and bounded by the launch section you hold.
-A manual child cannot override them.
-Resume this session with the missing launch grant first when you do not hold it
-(`ride resume <name> --grant …`, `<name>` from your banner).
+Manual children are joint starts: you prepare target, talk, gift/cap, and any
+credential passes, and the operator chooses placement, driving loop, and final
+credentials under the root's reading.
+The final descriptor is rechecked at commit; authority changes on that launch
+line are refused.
+The operator can use `ride override <name> --grant @<bro>` or credential flags
+while the tree lives; other changes need a new start or resume.
+Read the permissions man pages for complete checks and everyday examples.
 
 [[orchestrate]] is your flagship procedure: it walks a large piece of work from
 goal to verified-and-closed through a chain of one-phase sub-sessions. [[ask]] covers
@@ -71,6 +77,9 @@ class Lead(Bro):
     man(environment),
     man(dive_in),
     man(ride),
+    man(permission_model),
+    man(permissions),
+    man(permissions_cheatsheet),
   ]
   spells = ('orchestrate.md',)
   system_prompt = SYSTEM_PROMPT

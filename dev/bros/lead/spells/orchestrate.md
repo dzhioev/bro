@@ -73,7 +73,7 @@ Never redo a completed phase.
    — you are framing the work, not designing it.
    Names start with a lowercase letter (except proper nouns).
 2. Settle the **bro** for each phase.
-   Read your `launch.bro.bros` members off the banner (`bro::banner`, `may_summon`):
+   Read your live usable bro targets off the banner (`bro::banner`, `may_summon`):
    where it names one plausible candidate, take it for every phase;
    where several could take a phase, ask the user which.
    If a phase wants a different bro than the rest
@@ -135,14 +135,14 @@ this spell only says how a phase differs from a one-shot ask.
   A bro with no human channel either delivers or raises with a reason you relay, and these phases execute a settled plan rather than working one out
   — the thinking was bought in the phases before them.
 - **Scope.** Your summon check settles what a phase needs.
-  Grant only what it needs beyond its bro's declarations and only what you hold yourself:
-  `@<bro>` when the phase has to hand work onward, or a `:launch.bro.party.…` member when it has to start sessions of its own.
-  When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator's `permits` row carries the matching `:launch.bro.pass.<kind>+<instance>` right.
+  Give only what it needs beyond its base and what your recipient restrictions allow:
+  `@<bro>` for onward delegation, or `bro.placement=unboxed` / `bro.placement=join` for non-default placement.
+  When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator may use the matching `bro.cred=<kind>+<instance>` permission.
   Otherwise the kind and instance must come from `projects.<identity>.bros.<phase-bro>` in the host configuration;
   do not broaden every run of that bro when an authorized per-phase pass is available.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
-  a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its own `launch.bro.bros` set carries one.{{end}}
+  a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its initial usable bro targets include one.{{end}}
 - **Self-contained prompts.** A bro shares no context with you:
   spell out the root task URL,
   what to produce,
@@ -174,7 +174,7 @@ ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
   neither phase needs one
   — design only reads the codebase,
   and review-and-plan resets the integration branch to `origin/master` itself.{{when #may_summon contains eyebro}}
-- The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the request fixes a manual child's `launch` section;
+- The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the prepared request fixes a manual child's gift and cap;
   the design phase opens no pull request.{{end}}
 - No talk beyond the default:
   the user is in the session, so its questions go to them rather than to you.
@@ -362,7 +362,7 @@ re-fire it on that PR, which [[run pr]] resumes through its `pr` argument, rathe
 **Summon:** use the bro the step names.
 Set `into` to the commit its landing landed, as the integration phase answered it;
 size `timeout` for the step and grant `talk` `worker.question`.
-Pass the step's credential instance when this coordinator holds its pass right;
+Pass the step's credential instance when this coordinator may use its `bro.cred=kind+instance` permission;
 otherwise take it from the target bro's host-config entry.
 
 **Manual summon** where your summon check leaves the step to one:

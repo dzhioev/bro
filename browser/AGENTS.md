@@ -29,7 +29,7 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 ## Browser persona
 
 `browser` is the semantic interface to webview missions.
-Its own seed grants the whole webview worker type, while profile passes and a visible view remain host or launch decisions.
+Its own seed grants the whole webview worker type, while profile selection and a visible view require the guarded `webview.cred` and `webview.vnc` permissions.
 It mounts `webview::`, `browser::`, and `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
 Its answers omit element refs, page markup such as snapshot syntax or HTML, and tool names;
 Markdown formatting is allowed.

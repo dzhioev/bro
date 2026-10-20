@@ -42,7 +42,7 @@ Interpret them as follows:
    summon only where your instructions call for a summon or leave the delegation to your judgment;
    plan that summon from this list instead of probing.
    `may_summon: none` means this session may summon nobody,
-   and the line's absence means the launcher published no list (an unmanaged environment).
+   and the line's absence means this process has no mission authority channel.
    A listed target can still be denied for another reason, but an unlisted one always is.
    An entry answers to the bros it derives from as well as to its own name,
    and the line marks it with them:
@@ -61,16 +61,17 @@ Interpret them as follows:
    `talk: none` means the quest is mute, while an absent line means the launcher published no talk.
    The host enforces these rights and nothing in-session widens them.
 
-7. `permits` renders the non-bro-target names from this session's `launch` section.
-   It includes set members and flags such as `:launch.bro.party.boxed`, `:launch.bro.party.unboxed`, `:launch.bro.party.join`, and `:launch.webview.vnc`;
-   it also includes pass rights such as `:launch.bro.pass.github+project`, plus a type key such as `:launch.benchmark` when its payload is empty:
-   `permits: none` means no such name is held, and an absent line means the launcher published no `launch` section.
-   `may_summon` renders the `launch.bro.bros` members separately.
-   An unmarked summon starts boxed when that party member is present, otherwise unboxed when its member is present;
-   it is refused when neither is held and is never turned into a join.
-   Grant a child only launch authority this session holds under a held type key.
-   The section is fixed at launch, so changing it means relaunching with `--grant` / `--revoke` or shaping a child request.
-   The complete grammar and fold are `bro/reference/ride.md`, "Session permissions and credentials".
+7. Authority rows read the session's host record live.
+   `permits` lists usable permissions other than bro targets, such as `bro.placement=join`, `webview`, `webview.vnc`, and `bro.cred=github+reviewer`.
+   `may_summon` lists usable bro targets; conditional entries carry their `for` restrictions.
+   `may_give` lists give-only entries with their recipient restrictions, such as `webview.cred=cookies+assistant to @browser`.
+   A missing authority row means there is no mission channel, not that the host published an empty authority.
+   A start needs its type and every selected option value, defaults included.
+   A child may receive use this session lacks if it matches the allowed recipients; onward give cannot be wider than this session's own.
+   An unmarked summon defaults boxed and never falls back to unboxed or a join.
+   Request another placement explicitly when allowed.
+   The operator can change concrete bro targets and session credentials through `ride override`; other changes need a new start or resume.
+   The [permission reference](../reference/permissions.md) defines the grammar and checks; its [cheat sheet](../reference/permissions_cheatsheet.md) covers usual setups.
 
 8. `trail_id` is the trail this session is recorded into.
    It can roll mid-session
