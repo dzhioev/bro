@@ -188,9 +188,7 @@ def _live_work(port: TurnEnd) -> LiveWork:
   session_watch_lagging = journal_head is not None and (
     published_head is None or published_head < journal_head
   )
-  covered = {
-    item.mission_id for item in missions if session_watch_alive and item.type == mission.BRO
-  }
+  covered = {item.mission_id for item in missions if session_watch_alive}
 
   session_watch_expected = watches.session_watch_admitted()
   session_watch_down = session_watch_expected and not session_watch_alive

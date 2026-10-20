@@ -5,12 +5,18 @@ from typing import cast
 
 import pytest
 
-from bro import mission
+from bro import mission, watches
 from bro.artifact import DEFAULT_TIMEOUT as ARTIFACT_TIMEOUT, SHARE
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_MISSION
 from bro.broker.journal import MAX_EVENT_BATCH
-from bro.quest_test_helper import next_message, quest_record, reply, running_server
+from bro.quest_test_helper import (
+  next_message,
+  quest_record,
+  reply,
+  reply_empty_watch_replay,
+  running_server,
+)
 
 REF = f'sha256:{"a" * 64}/report.md'
 
@@ -366,8 +372,7 @@ async def test_watch_renders_both_types_and_cuts_an_oversized_chat_line(monkeypa
     first_line = asyncio.create_task(asyncio.to_thread(next, watch))
     channel, arm = await next_message(server)
     await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
-    channel, listing = await next_message(server)
-    await reply(server, channel, listing, outcome='ok', value={'missions': []})
+    await reply_empty_watch_replay(server)
     channel, poll = await next_message(server)
     events = [
       {
@@ -393,9 +398,9 @@ async def test_watch_renders_both_types_and_cuts_an_oversized_chat_line(monkeypa
     ]
     await reply(server, channel, poll, outcome='ok', value={'head': 2, 'events': events})
 
-    assert await first_line == 'mission BRO-1 (bro to dev) started'
+    assert await first_line == watches.quiet('mission BRO-1 (bro to dev) started')
     cut = await asyncio.to_thread(next, watch)
-    assert len(cut.encode()) == mission.WATCH_LINE_BYTES
+    assert len(cut.removeprefix(watches.quiet('')).encode()) == mission.WATCH_LINE_BYTES
     assert cut.endswith('[1544 bytes, cut; seq 2 in mission history WEB-1]')
     watch.close()
 
@@ -412,8 +417,7 @@ async def test_watch_promises_a_beat_before_its_first_request_and_before_every_r
     channel, arm = await next_message(server)
     assert beats == [promise]
     await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
-    channel, listing = await next_message(server)
-    await reply(server, channel, listing, outcome='ok', value={'missions': []})
+    await reply_empty_watch_replay(server)
     channel, poll = await next_message(server)
     assert beats == [promise, promise]
     event = {
@@ -427,7 +431,7 @@ async def test_watch_promises_a_beat_before_its_first_request_and_before_every_r
     }
     await reply(server, channel, poll, outcome='ok', value={'head': 1, 'events': [event]})
 
-    assert await first_line == 'mission BRO-1 (bro to dev) started'
+    assert await first_line == watches.quiet('mission BRO-1 (bro to dev) started')
     watch.close()
 
 
@@ -441,7 +445,8 @@ async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(mo
       'mission': f'WEB-{sequence}',
       'parent': 'ROOT',
       'args': {'type': 'webview'},
-      'transition': 'started',
+      'transition': 'ended',
+      'outcome': 'ok',
     }
 
   async with running_server(monkeypatch) as server:
@@ -450,8 +455,7 @@ async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(mo
       first_line = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, arm = await next_message(server)
       await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
-      channel, listing = await next_message(server)
-      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      await reply_empty_watch_replay(server)
       channel, first_poll = await next_message(server)
       assert first_poll.args == {'after': 0, 'wait': 0.05}
       await reply(
@@ -464,9 +468,9 @@ async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(mo
           'events': [event(sequence) for sequence in range(1, MAX_EVENT_BATCH + 1)],
         },
       )
-      assert await first_line == 'mission WEB-1 (webview) started'
+      assert await first_line == 'mission WEB-1 (webview) ended ok'
       assert [next(watch) for _ in range(2, MAX_EVENT_BATCH + 1)][-1] == (
-        f'mission WEB-{MAX_EVENT_BATCH} (webview) started'
+        f'mission WEB-{MAX_EVENT_BATCH} (webview) ended ok'
       )
 
       frame_cut_line = asyncio.create_task(asyncio.to_thread(next, watch))
@@ -479,8 +483,8 @@ async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(mo
         outcome='ok',
         value={'head': 300, 'events': [event(sequence) for sequence in range(257, 281)]},
       )
-      assert await frame_cut_line == 'mission WEB-257 (webview) started'
-      assert [next(watch) for _ in range(258, 281)][-1] == ('mission WEB-280 (webview) started')
+      assert await frame_cut_line == 'mission WEB-257 (webview) ended ok'
+      assert [next(watch) for _ in range(258, 281)][-1] == ('mission WEB-280 (webview) ended ok')
 
       tail_line = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, tail_poll = await next_message(server)
@@ -492,8 +496,8 @@ async def test_watch_drains_full_and_frame_cut_event_batches_without_skipping(mo
         outcome='ok',
         value={'head': 300, 'events': [event(sequence) for sequence in range(281, 301)]},
       )
-      assert await tail_line == 'mission WEB-281 (webview) started'
-      assert [next(watch) for _ in range(282, 301)][-1] == ('mission WEB-300 (webview) started')
+      assert await tail_line == 'mission WEB-281 (webview) ended ok'
+      assert [next(watch) for _ in range(282, 301)][-1] == ('mission WEB-300 (webview) ended ok')
 
       resumed = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, resumed_poll = await next_message(server)

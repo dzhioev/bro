@@ -304,6 +304,23 @@ async def test_tui_starts_a_turn_when_news_arrives_while_idle(monkeypatch):
       assert app.query_one('#input-bar', MessageInput).disabled is False
 
 
+class _OnceClock(turn_end.SilenceClock):
+  """a silence clock that is due once, so a test sees exactly one notice."""
+
+  def __init__(self) -> None:
+    super().__init__(patience=0.05)
+    self._spent = False
+
+  def due(self, works, now):
+    return [] if self._spent else super().due(works, now)
+
+  def notified(self, works, now) -> None:
+    self._spent = True
+
+  def next_expiry(self, works):
+    return None if self._spent else super().next_expiry(works)
+
+
 @pytest.mark.asyncio
 async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_work_on_idle(
   monkeypatch,
@@ -312,7 +329,7 @@ async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_wo
 
   monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
   runner = _MockRunner(response='reply')
-  runner._silence_clock = turn_end.SilenceClock(patience=0.05)
+  runner._silence_clock = _OnceClock()
   returned = threading.Event()
   original = runner.wait_for_news
 
@@ -337,7 +354,7 @@ async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_wo
       await app.workers.wait_for_complete()
       await pilot.pause()
 
-      assert runner.mock_llm.wake_calls > wake_calls
+      assert runner.mock_llm.wake_calls == wake_calls + 1
 
 
 @dataclass(frozen=True)

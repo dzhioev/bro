@@ -42,9 +42,11 @@ A subpackage with a map of its own is pointed at, not described here.
   identity, features, credential manifest and optional tier, LLM key, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common launch enforcement lives in `ride/ride/launch_control.py`, and bro authorization in `ride/ride/bro_worker.py`
-- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and ordered journal stream for every worker mission.
+- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and the ordered journal stream for every worker mission.
+  `mission watch` renders it for the session watch:
+  the missions the session launched, its own mission's owner chat, and quiet lines for a child's service marks and says.
   The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
-- `quest.py` (`quest`) — the bro-only view over the mission surface and its shared stream, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
+- `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
 - `watches.py` and `watch_run.py` (`watch-run`) — one session-local watch store and its producer.
   `take()` commits fair, bounded batches under one exclusive lock;
   each line names its command and carries the arrival time its producer recorded, and a cut batch carries a pending marker.

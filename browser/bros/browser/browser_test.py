@@ -36,7 +36,7 @@ def test_browse_spell_uses_session_watch_notifications_and_branches_final_delive
   for harness in ('bro', 'claude'):
     body = browser.get_spell_body('browse', harness=harness, hold='unattended')
     assert 'session watch delivers owner questions as notifications' in body
-    assert '[[watch quest watch]]' not in body
+    assert '[[watch mission watch]]' not in body
     assert 'call `bro::answer`' in body
     assert 'do not call `bro::answer`' in body
 

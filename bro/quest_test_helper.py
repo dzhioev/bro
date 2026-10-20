@@ -194,3 +194,21 @@ def entry(
   if pending:
     record['pending'] = True
   return record
+
+
+async def reply_empty_watch_replay(server: Harness) -> None:
+  channel, own_query = await next_message(server)
+  assert own_query.args == {'id': 'ROOT'}
+  await reply(
+    server,
+    channel,
+    own_query,
+    outcome='ok',
+    value={'mission': quest_record('ROOT', 'started', kind='root')},
+  )
+  channel, listing = await next_message(server)
+  assert listing.args == {}
+  await reply(server, channel, listing, outcome='ok', value={'missions': []})
+
+
+# --- watch ------------------------------------------------------------------------

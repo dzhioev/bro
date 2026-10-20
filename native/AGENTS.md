@@ -24,7 +24,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   A job or watch line runs in brash under the policy `Runner` writes from the bro's reach into a directory its lifetime owns, where the command list is finite, and in bash otherwise.
   OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
   interactive owners call `wake()` when the inbox reports news.
-  In a managed session, `do-ride` owns the shared watch store and arms its `quest watch` producer;
+  In a managed session, `do-ride` owns the shared watch store and arms its `mission watch` producer;
   an in-process `bro run|chat` keeps model-started watches in the temporary store its `Runner` tears down.
   A pump hands the inbox one bounded watch batch at a time and takes the next only after the model drains the last.
   At each one-shot turn end, `Runner` applies the shared `bro.turn_end` rule:

@@ -830,26 +830,32 @@ def _bounded_chat_line(line: str, event: dict[str, Any]) -> str:
 
 
 def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
+  """A child's chat as `mission … says|asks|replies|refused …`, and the session's
+  own mission's other end as `summoner …`; None for an event that is neither."""
   transition = event.get('transition')
+  is_own = event.get('mission') == own
   if transition not in ('message', 'refused'):
     return None
-  if transition == 'message' and event.get('from') != 'worker':
+  if transition == 'message' and event.get('from') != ('owner' if is_own else 'worker'):
     return None
-  clause = _mission_clause(event, own)
+  subject = 'summoner' if is_own else _mission_clause(event, own)
+  head = event.get('head')
   if transition == 'refused':
     reason = event.get('reason')
     if not isinstance(reason, str):
       raise MissionError('refused mission event carried no reason')
-    head = event.get('head')
-    rendered = f'{clause} refused {reason}'
+    rendered = f'{subject} refused {reason}'
     if not (isinstance(head, dict) and head.get('truncated') is True):
-      rendered += f' {_payload_text(head)}'
+      rendered += f': {_payload_text(head)}'
   elif event.get('id') is not None:
-    rendered = f'{clause} asks {_payload_text(event.get("head"))}'
+    correlation = f'question {event["id"]}'
+    if event.get('reply_to') is not None:
+      correlation += f', to {event["reply_to"]}'
+    rendered = f'{subject} asks {_payload_text(head)} ({correlation})'
   elif event.get('reply_to') is not None:
-    rendered = f'{clause} replies {_payload_text(event.get("head"))}'
+    rendered = f'{subject} replies {_payload_text(head)} (to {event["reply_to"]})'
   else:
-    rendered = f'{clause} says {_payload_text(event.get("head"))}'
+    rendered = f'{subject} says {_payload_text(head)}'
   return _bounded_chat_line(_single_line(rendered), event)
 
 
@@ -918,18 +924,8 @@ def visible_event_head() -> int:
     return _read_head(client, 'visible_head', 'head read')
 
 
-def _stream_event_relevant(
-  event: dict[str, Any],
-  own: str,
-  worker_type: Optional[str],
-  *,
-  include_own: bool,
-  strict_parent: bool,
-) -> bool:
-  is_own = event.get('mission') == own
-  if is_own:
-    if not include_own:
-      return False
+def _stream_event_relevant(event: dict[str, Any], own: str, worker_type: Optional[str]) -> bool:
+  if event.get('mission') == own:
     transition = event.get('transition')
     return transition == 'refused' or (transition == 'message' and event.get('from') == 'owner')
   if event.get('kind') != LAUNCH:
@@ -937,9 +933,7 @@ def _stream_event_relevant(
   if worker_type is not None and _worker_type(event) != worker_type:
     return False
   if event.get('parent') != own:
-    if strict_parent:
-      raise MissionError('events read returned a mission this session did not launch')
-    return False
+    raise MissionError('events read returned a mission this session did not launch')
   return event.get('transition') != 'message' or event.get('from') == 'worker'
 
 
@@ -949,16 +943,12 @@ def _replay_events(
   head: int,
   worker_type: Optional[str],
   *,
-  include_own: bool,
-  strict_parent: bool,
   after: int,
 ) -> list[WatchEvent]:
-  events: list[dict[str, Any]] = []
-  if include_own:
-    record = query_mission(client, own)
-    events.extend(
-      _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
-    )
+  record = query_mission(client, own)
+  events: list[dict[str, Any]] = [
+    _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
+  ]
   for record in _query_listing(client, worker_type):
     if record.get('parent') != own or _ended(record):
       continue
@@ -974,13 +964,7 @@ def _replay_events(
       raise MissionError('watch replay entry carried a malformed sequence')
     if sequence <= after or sequence > head:
       continue
-    if not _stream_event_relevant(
-      event,
-      own,
-      worker_type,
-      include_own=include_own,
-      strict_parent=strict_parent,
-    ):
+    if not _stream_event_relevant(event, own, worker_type):
       continue
     previous = replay.setdefault(sequence, event)
     if previous != event:
@@ -991,11 +975,8 @@ def _replay_events(
 def watch_stream(
   worker_type: Optional[str] = None,
   wait_seconds: float = READ_WAIT_SECONDS,
-  *,
-  include_own: bool = False,
-  strict_parent: bool = False,
 ) -> Generator[WatchItem]:
-  """Yield one arm/replay/gap stream for mission and quest watch projections."""
+  """Yield one arm/replay/gap stream of the missions this session launched and of its own mission's owner chat."""
   if worker_type == '':
     raise ValueError('mission type must be non-empty')
   if wait_seconds <= 0:
@@ -1013,8 +994,6 @@ def watch_stream(
       own,
       head,
       worker_type,
-      include_own=include_own,
-      strict_parent=strict_parent,
       after=last_yielded,
     ):
       last_yielded = cast(int, item.event['seq'])
@@ -1040,8 +1019,6 @@ def watch_stream(
           own,
           head,
           worker_type,
-          include_own=include_own,
-          strict_parent=strict_parent,
           after=last_yielded,
         ):
           last_yielded = cast(int, item.event['seq'])
@@ -1064,13 +1041,7 @@ def watch_stream(
         ):
           raise MissionError('events read returned a malformed sequence')
         cursor = max(cursor, sequence)
-        if not _stream_event_relevant(
-          event,
-          own,
-          worker_type,
-          include_own=include_own,
-          strict_parent=strict_parent,
-        ):
+        if not _stream_event_relevant(event, own, worker_type):
           continue
         last_yielded = sequence
         yield WatchEvent(event)
@@ -1079,10 +1050,22 @@ def watch_stream(
       watches.publish_journal_head(cursor)
 
 
+def _quiet(event: dict[str, Any]) -> bool:
+  """Whether the event is a service mark or a plain say of a child, which never wakes a session alone."""
+  from bro.broker.brotocol import MARK_TRANSITIONS
+
+  transition = event.get('transition')
+  is_say = event.get('id') is None and event.get('reply_to') is None
+  return transition in MARK_TRANSITIONS or (
+    transition == 'message' and event.get('from') == 'worker' and is_say
+  )
+
+
 def watch(
   worker_type: Optional[str] = None, wait_seconds: float = READ_WAIT_SECONDS
 ) -> Generator[str]:
-  """Yield retained pending chat, then ordered lifecycle and chat events."""
+  """Yield retained pending chat, then ordered lifecycle and chat events;
+  a child's service marks and says are quiet lines."""
   if worker_type == '':
     raise ValueError('mission type must be non-empty')
   if wait_seconds <= 0:
@@ -1094,8 +1077,15 @@ def watch(
       continue
     event = item.event
     chat_line = _chat_event_line(event, own)
-    line = chat_line if chat_line is not None else _event_line(event, own)
-    yield _single_line(f'before the watch: {line}') if item.replayed else line
+    if chat_line is not None:
+      line = chat_line
+    elif event.get('transition') in ('message', 'refused') or event.get('mission') == own:
+      continue
+    else:
+      line = _event_line(event, own)
+    if item.replayed:
+      line = _single_line(f'before the watch: {line}')
+    yield watches.quiet(line) if _quiet(event) else line
 
 
 # --- CLI ------------------------------------------------------------------------

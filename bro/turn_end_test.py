@@ -173,8 +173,7 @@ def test_background_work_and_a_speaking_summoner_keep_the_run_waiting_silently(m
 def test_a_failed_waiter_notices_even_beside_live_work(monkeypatch):
   _with_broker(monkeypatch, _mission('WEB-1', 'webview'))
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
-  store = FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)])
-  port = FakePort(store, (_work('job-1'),))
+  port = FakePort(FakeStore(), (_work('job-1'),))
 
   turn_end.settle(port)
   turn_end.settle(port)
@@ -186,6 +185,15 @@ def test_a_failed_waiter_notices_even_beside_live_work(monkeypatch):
     'Deliver the result of your task through `bro::answer` once the whole task is done.' in notice
   )
   assert port.ends == 0
+
+
+def test_the_session_watch_covers_a_mission_of_any_type(monkeypatch):
+  _with_broker(monkeypatch, _mission('WEB-1', 'webview'), _mission('Q1'))
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]))
+
+  turn_end.settle(port)
+
+  assert (port.notifications, port.ends) == ([], 0)
 
 
 def test_a_stalled_watch_notices_once_and_no_longer_holds_the_run():
@@ -209,7 +217,7 @@ def test_a_stalled_session_watch_is_a_down_session_watch(monkeypatch):
   turn_end.settle(port)
 
   [notice] = port.notifications
-  assert 'the session watch `quest watch` is down' in notice
+  assert 'the session watch `mission watch` is down' in notice
   assert 'quest Q1 to dev' in notice
 
 
@@ -324,7 +332,7 @@ def test_a_reported_session_watch_stall_leaves_the_deadline_and_stays_noticed_on
 
   first = turn_end.failure_notice(port)
 
-  assert first is not None and 'the session watch `quest watch` is down' in first
+  assert first is not None and 'the session watch `mission watch` is down' in first
   assert cast(FakeStore, port.watch_store).reported == [(watches.SESSION_WATCH_COMMAND, 'beat 1')]
   assert turn_end.failure_notice(port) is None
 
@@ -484,7 +492,7 @@ def _journal_head() -> int:
 
 @pytest.mark.asyncio
 async def test_the_sessions_own_end_is_no_event_its_turn_end_waits_for(monkeypatch):
-  # the session watch armed at the journal head, as `quest watch` does, and the
+  # the session watch armed at the journal head, as `mission watch` does, and the
   # end the session's answer journals is its summoner's to see
   watch = FakeWatch(watches.SESSION_WATCH_COMMAND)
   port = FakePort(FakeStore([watch]))
