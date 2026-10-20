@@ -407,12 +407,12 @@ Don't wait for a review to arrive — hand it over:
    step 15's APPROVED handler is where you collect it.
    It is not the only place, because the child can finish without posting anything new:
    one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
-   The session watch's `summon ended` line carries that end
+   The session watch's `ended` line for the quest carries that end
    — `bro::quest_check` on the quest id then, and a completed answer is the verdict whether or not a PR event carried it.
 3. A summon denied at launch, or a child that raises before it reviews anything
    — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
    — means no reviewer ran.
-   A raise arrives as `summon ended failed:raised` on the session watch, with its reason on `bro::quest_check`;
+   A raise arrives as `ended failed:raised` on the session watch, with its reason on `bro::quest_check`;
    report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
    A child that ran and ended without approving is the opposite case and blocks the merge;
    step 15 handles it.
@@ -473,7 +473,7 @@ stopping it is what you would have to undo, and a fresh `poll-pr` baselines ever
 With no eyebro summoned this event is it.
 Where you did summon one, its own answer is the verdict:
 `bro::quest_check` on the quest id
-— the child exits moments after posting its approval, so a `running` state means its `summon ended` line is still coming:
+— the child exits moments after posting its approval, so a `running` state means its `ended` line is still coming:
 check again when it arrives.
 An answer that is not an approval
 — findings still standing, a `raise`, an error

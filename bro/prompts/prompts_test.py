@@ -111,7 +111,7 @@ class TestSessionFragment:
     monkeypatch.setenv(LAUNCH_ENV, encode_launch({'bro': {'bros': frozenset({'reviewer'})}}))
     fragment = session_fragment('attended', harness=get_harness(harness))
     assert fragment.startswith('# Summoning session')
-    assert 'session keeps a quest watch' in fragment
+    assert 'session keeps a session watch' in fragment
     assert 'end the turn' in fragment
     assert 'watch-next' not in fragment
     assert '{{' not in fragment
@@ -153,7 +153,7 @@ class TestSessionFragment:
     fragment = session_fragment(
       'attended', harness=get_harness(harness), talk=('owner.say', 'worker.say')
     )
-    assert 'session keeps a quest watch' in fragment
+    assert 'session keeps a session watch' in fragment
     assert 'arrive as notifications' in fragment
 
   @pytest.mark.parametrize('harness', ['bro', 'claude'])

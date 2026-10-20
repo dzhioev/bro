@@ -274,7 +274,7 @@ _QUEST_CANCEL_DESCRIPTION = (
 
 
 _QUEST_WATCH_DESCRIPTION = (
-  "set whether the session's quest watch wakes this session on its quiet lines or holds them "
+  'set whether the session watch wakes this session on its quiet lines or holds them '
   'until the next line that does wake it, which is the default. use it to follow a child live; '
   'returns the setting now in force.'
 )

@@ -165,6 +165,7 @@ PYTEST_FILES = [
   'bro/harness/registry_test.py',
   'bro/bro_test.py',
   'bro/mission_test.py',
+  'bro/mission_watch_test.py',
   'bro/quest_test.py',
   'bro/turn_end_test.py',
   'bro/artifact_test.py',

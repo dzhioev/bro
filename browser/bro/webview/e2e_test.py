@@ -540,7 +540,7 @@ class ScriptedRunner(Runner):
   @contextmanager
   def _watch_pump(self):
     with super()._watch_pump():
-      self.watch_store.start('quest watch')
+      self.watch_store.start('mission watch')
       yield
 
   def _create_llm(self, *, hold):

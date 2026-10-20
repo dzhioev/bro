@@ -1379,7 +1379,7 @@ def test_claude_summoner_receives_a_child_question_and_end_through_its_session_w
   assert report['model_actions'] == ['summon', 'quest_say', 'quest_check']
   delivered = '\n'.join(report['deliveries'])
   assert 'asks approve the change?' in delivered
-  assert 'summon ended ok' in delivered
+  assert 'ended ok' in delivered
   assert all('watch' not in action for action in report['model_actions'])
   assert env.live_containers() == []
 
@@ -2306,11 +2306,11 @@ started = time.monotonic()
 deadline = started + 30
 notifications = []
 with Runner(WatchBro()) as runner:
-  runner.watch_store.start('quest watch')
+  runner.watch_store.start('mission watch')
   quest_id = summon_detached(
     'bro', 'raise for the native watch route', llm='echo', harness='bro', timeout=120
   )
-  while not any('summon ended failed:raised' in text for text in notifications):
+  while not any('ended failed:raised' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
       if not runner.inbox.wait(deadline, cancelled):
         raise TimeoutError('the native root was not woken by the child end')
@@ -2354,7 +2354,7 @@ def wait_for_incoming(text, deadline):
 wait_for_incoming('before arm', time.monotonic() + 30)
 notifications = []
 with Runner(WatchBro()) as runner:
-  runner.watch_store.start('quest watch')
+  runner.watch_store.start('mission watch')
   deadline = time.monotonic() + 30
   while not any('before the watch: summoner says before arm' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
@@ -2499,7 +2499,7 @@ def test_native_root_watch_wakes_on_a_detached_child_raise(
   report = json.loads(raw_report)
   assert code == 0
   assert report['elapsed'] < 30
-  assert any('summon ended failed:raised' in text for text in report['notifications'])
+  assert any('ended failed:raised' in text for text in report['notifications'])
   assert isolated_env.live_containers() == []
 
 
@@ -2594,7 +2594,7 @@ class ScriptedRunner(Runner):
   @contextmanager
   def _watch_pump(self):
     with super()._watch_pump():
-      self.watch_store.start('quest watch')
+      self.watch_store.start('mission watch')
       yield
 
   def _create_llm(self, *, hold):
@@ -2728,7 +2728,7 @@ class ScriptedLLM(LLM):
       self.notices.append(batch.text)
 
   def _grandchild_ended(self):
-    return any(f'summon ended ok (quest {self.quest_id} to bro)' in text for text in self.notices)
+    return any(f'mission {self.quest_id} (bro to bro) ended ok' in text for text in self.notices)
 
   async def wake(self, *, request_timeout=None):
     self._drain()
@@ -2761,7 +2761,7 @@ class ScriptedRunner(Runner):
   @contextmanager
   def _watch_pump(self):
     with super()._watch_pump():
-      self.watch_store.start('quest watch')
+      self.watch_store.start('mission watch')
       yield
 
   def _create_llm(self, *, hold):
@@ -2859,7 +2859,7 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
   delivered = json.loads(outcome['answer'])
   assert delivered['answer'] == 'approved'
   assert any('asks approve the grandchild?' in text for text in delivered['notices'])
-  assert any('summon ended ok' in text for text in delivered['notices'])
+  assert any('ended ok' in text for text in delivered['notices'])
   assert all('watch' not in action for action in delivered['actions'])
   assert all('turn ended with work still live' not in text for text in delivered['notices'])
   assert env.live_containers() == []

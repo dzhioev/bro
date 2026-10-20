@@ -224,12 +224,12 @@ def _run_hook(cwd: Path, **environment: str) -> subprocess.CompletedProcess[str]
 
 def test_the_hook_wakes_the_session_from_its_store(owner, state, tmp_path):
   del state
-  _seed(owner.store, 'quest watch', 'summon ended\n')
+  _seed(owner.store, 'mission watch', 'summon ended\n')
 
   completed = _run_hook(tmp_path)
 
   assert completed.returncode == REWAKE_STATUS, completed.stderr
-  assert completed.stderr == '\n[quest watch] summon ended\n'
+  assert completed.stderr == '\n[mission watch] summon ended\n'
   assert completed.stdout.splitlines() == [WAITER_MARK]
 
 

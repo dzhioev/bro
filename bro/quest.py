@@ -2,7 +2,7 @@
 
 A quest is what a summon opens: another session working a request until it
 answers. This module owns the outcome read, conversation read, say, ask, and
-caller-scoped listing, ordered watch, and cancellation for bro quests,
+caller-scoped listing, and cancellation for bro quests,
 as a library and as the ``quest`` CLI. ``self`` names the
 session's own quest, the one it answers.
 
@@ -20,12 +20,11 @@ broker implementation on pre-gate launch paths.
 import json
 import math
 import time
-from collections.abc import Generator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
 import bro.base.args as base_args
-from bro import mission as mission_client, watches
+from bro import mission as mission_client
 from bro.base import log
 
 if TYPE_CHECKING:
@@ -554,113 +553,6 @@ def list_quests() -> dict[str, Any]:
     return {'quests': _query_listing(client)}
 
 
-# --- watch ----------------------------------------------------------------------
-
-
-def _single_line(text: str) -> str:
-  return ''.join(
-    character if character.isprintable() else repr(character)[1:-1] for character in text
-  )
-
-
-def _quest_clause(event: dict[str, Any], own: str) -> str:
-  args = event.get('args')
-  parent = event.get('parent')
-  if not isinstance(args, dict) or not isinstance(parent, str):
-    raise QuestError('events read returned a malformed summon record')
-  clause = f'quest {event.get("mission")}'
-  target = args.get('target')
-  if isinstance(target, str):
-    clause += f' to {target}'
-  elif event.get('transition') != 'denied':
-    raise QuestError('events read returned an accepted summon without a target')
-  if parent != own:
-    raise QuestError('events read returned a quest this session did not summon')
-  return clause
-
-
-def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
-  transition = event.get('transition')
-  is_own_quest = event.get('mission') == own
-  sender = event.get('from')
-  other_end = sender == ('owner' if is_own_quest else 'worker')
-  if transition == 'message' and not other_end:
-    return None
-  if transition not in ('message', 'refused'):
-    return None
-  actor = 'summoner' if is_own_quest else 'summon'
-  if transition == 'refused':
-    reason = event.get('reason')
-    if not isinstance(reason, str):
-      raise QuestError('refused summon event carried no reason')
-    head = f'{actor} refused {reason}'
-    text = _refused_text(event)
-    if text is not None:
-      head += f': {text}'
-  elif event.get('id') is not None:
-    head = f'{actor} asks {_text_from_entry(event)}'
-  elif event.get('reply_to') is not None:
-    head = f'{actor} replies {_text_from_entry(event)}'
-  else:
-    head = f'{actor} says {_text_from_entry(event)}'
-  details = []
-  if not is_own_quest:
-    details.append(_quest_clause(event, own))
-  if event.get('id') is not None:
-    details.append(f'question {event["id"]}')
-  if event.get('reply_to') is not None:
-    details.append(f'to {event["reply_to"]}')
-  return _single_line(head if not details else f'{head} ({", ".join(details)})')
-
-
-def _event_line(event: dict[str, Any], own: str) -> str:
-  transition = event.get('transition')
-  if transition == 'trail':
-    head = f'summon trail {event.get("trail_id")}'
-  elif transition == 'ended':
-    reason = f':{event["reason"]}' if event.get('reason') is not None else ''
-    head = f'summon ended {event.get("outcome")}{reason}'
-  elif transition == 'denied':
-    head = str(event.get('reason'))
-  else:
-    head = f'summon {transition}'
-  return _single_line(f'{head} ({_quest_clause(event, own)})')
-
-
-def _quiet(event: dict[str, Any]) -> bool:
-  from bro.broker.brotocol import MARK_TRANSITIONS
-
-  transition = event.get('transition')
-  is_say = event.get('id') is None and event.get('reply_to') is None
-  return transition in MARK_TRANSITIONS or (
-    transition == 'message' and event.get('from') == 'worker' and is_say
-  )
-
-
-def watch(wait_seconds: float = READ_WAIT_SECONDS) -> Generator[str]:
-  """Yield the bro-quest view of the shared ordered mission stream, a summon's
-  service marks and a child's says as quiet lines."""
-  own = own_quest()
-  for item in mission_client.watch_stream(BRO, wait_seconds, include_own=True, strict_parent=True):
-    if isinstance(item, mission_client.WatchGap):
-      yield _single_line(f'quest watch gap: {item.reason}; re-armed at {item.head}')
-      continue
-    event = item.event
-    transition = event.get('transition')
-    chat_line = _chat_event_line(event, own)
-    if chat_line is not None:
-      line = chat_line
-    elif transition in ('message', 'refused') or (
-      transition == 'listening' and event.get('mission') == own
-    ):
-      continue
-    else:
-      line = _event_line(event, own)
-    if item.replayed:
-      line = _single_line(f'before the watch: {line}')
-    yield watches.quiet(line) if _quiet(event) else line
-
-
 # --- CLI ------------------------------------------------------------------------
 
 
@@ -748,16 +640,6 @@ def _list() -> int:
     log.error('%s', error)
     return 1
   _print_json(listing)
-  return 0
-
-
-def _watch() -> int:
-  try:
-    for line in watch():
-      print(line, flush=True)
-  except QuestError as error:
-    log.error('%s', error)
-    return 1
   return 0
 
 
@@ -858,14 +740,6 @@ def main(argv: list[str]) -> Optional[int]:
     'each id is a repeatable handle for `quest check` and `quest history`',
   )
   list_parser.set_handler(_list)
-
-  watch_parser = verbs.add_parser(
-    'watch',
-    help='stream every bro quest this session summons',
-    description='stream the ordered lifecycle and chat of every bro quest this session '
-    'summons. Runs until killed; what is already in flight when it starts is the baseline',
-  )
-  watch_parser.set_handler(_watch)
 
   cancel_parser = verbs.add_parser(
     'cancel',

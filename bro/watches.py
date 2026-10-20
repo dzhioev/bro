@@ -36,7 +36,7 @@ PRODUCER_SLUG_ENV = 'BRO_WATCH_SLUG'
 PRODUCER_COMMAND_ENV = 'BRO_WATCH_COMMAND'
 PRODUCER_POLICY_ENV = 'BRO_WATCH_BRASH_POLICY'
 PRODUCER_JOURNAL_ENV = 'BRO_WATCH_JOURNAL'
-SESSION_WATCH_COMMAND = 'quest watch'
+SESSION_WATCH_COMMAND = 'mission watch'
 BEAT_MISSES_ALLOWED = 3
 _QUIET_MARK = b'\x1f'
 _PENDING_MARKER = '[...pending watch lines...]'
@@ -1109,7 +1109,7 @@ def session_watch_admitted(
   summoned: Optional[bool] = None,
   talk: Optional[tuple[str, ...]] = None,
 ) -> bool:
-  """Whether this session can receive traffic carried only by its quest watch."""
+  """Whether this session can receive traffic carried only by its session watch."""
   from bro import summon
 
   resolved_may_summon = summon.effective_may_summon() if may_summon is None else may_summon
