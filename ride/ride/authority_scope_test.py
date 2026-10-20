@@ -700,3 +700,72 @@ def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, 
 
   with pytest.raises(ValueError, match='effort level'):
     parse('openai:vendor-private-variant:' + value)
+
+
+def test_cheatsheet_examples_use_shipped_configuration_and_permission_grammar():
+  import re
+  import shlex
+
+  from bro import reference
+  from bro.authority.syntax import Syntax
+
+  kinds = frozenset(credentials.default_registry())
+  syntax = Syntax(
+    {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
+    kinds,
+  )
+  text = (reference.DIRECTORY / 'permissions_cheatsheet.md').read_text()
+  for language, body in re.findall(r'```(\w+)\n(.*?)```', text, re.DOTALL):
+    if language == 'json':
+      configuration = Configuration.parse(json.loads(body))
+      syntax.layer(configuration.defaults.layer)
+      syntax.layer(configuration.operator)
+      for project in configuration.projects.values():
+        syntax.layer(project.policy.layer)
+        for policy in project.bros.values():
+          syntax.layer(policy.layer)
+    elif language == 'sh':
+      for line in body.splitlines():
+        words = shlex.split(line)
+        for index, word in enumerate(words):
+          if word in ('--grant', '--revoke', '--limit'):
+            entries = {'grant': [], 'revoke': [], 'limit': []}
+            entries[word[2:]] = [words[index + 1]]
+            syntax.layer(
+              parse_layer(grant=entries['grant'], revoke=entries['revoke'], limit=entries['limit'])
+            )
+          elif word in ('--pass', '--cred'):
+            syntax.layer(parse_layer(grant=['bro.cred=' + words[index + 1]]))
+
+
+def test_cheatsheet_shell_examples_parse_without_running_commands(monkeypatch):
+  import importlib
+  import re
+  import shlex
+
+  from bro import reference
+  from bro.base.args import Parser
+
+  class Captured(BaseException):
+    def __init__(self, parser):
+      self.parser = parser
+
+  def capture(parser, argv):
+    raise Captured(parser)
+
+  commands = {
+    'ride': 'ride.cli',
+    'summon': 'bro.summon',
+    'webview': 'bro.webview.cli',
+    'benchmark-run': 'bro.bench.run',
+  }
+  text = (reference.DIRECTORY / 'permissions_cheatsheet.md').read_text()
+  for body in re.findall(r'```sh\n(.*?)```', text, re.DOTALL):
+    for line in body.splitlines():
+      words = shlex.split(line)
+      module = importlib.import_module(commands[words[0]])
+      with monkeypatch.context() as context:
+        context.setattr(Parser, 'parse', capture)
+        with pytest.raises(Captured) as captured:
+          module.main(words)
+      captured.value.parser.parse(words)

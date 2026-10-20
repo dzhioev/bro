@@ -79,6 +79,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/claude/` — the Claude Code harness implementation, including the host's verified pinned-release cache;
   see `ride/claude/AGENTS.md`.
 
+The public authority reference is `bro/reference/permissions.md`; scenario-first setup instructions are in `bro/reference/permissions_cheatsheet.md`.
+
 ## Invariants
 
 - The neutral layer owns one started-party launcher parameterized by isolation;
@@ -135,6 +137,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - A pinned mode-verb workspace is never auto-dropped.
   An unpinned `along` workspace is kept unless `--drop` is explicit;
   an unpinned `solo` workspace is dropped after a clean exit unless `--keep` is explicit.
+  Spawned-workspace credential-operation retention is described in `bro/reference/permissions.md`, "Credential changes and settlement".
 - A solo resume becomes an along session and preserves its set hold value.
 - Every reconstructed session argv and `do-ride` command restates the resolved `--hold`.
   The session executable has no placement flag from which to re-derive it.

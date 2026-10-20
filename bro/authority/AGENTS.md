@@ -12,3 +12,5 @@ Pure symbolic algebra with no I/O.
 Lazy resolvers are pure and region-constant, and must represent the same authority as their eager expansion for every checked start.
 An override result is a candidate transition: publish it only after existence checks and application succeed.
 Tests compare each layer with the independent finite evaluator in `oracle_test_helper.py`.
+
+The public algebra reference is `bro/reference/permission_model.md`; the shipped grammar and runtime mapping are in `bro/reference/permissions.md`.

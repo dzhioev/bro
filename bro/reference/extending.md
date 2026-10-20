@@ -108,16 +108,15 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   Gate components with `when(feature('brog'), …)` (`from bro.bro import feature`) and text with `{{iff #features contains brog}}`;
   a gated component's secrets enter the manifest only where its gates resolve, and the gate's own credential is tiered with the feature.
   See `bro/reference/conditions.md` "Bro features".
-- `may_summon = ('reviewer',)` seeds members of `launch.bro.bros`, adjusted per launch or summon request by `--grant @bro` and `--revoke @bro`.
-  A summon request may grant the child only launch authority its summoner holds;
-  the child's own seed and configuration are independent, and the host's depth cap separately bounds the launch tree.
-  The declaration is MRO-walked and unioned like `extra_secrets`;
-  each seed expands transitive launch authority and should be added deliberately.
-  The complete permission-document fold is `bro/reference/ride.md`, "Session permissions and credentials".
-- `may_launch = ('webview',)` seeds one whole `:launch.<type>` key per worker type before the launch's configuration layers fold.
-  Fields, flags, and pass rights remain host- or launch-configured, and any layer may revoke the seeded key.
-  The declaration is MRO-walked and unioned like `may_summon`;
-  `bro` is refused because the framework already seeds it, and an uninstalled type fails when the host computes a launch for the persona.
+- `may_summon = ('reviewer',)` seeds `@reviewer` with full use and give before configuration layers apply.
+  The child's base is independent of its starter; request gifts and caps add or restrict authority under the use/give checks.
+  The declaration is MRO-walked and unioned like `extra_secrets`.
+  The host's depth cap separately bounds the tree.
+- `may_launch = ('webview',)` seeds the type's start permission with full use and give.
+  The declaration is MRO-walked and unioned like `may_summon`.
+  Guarded option values, such as profiles or VNC, need their own grants.
+  `bro` is refused because the framework already seeds it; an uninstalled type fails an applicable launch.
+  The [permission reference](permissions.md) defines type options, configuration layers, and the checks.
 - `provisioning = (provision_hooks,)` declares session-start steps for the session's workspace
   — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`do-ride` for a managed one, on either harness).
   MRO-walked and concatenated like `extra_secrets`.

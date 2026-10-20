@@ -63,3 +63,12 @@ async def test_read_tool_serves_the_roster(source):
 async def test_read_tool_returns_the_page(source):
   tool = (await source.as_mcp_server().list_tools())[0]
   assert await tool.call({'topic': 'first'}) == '# First\n\nfirst body\n'
+
+
+def test_permission_reference_pages_are_served_whole():
+  from bro.datasources import references
+
+  pages = [references.permission_model, references.permissions, references.permissions_cheatsheet]
+  manual = ManSource('man', summary='permission references', pages=pages)
+  for page in pages:
+    assert manual.read(page.name) == page._path.read_text()

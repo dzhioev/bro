@@ -90,7 +90,7 @@ Use `BRO_STORE` for a synthesized service or session store.
 A hydrated session's index additionally carries `generation`, `kinds` (the declared hydrated kinds), and `material`, an authoritative stored-name-to-relative-file mapping under `creds/`.
 Only mapped names are readable, regardless of other files in the directory.
 A credential override advances the generation and may record its `operation` id;
-`bro/reference/ride.md` describes publication and recovery.
+`bro/reference/ride.md` describes publication; `bro/reference/permissions.md` describes operation settlement and recovery.
 
 The `credentials get <kind>` CLI applies the store's explicit selection, while `--instance` addresses one stored name exactly.
 `credentials list` prints every registered kind with its description;
@@ -170,7 +170,8 @@ The path entry's list replaces the URL entry's whole, and no list at all reads a
 The launch's own `--llm` or a summon's `llm` then fills over the picked recipe:
 naming a provider or a model keeps its own pair, and an effort or `+fast` it does not name is read from the pick;
 a result the harness does not serve fails the launch.
-The settled recipe is what the session records and forwards, so a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
+The admitted recipe is what the session runs and forwards; the resume record keeps set values and reapplies defaults.
+Thus a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
 The retired `instances` field is rejected with `creds` named as its replacement.
 Each launch requires every credential name in its applicable layers to be registered.
 Authority may name absent instances;
@@ -204,7 +205,7 @@ The alias is what any distribution may claim, so keying on it would let two comm
 an entry keyed by the alias of the running command fails the read rather than sitting inert.
 
 A launch whose attachment no project entry names simply reads the layers that do apply, ending at the kind's own stored material.
-A launch can override its computed selection with `--cred kind+instance` without adding the kind.
+A launch can select and hold a kind with `--cred kind+instance`, overriding its default pick.
 
 Every console script names its module to `bro.base.args.run_cli`, which records the canonical name of the command the process is.
 On first credential access, an ambient resolver reads the store's defaults and applies the host config's `user` and that command's own layer.
@@ -247,3 +248,4 @@ A managed session reads a synthesized store rather than the host's, in this same
 a name not hydrated resolves to `SecretNotFound`, while the code registry's full kind universe remains known for capability checks.
 The store keeps selected and transitively referenced instances under their own stored names, with its picks under `defaults` and typed annotations under `sources`.
 Credential selection, hydration, and delivery, including install hooks, are documented in `bro/reference/ride.md`, "Session permissions and credentials".
+Authority and configured picks are documented in `bro/reference/permissions.md`; common setups are in `bro/reference/permissions_cheatsheet.md`.

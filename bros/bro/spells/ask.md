@@ -6,8 +6,8 @@ This spell should be used when the user asks to relay a question or job to anoth
 — "[[ask researcher to compare the storage options]]", "ask the reviewer whether the change is safe", "have deployer roll out the API", "summon developer"
 — including asking for an interactive child the user will drive themselves ("summon a dev session for me", a manual summon).
 Turns the phrasing into a summon, picks the scope the request needs, and relays the retained answer with the failure modes handled.
-A summon succeeds only when the target is in the summoner's `launch.bro.bros` set
-— the session reads those members from the banner's `may_summon` row, fixed at launch
+A summon needs a usable target in the summoner's host authority
+— read the banner's live `may_summon` row and any conditional `for` restrictions
 — so a denial stays a normal outcome the spell relays.
 
 version: 1.25.0
@@ -28,7 +28,7 @@ The session watch carries later lifecycle and chat transitions as notifications.
 From the user's wording extract:
 
 - **target** — the bro to summon (`reviewer`, `deployer`, …).
-  The session's `launch.bro.bros` members are on its banner as `may_summon` (`bro::banner`)
+  The session's usable bro targets are on its live banner as `may_summon` (`bro::banner`)
   — read it rather than probing:
   a target it does not name is denied, and `none` means this session cannot summon at all.
   Being listed is not a promise the run succeeds;
@@ -52,20 +52,20 @@ Optional knobs normally follow only from the request:
   Uncommitted changes never transfer.
 - `hold` sets the child's user-involvement level and defaults to unattended.
 - `harness` selects `bro` or `claude`, and `llm` selects the recipe within it.
-- `party='start'` opens a workspace of the child's own;
-  `party='join'` runs beside this session in the same workspace and isolation.
-  A join is only for intended concurrent work in the same tree and refuses `into`, `isolation`, and `manual`.
-- `isolation` selects `boxed` or `unboxed` for a started party.
-  An unmarked request starts boxed when permitted, otherwise unboxed, and never becomes a join implicitly.
-- `grant` and `revoke` shape the child's onward authority with `@bro` and `:launch.…` names.
-  A grant must be authority this session holds;
-  revokes are unbounded, and restating either state is harmless.
-- `passes` gives the child a credential instance covered by this session's matching pass right.
-  Without one, the child resolves credentials from its own bro, harness, model, and host configuration.
+- `placement` selects `boxed`, `unboxed`, or `join`.
+  An unmarked request is boxed; it never falls back to unboxed or joins implicitly.
+  A join is only for intended concurrent work in the same tree and refuses `into` and `manual`.
+- `grant`, `revoke`, and `limit` shape the child's authority.
+  A gift needs an allowed recipient, and its onward give cannot exceed this session's own recipients.
+  This may allow giving use the session does not hold; `may_give` lists give-only entries.
+  Plain grants forward use with this session's recipient restrictions; qualified grants supply exactly their clauses.
+  Bare kinds in grant/revoke add or drop the child's credential kinds, subject to the use rule for their resulting picks.
+- `passes` selects and holds a credential instance under its `bro.cred=kind+instance` use permission.
+  Without one, the child's own bro, harness, model, and pinned host configuration supply its credentials.
 - `share` gives the child read access to an artifact ref this session can reach at launch.
   Use `bro::quest_share` for a ref minted later.
 
-The complete permission grammar and fold are in `bro/reference/ride.md`, "Session permissions and credentials".
+The complete grammar and checks are in `bro/reference/permissions.md`; everyday setups are in `bro/reference/permissions_cheatsheet.md`.
 
 ## Talk rights
 
@@ -105,11 +105,12 @@ Use `bro::quest_history` to recover retained chat and open questions.
 
 When the host cannot spawn the requested child, or the user asks to drive the child themselves, call `bro::summon` with `manual=true`.
 The host spawns nothing and returns a token plus a launch command after accepting the expectation.
-`into`, `grant`, `revoke`, `passes`, and `talk` still apply;
-`timeout`, `hold`, `llm`, `harness`, `party`, `isolation`, and `share` are refused because the user's launch owns them or no launched workspace exists yet.
-The summoner still needs either `:launch.bro.party.boxed` or `:launch.bro.party.unboxed`.
+`into`, `grant`, `revoke`, `limit`, `passes`, and `talk` still apply;
+`timeout`, `hold`, `llm`, `harness`, `placement`, and `share` are refused because the user's launch owns them or no launched workspace exists yet.
+The summoner needs no placement right; the operator chooses placement at commit.
+The host rechecks the completed descriptor against both principals under the root's reading.
 
-Relay the ready-to-paste command `ride along --summoned <token> <target>`.
+Relay the returned runtime-specific `ride along --summoned <token> <target>` command verbatim.
 The user may instead choose `ride solo --summoned <token> <target>` for a one-shot request and may add their own launch flags.
 Then follow the token as the quest id like any other accepted summon.
 There is no timer on a manual summon;
@@ -123,10 +124,10 @@ If the user asked for follow-up action on the answer, continue with it.
 
 ## Failure modes
 
-- **Denied** — the target is outside this session's `launch.bro.bros`, the request is malformed, a grant exceeds this session's authority, a pass is unauthorized, or the summon exceeds the depth cap.
+- **Denied** — the target has no usable authority in this session, the request is malformed, a grant exceeds this session's authority, a pass is unauthorized, or the summon exceeds the depth cap.
   The error names the reason and no child starts.
-  A target missing from the fixed banner requires a relaunch with `--grant @<target>`;
-  nothing in-session can widen it.
+  A missing target needs the operator's `ride override <name> --grant @<target>` or a new start with that grant.
+  A mission cannot widen its own authority.
 - **Raised or errored** — the target ran but could not fulfill the request.
   `bro::quest_check` raises with the retained reason.
   Relay it;

@@ -120,7 +120,7 @@ A subpackage with a map of its own is pointed at, not described here.
   the recording health file (`health.py`) and a managed session's current-trail pointer (`trail_pointer.py`)
 - `prompts/` — the prompt store;
   see `prompts/AGENTS.md`
-- `reference/` — the reference docs that ship in the wheel (`extending.md`, `conditions.md`, `template.md`, `ride.md`, `dive_in.md`), served to bros on demand through `datasources/references.py`
+- `reference/` — the reference docs that ship in the wheel (`extending.md`, `conditions.md`, `template.md`, `ride.md`, `dive_in.md`, and the three permission pages), served to bros on demand through `datasources/references.py`
 - `runtime/` — fronts that compose lower-level packages into runnable services;
   see `runtime/AGENTS.md`
 - `setup/` — bringing up a checkout, and the credential and host-config schemas;
