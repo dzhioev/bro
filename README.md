@@ -335,7 +335,7 @@ default = "triage"
 ```
 
 The persona is the same on every harness:
-its prompt, its spells, its credentials, and its `launch` authority.
+its prompt, its spells, its credentials, and its use/give authority.
 What differs is what the harness brings of its own, and the declaration decides what to do with it.
 A Claude session comes with Claude's tools and skills, so the declaration withholds the ones it does not want and adds its namespaces as MCP servers beside the rest;
 bro's own loop serves exactly the declared roster.
@@ -390,9 +390,12 @@ dive-in --grant aws 'why did the deploy fail?'
 ```
 
 Delegation is bounded separately.
-A summon request may add only launch authority its parent holds, while the child still starts from its own declaration and host configuration.
-Its credentials likewise come from that mission-specific configuration unless the parent passes a credential instance covered by a pass right for the mission type;
-a bro child holds that kind at the passed instance, while a worker container receives it in its private scoped store and the owner never holds it.
+A child starts from its own declaration and pinned host configuration, with the request's explicit gift and cap layered over it.
+Use and give are separate: a parent can hand browser a profile right without being able to open a webview itself.
+Recipient restrictions bound who may receive it and how far it can travel onward.
+Passing a credential selects it for the child's store, not the parent's, and needs permission for that option value.
+The operator can change bro targets or credentials in a live tree with `ride override`; a resume takes a fresh configuration reading.
+The [permission cheat sheet](bro/reference/permissions_cheatsheet.md) covers the usual setups without requiring the model.
 The host authorizes every request and journals it, and the child's trail records who summoned it.
 
 Afterwards, every run on every harness is a recorded trail:
@@ -438,7 +441,8 @@ a boxed session reaches that remote only where it asks for no authentication, an
 
 - [`AGENTS.md`](AGENTS.md) — the repository map, and the rules every change follows
 - [`bro/reference/extending.md`](bro/reference/extending.md) — how to add a bro, a data source, a toolset, and the entry-point groups they register through
-- [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, the session permission document, summons, recording
+- [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, credential delivery, summons, recording
+- [`bro/reference/permission_model.md`](bro/reference/permission_model.md) and [`bro/reference/permissions.md`](bro/reference/permissions.md) — the abstract model and the shipped permission system
 - [`bro/reference/conditions.md`](bro/reference/conditions.md) and [`bro/reference/template.md`](bro/reference/template.md) — conditioning in code and in text
 - [`bro/setup/AGENTS.md`](bro/setup/AGENTS.md) — the credential store and the host config
 

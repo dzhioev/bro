@@ -70,7 +70,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   `ride solo --unboxed --tree "$PWD" --runtime-bundle <bundle> …` under `setsid`,
   a join-only ride in the task's directory whose records land under the collected agent directory,
   reaped through a fresh root exec when harbor cancels the phase.
-  The root revokes `bro.placement=boxed` and grants `bro.placement=join`, so its summons may join the task tree and start no new party (`bro/reference/ride.md`, "Session permissions and credentials").
+  The root revokes `bro.placement=boxed` and grants `bro.placement=join`, so its summons may join the task tree and start no new party (`bro/reference/permissions.md`, "Start surfaces").
   Harbor's `model_name` carries a registered provider's name plus a `--llm` recipe with its provider slot dropped
   — `<provider>/<model>[:<effort>][+fast]`, mapped onto `--llm :<recipe>`, the spelling
   that keeps the persona's own spec;

@@ -71,3 +71,31 @@ extending = FileSource(
   # carries directive examples; rendering would execute them
   render=False,
 )
+
+
+permission_model = FileSource(
+  'permission-model',
+  summary=(
+    'the abstract use/give permission model: atoms, patterns, authorities, '
+    'starts, joint starts, overrides, and resumes.'
+  ),
+  path=reference.DIRECTORY / 'permission_model.md',
+)
+
+permissions = FileSource(
+  'permissions',
+  summary=(
+    'the shipped permission system: type options, syntax, configuration readings '
+    'and layers, every launch surface, overrides, settlement, records, and refusals.'
+  ),
+  path=reference.DIRECTORY / 'permissions.md',
+)
+
+permissions_cheatsheet = FileSource(
+  'permissions-cheatsheet',
+  summary=(
+    'everyday permission setups with working examples: summoning, credentials, '
+    'webviews, delegation and relays, placements, limits, overrides, and manual children.'
+  ),
+  path=reference.DIRECTORY / 'permissions_cheatsheet.md',
+)

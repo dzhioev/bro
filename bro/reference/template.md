@@ -73,7 +73,7 @@ file      := prompt file name           file: [A-Za-z0-9._/-]+
 
 `bro.mcp.render_text(text, harness=…, creds=…, may_summon=…, talk=…, hold=…, extra=…)` renders directives against the facts the call site knows.
 A registered `Harness` contributes its capability facts and passages through `Harness.facts()`;
-`may_summon` is the session's `launch.bro.bros` set as described in `bro/reference/conditions.md`.
+`may_summon` is the usable bro-target view described in `bro/reference/conditions.md`, initial for prompt composition and live for spell casts.
 The other facts are documented there too.
 `extra` merges a caller-owned vocabulary next to them
 — the bro surfaces pass the owning bro's `#features` — and the renderer resolves `{{include}}` targets through the `prompts` loader.
