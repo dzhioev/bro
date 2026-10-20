@@ -94,7 +94,7 @@ Terminal-Bench 2.2 would arrive as a new pin file and new task sets naming it;
 task names are names inside one revision, so a 2.1 list is not reused against 2.2 without checking.
 
 Where the job runs depends on where the command runs.
-A managed session carries no docker socket and needs `:launch.benchmark`, whose worker payload has no fields, so from inside one the job goes through the session broker:
+A managed session carries no docker socket and needs the `benchmark` start permission, so from inside one the job goes through the session broker:
 the host runs `bro.benchmark.job` with its own Docker access through the registered `benchmark` worker type from `bro-bench`, pointed at the composed config,
 and the finished run comes back as an artifact whose `output/` holds the job directory beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` prints `results <path>  artifact <ref>`;

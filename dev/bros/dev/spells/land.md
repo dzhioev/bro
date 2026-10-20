@@ -133,7 +133,7 @@ Two cases block or defer the close:
   Then:
   - deploy succeeded → close the task done as usual and include the ops bro's answer in the report;
   - deploy failed (raised / error / timeout) → leave the task open and report the failure and its reason;
-  - no summon client in the session (no broker channel), or no operations bro in `launch.bro.bros` → leave the task open and report the pending deploy, naming the exact summon command (`call <ops-bro> "deploy …"`).
+  - no summon client in the session (no broker channel), or no usable operations bro target in host authority → leave the task open and report the pending deploy, naming the exact summon command (`call <ops-bro> "deploy …"`).
 - **The user said to keep it open.**
   Phrases in the initial prompt like "keep this open", "leave open with notes", or "only landing a subset" mean the task stays in its current status;
   note it in your report.

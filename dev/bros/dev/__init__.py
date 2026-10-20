@@ -2,7 +2,12 @@ import bro.brog.mcp as brog_mcp
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
-from bro.datasources.references import extending
+from bro.datasources.references import (
+  extending,
+  permission_model,
+  permissions,
+  permissions_cheatsheet,
+)
 from bro.dev import references
 from bro.mcp import ANY, brash, creds, delegation, files, man, mount, source, web
 from bro.workflow.commit_footer import provision_hooks
@@ -56,6 +61,9 @@ class Dev(Bro):
     source(references.rebase_conflicts),
     man(extending),
     *(man(guide) for guide in references.guides),
+    man(permission_model),
+    man(permissions),
+    man(permissions_cheatsheet),
   ]
   spells = (
     'audit.md',

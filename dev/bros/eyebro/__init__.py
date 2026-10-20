@@ -1,3 +1,4 @@
+from bro.datasources.references import permission_model, permissions, permissions_cheatsheet
 from bro.dev import references
 from bro.mcp import ANY, brash, creds, files, man, source, web
 from bros.bro import Bro
@@ -46,6 +47,9 @@ class Eyebro(Bro):
     web(),
     source(references.dev_style),
     *(man(guide) for guide in references.guides),
+    man(permission_model),
+    man(permissions),
+    man(permissions_cheatsheet),
   ]
   spells = ('review-diff.md', 'review-pr.md')
   system_prompt = SYSTEM_PROMPT

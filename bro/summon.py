@@ -624,7 +624,7 @@ def main(argv: list[str]) -> Optional[int]:
     dest='placement',
     action='store_const',
     const='boxed',
-    help='start a party, choosing the first permitted isolation',
+    help='start a separate party, boxed unless --unboxed is set',
   )
   placement.add_argument(
     '--join',

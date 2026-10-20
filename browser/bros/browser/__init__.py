@@ -34,7 +34,7 @@ Never pay.
 Accept terms or consent only when the summoner authorized it for that step.
 Dismiss a cookie banner with its least permissive choice.
 Where the choice is consent or pay, read the content under the overlay and ask before clicking either.
-Report a CAPTCHA, bot check, or login wall instead of working around it, naming the profiles the session says it may pass.
+Report a CAPTCHA, bot check, or login wall instead of working around it, naming the profiles its live authority permits selecting for a webview.
 Upload only files the summoner shared for that purpose, naming each one.
 Never open `file://`.
 Open with a profile or an `allow` list only when the request names one.
