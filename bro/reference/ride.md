@@ -175,6 +175,11 @@ Where a persona declares shell reach, both harnesses mount `bro::watch(command, 
 Under a finite command list a watch runs its line in brash under the session's brash policy, as the bro harness's jobs do, and under `brash(ANY)` in bash;
 `wake_on_quiet` sets the watch to wake on its quiet lines, while `unwatch` stops the watch it names without checking the command list and refuses the runtime-owned session watch.
 `do-ride` arms `mission watch` before the harness starts for every session with a broker channel, so operator scope changes wake sessions that started without summon targets too.
+`do-ride` restarts the session watch once a second while its producer is gone, keeping its log and the journal head it last published;
+the dead producer's exit line reaches the session as usual, and the new one opens with a `mission watch resumed after …` line.
+A restarted watch reads the journal on from that head, so no event is lost while the journal still retains it, and one the dead producer yielded but had not yet published may repeat;
+past the retention window the stream reports a gap.
+A read that times out reconnects from the stream's cursor, finishing any replay it interrupted, and reports a gap only if the next read finds the retention expired.
 Each joined party member has its own session directory and therefore its own store.
 The session watch reaches the model through the selected harness's delivery port without adding commands to the persona's tool reach.
 

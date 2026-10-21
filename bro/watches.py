@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Optional, Self
 
-from bro.base import spawn
+from bro.base import log, spawn
 from bro.base.credential_environment import overlay
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, format_size
 from bro.monitor import SESSION_DIR_ENV, session_dir
@@ -39,6 +39,7 @@ PRODUCER_POLICY_ENV = 'BRO_WATCH_BRASH_POLICY'
 PRODUCER_JOURNAL_ENV = 'BRO_WATCH_JOURNAL'
 SESSION_WATCH_COMMAND = 'mission watch'
 BEAT_MISSES_ALLOWED = 3
+RESTART_INTERVAL_SECONDS = 1.0
 _QUIET_MARK = b'\x1f'
 _PENDING_MARKER = '[...pending watch lines...]'
 _COMMAND_SUFFIX = '.command'
@@ -457,19 +458,26 @@ class Watch:
       pass
     raise WatchError(f'`{self.command}` log has no arrival time for its line at {offset}')
 
+  def clear_producer(self) -> None:
+    """Remove what belongs to one producer process, leaving the log and its delivery state."""
+    for path in (
+      self.pid_file,
+      self.journal_file,
+      self.journal_wake_file,
+      self.beat_file,
+      self.stall_reported_file,
+    ):
+      path.unlink(missing_ok=True)
+
   def clear(self) -> None:
+    self.clear_producer()
     for path in (
       self.command_file,
       self.log,
       self.times,
       self.offset_file,
-      self.pid_file,
-      self.journal_file,
       self.journal_head_file,
-      self.journal_wake_file,
       self.wake_on_quiet_file,
-      self.beat_file,
-      self.stall_reported_file,
     ):
       path.unlink(missing_ok=True)
 
@@ -635,66 +643,120 @@ class Store:
           os.read(wake_fd, 1)
 
   def start(
-    self, command: str, policy: Optional[Path] = None, *, wake_on_quiet: bool = False
+    self,
+    command: str,
+    policy: Optional[Path] = None,
+    *,
+    wake_on_quiet: bool = False,
   ) -> Watch:
     """start `command` as a producer: in brash under `policy`, or in bash where
     there is none."""
     watch = self._watch(command)
     with self._locked():
-      if watch.producer_alive():
-        raise WatchError(f'`{watch.command}` already runs in this session')
+      return self._start_locked(watch, policy, wake_on_quiet, False)
+
+  def restart(self, command: str) -> bool:
+    """Start a new producer for the declared watch `command` if its producer is gone;
+    False when it is undeclared or running.
+
+    The watch's log, offset, and published journal head stay, so the new producer
+    continues the dead one's stream."""
+    watch = self._watch(command)
+    with self._locked():
+      if not watch.command_file.exists() or watch.producer_alive():
+        return False
+      self._start_locked(watch, None, False, True)
+      return True
+
+  def _start_locked(
+    self, watch: Watch, policy: Optional[Path], wake_on_quiet: bool, resume: bool
+  ) -> Watch:
+    if watch.producer_alive():
+      raise WatchError(f'`{watch.command}` already runs in this session')
+    if resume:
+      watch.clear_producer()
+    else:
       watch.clear()
       watch.command_file.write_text(watch.command)
       if wake_on_quiet:
         watch.wake_on_quiet_file.touch()
-      os.mkfifo(watch.journal_file)
-      os.mkfifo(watch.journal_wake_file)
-      ready_read_fd, ready_write_fd = os.pipe()
-      environment = {
-        **os.environ,
-        PRODUCER_ENV: '1',
-        PRODUCER_READY_FD_ENV: str(ready_write_fd),
-        PRODUCER_OWNER_PATH_ENV: str(self.owner_path),
-        PRODUCER_DIRECTORY_ENV: str(self.directory),
-        PRODUCER_SLUG_ENV: watch.slug,
-        PRODUCER_COMMAND_ENV: watch.command,
-        PRODUCER_JOURNAL_ENV: str(watch.journal_file),
-      }
-      if policy is None:
-        environment.pop(PRODUCER_POLICY_ENV, None)
-      else:
-        environment[PRODUCER_POLICY_ENV] = str(policy)
-      process: Optional[subprocess.Popen] = None
-      try:
-        with (
-          os.fdopen(ready_read_fd, 'rb') as ready,
-          os.fdopen(ready_write_fd, 'wb') as ready_writer,
-        ):
-          process = subprocess.Popen(
-            spawn.module_argv('bro.watch_run'),
-            env=overlay(environment),
-            pass_fds=(ready_write_fd,),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-          )
-          ready_writer.close()
-          started = ready.read(1)
-      except OSError as error:
-        if process is not None:
-          with contextlib.suppress(ProcessLookupError):
-            os.killpg(process.pid, signal.SIGKILL)
-          process.wait()
-        watch.clear()
-        raise WatchError(f'cannot start `{watch.command}`: {error}') from error
-      assert process is not None
-      if started != b'1':
+    os.mkfifo(watch.journal_file)
+    os.mkfifo(watch.journal_wake_file)
+    ready_read_fd, ready_write_fd = os.pipe()
+    environment = {
+      **os.environ,
+      PRODUCER_ENV: '1',
+      PRODUCER_READY_FD_ENV: str(ready_write_fd),
+      PRODUCER_OWNER_PATH_ENV: str(self.owner_path),
+      PRODUCER_DIRECTORY_ENV: str(self.directory),
+      PRODUCER_SLUG_ENV: watch.slug,
+      PRODUCER_COMMAND_ENV: watch.command,
+      PRODUCER_JOURNAL_ENV: str(watch.journal_file),
+    }
+    if policy is None:
+      environment.pop(PRODUCER_POLICY_ENV, None)
+    else:
+      environment[PRODUCER_POLICY_ENV] = str(policy)
+    process: Optional[subprocess.Popen] = None
+    try:
+      with (
+        os.fdopen(ready_read_fd, 'rb') as ready,
+        os.fdopen(ready_write_fd, 'wb') as ready_writer,
+      ):
+        process = subprocess.Popen(
+          spawn.module_argv('bro.watch_run'),
+          env=overlay(environment),
+          pass_fds=(ready_write_fd,),
+          stdin=subprocess.DEVNULL,
+          stdout=subprocess.DEVNULL,
+          stderr=subprocess.DEVNULL,
+          start_new_session=True,
+        )
+        ready_writer.close()
+        started = ready.read(1)
+    except OSError as error:
+      if process is not None:
+        with contextlib.suppress(ProcessLookupError):
+          os.killpg(process.pid, signal.SIGKILL)
         process.wait()
-        watch.clear()
-        raise WatchError(f'watch producer failed to start `{watch.command}`')
-      threading.Thread(target=process.wait, daemon=True).start()
-      return watch
+      self._discard_failed_start(watch, resume)
+      raise WatchError(f'cannot start `{watch.command}`: {error}') from error
+    assert process is not None
+    if started != b'1':
+      process.wait()
+      self._discard_failed_start(watch, resume)
+      raise WatchError(f'watch producer failed to start `{watch.command}`')
+    threading.Thread(target=process.wait, daemon=True).start()
+    return watch
+
+  @staticmethod
+  def _discard_failed_start(watch: Watch, resume: bool) -> None:
+    if resume:
+      watch.clear_producer()
+    else:
+      watch.clear()
+
+  @contextlib.contextmanager
+  def kept_alive(self, command: str) -> Generator[None]:
+    """Restart `command`'s producer from its retained stream whenever it is gone.
+
+    A restart that fails is logged and tried again at the next interval."""
+    stopped = threading.Event()
+
+    def supervise() -> None:
+      while not stopped.wait(RESTART_INTERVAL_SECONDS):
+        try:
+          self.restart(command)
+        except WatchError as error:
+          log.error('%s', error)
+
+    thread = threading.Thread(target=supervise, daemon=True)
+    thread.start()
+    try:
+      yield
+    finally:
+      stopped.set()
+      thread.join()
 
   def _terminate(self, watch: Watch) -> None:
     identity = watch.producer_identity()
@@ -1084,6 +1146,22 @@ def publish_journal_head(head: int) -> None:
   with os.fdopen(journal, 'wb', buffering=0) as writer:
     os.set_blocking(journal, True)
     writer.write(f'{head}\n'.encode())
+
+
+def resumed_journal_head() -> Optional[int]:
+  """The journal head the producer's previous run published, or None for a fresh
+  producer and outside a producer."""
+  directory = os.environ.get(PRODUCER_DIRECTORY_ENV)
+  slug_value = os.environ.get(PRODUCER_SLUG_ENV)
+  command = os.environ.get(PRODUCER_COMMAND_ENV)
+  if (
+    os.environ.get(PRODUCER_ENV) != '1'
+    or directory is None
+    or slug_value is None
+    or command is None
+  ):
+    return None
+  return Watch(command, Path(directory), slug_value).journal_head()
 
 
 def beat(within_seconds: float) -> None:

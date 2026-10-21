@@ -46,6 +46,7 @@ A subpackage with a map of its own is pointed at, not described here.
   `mission watch` renders it for the session watch:
   the missions the session launched, its own mission's owner chat, and quiet lines for a child's service marks and says.
   The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
+  A timed-out read reconnects from the stream's cursor, and a restarted producer resumes from the journal head its predecessor published.
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
 - `watches.py` and `watch_run.py` (`watch-run`) — one session-local watch store and its producer.
   `take()` commits fair, bounded batches under one exclusive lock;
@@ -54,6 +55,7 @@ A subpackage with a map of its own is pointed at, not described here.
   The store also reports whether waking lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed;
   a producer publishes a head its command sends only once the output written before it is in the log.
   `watch-run` executes each command line under `job_supervisor`, in brash under the policy its starter names or else in bash, detached from its starter but held by an owner-liveness handle.
+  `Store.kept_alive` restarts a dead producer from its retained log.
   Managed sessions are owned by `do-ride`, while an in-process native `Runner` owns a temporary store.
 - `turn_end.py` — `LineSink` and `TurnEnd`, the two harness ports for watch delivery and one-shot settlement,
   the shared verdict over missions, watches, undelivered waking lines, harness background work, and live session traffic,

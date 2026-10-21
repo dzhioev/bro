@@ -901,7 +901,15 @@ class WatchGap:
   head: int
 
 
-WatchItem = WatchEvent | WatchGap
+@dataclass(frozen=True)
+class WatchResume:
+  """The stream continues from `head` after `reason` interrupted it."""
+
+  reason: str
+  head: int
+
+
+WatchItem = WatchEvent | WatchGap | WatchResume
 
 
 def _read_head(client: 'Client', field: str, action: str) -> int:
@@ -975,82 +983,117 @@ def _replay_events(
   return [WatchEvent(replay[sequence], replayed=True) for sequence in sorted(replay)]
 
 
+@dataclass
+class _Position:
+  # the journal sequence the stream has read through; None until it arms
+  cursor: Optional[int]
+  # the newest sequence the stream has yielded
+  yielded: int
+  # the head an arm or re-arm is replaying retained chat up to; None once replayed
+  replay_head: Optional[int] = None
+
+
+def _replay_pending(
+  client: 'Client', own: str, worker_type: Optional[str], position: _Position
+) -> Generator[WatchItem]:
+  """Finish the replay an arm or re-arm began, then move the cursor to its head."""
+  if position.replay_head is None:
+    return
+  for item in _replay_events(
+    client, own, position.replay_head, worker_type, after=position.yielded
+  ):
+    position.yielded = cast(int, item.event['seq'])
+    yield item
+  position.cursor = position.replay_head
+  position.replay_head = None
+  watches.publish_journal_head(position.cursor)
+
+
 def watch_stream(
   worker_type: Optional[str] = None,
   wait_seconds: float = READ_WAIT_SECONDS,
 ) -> Generator[WatchItem]:
-  """Yield one arm/replay/gap stream of the missions this session launched and of its own mission's owner chat."""
+  """Yield one arm/replay/gap stream of the missions this session launched and of its own mission's owner chat.
+
+  A producer restarted after a death continues from the journal head its predecessor published.
+  A timed-out read reconnects and continues the same way, finishing a replay it interrupted."""
   if worker_type == '':
     raise ValueError('mission type must be non-empty')
   if wait_seconds <= 0:
     raise MissionError('events wait must be positive')
+  own = own_mission()
+  resumed = watches.resumed_journal_head()
+  position = _Position(resumed, 0 if resumed is None else resumed)
+  reason = None if resumed is None else 'a restart of the watch'
+  while True:
+    watches.beat(wait_seconds + ACCEPT_TIMEOUT)
+    try:
+      with open_client() as client:
+        if position.cursor is None and position.replay_head is None:
+          position.replay_head = _event_head(client)
+        head = position.cursor if position.replay_head is None else position.replay_head
+        if reason is not None and head is not None:
+          yield WatchResume(reason, head)
+        reason = None
+        yield from _replay_pending(client, own, worker_type, position)
+        yield from _follow(client, own, worker_type, wait_seconds, position)
+    except _BrokerReadTimeout as error:
+      reason = str(error)
+
+
+def _follow(
+  client: 'Client',
+  own: str,
+  worker_type: Optional[str],
+  wait_seconds: float,
+  position: _Position,
+) -> Generator[WatchItem]:
   from bro.broker.dispatcher import EVENTS
 
-  own = own_mission()
-  watches.beat(wait_seconds + ACCEPT_TIMEOUT)
-  with open_client() as client:
-    head = _event_head(client)
-    cursor = head
-    last_yielded = 0
-    for item in _replay_events(
-      client,
-      own,
-      head,
-      worker_type,
-      after=last_yielded,
+  assert position.cursor is not None
+  while True:
+    watches.beat(wait_seconds + ACCEPT_TIMEOUT)
+    try:
+      value = _read_value(
+        client,
+        EVENTS,
+        {'after': position.cursor, 'wait': wait_seconds},
+        timeout=max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT),
+      )
+    except MissionError as error:
+      if not str(error).startswith('events gap:'):
+        raise
+      position.replay_head = _event_head(client, rearm=True)
+      yield WatchGap(str(error), position.replay_head)
+      yield from _replay_pending(client, own, worker_type, position)
+      continue
+    events = value.get('events')
+    if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
+      raise MissionError('events read returned malformed records')
+    batch_head = value.get('head')
+    if (
+      not isinstance(batch_head, int)
+      or isinstance(batch_head, bool)
+      or batch_head < position.cursor
     ):
-      last_yielded = cast(int, item.event['seq'])
-      yield item
-    watches.publish_journal_head(cursor)
-    while True:
-      watches.beat(wait_seconds + ACCEPT_TIMEOUT)
-      try:
-        value = _read_value(
-          client,
-          EVENTS,
-          {'after': cursor, 'wait': wait_seconds},
-          timeout=max(ACCEPT_TIMEOUT, wait_seconds + ACCEPT_TIMEOUT),
-        )
-      except MissionError as error:
-        if not str(error).startswith('events gap:'):
-          raise
-        head = _event_head(client, rearm=True)
-        cursor = head
-        yield WatchGap(str(error), head)
-        for item in _replay_events(
-          client,
-          own,
-          head,
-          worker_type,
-          after=last_yielded,
-        ):
-          last_yielded = cast(int, item.event['seq'])
-          yield item
-        watches.publish_journal_head(cursor)
+      raise MissionError('events read returned a malformed head')
+    for event in events:
+      sequence = event.get('seq')
+      if (
+        not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence <= position.cursor
+        or sequence > batch_head
+      ):
+        raise MissionError('events read returned a malformed sequence')
+      position.cursor = max(position.cursor, sequence)
+      if not _stream_event_relevant(event, own, worker_type):
         continue
-      events = value.get('events')
-      if not isinstance(events, list) or not all(isinstance(event, dict) for event in events):
-        raise MissionError('events read returned malformed records')
-      batch_head = value.get('head')
-      if not isinstance(batch_head, int) or isinstance(batch_head, bool) or batch_head < cursor:
-        raise MissionError('events read returned a malformed head')
-      for event in events:
-        sequence = event.get('seq')
-        if (
-          not isinstance(sequence, int)
-          or isinstance(sequence, bool)
-          or sequence <= cursor
-          or sequence > batch_head
-        ):
-          raise MissionError('events read returned a malformed sequence')
-        cursor = max(cursor, sequence)
-        if not _stream_event_relevant(event, own, worker_type):
-          continue
-        last_yielded = sequence
-        yield WatchEvent(event)
-      if len(events) == 0:
-        cursor = batch_head
-      watches.publish_journal_head(cursor)
+      position.yielded = sequence
+      yield WatchEvent(event)
+    if len(events) == 0:
+      position.cursor = batch_head
+    watches.publish_journal_head(position.cursor)
 
 
 def _quiet(event: dict[str, Any]) -> bool:
@@ -1077,6 +1120,9 @@ def watch(
   for item in watch_stream(worker_type, wait_seconds):
     if isinstance(item, WatchGap):
       yield _single_line(f'mission watch gap: {item.reason}; re-armed at {item.head}')
+      continue
+    if isinstance(item, WatchResume):
+      yield _single_line(f'mission watch resumed after {item.reason}; reading on from {item.head}')
       continue
     event = item.event
     if event.get('transition') == 'override':
