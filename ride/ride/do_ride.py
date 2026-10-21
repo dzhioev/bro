@@ -295,6 +295,7 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
     _activity_marked(run.activity_file),
     session_broxy(),
     watches.Owner.for_session() as watch_owner,
+    contextlib.ExitStack() as session_scope,
   ):
     if watches.session_watch_admitted():
       from bro.authority_view import capture_initial
@@ -304,6 +305,7 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
       capture_initial()
       save_deferred_contract(harness=get_harness(run.harness), hold=run.hold)
       watch_owner.store.start(watches.SESSION_WATCH_COMMAND)
+      session_scope.enter_context(watch_owner.store.kept_alive(watches.SESSION_WATCH_COMMAND))
     code = harness.run_session(run)
   requested = requested_exit_status()
   return code if requested is None else requested

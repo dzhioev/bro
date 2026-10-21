@@ -476,6 +476,135 @@ async def test_watch_rearm_replays_only_chat_past_the_last_yielded_entry(monkeyp
       assert await resumed == 'mission S1 (bro to dev) denied not allowed'
 
 
+_DENIED_LAUNCH = {
+  'kind': 'launch',
+  'type': 'bro',
+  'mission': 'S1',
+  'parent': 'ROOT',
+  'args': {'target': 'dev'},
+  'transition': 'denied',
+  'reason': 'not allowed',
+}
+
+
+@pytest.mark.asyncio
+async def test_watch_reconnects_after_a_timed_out_read_and_continues_from_its_cursor(monkeypatch):
+  monkeypatch.setattr(mission, 'ACCEPT_TIMEOUT', 0.2)
+  async with running_server(monkeypatch) as server:
+    with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
+      first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await next_message(server)
+      await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
+      await reply_empty_watch_replay(server)
+      channel, unanswered = await next_message(server)
+      assert unanswered.args == {'after': 10, 'wait': 0.05}
+
+      assert await first_line == (
+        "mission watch resumed after no reply to broker 'events' request within 0s;"
+        ' reading on from 10'
+      )
+      denied = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, poll = await next_message(server)
+      assert poll.args == {'after': 10, 'wait': 0.05}
+      await reply(
+        server,
+        channel,
+        poll,
+        outcome='ok',
+        value={'head': 11, 'events': [{**_DENIED_LAUNCH, 'seq': 11}]},
+      )
+      assert await denied == 'mission S1 (bro to dev) denied not allowed'
+
+
+@pytest.mark.asyncio
+async def test_watch_retries_an_arm_replay_that_timed_out(monkeypatch):
+  monkeypatch.setattr(mission, 'ACCEPT_TIMEOUT', 0.2)
+  async with running_server(monkeypatch) as server:
+    with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
+      resumed = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await next_message(server)
+      await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
+      channel, unanswered = await next_message(server)
+      assert unanswered.args == {'id': 'ROOT'}
+      assert (await resumed).endswith('; reading on from 10')
+
+      replayed = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, own_query = await next_message(server)
+      await reply(
+        server,
+        channel,
+        own_query,
+        outcome='ok',
+        value={
+          'mission': quest_record(
+            'ROOT', 'started', kind='root', messages=[entry(5, 'owner', 'retained')], chat_seq=5
+          )
+        },
+      )
+      channel, listing = await next_message(server)
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      assert await replayed == 'before the watch: summoner says retained'
+
+
+@pytest.mark.asyncio
+async def test_watch_retries_a_gap_replay_that_timed_out(monkeypatch):
+  monkeypatch.setattr(mission, 'ACCEPT_TIMEOUT', 0.2)
+  async with running_server(monkeypatch) as server:
+    with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
+      first = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await next_message(server)
+      await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
+      await reply_empty_watch_replay(server)
+      channel, poll = await next_message(server)
+      await reply(server, channel, poll, outcome='denied', error='events gap: oldest is 15')
+      channel, rearm = await next_message(server)
+      await reply(server, channel, rearm, outcome='ok', value={'head': 20, 'events': []})
+      assert await first == 'mission watch gap: events gap: oldest is 15; re-armed at 20'
+
+      resumed = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, unanswered = await next_message(server)
+      assert unanswered.args == {'id': 'ROOT'}
+      assert (await resumed).endswith('; reading on from 20')
+
+      replayed = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, own_query = await next_message(server)
+      await reply(
+        server,
+        channel,
+        own_query,
+        outcome='ok',
+        value={
+          'mission': quest_record(
+            'ROOT', 'started', kind='root', messages=[entry(18, 'owner', 'retained')], chat_seq=18
+          )
+        },
+      )
+      channel, listing = await next_message(server)
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      assert await replayed == 'before the watch: summoner says retained'
+
+
+@pytest.mark.asyncio
+async def test_a_restarted_watch_reads_on_from_the_published_journal_head(monkeypatch):
+  monkeypatch.setattr(watches, 'resumed_journal_head', lambda: 7)
+  async with running_server(monkeypatch) as server:
+    with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
+      assert await asyncio.to_thread(next, watch) == (
+        'mission watch resumed after a restart of the watch; reading on from 7'
+      )
+      denied = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, poll = await next_message(server)
+      assert poll.args == {'after': 7, 'wait': 0.05}
+      await reply(
+        server,
+        channel,
+        poll,
+        outcome='ok',
+        value={'head': 8, 'events': [{**_DENIED_LAUNCH, 'seq': 8}]},
+      )
+      assert await denied == 'mission S1 (bro to dev) denied not allowed'
+
+
 def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   child = {
     'kind': 'launch',

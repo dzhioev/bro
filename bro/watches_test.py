@@ -634,6 +634,49 @@ class TestProducers:
       owner.store.stop(watches.SESSION_WATCH_COMMAND)
 
 
+class TestKeptAlive:
+  def test_a_dead_producer_restarts_with_its_log_and_published_head(self, owner, monkeypatch):
+    monkeypatch.setattr(watches, 'RESTART_INTERVAL_SECONDS', 0.05)
+    command = 'printf "again\\n"'
+    watch = owner.store.start(command)
+    watch.publish_journal_head(5)
+
+    with owner.store.kept_alive(command):
+      deadline = time.monotonic() + 10
+      while watch.log.read_text().count('[watch-run] exited 0') < 2:
+        assert time.monotonic() < deadline, 'the producer was never restarted'
+        time.sleep(0.01)
+
+    assert watch.journal_head() == 5
+    assert watch.log.read_text().startswith('again\n[watch-run] exited 0\nagain\n')
+
+  def test_a_stopped_watch_is_not_restarted(self, owner):
+    command = 'sleep 30'
+    watch = owner.store.start(command)
+    owner.store.stop(command)
+
+    assert not owner.store.restart(command)
+    assert not watch.command_file.exists()
+    assert not watch.producer_alive()
+
+  def test_a_running_watch_is_not_restarted(self, owner):
+    command = 'sleep 30'
+    owner.store.start(command)
+
+    assert not owner.store.restart(command)
+
+  def test_a_fresh_producer_resumes_from_no_head(self, owner, monkeypatch):
+    watch = _seed(owner.store, 'fresh', '')
+    monkeypatch.setenv(watches.PRODUCER_ENV, '1')
+    monkeypatch.setenv(watches.PRODUCER_DIRECTORY_ENV, str(watch.directory))
+    monkeypatch.setenv(watches.PRODUCER_SLUG_ENV, watch.slug)
+    monkeypatch.setenv(watches.PRODUCER_COMMAND_ENV, watch.command)
+    assert watches.resumed_journal_head() is None
+
+    watch.publish_journal_head(9)
+    assert watches.resumed_journal_head() == 9
+
+
 class TestOwner:
   def test_a_new_owner_starts_with_an_empty_store(self, monkeypatch, tmp_path):
     monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
