@@ -157,20 +157,23 @@ poll-pr <owner>/<repo> <n>
 
 Events fire for the review parties
 — the author (human or app account), the repo owner, and any other reviewer
-— and arrive as JSON lines on stdout:
+— and arrive as text on stdout: `<kind>:` on a first line, then its fields indented beneath (`at` is the UTC emit time; a body is a `|` block, a list is `-` items):
 
-- `{"event": "comment", "id": N, "user": "…", "body": "…", "path": "…", "url": "…"}`
+- `comment:` with `id`, `user`, `path`, `url`, `body`
   — a new comment;
   replies to existing review threads fire here too.
-- `{"event": "review", "id": N, "user": "…", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "body": "…", "url": "…", "comments": […]}`
-  — a new review, its inline comments bundled under `comments`.
-- `{"event": "pushed", "pr": N, "head": "…"}`
+- `review:` with `id`, `user`, `state` (`APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED`), `review_decision`, `url`, `body`, and `comments` (the bundled inline comments)
+  — a new review.
+- `pushed:` with `head`
   — the PR's head moved to a new commit.
-- `{"event": "checks", "pr": N, "head": "…", "state": "red|green|pending", "failing": […]}`
-  — the checks on `head` turned red (failures in `failing`), turned green, or stopped being green without failing.
-- `{"event": "conflicts", "pr": N}` — the PR became unmergeable into its base.
-- `{"event": "merged", "pr": N}` / `{"event": "closed", "pr": N}` — the PR is terminal.
-- `{"event": "watch_failed", "pr": N, "source": "…", "reason": "…"}`
+- `checks:` with `head`, `state` (`red|green|pending`), `failing`
+  — the checks on `head` turned red, turned green, or stopped being green without failing.
+- `conflicts:` — the PR became unmergeable into its base.
+- `merged:` / `closed:` — the PR is terminal.
+- `disconnected:` / `reconnected:`
+  — GitHub was unreachable for an event source for a while, and is reachable again;
+  the watch continues, and nothing from that source arrives in between.
+- `watch_failed:` with `source`, `reason`, `failing_for`
   — terminal:
   an event source kept failing past the grace window and the watch ended;
   the process exits right after.

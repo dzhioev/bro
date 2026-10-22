@@ -726,6 +726,24 @@ def test_slugs_keep_commands_apart_and_out_of_subdirectories():
   assert '/' not in watches.slug(['poll-pr', 'owner/repo', '42'])
 
 
+class TestDiagnostics:
+  def test_a_producer_has_a_diagnostics_file_beside_its_watch_files(self, owner, monkeypatch):
+    watch = _seed(owner.store, 'poll', '')
+    monkeypatch.setenv(watches.PRODUCER_ENV, '1')
+    monkeypatch.setenv(watches.PRODUCER_DIRECTORY_ENV, str(watch.directory))
+    monkeypatch.setenv(watches.PRODUCER_SLUG_ENV, watch.slug)
+
+    assert watches.diagnostics_path() == watch.diagnostics_file
+    watch.diagnostics_file.write_text('x')
+    watch.clear()
+    assert not watch.diagnostics_file.exists()
+
+  def test_outside_a_producer_there_is_none(self, monkeypatch):
+    monkeypatch.delenv(watches.PRODUCER_ENV, raising=False)
+
+    assert watches.diagnostics_path() is None
+
+
 class TestBeat:
   def _producer_environment(self, monkeypatch, watch: watches.Watch) -> None:
     monkeypatch.setenv(watches.PRODUCER_ENV, '1')

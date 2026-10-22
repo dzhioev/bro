@@ -1,11 +1,16 @@
 """GitHub API client: JSON verbs over stdlib urllib with a transient-retry policy."""
 
+import contextlib
 import http.client
 import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Callable, Generator
+from contextvars import ContextVar
+from dataclasses import dataclass
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from typing import Any, Optional
@@ -25,6 +30,9 @@ _PASSING_CONCLUSIONS = frozenset({'success', 'neutral', 'skipped'})
 # merge states of a head whose commit status passes with nothing required left to report
 _NOTHING_EXPECTED_MERGE_STATES = frozenset({'clean', 'has_hooks'})
 _GRAPHQL_URL = 'https://api.github.com/graphql'
+_NOT_MODIFIED = 304
+_DEFAULT_PAGE_SIZE = 30  # GitHub's, for a collection url naming no `per_page`
+_CONDITIONAL_CACHE_LIMIT = 256
 _NEXT_PAGE = re.compile(r'<([^>]+)>;\s*rel="next"')
 
 
@@ -108,6 +116,43 @@ def _retryable(error: Exception) -> bool:
 _RETRY_POLICY = RetryPolicy(retryable=_retryable, delay=_retry_delay, attempts=_MAX_ATTEMPTS)
 
 
+@dataclass(frozen=True)
+class _Cached:
+  etag: str
+  payload: bytes
+  headers: Message
+
+
+# the last 200 answer of each GET url that carried an ETag, replayed when the
+# server answers a conditional request with 304 — which GitHub does not count
+# against the primary rate limit
+_conditional_cache: dict[str, _Cached] = {}
+
+
+def _remember(url: str, cached: _Cached) -> None:
+  _conditional_cache.pop(url, None)
+  _conditional_cache[url] = cached
+  if len(_conditional_cache) > _CONDITIONAL_CACHE_LIMIT:
+    del _conditional_cache[next(iter(_conditional_cache))]
+
+
+_attempt_failure_observer: ContextVar[Optional[Callable[[Exception], None]]] = ContextVar(
+  'attempt_failure_observer', default=None
+)
+
+
+@contextlib.contextmanager
+def observing_failures(observer: Callable[[Exception], None]) -> Generator[None]:
+  """report every failed attempt of the requests made inside the block to
+  `observer` as it happens, before the retry policy decides to repeat it. An
+  exception the observer raises ends the request in place of the attempt's own."""
+  token = _attempt_failure_observer.set(observer)
+  try:
+    yield
+  finally:
+    _attempt_failure_observer.reset(token)
+
+
 def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> Any:
   return _request_with_headers(method, url, token, body)[0]
 
@@ -117,6 +162,9 @@ def _request_with_headers(
 ) -> tuple[Any, Message]:
   """one authenticated call, retried per the transient policy; parsed JSON response
   (None when the response has no body, e.g. a 204) and the response headers.
+
+  a GET is sent conditionally on the ETag of its last answer, and a 304 is answered
+  from that copy.
 
   the retry policy applies to mutating verbs too — a retried write can rarely land
   twice (the write succeeded, the response was lost); accepted at this scale.
@@ -130,19 +178,52 @@ def _request_with_headers(
   if body is not None:
     data = json.dumps(body).encode()
     headers['Content-Type'] = 'application/json'
+  cached = _conditional_cache.get(url) if method == 'GET' else None
+  if cached is not None:
+    headers['If-None-Match'] = cached.etag
   prepared = urllib.request.Request(url, data=data, headers=headers, method=method)
 
   def send() -> tuple[Any, Message]:
-    with urllib.request.urlopen(prepared, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
-      payload = response.read()
-      response_headers = response.headers
+    try:
+      with urllib.request.urlopen(prepared, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+        payload = response.read()
+        response_headers = response.headers
+    except urllib.error.HTTPError as error:
+      if error.code != _NOT_MODIFIED or cached is None:
+        raise
+      payload, response_headers = cached.payload, cached.headers
+    else:
+      etag = response_headers.get('ETag')
+      if method == 'GET' and etag is not None:
+        _remember(url, _Cached(etag, payload, response_headers))
     return (json.loads(payload) if len(payload) > 0 else None, response_headers)
 
-  return retry(send, _RETRY_POLICY, label=url)
+  def observed_send() -> tuple[Any, Message]:
+    try:
+      return send()
+    except Exception as error:
+      observer = _attempt_failure_observer.get()
+      if observer is not None:
+        observer(error)
+      raise
+
+  return retry(observed_send, _RETRY_POLICY, label=url)
 
 
 def get(url: str, token: str) -> Any:
   return _request('GET', url, token)
+
+
+def _page_size(url: str) -> int:
+  values = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get('per_page')
+  return _DEFAULT_PAGE_SIZE if values is None else int(values[0])
+
+
+def _page_after(url: str) -> str:
+  parts = urllib.parse.urlsplit(url)
+  query = urllib.parse.parse_qs(parts.query)
+  query['page'] = [str(int(query.get('page', ['1'])[0]) + 1)]
+  return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(query, doseq=True)))
 
 
 def get_all(url: str, token: str) -> list[Any]:
@@ -155,7 +236,14 @@ def get_all(url: str, token: str) -> list[Any]:
       raise ValueError(f'{page_url} answered with no collection to page through')
     items.extend(page)
     match = _NEXT_PAGE.search(headers.get('Link') or '')
-    page_url = None if match is None else match.group(1)
+    if match is not None:
+      page_url = match.group(1)
+    elif len(page) > 0 and len(page) == _page_size(page_url):
+      # a full page may have a successor its replayed Link does not name:
+      # a 304 keeps the Link of the answer it validated
+      page_url = _page_after(page_url)
+    else:
+      page_url = None
   return items
 
 

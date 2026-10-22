@@ -331,41 +331,49 @@ It authenticates as the session's `github` credential, re-resolved each cycle so
 poll-pr <owner>/<repo> <pr_number>
 ```
 
-`poll-pr` outputs JSON-lines to stdout:
-- `{"event": "merged", "pr": N}`
+`poll-pr` prints each event to stdout as `<kind>:` on a first line, then its fields indented beneath, `at` (the UTC emit time) first:
+a body or multi-line value is a `|` block, a list is `-` items, a missing value is `none`, and a `_for` value counts seconds.
+
+- `merged:` with `merged_by`, `merge_commit` (the base's tip after the merge) and `commits` (`sha`, `subject`, as the PR carried them — a rebase merge rewrites them on the base)
   — PR was merged
-- `{"event": "closed", "pr": N}`
+- `closed:`
   — PR was closed without merging
-- `{"event": "conflicts", "pr": N}`
+- `conflicts:`
   — the PR became unmergeable into its base (GitHub's `mergeable` turned false, typically after something landed on the base).
   Fires once per conflicted episode
   — it re-arms only after the PR turns mergeable again.
-- `{"event": "checks", "pr": N, "head": "...", "state": "red|green|pending", "failing": [{"name": "...", "conclusion": "...", "url": "..."}]}`
+- `checks:` with `head`, `state` (`red|green|pending`) and `failing` (`name`, `conclusion`, `url` per failed run)
   — the check result changed on `head`, the PR head it was read for.
-  `red` fires once per red episode, its failures in `failing`;
+  `red` fires once per red episode;
   `green` fires once every check run has concluded without failure
   — and before any check reports, once GitHub's merge state holds the merge for none:
   the checks the base requires decide a head nothing reported on, and a check that reports later gates it from then on;
   `pending` fires when a green head stops being green without failing, a check starting on it or GitHub's merge state holding it again.
   Watcher silence is not evidence that checks are green.
-- `{"event": "pushed", "pr": N, "head": "..."}`
+- `pushed:` with `head`
   — a push from somewhere other than this checkout moved the PR's head;
   your own pushes stay silent.
-- `{"event": "comment", "id": N, "user": "...", "body": "...", "path": "...", "url": "..."}`
+- `comment:` with `id`, `user`, `path`, `url`, `body`
   — new comment from a party to the review:
   the PR author, the repo owner, or anyone with a review on the PR (self filtered out — a reviewing session hears the author this way).
   Standalone inline review comments (replies to existing review threads) fire here;
   inline comments attached to a fresh review are bundled into the `review` event instead.
-- `{"event": "review", "id": N, "user": "...", "state": "APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED", "review_decision": "APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED|null", "body": "...", "url": "...", "comments": [...]}`
+- `review:` with `id`, `user`, `state` (`APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED`), `review_decision` (`APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED|none`), `url`, `body`, and `comments` (`id`, `path`, `line`, `url`, `body` per inline comment)
   — new review.
   `state` is this reviewer's verdict;
   `review_decision` is GitHub's over the whole PR, read as the review fired.
   `REVIEW_REQUIRED` there means the base branch is still owed a review from an account its rules count
   — an approval from one they don't leaves the decision standing
-  — and `null` means the base asks for no review at all.
-  `comments` holds one `{"id": N, "path": "...", "line": N, "body": "...", "url": "..."}` per inline comment attached to this review at the moment `poll-pr` saw it (typically all of them;
-  rarely empty if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
-- `{"event": "watch_failed", "pr": N, "source": "baseline|pull-request|checks|reviews", "reason": "...", "failing_for": N}`
+  — and `none` means the base asks for no review at all.
+  `comments` are the inline comments attached to this review at the moment `poll-pr` saw it (typically all of them;
+  rarely none if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
+- `disconnected:` with `source`, `reason`, `failing_for`
+  — an event source has been unreachable for that long (a minute by default).
+  Fires once per outage, and the watch keeps running:
+  treat the silence as unknown, not quiet.
+- `reconnected:` with `disconnected_for`
+  — every source answers again; what happened meanwhile follows as ordinary events.
+- `watch_failed:` with `source` (`baseline|pull-request|checks|reviews`), `reason`, `failing_for`
   — terminal:
   the named event source kept failing past the grace window, so the watch ended rather than going quiet on those events
   — the process exits nonzero right after.
@@ -375,7 +383,7 @@ poll-pr <owner>/<repo> <pr_number>
 
 How to run it:
 [[watch poll-pr <owner>/<repo> <pr_number>]], and react to every line per step 15.
-An exit of the watched command right after `merged`, `closed`, or `watch_failed` is terminal;
+An exit of the watched command right after `merged:`, `closed:`, or `watch_failed:` is terminal;
 an exit without one means the watcher died:
 [[resume pr]] with its number rather than starting the watch again.
 When chaining into [[land]], end the watch.
@@ -556,6 +564,10 @@ someone (the user, a [[land]] run, or external action) terminated the PR.
 If `merged`, run [[land]]'s post-merge bookkeeping
 — the `merged` comment and task closure.
 If `closed` without merge, log it and report to the user.
+
+**`disconnected` / `reconnected` events**:
+no action;
+never read the silence between them as a clear gate.
 
 **`watch_failed` event**:
 the watch is over and the PR is not

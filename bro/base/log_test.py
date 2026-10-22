@@ -22,6 +22,17 @@ def run_log_script(code: str, level_env: Optional[str] = None) -> str:
   return result.stderr
 
 
+class TestToFile:
+  def test_records_go_to_the_file_and_not_to_stderr(self, tmp_path):
+    path = tmp_path / 'out.log'
+    code = (
+      'import sys; from pathlib import Path; from bro.base import log; '
+      f'log.to_file(Path({str(path)!r})); log.warning("redirected")'
+    )
+    assert run_log_script(code) == ''
+    assert 'redirected' in path.read_text()
+
+
 class TestLogLevel:
   def test_info_visible_by_default(self):
     output = run_log_script('from bro.base import log; log.info("hello")')

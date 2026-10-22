@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from pathlib import Path
 
 # the detail tier between DEBUG and INFO
 VERBOSE = 15
@@ -55,6 +56,14 @@ _handler.setFormatter(
 )
 _logger.addHandler(_handler)
 _logger.propagate = False
+
+
+def to_file(path: Path) -> None:
+  """send this process's records to `path` instead of stderr."""
+  _logger.removeHandler(_handler)
+  file_handler = logging.FileHandler(path)
+  file_handler.setFormatter(_handler.formatter)
+  _logger.addHandler(file_handler)
 
 
 def _caller_scope():

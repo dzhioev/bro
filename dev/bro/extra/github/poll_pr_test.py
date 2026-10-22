@@ -1,16 +1,18 @@
 #!/usr/bin/env python
 import email.message
 import http.client
+import io
 import itertools
 import json
+import re
 import subprocess
 import urllib.error
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, ClassVar, Optional
 
 import pytest
 
-from bro.base import credentials
+from bro.base import credentials, retry
 from bro.extra.github import poll_pr
 
 
@@ -126,6 +128,17 @@ def _run(api: _FakeAPI, **kwargs) -> list[dict[str, Any]]:
   return events
 
 
+_RENDERED_EMIT = poll_pr._emit
+
+
+@pytest.fixture(autouse=True)
+def _events_as_json(monkeypatch):
+  """stdout carries events as JSON lines, so the tests below read them back as dicts;
+  `TestRender` and `TestTextOutput` cover the text they are rendered to."""
+  monkeypatch.setattr(poll_pr, '_emit', lambda event: print(json.dumps(event), flush=True))
+  monkeypatch.setattr(poll_pr.pulls, 'pull_commits', lambda *a: [])
+
+
 def _poll(**overrides) -> int:
   arguments: dict[str, Any] = {
     'owner': 'o',
@@ -134,6 +147,7 @@ def _poll(**overrides) -> int:
     'token': lambda: 't',
     'interval': 0,
     'failure_grace': 300,
+    'disconnect_after': 60,
     'local_tip': lambda sha: False,
   }
   return poll_pr.poll_pr(**{**arguments, **overrides})
@@ -375,6 +389,13 @@ class TestPollLoopResilience:
     assert fetch.calls == 3
 
 
+class _Response(io.BytesIO):
+  headers: ClassVar[dict[str, str]] = {}
+
+  def __enter__(self):
+    return self
+
+
 class TestSourceFailures:
   def _baseline(self, monkeypatch):
     monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
@@ -387,8 +408,10 @@ class TestSourceFailures:
     monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
 
   def _clock(self, monkeypatch, step: float) -> None:
-    ticks = itertools.count(0, step)
-    monkeypatch.setattr(poll_pr.time, 'monotonic', lambda: next(ticks))
+    """a clock that only the poll interval moves, `step` seconds per cycle."""
+    now = [0.0]
+    monkeypatch.setattr(poll_pr.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: now.__setitem__(0, now[0] + step))
 
   def test_a_failing_source_does_not_suppress_the_others(self, monkeypatch, capsys):
     # a token without `checks: read` 403s on check-runs while reviews and
@@ -465,6 +488,88 @@ class TestSourceFailures:
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert events == [{'event': 'merged', 'pr': 1}]
 
+  def test_a_source_failing_past_the_disconnect_window_reports_once_and_again_on_recovery(
+    self, monkeypatch, capsys
+  ):
+    self._baseline(monkeypatch)
+    self._clock(monkeypatch, step=10)
+    monkeypatch.setattr(
+      poll_pr.pulls, 'pull_request', _Stepper([_open_pr()] * 9 + [{'merged': True}])
+    )
+    failure = _http_error(503)
+    # failing from the first cycle (t=0) to the sixth (t=50), healthy from t=60
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', _Stepper([failure] * 6 + [[]] * 3))
+    assert _poll(disconnect_after=30) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [
+      {
+        'event': 'disconnected',
+        'pr': 1,
+        'source': 'checks',
+        'reason': 'HTTP 503',
+        'failing_for': 30,
+      },
+      {'event': 'reconnected', 'pr': 1, 'disconnected_for': 60},
+      {'event': 'merged', 'pr': 1},
+    ]
+
+  def _through_the_retry_layer(self, monkeypatch, failures: int):
+    """pull-request reads that go through the real API retry loop and fail
+    `failures` times with a 30 s `Retry-After`, the retry sleeps moving the clock."""
+    now = [0.0]
+    monkeypatch.setattr(poll_pr.time, 'monotonic', lambda: now[0])
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(retry, 'sleep', lambda seconds: now.__setitem__(0, now[0] + seconds))
+    refusal = urllib.error.HTTPError(
+      'https://api.github.com/p', 403, 'Forbidden', email.message.Message(), None
+    )
+    refusal.headers['Retry-After'] = '30'
+    answers = [refusal] * failures + [_open_pr(), _open_pr(), {'merged': True}]
+
+    def urlopen(request, *, timeout):
+      answer = answers.pop(0)
+      if isinstance(answer, BaseException):
+        raise answer
+      return _Response(json.dumps(answer).encode())
+
+    monkeypatch.setattr(poll_pr.api.urllib.request, 'urlopen', urlopen)
+    api_get = poll_pr.api.get
+    reads = iter([_open_pr()])
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'pull_request',
+      lambda *a: next(reads, None) or api_get('https://api.github.com/p', 't'),
+    )
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
+    return now
+
+  def test_an_outage_is_reported_while_the_api_still_retries(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    now = self._through_the_retry_layer(monkeypatch, failures=4)
+    assert _poll() == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert [e['event'] for e in events] == ['disconnected', 'reconnected', 'merged']
+    assert events[0]['failing_for'] == 60
+    assert now[0] == 120
+
+  def test_a_retry_exhaustion_does_not_report_the_outage_twice(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    self._through_the_retry_layer(monkeypatch, failures=5)
+    assert _poll() == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert [e['event'] for e in events] == ['disconnected', 'reconnected', 'merged']
+
+  def test_a_blip_shorter_than_the_disconnect_window_reports_nothing(self, monkeypatch, capsys):
+    self._baseline(monkeypatch)
+    self._clock(monkeypatch, step=10)
+    monkeypatch.setattr(
+      poll_pr.pulls, 'pull_request', _Stepper([_open_pr()] * 4 + [{'merged': True}])
+    )
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', _Stepper([_http_error(503)] * 2 + [[]] * 3))
+    assert _poll(disconnect_after=30) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+    assert events == [{'event': 'merged', 'pr': 1}]
+
   def test_a_failed_baseline_ends_the_watch_before_the_first_cycle(self, monkeypatch, capsys):
     self._baseline(monkeypatch)
 
@@ -528,6 +633,119 @@ def _check_run(name: str, status: str, conclusion: Optional[str] = None) -> dict
 
 def _edge(transition: Optional[poll_pr.CheckTransition]) -> Optional[str]:
   return None if transition is None else transition.state
+
+
+class TestRender:
+  def test_a_bare_event_is_its_kind_alone(self):
+    assert poll_pr.render({'event': 'merged', 'pr': 7}) == 'merged:'
+
+  def test_fields_are_indented_under_the_kind_and_the_pr_is_left_out(self):
+    event = {'event': 'pushed', 'pr': 7, 'head': 'abc'}
+    assert poll_pr.render(event) == 'pushed:\n  head: abc'
+
+  def test_values_are_plain_none_is_spelled_out_and_empty_is_left_out(self):
+    event = {'event': 'disconnected', 'reason': 'HTTP 403', 'decision': None, 'empty': ''}
+    assert poll_pr.render(event) == 'disconnected:\n  reason: HTTP 403\n  decision: none'
+
+  def test_durations_count_seconds(self):
+    event = {'event': 'reconnected', 'disconnected_for': 245}
+    assert poll_pr.render(event) == 'reconnected:\n  disconnected_for: 245s'
+
+  def test_a_body_is_a_block_with_its_blank_lines_empty(self):
+    event = {'event': 'comment', 'user': 'bob', 'body': 'first\n\nsecond'}
+    assert poll_pr.render(event).splitlines() == [
+      'comment:',
+      '  user: bob',
+      '  body: |',
+      '    first',
+      '',
+      '    second',
+    ]
+
+  def test_an_empty_body_is_left_out(self):
+    assert poll_pr.render({'event': 'comment', 'body': ' \n'}) == 'comment:'
+
+  def test_list_items_are_dashed_with_their_body_a_level_deeper(self):
+    event = {
+      'event': 'review',
+      'id': 2,
+      'comments': [
+        {'id': 3, 'path': 'a.py', 'line': None, 'body': 'fix this'},
+        {'id': 5, 'path': 'b.py', 'body': ''},
+      ],
+    }
+    assert poll_pr.render(event).splitlines() == [
+      'review:',
+      '  id: 2',
+      '  comments:',
+      '    - id: 3',
+      '      path: a.py',
+      '      line: none',
+      '      body: |',
+      '        fix this',
+      '    - id: 5',
+      '      path: b.py',
+    ]
+
+  def test_an_empty_list_adds_no_lines(self):
+    event = {'event': 'checks', 'state': 'green', 'failing': []}
+    assert poll_pr.render(event) == 'checks:\n  state: green'
+
+
+class TestTextOutput:
+  def test_events_reach_stdout_stamped_and_rendered(self, monkeypatch, capsys):
+    monkeypatch.setattr(poll_pr, '_emit', _RENDERED_EMIT)
+    monkeypatch.setattr(poll_pr, '_timestamp', lambda: '2026-10-22T03:41:07Z')
+    poll_pr._emit({'event': 'conflicts', 'pr': 9})
+    assert capsys.readouterr().out == 'conflicts:\n  at: 2026-10-22T03:41:07Z\n'
+
+  def test_the_timestamp_is_utc_to_the_second(self):
+    assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', poll_pr._timestamp())
+
+
+class TestMergedEvent:
+  def _merged(self, monkeypatch, capsys, **pr_fields):
+    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
+    for name in ('issue_comments', 'review_comments', 'reviews'):
+      monkeypatch.setattr(poll_pr.pulls, name, lambda *a: [])
+    monkeypatch.setattr(poll_pr.api, 'viewer_login', lambda *a: 'alice')
+    monkeypatch.setattr(poll_pr.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(
+      poll_pr.pulls, 'pull_request', _Stepper([_open_pr(), {'merged': True, **pr_fields}])
+    )
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
+    assert _poll() == 0
+    return [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
+
+  def test_it_names_who_merged_what_and_the_commits_the_pr_carried(self, monkeypatch, capsys):
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'pull_commits',
+      lambda *a: [
+        {'sha': 'aaa', 'commit': {'message': 'first\n\nbody'}},
+        {'sha': 'bbb', 'commit': {'message': 'second'}},
+      ],
+    )
+    events = self._merged(
+      monkeypatch, capsys, merged_by={'login': 'dzhioev'}, merge_commit_sha='ccc'
+    )
+    assert events == [
+      {
+        'event': 'merged',
+        'pr': 1,
+        'merged_by': 'dzhioev',
+        'merge_commit': 'ccc',
+        'commits': [{'sha': 'aaa', 'subject': 'first'}, {'sha': 'bbb', 'subject': 'second'}],
+      }
+    ]
+
+  def test_a_failed_commit_read_still_reports_the_merge(self, monkeypatch, capsys):
+    def failing(*a):
+      raise _http_error(503)
+
+    monkeypatch.setattr(poll_pr.pulls, 'pull_commits', failing)
+    events = self._merged(monkeypatch, capsys, merge_commit_sha='ccc')
+    assert events == [{'event': 'merged', 'pr': 1, 'merge_commit': 'ccc'}]
 
 
 class TestCheckTracker:
@@ -956,9 +1174,10 @@ class TestMain:
   def _capture_poll(self, monkeypatch) -> dict:
     captured = {}
 
-    def fake_poll(owner, repo, pr, token, interval, failure_grace, local_tip):
+    def fake_poll(owner, repo, pr, token, interval, failure_grace, disconnect_after, local_tip):
       captured['token'] = token
       captured['failure_grace'] = failure_grace
+      captured['disconnect_after'] = disconnect_after
       captured['local_tip'] = local_tip
       return 0
 
@@ -979,6 +1198,22 @@ class TestMain:
     captured = self._capture_poll(monkeypatch)
     assert poll_pr.main(['poll-pr', 'x/y', '1', '--failure-grace', '60']) == 0
     assert captured['failure_grace'] == 60
+
+  def test_a_producer_keeps_the_log_out_of_the_watch_output(self, monkeypatch, tmp_path):
+    self._capture_poll(monkeypatch)
+    diagnostics = tmp_path / 'diagnostics'
+    redirected: list[Path] = []
+    monkeypatch.setattr(poll_pr.watches, 'diagnostics_path', lambda: diagnostics)
+    monkeypatch.setattr(poll_pr.log, 'to_file', redirected.append)
+    assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+    assert redirected == [diagnostics]
+
+  def test_disconnect_after_flag_reaches_the_watch(self, monkeypatch):
+    captured = self._capture_poll(monkeypatch)
+    assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+    assert captured['disconnect_after'] == 60
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--disconnect-after', '20']) == 0
+    assert captured['disconnect_after'] == 20
 
   def test_repo_flag_names_the_checkout_whose_tips_stay_quiet(self, monkeypatch, checkout):
     captured = self._capture_poll(monkeypatch)
