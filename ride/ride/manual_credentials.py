@@ -25,11 +25,26 @@ def connected_applier(
   registration = register_applier(root, mission)
   address = registration['address']
   stopped = threading.Event()
+  guard = threading.Lock()
+  connected: list[Client] = []
+
+  @contextlib.contextmanager
+  def abortable_connection() -> Generator[Client]:
+    with Client(connect(address)) as client:
+      with guard:
+        if stopped.is_set():
+          raise ConnectionError('manual credential applier is stopping')
+        connected.append(client)
+      try:
+        yield client
+      finally:
+        with guard:
+          connected.remove(client)
 
   def serve() -> None:
     while not stopped.is_set():
       try:
-        with Client(connect(address)) as client:
+        with abortable_connection() as client:
           while not stopped.is_set():
             response = client.call('credentials.work', {}, timeout=15).payload
             if response.get('outcome') != 'ok':
@@ -83,6 +98,9 @@ def connected_applier(
   try:
     yield
   finally:
-    stopped.set()
+    with guard:
+      stopped.set()
+      for client in connected:
+        client.close()
     applier.close()
     thread.join()
