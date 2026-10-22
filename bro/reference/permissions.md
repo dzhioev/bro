@@ -180,7 +180,8 @@ A bro's base folds these layers in order:
 
 1. Universal entries: every open option's `*`, the `bro` start permission, and `bro.placement=boxed`, all with full use and give.
    Configured-credential entries permit a target's configured picks only in starts of that target under the matching harness and provider; they give nothing onward.
-   These are a finite, lazily evaluated family fixed by the reading, independent of `add` and `drop`.
+   There is one entry per configured kind and instance, whose use pattern carries a `configured=<kind>+<instance>` condition decided against the concrete start;
+   the family is fixed by the reading, independent of `add` and `drop`, and does not grow with targets, harnesses, or providers.
 2. The persona's `may_summon` entries as `@<bro>`, and its `may_launch` entries as type start permissions, with full use and give.
 3. Repository `[tool.bro]`, host `defaults`, matching project URL, project path, URL `bros.<target>`, then path `bros.<target>`.
 

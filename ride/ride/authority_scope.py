@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import cache
-from itertools import product
 from typing import cast
 
-from bro.authority.authority import Authority, Entry, LazyEntry, Pair, Permission
-from bro.authority.patterns import Descriptor, Pattern, PatternSet
+from bro.authority.authority import Authority, Entry, Pair, Permission
+from bro.authority.patterns import Descriptor, Pattern, PatternSet, Predicate
 from bro.authority.rules import Declaration, Option, Request
 from bro.authority.syntax import parse_entry, parse_permission
 from bro.authority.values import (
@@ -200,7 +199,17 @@ def declaration(kinds: frozenset[str]) -> Declaration:
   return Declaration(options, defaults, credential_defaults, validate, base, validate_joint)
 
 
-def configured_entries(reading: Reading) -> tuple[LazyEntry, ...]:
+def configured_entries(reading: Reading) -> tuple[Entry, ...]:
+  """One entry per configured (kind, instance), usable by the starts that configure it.
+
+  Computed once per reading, so later starts under it do no per-target work.
+  """
+  if 'configured_entries' not in reading.derived:
+    reading.derived['configured_entries'] = _configured_entries(reading)
+  return reading.derived['configured_entries']
+
+
+def _configured_entries(reading: Reading) -> tuple[Entry, ...]:
   installed = reading.installation
   targets = set(installed.bros)
   for project in reading.configuration.projects.values():
@@ -210,37 +219,35 @@ def configured_entries(reading: Reading) -> tuple[LazyEntry, ...]:
   def held(target: str, harness: str, provider: str) -> frozenset[str]:
     return configured_kinds(target, harness, provider, reading)
 
-  def entry(target: str, harness: str, provider: str, kind: str, instance: str) -> LazyEntry:
-    values = {'target': target, 'harness': harness, 'provider': provider}
-    pattern = Pattern(
-      'bro',
-      {
-        name: installed.declarations['bro'].options[name].domain.singleton(value)
-        for name, value in values.items()
-      },
-      frozenset(values),
-    )
+  def configured(kind: str, instance: str) -> Predicate:
+    def holds(descriptor: Descriptor, prepare: bool) -> bool:
+      axes = [descriptor.values.get(name) for name in ('target', 'harness', 'provider')]
+      if None in axes:
+        return prepare
+      target, harness, provider = cast(list[str], axes)
+      return (
+        reading.picks(target).get(kind, '') == instance
+        and provider in installed.provider_needs
+        and kind in held(target, harness, provider)
+      )
 
-    def resolve(start: Descriptor) -> Pair:
-      if start.type != 'bro' or not all(
-        name not in start.values or start.values[name] == value for name, value in values.items()
-      ):
-        return Pair()
-      if kind not in held(target, harness, provider):
-        return Pair()
-      return Pair(PatternSet((pattern,)))
+    return Predicate(f'configured={kind}+{instance}', holds)
 
-    domain = installed.declarations['bro'].options[f'cred.{kind}'].domain
-    return LazyEntry(Permission('bro', f'cred.{kind}', domain.singleton(instance)), resolve)
-
+  instances = {
+    kind: {reading.picks(target).get(kind, '') for target in targets}
+    for kind in installed.credential_kinds
+  }
   return tuple(
-    entry(target, harness, provider, kind, reading.picks(target).get(kind, ''))
-    for target, harness, provider, kind in product(
-      sorted(targets),
-      installed.harnesses,
-      installed.provider_needs,
-      sorted(installed.credential_kinds),
+    Entry(
+      Permission(
+        'bro',
+        f'cred.{kind}',
+        installed.declarations['bro'].options[f'cred.{kind}'].domain.singleton(instance),
+      ),
+      Pair(PatternSet((Pattern('bro', predicates=frozenset({configured(kind, instance)})),))),
     )
+    for kind in sorted(instances)
+    for instance in sorted(instances[kind])
   )
 
 

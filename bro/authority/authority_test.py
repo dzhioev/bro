@@ -5,7 +5,7 @@ import pytest
 
 from .authority import Atom, Authority, Cap, Entry, LazyEntry, Pair, Permission, partition
 from .oracle_test_helper import descriptors, evaluate, pattern_matches, powerset
-from .patterns import Descriptor, Pattern, PatternSet
+from .patterns import Descriptor, Pattern, PatternSet, Predicate
 from .values import Strings
 
 
@@ -25,6 +25,8 @@ def test_expression_evaluation_matches_boolean_oracle():
     Atom(type, 'A', value) for type in types for value in ['a', 'b', 'fresh', 'another']
   ]
 
+  holds_a = Predicate('holds-a', lambda descriptor, prepare: descriptor.values.get('A') == 'a')
+
   def patterns(type=None):
     return PatternSet(
       tuple(
@@ -32,6 +34,7 @@ def test_expression_evaluation_matches_boolean_oracle():
           type or random.choice(types),
           {'A': Strings(random.choice(powerset(['a', 'b'])))},
           frozenset({'A'}) if random.choice([False, True]) else frozenset(),
+          predicates=frozenset({holds_a}) if random.choice([False, True]) else frozenset(),
         )
         for _ in range(random.randrange(3))
       )

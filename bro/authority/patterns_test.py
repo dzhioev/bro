@@ -2,7 +2,7 @@ from itertools import product
 from random import Random
 
 from .oracle_test_helper import descriptors, matches, pattern_matches, powerset
-from .patterns import Descriptor, Pattern, PatternSet
+from .patterns import Descriptor, Pattern, PatternSet, Predicate
 from .values import Finite, IntegerInterval, Integers, LatticeInterval, Strings, Subsets
 
 
@@ -118,3 +118,40 @@ def test_inclusion_uses_the_declared_domain_not_the_larger_family_universe():
   bounded = PatternSet((Pattern('T', {'N': domain}),))
   assert not PatternSet.all('T').within(bounded)
   assert PatternSet.all('T').within(bounded, {'T': {'N': domain}})
+
+
+def test_predicate_patterns_against_brute_force():
+  base = frozenset({'a', 'b'})
+  first = Predicate('first', lambda descriptor, prepare: descriptor.values.get('A') == 'a')
+  second = Predicate('second', lambda descriptor, prepare: descriptor.values.get('B') == 'b')
+  options = [
+    (Finite(base, values), required) for values in powerset(base) for required in (False, True)
+  ]
+  conditions = [
+    (frozenset(held), frozenset(unheld))
+    for held in powerset([first, second])
+    for unheld in powerset([first, second])
+  ]
+  patterns = [
+    Pattern(
+      'T', {'A': values[0]}, frozenset({'A'}) if values[1] else frozenset(), frozenset(), *condition
+    )
+    for values, condition in product(options, conditions)
+  ]
+  cases = descriptors('T', {'A': ['a', 'b'], 'B': ['a', 'b']})
+  for left, right in product(patterns, repeat=2):
+    intersection = left.meet(right)
+    difference = PatternSet(left.difference(right))
+    expected_inclusion = True
+    for descriptor in cases:
+      for prepare in (False, True):
+        first_match = matches(left, descriptor, prepare=prepare)
+        second_match = matches(right, descriptor, prepare=prepare)
+        assert left.matches(descriptor, prepare=prepare) == first_match
+        assert intersection is not None
+        assert intersection.matches(descriptor, prepare=prepare) == (first_match and second_match)
+      first_match, second_match = matches(left, descriptor), matches(right, descriptor)
+      assert difference.matches(descriptor) == (first_match and not second_match)
+      expected_inclusion &= not first_match or second_match
+    if PatternSet((left,)).within(PatternSet((right,))):
+      assert expected_inclusion

@@ -55,6 +55,8 @@ def matches(pattern: Pattern, descriptor: Descriptor, *, prepare: bool = False) 
       for name, values in pattern.values.items()
     )
     and not pattern.unset & descriptor.values.keys()
+    and all(predicate.holds(descriptor, prepare) for predicate in pattern.predicates)
+    and not any(predicate.holds(descriptor, prepare) for predicate in pattern.unholds)
   )
 
 

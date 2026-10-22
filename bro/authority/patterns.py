@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
@@ -16,6 +16,19 @@ class Descriptor:
 
   def __post_init__(self) -> None:
     object.__setattr__(self, 'values', MappingProxyType(dict(self.values)))
+
+
+@dataclass(frozen=True)
+class Predicate:
+  """An opaque condition on a concrete descriptor, identified by its name.
+
+  `holds(descriptor, prepare)` decides it for a descriptor; with `prepare` it may be
+  optimistic about options the partial descriptor leaves unset.
+  The algebra treats distinct predicates as independent of each other and of every option.
+  """
+
+  name: str
+  holds: Callable[[Descriptor, bool], bool] = field(compare=False)
 
 
 @dataclass(frozen=True)
@@ -57,6 +70,8 @@ class Pattern:
   values: Mapping[str, ValueSet] = field(default_factory=dict)
   required: frozenset[str] = frozenset()
   unset: frozenset[str] = frozenset()
+  predicates: frozenset[Predicate] = frozenset()
+  unholds: frozenset[Predicate] = frozenset()
 
   def __post_init__(self) -> None:
     object.__setattr__(self, 'values', MappingProxyType(dict(self.values)))
@@ -69,17 +84,27 @@ class Pattern:
     return _State(self.values.get(option), option not in self.required, option not in self.unset)
 
   @classmethod
-  def _from_states(cls, type: str, states: Mapping[str, _State]) -> Pattern:
+  def _from_states(
+    cls,
+    type: str,
+    states: Mapping[str, _State],
+    predicates: frozenset[Predicate] = frozenset(),
+    unholds: frozenset[Predicate] = frozenset(),
+  ) -> Pattern:
     return cls(
       type,
       {option: state.values for option, state in states.items() if state.values is not None},
       frozenset(option for option, state in states.items() if not state.unset),
       frozenset(option for option, state in states.items() if not state.set_allowed),
+      predicates,
+      unholds,
     )
 
   @property
   def is_empty(self) -> bool:
-    return any(self._state(option).is_empty for option in self.options)
+    return bool(self.predicates & self.unholds) or any(
+      self._state(option).is_empty for option in self.options
+    )
 
   def matches(self, descriptor: Descriptor, *, prepare: bool = False) -> bool:
     if descriptor.type != self.type or (not prepare and self.is_empty):
@@ -95,7 +120,9 @@ class Pattern:
         and not state.values.contains(descriptor.values[option])
       ):
         return False
-    return True
+    return all(predicate.holds(descriptor, prepare) for predicate in self.predicates) and not any(
+      predicate.holds(descriptor, prepare) for predicate in self.unholds
+    )
 
   def meet(self, other: Pattern) -> Pattern | None:
     if self.type != other.type:
@@ -106,6 +133,8 @@ class Pattern:
         option: self._state(option).intersection(other._state(option))
         for option in self.options | other.options
       },
+      self.predicates | other.predicates,
+      self.unholds | other.unholds,
     )
     return result
 
@@ -120,12 +149,23 @@ class Pattern:
       state = remaining[option]
       outside = state.difference(other._state(option))
       if not outside.is_empty:
-        pieces.append(self._from_states(self.type, {**remaining, option: outside}))
+        pieces.append(
+          self._from_states(
+            self.type, {**remaining, option: outside}, self.predicates, self.unholds
+          )
+        )
       inside = state.intersection(other._state(option))
       if inside.is_empty:
         return tuple(pieces)
       remaining[option] = inside
-    return tuple(pieces)
+    held, unheld = self.predicates, self.unholds
+    for predicate in sorted(other.predicates, key=lambda item: item.name):
+      pieces.append(self._from_states(self.type, remaining, held, unheld | {predicate}))
+      held |= {predicate}
+    for predicate in sorted(other.unholds, key=lambda item: item.name):
+      pieces.append(self._from_states(self.type, remaining, held | {predicate}, unheld))
+      unheld |= {predicate}
+    return tuple(piece for piece in pieces if not piece.is_empty)
 
 
 @dataclass(frozen=True)

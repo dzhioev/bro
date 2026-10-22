@@ -7,7 +7,7 @@ from typing import ClassVar, NoReturn, cast
 
 import pytest
 
-from bro.authority.authority import Atom, Authority, LazyEntry
+from bro.authority.authority import Atom, Authority
 from bro.authority.oracle_test_helper import evaluate
 from bro.authority.patterns import Descriptor
 from bro.authority.rules import Refusal, Request
@@ -20,8 +20,9 @@ from bro.llm.llm import LLMSpec as Recipe
 from bro.llm.llms.echo import LLMSpec
 from bro.mcp import MCPServerSpec, ToolLayer, creds
 from bro.worker_types import installed_types
+from ride.authority_launch import mission_view
 from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
-from ride.authority_scope import configured_entries, existence
+from ride.authority_scope import configured_entries, configured_kinds, existence
 from ride.repository import Repository
 
 
@@ -181,7 +182,7 @@ def test_uninstalled_target_and_harness_fail_only_at_existence(installation):
       normalized(source, target=target)
 
 
-def test_configured_instances_are_lazy_and_target_harness_provider_scoped(installation):
+def test_configured_instances_are_target_harness_provider_scoped(installation):
   source = reading(
     installation,
     {
@@ -197,7 +198,7 @@ def test_configured_instances_are_lazy_and_target_harness_provider_scoped(instal
   )
   descriptor = normalized(source)
   base = installation.declarations['bro'].base(descriptor, source)
-  assert all(isinstance(entry, LazyEntry) for entry in configured_entries(source))
+  assert len(configured_entries(source)) == len(installation.credential_kinds) + 2
   atom = Atom('bro', 'cred.active', 'child-secret')
   pair = base.evaluate(atom, descriptor, installation.declarations)
   assert pair.use.matches(descriptor)
@@ -769,3 +770,76 @@ def test_cheatsheet_shell_examples_parse_without_running_commands(monkeypatch):
         with pytest.raises(Captured) as captured:
           module.main(words)
       captured.value.parser.parse(words)
+
+
+def grown(installation, count):
+  """The installation with `count` more targets, harnesses, and providers, all configured alike."""
+  native = installation.harnesses['native']
+  return replace(
+    installation,
+    bros={
+      **installation.bros,
+      **{
+        f'extra{index}': type(f'Extra{index}', (Other,), {'name': f'extra{index}'})(
+          credential_presence=installation.credential_kinds
+        )
+        for index in range(count)
+      },
+    },
+    harnesses={
+      **installation.harnesses,
+      **{f'native{index}': native for index in range(count)},
+    },
+    provider_needs={
+      **installation.provider_needs,
+      **{f'echo{index}': frozenset({'provider_key'}) for index in range(count)},
+    },
+  )
+
+
+def test_configured_authority_agrees_with_configured_kinds_on_every_start(installation):
+  installation = grown(installation, 2)
+  source = reading(
+    installation,
+    {'projects': {'/project': {'bros': {'child': {'creds': ['active+child-secret']}}}}},
+  )
+  authority = Authority(configured_entries(source))
+  types = tuple(installation.declarations)
+  for target, harness, provider in product(
+    installation.bros, installation.harnesses, installation.provider_needs
+  ):
+    start = Descriptor('bro', {'target': target, 'harness': harness, 'provider': provider})
+    held = configured_kinds(target, harness, provider, source)
+    for kind in installation.credential_kinds:
+      for instance in {source.picks(name).get(kind, '') for name in installation.bros}:
+        atom = Atom('bro', f'cred.{kind}', instance)
+        expected = kind in held and source.picks(target).get(kind, '') == instance
+        assert authority.evaluate(atom, start, types).use.matches(start) == expected
+        assert evaluate(authority, atom, start, start, give=False) == expected
+
+
+def test_growing_an_axis_or_value_set_does_not_grow_entries_or_rendered_size(installation):
+  sizes = {}
+  for count in (0, 4):
+    source = reading(grown(installation, count))
+    mission = source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+    view = mission_view(mission)
+    sizes[count] = (
+      len(configured_entries(source)),
+      len(json.dumps(view['permits'])),
+      len(json.dumps(view['authority'])),
+    )
+  assert sizes[0] == sizes[4]
+
+
+def test_later_starts_under_a_reading_do_no_per_target_work(installation, monkeypatch):
+  source = reading(grown(installation, 6))
+  start = Request('bro', {'target': 'child'})
+  source.rules.start(start, Authority.top(), source)
+  calls = []
+  picks = Reading.picks
+  monkeypatch.setattr(
+    Reading, 'picks', lambda self, target: calls.append(target) or picks(self, target)
+  )
+  source.rules.start(start, Authority.top(), source)
+  assert len(calls) <= len(installation.credential_kinds)
