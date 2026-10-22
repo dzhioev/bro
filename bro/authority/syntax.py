@@ -730,6 +730,8 @@ def render_pattern(pattern: Pattern, *, recipient: bool = False) -> str:
     and 'target' in pattern.values
     and pattern.required == {'target'}
     and not pattern.unset
+    and not pattern.predicates
+    and not pattern.unholds
   ):
     shorthand = render_permission(Permission('bro', 'target', pattern.values['target']))
     if shorthand.startswith('@') and shorthand != '@*':
@@ -752,6 +754,8 @@ def render_pattern(pattern: Pattern, *, recipient: bool = False) -> str:
       conditions.append(name + ('=' if option in pattern.required else '?=') + values)
     else:
       conditions.append(option)
+  conditions.extend(sorted(predicate.name for predicate in pattern.predicates))
+  conditions.extend(sorted(f'not({predicate.name})' for predicate in pattern.unholds))
   if recipient and pattern.type == 'bro' and 'placement' not in pattern.options:
     conditions.append('placement?=*')
   return pattern.type + '{' + ','.join(conditions) + '}'

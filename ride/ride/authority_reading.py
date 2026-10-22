@@ -215,6 +215,7 @@ class Reading:
   attachment: host_config.Attachment | None = None
   project: Mapping[str, Any] = field(default_factory=dict)
   project_policy: Policy = Policy()
+  derived: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
 
   def __post_init__(self) -> None:
     object.__setattr__(self, 'store_defaults', MappingProxyType(dict(self.store_defaults)))
