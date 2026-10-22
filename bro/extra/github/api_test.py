@@ -62,6 +62,13 @@ class _FakeUrlopen:
     return _FakeResponse(step)
 
 
+@pytest.fixture(autouse=True)
+def _empty_conditional_cache():
+  api._conditional_cache.clear()
+  yield
+  api._conditional_cache.clear()
+
+
 def _install(monkeypatch, fake: _FakeUrlopen) -> None:
   monkeypatch.setattr(api.urllib.request, 'urlopen', fake)
   monkeypatch.setattr(retry, 'sleep', lambda _: None)
@@ -103,6 +110,85 @@ class TestVerbs:
     _install(monkeypatch, fake)
     assert api.delete('https://api.github.com/x', 't') is None
     assert fake.requests[0].get_method() == 'DELETE'
+
+
+class TestConditionalGet:
+  URL = 'https://api.github.com/x'
+
+  def test_a_not_modified_answer_replays_the_cached_body(self, monkeypatch):
+    fake = _FakeUrlopen([({'n': 1}, {'ETag': '"a"'}), _http_error(304)])
+    _install(monkeypatch, fake)
+    assert api.get(self.URL, 't') == {'n': 1}
+    assert api.get(self.URL, 't') == {'n': 1}
+    assert fake.requests[0].get_header('If-none-match') is None
+    assert fake.requests[1].get_header('If-none-match') == '"a"'
+
+  def test_a_changed_answer_replaces_the_cached_one(self, monkeypatch):
+    fake = _FakeUrlopen(
+      [({'n': 1}, {'ETag': '"a"'}), ({'n': 2}, {'ETag': '"b"'}), _http_error(304)]
+    )
+    _install(monkeypatch, fake)
+    api.get(self.URL, 't')
+    assert api.get(self.URL, 't') == {'n': 2}
+    assert api.get(self.URL, 't') == {'n': 2}
+    assert fake.requests[2].get_header('If-none-match') == '"b"'
+
+  def test_an_unexpected_not_modified_is_an_error(self, monkeypatch):
+    fake = _FakeUrlopen([_http_error(304)])
+    _install(monkeypatch, fake)
+    with pytest.raises(urllib.error.HTTPError):
+      api.get(self.URL, 't')
+
+  def test_a_paginated_read_replays_each_page_with_its_link(self, monkeypatch):
+    second = 'https://api.github.com/x?page=2'
+    link = {'Link': f'<{second}>; rel="next"', 'ETag': '"p1"'}
+    fake = _FakeUrlopen([([1], link), ([2], {'ETag': '"p2"'}), _http_error(304), _http_error(304)])
+    _install(monkeypatch, fake)
+    assert api.get_all(self.URL, 't') == [1, 2]
+    assert api.get_all(self.URL, 't') == [1, 2]
+
+  def test_a_full_last_page_is_followed_to_a_page_added_since(self, monkeypatch):
+    url = 'https://api.github.com/x?per_page=2'
+    full = ([1, 2], {'ETag': '"p1"'})
+    fake = _FakeUrlopen([full, [], _http_error(304), ([3], {'ETag': '"p2"'})])
+    _install(monkeypatch, fake)
+    assert api.get_all(url, 't') == [1, 2]
+    assert api.get_all(url, 't') == [1, 2, 3]
+    assert [request.full_url for request in fake.requests] == [
+      url,
+      f'{url}&page=2',
+      url,
+      f'{url}&page=2',
+    ]
+
+  def test_a_full_default_sized_page_is_followed_too(self, monkeypatch):
+    url = 'https://api.github.com/x'
+    size = api._DEFAULT_PAGE_SIZE
+    fake = _FakeUrlopen([(list(range(size)), {'ETag': '"p1"'}), []])
+    _install(monkeypatch, fake)
+    assert api.get_all(url, 't') == list(range(size))
+    assert fake.requests[1].full_url == f'{url}?page=2'
+
+  def test_a_short_last_page_is_not_followed(self, monkeypatch):
+    fake = _FakeUrlopen([[1]])
+    _install(monkeypatch, fake)
+    assert api.get_all('https://api.github.com/x?per_page=2', 't') == [1]
+    assert fake.call_count == 1
+
+  def test_a_mutating_verb_is_never_conditional(self, monkeypatch):
+    fake = _FakeUrlopen([({'n': 1}, {'ETag': '"a"'}), {'n': 2}])
+    _install(monkeypatch, fake)
+    api.get(self.URL, 't')
+    api.post(self.URL, 't', {})
+    assert fake.requests[1].get_header('If-none-match') is None
+
+  def test_the_cache_holds_a_bounded_number_of_urls(self, monkeypatch):
+    count = api._CONDITIONAL_CACHE_LIMIT + 5
+    fake = _FakeUrlopen([({'n': 1}, {'ETag': '"a"'})] * count)
+    _install(monkeypatch, fake)
+    for index in range(count):
+      api.get(f'{self.URL}/{index}', 't')
+    assert len(api._conditional_cache) == api._CONDITIONAL_CACHE_LIMIT
 
 
 class TestRetry:
@@ -150,6 +236,39 @@ class TestRetry:
     with pytest.raises(urllib.error.HTTPError):
       api.get('https://api.github.com/x', 't')
     assert fake.call_count == api._MAX_ATTEMPTS
+
+
+class TestObservingFailures:
+  URL = 'https://api.github.com/x'
+
+  def test_every_failed_attempt_is_reported_before_the_retry(self, monkeypatch):
+    fake = _FakeUrlopen([_http_error(503), _http_error(503), {'ok': True}])
+    _install(monkeypatch, fake)
+    seen: list[Exception] = []
+    with api.observing_failures(seen.append):
+      assert api.get(self.URL, 't') == {'ok': True}
+    codes = [e.code for e in seen if isinstance(e, urllib.error.HTTPError)]
+    assert codes == [503, 503]
+
+  def test_an_observer_error_ends_the_request(self, monkeypatch):
+    fake = _FakeUrlopen([_http_error(503), {'ok': True}])
+    _install(monkeypatch, fake)
+
+    def refuse(error: Exception) -> None:
+      raise RuntimeError('stop')
+
+    with api.observing_failures(refuse), pytest.raises(RuntimeError):
+      api.get(self.URL, 't')
+    assert fake.call_count == 1
+
+  def test_requests_outside_the_block_are_not_observed(self, monkeypatch):
+    fake = _FakeUrlopen([_http_error(503), {'ok': True}])
+    _install(monkeypatch, fake)
+    seen: list[Exception] = []
+    with api.observing_failures(seen.append):
+      pass
+    api.get(self.URL, 't')
+    assert seen == []
 
 
 class TestRetryDelay:

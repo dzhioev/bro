@@ -52,6 +52,7 @@ _JOURNAL_HEAD_SUFFIX = '.journal-head'
 _JOURNAL_WAKE_SUFFIX = '.journal-wake'
 _WAKE_ON_QUIET_SUFFIX = '.wake-on-quiet'
 _BEAT_SUFFIX = '.beat'
+_DIAGNOSTICS_SUFFIX = '.diagnostics'
 _STALL_REPORTED_SUFFIX = '.beat-reported'
 _TURN_FILENAME = '.turn'
 _NOTIFIED_FILENAME = '.notified'
@@ -338,6 +339,10 @@ class Watch:
     return self.directory / f'{self.slug}{_BEAT_SUFFIX}'
 
   @property
+  def diagnostics_file(self) -> Path:
+    return self.directory / f'{self.slug}{_DIAGNOSTICS_SUFFIX}'
+
+  @property
   def stall_reported_file(self) -> Path:
     return self.directory / f'{self.slug}{_STALL_REPORTED_SUFFIX}'
 
@@ -465,6 +470,7 @@ class Watch:
       self.journal_file,
       self.journal_wake_file,
       self.beat_file,
+      self.diagnostics_file,
       self.stall_reported_file,
     ):
       path.unlink(missing_ok=True)
@@ -1180,6 +1186,16 @@ def beat(within_seconds: float) -> None:
   os.replace(staging, target)
   # a journal wait already blocked must see this beat's deadline
   _signal_journal_change(Path(directory) / f'{slug_value}{_JOURNAL_WAKE_SUFFIX}')
+
+
+def diagnostics_path() -> Optional[Path]:
+  """Where a producer's own diagnostics go, so they stay out of the output the
+  watch delivers; None outside a producer."""
+  directory = os.environ.get(PRODUCER_DIRECTORY_ENV)
+  slug_value = os.environ.get(PRODUCER_SLUG_ENV)
+  if os.environ.get(PRODUCER_ENV) != '1' or directory is None or slug_value is None:
+    return None
+  return Path(directory) / f'{slug_value}{_DIAGNOSTICS_SUFFIX}'
 
 
 def session_watch_admitted() -> bool:

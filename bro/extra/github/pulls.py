@@ -18,6 +18,11 @@ def pull_request(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
   return api.get(url, token)
 
 
+def pull_commits(owner: str, repo: str, pr: int, token: str) -> list[dict[str, Any]]:
+  url = f'https://api.github.com/repos/{owner}/{repo}/pulls/{pr}/commits?per_page=100'
+  return api.get_all(url, token)
+
+
 _REVIEW_DECISION_QUERY = """
   query($owner: String!, $repo: String!, $pr: Int!) {
     repository(owner: $owner, name: $repo) {
