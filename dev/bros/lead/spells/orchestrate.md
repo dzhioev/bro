@@ -54,6 +54,7 @@ and ends.
 Read the appended `# Arguments` section:
 
 - `new` — seed text for the work to open (Step 0).
+  The seed is the user's own words, passed through unchanged.
   An empty value means collect the seed from the user.
 - `task` — ref of an existing root task:
   resume it.
@@ -82,9 +83,10 @@ Never redo a completed phase.
    The design and review-and-plan bros must expose `spell::design`;
    check their `bro show` cards before choosing them.
    Then check every phase's summon the way you check any summon, all of them at once, so the user settles each way out before the work starts.
-3. `brog::create_task` with the name,
-   tags,
-   and a `## Goal` body stating in a few lines what the work must achieve.
+3. Show the user the name, the tags, and the `## Goal` body, then `brog::create_task` with them.
+   The `## Goal` body is the user's own brief with only spelling and grammar fixed
+   — nothing condensed, reordered, or dropped;
+   a few lines stating what the work must achieve go above it only when the brief does not.
    The task is born open.
    Its returned url is the root task URL every phase prompt carries.
 4. Record the kickoff comment, naming who runs the phases so a resumed session recovers it,
