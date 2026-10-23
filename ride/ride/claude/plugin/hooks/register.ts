@@ -109,18 +109,32 @@ async function clock($: EngineInterface): Promise<(milliseconds: number) => stri
   return milliseconds => `${formatter.format(milliseconds)}${suffix}`
 }
 
-// one row per line: its arrival time, its watch's command shortened and
-// marked `*` when the line wakes the session, then what the line says
+// one row per event: its first line's arrival time, its watch's command
+// shortened and marked `*` when the line wakes the session, then what the line
+// says; the indented or empty lines of the same watch that follow it continue
+// the row
 function rows(rewake: Rewake, time: (milliseconds: number) => string): string[] {
-  const lines = rewake.lines.map(line => {
-    const tag = line.command === null ? '' : `[${clipped(line.command, TAG_CHARACTERS)}]${line.wakes ? '*' : ''} `
-    return `${time(line.arrived * 1000)} ${tag}${clipped(line.content, CONTENT_CHARACTERS)}`
+  const events: RewakeLine[][] = []
+  for (const line of rewake.lines) {
+    const previous = events[events.length - 1]
+    if (previous !== undefined && previous[0].command === line.command && /^(\s|$)/.test(line.content)) {
+      previous.push(line)
+    } else {
+      events.push([line])
+    }
+  }
+  const rendered = events.map(([first, ...continuation]) => {
+    const tag = first.command === null ? '' : `[${clipped(first.command, TAG_CHARACTERS)}]${first.wakes ? '*' : ''} `
+    const head = `${time(first.arrived * 1000)} ${tag}`
+    return [`${head}${clipped(first.content, CONTENT_CHARACTERS)}`]
+      .concat(continuation.map(line => (line.content === '' ? '' : `${' '.repeat(head.length)}${clipped(line.content, CONTENT_CHARACTERS)}`)))
+      .join('\n')
   })
   if (rewake.pending) {
     const blank = ' '.repeat(time(0).length)
-    lines.push(`${blank} … more watch lines wait for the next wake`)
+    rendered.push(`${blank} … more watch lines wait for the next wake`)
   }
-  return lines
+  return rendered
 }
 
 function clipped(text: string, characters: number): string {

@@ -123,3 +123,40 @@ test("the waiter's own notice is drawn without a tag", async ($, on) => {
 
   expect(rows).toEqual(['13:05:07Z No watch line arrived for 24 hours'])
 })
+
+test('the indented lines of one watch continue its event under a single tag', async ($, on) => {
+  session(on, () => ({
+    count: 1,
+    lines: [
+      line('poll-pr o/r 1', 'review:'),
+      line('poll-pr o/r 1', '  id: 7', false),
+      line('poll-pr o/r 1', '  state: APPROVED', false),
+      line('poll-pr o/r 1', 'check:'),
+      line('other', '  indented'),
+    ],
+    pending: false,
+  }))
+  const rows = logged(on)
+  await $.session.append(notification)
+
+  const head = '13:05:07Z [poll-pr o/r 1]* '
+  const pad = ' '.repeat(head.length)
+  expect(rows).toEqual([
+    `${head}review:\n${pad}  id: 7\n${pad}  state: APPROVED`,
+    `${head}check:`,
+    '13:05:07Z [other]*   indented',
+  ])
+})
+
+test('an empty line inside an event continues it', async ($, on) => {
+  session(on, () => ({
+    count: 1,
+    lines: [line('poll-pr o/r 1', 'review:'), line('poll-pr o/r 1', '    First.'), line('poll-pr o/r 1', ''), line('poll-pr o/r 1', '    Second.')],
+    pending: false,
+  }))
+  const rows = logged(on)
+  await $.session.append(notification)
+
+  const pad = ' '.repeat('13:05:07Z [poll-pr o/r 1]* '.length)
+  expect(rows).toEqual([`13:05:07Z [poll-pr o/r 1]* review:\n${pad}    First.\n\n${pad}    Second.`])
+})
