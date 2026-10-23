@@ -214,8 +214,8 @@ On a batch it exits 2 with the lines on stderr,
 which Claude hands the model under the hook's `rewakeSummary` and `rewakeMessage`, after the next tool result of a running turn or as a turn of its own.
 It also records the batch in the session's Claude state dir, where ride's own Claude Code plugin reads it.
 An interactive session loads that plugin from a copy laid in its state dir at launch,
-and the plugin draws a dim transcript row for each line of the batch as Claude delivers it:
-the line's arrival time on the session's Claude clock, its watch's command shortened and marked `*` when the line woke the session, then the line.
+and the plugin draws a dim transcript row for each event of the batch as Claude delivers it:
+the first line's arrival time on the session's Claude clock, its watch's command shortened and marked `*` when the line woke the session, then the line, with the indented or empty lines of the same watch that follow it continuing the row.
 A waiter exits 0 once a later waiter supersedes it, the runner stands it down, or `do-ride` is gone;
 shortly before its hook timeout it wakes the session with a line saying no watch line arrived and that ending the turn keeps waiting.
 
