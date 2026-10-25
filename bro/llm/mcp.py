@@ -1,5 +1,6 @@
 import functools
 import inspect
+import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -168,6 +169,14 @@ class Tool(ABC):
 
   @abstractmethod
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str: ...
+
+
+def encode_tool_result(result: dict[str, Any] | str) -> str:
+  return (
+    result
+    if isinstance(result, str)
+    else json.dumps(result, separators=(',', ':'), ensure_ascii=False)
+  )
 
 
 def wire_name(namespace: str, tool: str) -> str:
