@@ -932,7 +932,7 @@ workspace removal (`--drop`, `ride clean`) deletes it with the workspace.
 
 A registered worker type can return a core `Container(WorkerContainer(…))` run without importing ride.
 The shipped `webview` type is a browser worker container driven through `webview open`, `mission ask`, and `webview close`;
-its optional noVNC loopback view requires `webview.vnc`, and every webview launch requires `webview`.
+its optional noVNC loopback view requires `webview.vnc`, its page downloads require `webview.downloads`, and every webview launch requires `webview`.
 `webview open --cookies <instance>` passes one `cookies` profile into the worker's scoped store, while `--vnc --port <port>` requests the noVNC host port.
 Its declaration ships a byte-valued Docker build context whose normalized relative paths include a `Dockerfile` opening with `ARG RUNTIME_IMAGE` and `FROM ${RUNTIME_IMAGE}`.
 It also declares a command, environment, and a mapping from distinct container ports to requested host ports.

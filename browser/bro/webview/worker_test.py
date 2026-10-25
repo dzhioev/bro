@@ -108,10 +108,11 @@ class TestWebviewType:
     assert set(run.spec.files) == {'Dockerfile'}
     assert json.loads(run.spec.env['WEBVIEW_OPTIONS']) == {
       'vnc': False,
+      'downloads': False,
       'allowed_origins': [],
       'blocked_origins': [],
     }
-    assert run.extension == worker.WebviewFacts(False, None, (), ())
+    assert run.extension == worker.WebviewFacts(False, None, False, (), ())
 
   def test_vnc_and_origins_reach_the_container_facts(self, tmp_path):
     run = _worker_type().launch(
@@ -128,15 +129,23 @@ class TestWebviewType:
     assert run.spec.published_ports == {worker.VNC_PORT: None}
     assert json.loads(run.spec.env['WEBVIEW_OPTIONS']) == {
       'vnc': True,
+      'downloads': False,
       'allowed_origins': ['https://one.example', '*.trusted.example'],
       'blocked_origins': ['https://blocked.example'],
     }
     assert run.extension == worker.WebviewFacts(
       True,
       None,
+      False,
       ('https://one.example', '*.trusted.example'),
       ('https://blocked.example',),
     )
+
+  def test_downloads_reach_the_container_options_and_facts(self, tmp_path):
+    run = _worker_type().launch(_request(tmp_path, {'downloads': True}))
+
+    assert json.loads(run.spec.env['WEBVIEW_OPTIONS'])['downloads'] is True
+    assert run.extension.downloads is True
 
   def test_vnc_port_pins_the_published_host_port(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {'vnc': True, 'vnc_port': 46080}))
@@ -161,6 +170,7 @@ class TestWebviewType:
     [
       ({'unknown': True}, 'unknown webview fields'),
       ({'vnc': 1}, 'vnc must be a flag'),
+      ({'downloads': 1}, 'downloads must be a flag'),
       ({'vnc': True, 'vnc_port': True}, 'domain check'),
       ({'vnc': True, 'vnc_port': 1023}, 'domain check'),
       ({'vnc_port': 46080}, 'validity check.*vnc_port requires vnc'),
@@ -172,7 +182,7 @@ class TestWebviewType:
 
   def test_webview_builds_an_admitted_request_from_a_webview_owner(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {}, type=worker.WEBVIEW))
-    assert run.extension == worker.WebviewFacts(False, None, (), ())
+    assert run.extension == worker.WebviewFacts(False, None, False, (), ())
 
   def test_one_owner_may_hold_several_live_webviews(self, tmp_path):
     worker_type = _worker_type()
@@ -185,11 +195,12 @@ class TestWebviewType:
     worker_type.launch(_request(tmp_path, {}, request_id='second'))
 
   def test_audit_fields_are_json_facts(self):
-    facts = worker.WebviewFacts(True, 46080, ('https://allowed',), ('https://blocked',))
+    facts = worker.WebviewFacts(True, 46080, True, ('https://allowed',), ('https://blocked',))
 
     assert _worker_type().audit_fields(facts) == {
       'vnc': True,
       'vnc_port': 46080,
+      'downloads': True,
       'allowed_origins': ['https://allowed'],
       'blocked_origins': ['https://blocked'],
     }

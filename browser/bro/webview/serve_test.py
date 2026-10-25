@@ -269,7 +269,7 @@ def daemon_files(tmp_path, monkeypatch, worker_id):
   monkeypatch.setenv(BROKER_TALK, 'owner.question,worker.say')
   monkeypatch.setenv(
     serve.OPTIONS_ENV,
-    json.dumps({'vnc': False, 'allowed_origins': [], 'blocked_origins': []}),
+    json.dumps({'vnc': False, 'downloads': False, 'allowed_origins': [], 'blocked_origins': []}),
   )
   return workspace, binaries
 
@@ -306,8 +306,9 @@ async def _ask(
     'not-json',
     '[]',
     '{}',
-    '{"vnc": 1, "allowed_origins": [], "blocked_origins": []}',
-    '{"vnc": false, "allowed_origins": ["a;b"], "blocked_origins": []}',
+    '{"vnc": 1, "downloads": false, "allowed_origins": [], "blocked_origins": []}',
+    '{"vnc": false, "downloads": 1, "allowed_origins": [], "blocked_origins": []}',
+    '{"vnc": false, "downloads": false, "allowed_origins": ["a;b"], "blocked_origins": []}',
   ],
 )
 def test_options_fail_fast_on_malformed_values(raw):
@@ -500,6 +501,7 @@ async def test_startup_warms_browser_then_listens_and_commands_reply_verbatim(
     json.dumps(
       {
         'vnc': False,
+        'downloads': False,
         'allowed_origins': ['https://allowed.example'],
         'blocked_origins': ['https://blocked.example'],
       }
@@ -594,12 +596,12 @@ async def test_files_the_result_does_not_name_are_removed_without_minting(
       channel,
       {
         'tool': 'write',
-        'arguments': {'path': 'output/console.log', 'content': 'entries', 'text': 'written'},
+        'arguments': {'path': 'scratch/notes.log', 'content': 'entries', 'text': 'written'},
       },
     )
 
     assert reply == {'text': 'written', 'files': []}
-    assert not (workspace / 'output/console.log').exists()
+    assert not (workspace / 'scratch/notes.log').exists()
 
     await _ask(sink, channel, {'webview': 'close'}, identifier='close')
     await sink.next(lambda message: message.type == Tag.RESULT)
@@ -654,11 +656,32 @@ async def test_tools_malformed_withheld_and_tool_errors(daemon_files, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_downloads_option_sets_whether_the_browser_accepts_downloads(
+  daemon_files, monkeypatch
+):
+  workspace, _ = daemon_files
+  monkeypatch.setenv(
+    serve.OPTIONS_ENV,
+    json.dumps({'vnc': False, 'downloads': True, 'allowed_origins': [], 'blocked_origins': []}),
+  )
+  async with running_broker(monkeypatch, workspace) as sink:
+    daemon = asyncio.create_task(serve.serve())
+    channel, _ = await _ready(sink)
+
+    facts = json.loads((await _ask(sink, channel, {'tool': 'facts'}, 'facts'))['text'])
+    assert facts['config']['browser']['contextOptions']['acceptDownloads'] is True
+
+    await _ask(sink, channel, {'webview': 'close'}, 'close')
+    await sink.next(lambda message: message.type == Tag.RESULT)
+    await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
 async def test_vnc_starts_after_both_ports_and_reports_the_published_url(daemon_files, monkeypatch):
   workspace, _ = daemon_files
   monkeypatch.setenv(
     serve.OPTIONS_ENV,
-    json.dumps({'vnc': True, 'allowed_origins': [], 'blocked_origins': []}),
+    json.dumps({'vnc': True, 'downloads': False, 'allowed_origins': [], 'blocked_origins': []}),
   )
   monkeypatch.setenv(serve.PUBLISHED_PORTS_ENV, f'{serve.VNC_PORT}=49152')
   async with running_broker(monkeypatch, workspace) as sink:
@@ -780,7 +803,7 @@ async def test_dead_vnc_process_fails_startup_before_ready(daemon_files, monkeyp
   _executable(binaries / 'x11vnc', '#!/usr/bin/env python3\nraise SystemExit(23)\n')
   monkeypatch.setenv(
     serve.OPTIONS_ENV,
-    json.dumps({'vnc': True, 'allowed_origins': [], 'blocked_origins': []}),
+    json.dumps({'vnc': True, 'downloads': False, 'allowed_origins': [], 'blocked_origins': []}),
   )
   monkeypatch.setenv(serve.PUBLISHED_PORTS_ENV, f'{serve.VNC_PORT}=49152')
   async with running_broker(monkeypatch, workspace):
@@ -848,7 +871,7 @@ async def test_command_file_limit_removes_every_output_without_minting(monkeypat
   (tmp_path / 'two').write_bytes(b'34')
   monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
 
-  with pytest.raises(serve.DaemonError, match='4 bytes'):
+  with pytest.raises(serve.DaemonError, match='holds 4 bytes'):
     await serve.collect_files(before, f'### Result\n- [One]({tmp_path / "one"})')
 
   assert not (tmp_path / 'one').exists()
@@ -915,37 +938,49 @@ NAMED_FILES_CASES = {
   'screenshot': (
     '### Result\n- [Screenshot of viewport](/workspace/output/page-1.png)\n'
     '### Page\n- Page URL: https://example.test/',
-    ['/workspace/output/page-1.png'],
+    (['/workspace/output/page-1.png'], []),
   ),
   'snapshot written to a file': (
     '### Page\n- Page URL: https://example.test/\n### Snapshot\n- [Snapshot](/workspace/page.yml)',
-    ['/workspace/page.yml'],
+    (['/workspace/page.yml'], []),
   ),
   'inline snapshot': (
     '### Snapshot\n```yaml\n- button "Open" [ref=e5]\n```',
-    [],
+    ([], []),
   ),
   'download': (
     '### Events\n- Downloading file report.bin ...\n'
     '- Downloaded file report.bin to "/workspace/output/report.bin"',
-    ['/workspace/output/report.bin'],
+    ([], ['/workspace/output/report.bin']),
+  ),
+  'download still in progress': (
+    '### Events\n- Downloading file report.bin ...',
+    ([], []),
   ),
   'console entries are not an output': (
     '### Events\n- New console entries: /workspace/output/console-1.log#L1-L3',
-    [],
+    ([], []),
   ),
   'a link outside the file sections': (
     '### Open tabs\n- [Tab](/workspace/tab.png)\n### Page\n- [Page](/workspace/page.png)',
-    [],
+    ([], []),
   ),
-  'a relative path': ('### Result\n- [Screenshot](./page.png)', []),
+  'a download line outside the events section': (
+    '### Result\n- Downloaded file a.bin to "/workspace/output/a.bin"',
+    ([], []),
+  ),
+  'a relative path': ('### Result\n- [Screenshot](./page.png)', ([], [])),
   'a repeated file': (
     '### Result\n- [Screenshot](/workspace/a.png)\n### Snapshot\n- [Snapshot](/workspace/a.png)',
-    ['/workspace/a.png'],
+    (['/workspace/a.png'], []),
   ),
   'a title with brackets and a path with parentheses': (
     '### Result\n- [Screenshot [full]](/workspace/shot (1).png)',
-    ['/workspace/shot (1).png'],
+    (['/workspace/shot (1).png'], []),
+  ),
+  'a download name that contains the path delimiter': (
+    '### Events\n- Downloaded file x to "/etc/passwd.bin to "/workspace/output/x.bin"',
+    ([], ['/workspace/output/x.bin']),
   ),
 }
 
@@ -961,4 +996,77 @@ def test_named_files_reads_a_long_malformed_line_in_linear_time():
   ('text', 'expected'), NAMED_FILES_CASES.values(), ids=NAMED_FILES_CASES.keys()
 )
 def test_named_files_reads_the_paths_a_result_names(text, expected):
-  assert serve.named_files(text) == [Path(path) for path in expected]
+  written, downloaded = expected
+  assert serve.named_files(text) == serve.NamedFiles(
+    [Path(path) for path in written], [Path(path) for path in downloaded]
+  )
+
+
+@pytest.mark.asyncio
+async def test_a_download_that_finished_between_commands_is_minted_when_a_reply_names_it(
+  monkeypatch, tmp_path
+):
+  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', tmp_path / 'output')
+  serve.ARTIFACT_VIEW.mkdir()
+  serve.OUTPUT_DIRECTORY.mkdir()
+  (serve.OUTPUT_DIRECTORY / 'report.bin').write_bytes(b'report')
+  before = serve.workspace_files()
+  (serve.OUTPUT_DIRECTORY / 'console-1.log').write_text('entries')
+  minted: list[str] = []
+
+  def mint(path: str):
+    minted.append(path)
+    return SimpleMint(REF)
+
+  monkeypatch.setattr(serve, 'mint_artifact', mint)
+  text = f'### Events\n- Downloaded file report.bin to "{serve.OUTPUT_DIRECTORY / "report.bin"}"'
+
+  files = await serve.collect_files(before, text)
+
+  assert files == [{'name': 'output/report.bin', 'ref': REF}]
+  assert minted == ['output/report.bin']
+  assert not (serve.OUTPUT_DIRECTORY / 'report.bin').exists()
+  assert (serve.OUTPUT_DIRECTORY / 'console-1.log').read_text() == 'entries'
+
+
+@pytest.mark.asyncio
+async def test_a_download_outside_the_output_directory_or_missing_is_reported_and_left_alone(
+  monkeypatch, tmp_path
+):
+  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', tmp_path / 'output')
+  serve.ARTIFACT_VIEW.mkdir()
+  (tmp_path / 'secret.txt').write_text('private')
+  before = serve.workspace_files()
+  monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
+  text = (
+    f'### Events\n- Downloaded file a to "{tmp_path / "secret.txt"}"\n'
+    f'- Downloaded file b to "{tmp_path / "output/missing.bin"}"'
+  )
+
+  files = await serve.collect_files(before, text)
+
+  assert [file['error'] for file in files] == ['named download is not in the output directory'] * 2
+  assert (tmp_path / 'secret.txt').read_text() == 'private'
+
+
+@pytest.mark.asyncio
+async def test_output_limit_counts_a_download_that_finished_between_commands(monkeypatch, tmp_path):
+  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', tmp_path / 'output')
+  monkeypatch.setattr(serve, 'OUTPUT_LIMIT_BYTES', 4)
+  serve.ARTIFACT_VIEW.mkdir()
+  serve.OUTPUT_DIRECTORY.mkdir()
+  (serve.OUTPUT_DIRECTORY / 'large.bin').write_bytes(b'12345678')
+  before = serve.workspace_files()
+  monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
+  text = f'### Events\n- Downloaded file large.bin to "{serve.OUTPUT_DIRECTORY / "large.bin"}"'
+
+  with pytest.raises(serve.DaemonError, match='holds 8 bytes'):
+    await serve.collect_files(before, text)
+
+  assert not (serve.OUTPUT_DIRECTORY / 'large.bin').exists()

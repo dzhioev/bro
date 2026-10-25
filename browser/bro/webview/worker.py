@@ -42,6 +42,7 @@ def vnc_url(host_port: int) -> str:
 class WebviewFacts:
   vnc: bool
   vnc_port: int | None
+  downloads: bool
   allowed_origins: tuple[str, ...]
   blocked_origins: tuple[str, ...]
 
@@ -80,6 +81,7 @@ class WebviewType(WorkerType):
     return Declaration(
       {
         'vnc': Option('scalar', Finite(frozenset({True}), frozenset({True}))),
+        'downloads': Option('scalar', Finite(frozenset({True}), frozenset({True}))),
         'vnc_port': Option(
           'scalar',
           Scalars((Integers((IntegerInterval(1024, 65535),)), Finite(sentinels, sentinels))),
@@ -104,16 +106,17 @@ class WebviewType(WorkerType):
 
   @classmethod
   def option_values(cls, fields: Mapping[str, Any], reading: object) -> OptionValues:
-    options = {'vnc', 'vnc_port', 'timeout', 'cred.cookies'}
+    options = {'vnc', 'vnc_port', 'downloads', 'timeout', 'cred.cookies'}
     content_names = {'allowed_origins', 'blocked_origins', 'share'}
     if fields.keys() - options - content_names - {'pass', 'cookies'}:
       raise ValueError('unknown webview fields')
     values = {name: value for name, value in fields.items() if name in options}
-    if 'vnc' in values:
-      if type(values['vnc']) is not bool:
-        raise ValueError('vnc must be a flag')
-      if values['vnc'] is False:
-        del values['vnc']
+    for flag in ('vnc', 'downloads'):
+      if flag in values:
+        if type(values[flag]) is not bool:
+          raise ValueError(f'{flag} must be a flag')
+        if values[flag] is False:
+          del values[flag]
     for name, sentinel in (('vnc_port', 'auto'), ('timeout', 'none')):
       if name in values and values[name] is None:
         values[name] = sentinel
@@ -143,14 +146,16 @@ class WebviewType(WorkerType):
       raise ValueError('webview start requires an admitted record')
     values = request.record.descriptor.values
     vnc = values.get('vnc') is True
+    downloads = values.get('downloads') is True
     vnc_port = None if values['vnc_port'] == 'auto' else cast(int, values['vnc_port'])
     allowed_origins = _origins(request.args, 'allowed_origins')
     blocked_origins = _origins(request.args, 'blocked_origins')
-    facts = WebviewFacts(vnc, vnc_port, allowed_origins, blocked_origins)
+    facts = WebviewFacts(vnc, vnc_port, downloads, allowed_origins, blocked_origins)
     options = json.dumps(
       {
         'allowed_origins': list(allowed_origins),
         'blocked_origins': list(blocked_origins),
+        'downloads': downloads,
         'vnc': vnc,
       },
       separators=(',', ':'),
@@ -174,6 +179,7 @@ class WebviewType(WorkerType):
     return {
       'vnc': extension.vnc,
       'vnc_port': extension.vnc_port,
+      'downloads': extension.downloads,
       'allowed_origins': list(extension.allowed_origins),
       'blocked_origins': list(extension.blocked_origins),
     }

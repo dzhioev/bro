@@ -240,6 +240,7 @@ def test_reopen_repeats_options_shares_and_last_url(monkeypatch, tmp_path) -> No
     context,
     cookies='profile',
     vnc=True,
+    downloads=True,
     allow=['https://allowed.test'],
     block=['https://blocked.test'],
     share=[REF],
@@ -271,6 +272,7 @@ def test_reopen_repeats_options_shares_and_last_url(monkeypatch, tmp_path) -> No
     {
       'cookies': 'profile',
       'vnc': True,
+      'downloads': True,
       'allowed_origins': ['https://allowed.test'],
       'blocked_origins': ['https://blocked.test'],
       'share': [REF],
@@ -278,6 +280,7 @@ def test_reopen_repeats_options_shares_and_last_url(monkeypatch, tmp_path) -> No
     {
       'cookies': 'profile',
       'vnc': True,
+      'downloads': True,
       'allowed_origins': ['https://allowed.test'],
       'blocked_origins': ['https://blocked.test'],
       'share': [REF, OTHER_REF],

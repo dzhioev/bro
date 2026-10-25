@@ -49,7 +49,7 @@ def _vnc(_display):
 
 
 @contextlib.contextmanager
-def _browser_config(seed):
+def _browser_config(seed, *, downloads):
   global _captured_seed
   _captured_seed = seed
   yield Path('/config'), None

@@ -151,6 +151,7 @@ An uninstalled target normalizes without declared needs or a recipe and fails on
 |---|---|---|---|
 | `vnc` | Flag | Unset | No |
 | `vnc_port` | 1024–65535 or `auto` | `auto` | Yes |
+| `downloads` | Flag | Unset | No |
 | `cred.cookies` | Instance names | Unset: no profile | No |
 | `timeout` | Positive whole seconds or `none` | `none` | Yes |
 
@@ -214,7 +215,7 @@ Configuration schema and project identity matching are in `bro/setup/AGENTS.md`,
 | `summon` | Target, placement flags, `--pass`, credential `--grant`/`--revoke`, driving-loop flags | `--grant`, `--revoke`, `--limit` |
 | `bro::summon` | `target`, `placement`, `passes`, `harness`, `llm`, `hold`, `timeout`, `talk` | `grant`, `revoke`, `limit` lists |
 | `launch {type: …}` | Type's wire fields | `grant`, `revoke`, `limit` lists |
-| `webview open` / `webview::open` | VNC, port, cookies, timeout | Checked as a webview start |
+| `webview open` / `webview::open` | VNC, port, downloads, cookies, timeout | Checked as a webview start |
 | `benchmark-run` | Config and timeout | Checked as a benchmark start |
 
 `summon --pass github+reviewer` sets `cred.github=reviewer`; it does not give onward permission to pass it again.

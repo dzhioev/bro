@@ -167,12 +167,14 @@ async def capture(stdin: BinaryIO, stdout: BinaryIO) -> None:
     with contextlib.ExitStack() as process_stack:
       xvfb, display = process_stack.enter_context(serve._xvfb())
       vnc_processes = process_stack.enter_context(serve._vnc(display))
-      config, storage_path = process_stack.enter_context(serve._browser_config(seed))
+      config, storage_path = process_stack.enter_context(
+        serve._browser_config(seed, downloads=False)
+      )
       processes = [('Xvfb', xvfb), *vnc_processes]
       async with contextlib.AsyncExitStack() as async_stack:
         session, mcp_process = await async_stack.enter_async_context(
           serve._playwright(
-            serve.Options(True, (), ()),
+            serve.Options(True, False, (), ()),
             config,
             storage_path,
             display,

@@ -31,6 +31,7 @@ _PAGE_URL = re.compile(r'(?m)^- Page URL: (\S.*)$')
 class OpenOptions:
   cookies: Optional[str]
   vnc: bool
+  downloads: bool
   allowed_origins: tuple[str, ...]
   blocked_origins: tuple[str, ...]
 
@@ -78,6 +79,7 @@ def _launch(record: WebviewRecord) -> OpenedWebview:
   return open_webview(
     cookies=options.cookies,
     vnc=options.vnc,
+    downloads=options.downloads,
     allowed_origins=list(options.allowed_origins),
     blocked_origins=list(options.blocked_origins),
     share=list(record.shares),
@@ -86,7 +88,8 @@ def _launch(record: WebviewRecord) -> OpenedWebview:
 
 @toolset.tool(
   'open a browser webview and wait until it is ready. cookies names an available browser '
-  'profile; vnc requests a human-visible noVNC URL; allow limits the page to the listed origins '
+  'profile; vnc requests a human-visible noVNC URL; downloads lets the page download files, each '
+  'returned with the first command reply after it finishes; allow limits the page to the listed origins '
   'and block refuses the listed ones, so a refused frame, form submission, script, or API call '
   'fails with net::ERR_BLOCKED_BY_CLIENT while top-level redirects pass, and neither is a '
   'security boundary; share exposes artifact refs from startup.'
@@ -95,6 +98,7 @@ def open(
   context: Context[Webviews],
   cookies: Annotated[Optional[str], Field(description='cookies profile instance')] = None,
   vnc: Annotated[bool, Field(description='publish a noVNC view')] = False,
+  downloads: Annotated[bool, Field(description='let the page download files')] = False,
   allow: Annotated[
     Optional[list[str]],
     Field(description='the only origins the page may request, as https://host; omit for all'),
@@ -109,6 +113,7 @@ def open(
   options = OpenOptions(
     cookies=cookies,
     vnc=vnc,
+    downloads=downloads,
     allowed_origins=tuple(allow or ()),
     blocked_origins=tuple(block or ()),
   )

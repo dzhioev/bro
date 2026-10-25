@@ -37,7 +37,8 @@ Where the choice is consent or pay, read the content under the overlay and ask b
 Report a CAPTCHA, bot check, or login wall instead of working around it, naming the profiles its live authority permits selecting for a webview.
 Upload only files the summoner shared for that purpose, naming each one.
 Never open `file://`.
-Open with a profile or an `allow` list only when the request names one.
+Open with a profile or an `allow` list only when the request names one, and with `downloads` only when the request needs a file downloaded.
+A download finishes after the action that starts it, and that action can reply before it does or time out while it runs: keep running a command, such as a snapshot, until a reply reports the file as downloaded, then report the file ref that reply carries.
 
 ## Decisions
 
