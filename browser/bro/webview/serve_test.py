@@ -7,6 +7,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 from typing import Any, BinaryIO, Optional, cast
@@ -553,16 +554,17 @@ async def test_command_files_are_minted_listed_and_removed(daemon_files, monkeyp
     daemon = asyncio.create_task(serve.serve())
     channel, _ = await _ready(sink)
 
+    text = f'### Result\n- [Screenshot of viewport]({workspace / "nested/screenshot.png"})'
     reply = await _ask(
       sink,
       channel,
       {
         'tool': 'write',
-        'arguments': {'path': 'nested/screenshot.png', 'content': 'image bytes', 'text': 'shot'},
+        'arguments': {'path': 'nested/screenshot.png', 'content': 'image bytes', 'text': text},
       },
     )
 
-    assert reply['text'] == 'shot'
+    assert reply['text'] == text
     assert reply['files'] == [
       {
         'name': 'nested/screenshot.png',
@@ -571,6 +573,33 @@ async def test_command_files_are_minted_listed_and_removed(daemon_files, monkeyp
     ]
     assert minted == [('nested/screenshot.png', b'image bytes')]
     assert not (workspace / 'nested/screenshot.png').exists()
+
+    await _ask(sink, channel, {'webview': 'close'}, identifier='close')
+    await sink.next(lambda message: message.type == Tag.RESULT)
+    await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
+async def test_files_the_result_does_not_name_are_removed_without_minting(
+  daemon_files, monkeypatch
+):
+  workspace, _ = daemon_files
+  monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
+  async with running_broker(monkeypatch, workspace) as sink:
+    daemon = asyncio.create_task(serve.serve())
+    channel, _ = await _ready(sink)
+
+    reply = await _ask(
+      sink,
+      channel,
+      {
+        'tool': 'write',
+        'arguments': {'path': 'output/console.log', 'content': 'entries', 'text': 'written'},
+      },
+    )
+
+    assert reply == {'text': 'written', 'files': []}
+    assert not (workspace / 'output/console.log').exists()
 
     await _ask(sink, channel, {'webview': 'close'}, identifier='close')
     await sink.next(lambda message: message.type == Tag.RESULT)
@@ -820,7 +849,7 @@ async def test_command_file_limit_removes_every_output_without_minting(monkeypat
   monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
 
   with pytest.raises(serve.DaemonError, match='4 bytes'):
-    await serve.collect_files(before)
+    await serve.collect_files(before, f'### Result\n- [One]({tmp_path / "one"})')
 
   assert not (tmp_path / 'one').exists()
   assert not (tmp_path / 'two').exists()
@@ -838,7 +867,7 @@ async def test_refused_file_mint_is_reported_and_the_file_is_removed(monkeypatch
     raise serve.ArtifactError('artifact store cap reached')
 
   monkeypatch.setattr(serve, 'mint_artifact', refuse)
-  files = await serve.collect_files(before)
+  files = await serve.collect_files(before, f'### Result\n- [Large]({tmp_path / "large.bin"})')
 
   assert files == [{'name': 'large.bin', 'error': 'artifact store cap reached'}]
   assert not (tmp_path / 'large.bin').exists()
@@ -853,7 +882,83 @@ async def test_non_file_output_is_reported_and_removed(monkeypatch, tmp_path):
   (tmp_path / 'link').symlink_to('/etc/passwd')
   monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
 
-  files = await serve.collect_files(before)
+  files = await serve.collect_files(before, f'### Result\n- [Link]({tmp_path / "link"})')
 
   assert files == [{'name': 'link', 'error': 'unsupported symlink output'}]
   assert not (tmp_path / 'link').exists()
+
+
+@pytest.mark.asyncio
+async def test_a_named_file_the_command_did_not_write_is_reported_and_left_alone(
+  monkeypatch, tmp_path
+):
+  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  serve.ARTIFACT_VIEW.mkdir()
+  (tmp_path / 'existing.txt').write_text('before the command')
+  before = serve.workspace_files()
+  monkeypatch.setattr(serve, 'mint_artifact', lambda path: pytest.fail('mint should not run'))
+  text = f'### Result\n- [Existing]({tmp_path / "existing.txt"})\n- [Outside](/etc/passwd)'
+
+  files = await serve.collect_files(before, text)
+
+  assert files == [
+    {'name': str(tmp_path / 'existing.txt'), 'error': 'named file was not written by the command'},
+    {'name': '/etc/passwd', 'error': 'named file was not written by the command'},
+  ]
+  assert (tmp_path / 'existing.txt').read_text() == 'before the command'
+
+
+# Result texts as Playwright MCP's response serializer lays them out:
+# `### <section>` headings, link lines for written files, an Events line per download.
+NAMED_FILES_CASES = {
+  'screenshot': (
+    '### Result\n- [Screenshot of viewport](/workspace/output/page-1.png)\n'
+    '### Page\n- Page URL: https://example.test/',
+    ['/workspace/output/page-1.png'],
+  ),
+  'snapshot written to a file': (
+    '### Page\n- Page URL: https://example.test/\n### Snapshot\n- [Snapshot](/workspace/page.yml)',
+    ['/workspace/page.yml'],
+  ),
+  'inline snapshot': (
+    '### Snapshot\n```yaml\n- button "Open" [ref=e5]\n```',
+    [],
+  ),
+  'download': (
+    '### Events\n- Downloading file report.bin ...\n'
+    '- Downloaded file report.bin to "/workspace/output/report.bin"',
+    ['/workspace/output/report.bin'],
+  ),
+  'console entries are not an output': (
+    '### Events\n- New console entries: /workspace/output/console-1.log#L1-L3',
+    [],
+  ),
+  'a link outside the file sections': (
+    '### Open tabs\n- [Tab](/workspace/tab.png)\n### Page\n- [Page](/workspace/page.png)',
+    [],
+  ),
+  'a relative path': ('### Result\n- [Screenshot](./page.png)', []),
+  'a repeated file': (
+    '### Result\n- [Screenshot](/workspace/a.png)\n### Snapshot\n- [Snapshot](/workspace/a.png)',
+    ['/workspace/a.png'],
+  ),
+  'a title with brackets and a path with parentheses': (
+    '### Result\n- [Screenshot [full]](/workspace/shot (1).png)',
+    ['/workspace/shot (1).png'],
+  ),
+}
+
+
+def test_named_files_reads_a_long_malformed_line_in_linear_time():
+  text = '### Result\n- [' + 'x](/' * 20000 + 'not-closed'
+  started = time.monotonic()
+  serve.named_files(text)
+  assert time.monotonic() - started < 1.0
+
+
+@pytest.mark.parametrize(
+  ('text', 'expected'), NAMED_FILES_CASES.values(), ids=NAMED_FILES_CASES.keys()
+)
+def test_named_files_reads_the_paths_a_result_names(text, expected):
+  assert serve.named_files(text) == [Path(path) for path in expected]

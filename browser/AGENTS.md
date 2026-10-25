@@ -84,7 +84,9 @@ The daemon answers a tool call with `{text, files}`, where each file names its w
 An oversized reply names the artifact holding its text or its whole object instead.
 The `ready` say is `{event: ready, vnc}`, and a close ends the mission with the number of successful tool calls.
 
-The daemon collects files new or changed anywhere under `/workspace` around each tool call, except the read-only artifact view, then mints and removes them.
+The daemon mints the files a tool result names — link lines in its `Result` and `Snapshot` sections and download lines in its `Events` section — when the call wrote them anywhere under `/workspace` outside the read-only artifact view;
+a named file the call did not write is reported as an error entry, and every other file the call wrote is removed unminted.
+`named_files` owns the result format, and `serve_test.py` pins it case by case, so a Playwright MCP bump that changes the layout fails there and in `webview_e2e` instead of silently dropping files.
 It withholds every tool in `WITHHELD_TOOLS` from both the live roster and calls.
 A webview mission has an empty base authority.
 
