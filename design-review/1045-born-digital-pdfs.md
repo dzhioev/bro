@@ -86,9 +86,11 @@ Cancellation kills a call's worker where the harness delivers it; the wall clock
 
 - A call takes a worker slot (§6) before it reads, so the snapshots held in memory never outnumber the slots.
   It waits for one at most `queue_seconds` and then fails with a `RuntimeError` saying that every slot is busy.
+  The slot is held until the call ends, and every ordinary failure before a worker starts (a refused path, an unreadable file, an unidentified type, a file over its size) releases it at once.
 - The file opens through the seam (`open_read`, §9) and is read off the event loop (`bro.base.offload.off_loop`) within `read_seconds`, counted from the slot.
-  A read that overruns, on a hung network mount say, fails the call without stalling the tool server, and its thread keeps running with the open file and the bytes read so far.
-  That thread keeps the slot until it returns, so abandoned reads hold at most the slots, and further calls fail at the queue bound until they return.
+  A read that overruns, on a hung network mount say, fails the call with a `RuntimeError` saying that the read timed out, without stalling the tool server.
+  A read abandoned in any way, by that timeout or by the call's cancellation, leaves its thread running with the open file and the bytes read so far, and the thread keeps the slot until it returns.
+  So abandoned reads hold at most the slots, and further calls fail at the queue bound until they return.
 - The read accepts regular files only (§9), stops at the type's `max_bytes` + 1 (larger is rejected naming the size) and hashes while reading.
   Unless `type` is given, the first 4,096 bytes identify the type (§4).
 - Every file is a path: a workspace file, an artifact's read-only view (`artifact get <ref>` prints its path) or a temporary file, and whether the session may read it is the seam's business alone.
@@ -146,7 +148,8 @@ One loop multiplexes the pipes:
 - it enforces the wall clock, counted from the worker's start and not from waiting for a slot;
 - on expiry, on an overflow or on cancellation it kills the whole process group before reaping its leader.
 
-A counting semaphore of `worker_memory_budget_bytes // address_space_bytes` slots, at least one, admits a call before it reads its snapshot (§3) and releases when the worker is reaped or, for a read that overran, when its thread returns.
+A counting semaphore of `worker_memory_budget_bytes // address_space_bytes` slots, at least one, admits a call before it reads its snapshot (§3) and releases at the end of the call:
+when its worker is reaped, at once on a failure before a worker, and, for an abandoned read, when its thread returns.
 The budget is the lower of 4 GiB and half the memory the process may use, the cgroup `memory.max` where readable and finite and else physical memory: four slots at the 1 GiB bound on the 8 GiB box.
 A bound caps resident memory too, so the budget caps the total; cgroups are read-only in the box and differ between hosts, so the kernel cannot enforce one of our own.
 The runner's state is built at the first call, never when the toolset is built, because `bro show` and the stdio path build servers without a loop; the toolset's `close` kills the workers still running.
@@ -342,10 +345,13 @@ a document without a form gives an empty list.
 
 `nearby_text` is chosen from the non-hidden, non-generated characters by their boxes, in the widget's coordinate space (unrotated page space, rectangles normalised):
 1. a character is *left* of the widget when its vertical extent overlaps the widget's by at least half of the character's height and its right edge is at most 2 pt right of the widget's left edge;
-   the left run is the nearest such character and the characters chained to it leftwards by gaps under 12 pt;
+   the left characters are ordered by right edge, greatest first, then by text index,
+   and the left run takes them in that order while each one's right edge is under 12 pt left of the run's leftmost left edge (an overlap counts), stopping at the first that is not;
 2. without a left run, the *above* run is chosen among the characters that overlap the widget horizontally and whose bottom edge lies 0 to 28 pt above its top:
    those whose bottom edge is within half a character height of the lowest such bottom edge;
-3. the text is the page text from the first to the last character of the run in text order, whitespace collapsed and cut at 80 characters; it is null when neither run exists.
+3. the text is the run's characters alone, in text order, with a single space wherever a generated space or line break lies between two consecutive ones in the page text and nothing otherwise,
+   so a hidden or unselected character between them contributes nothing;
+   whitespace is collapsed and the text cut at 80 characters, and it is null when neither run exists.
 
 Page rotation is not applied, so on a `/Rotate` page left and above are those of the unrotated space and the hint may be wrong.
 The constants (2 pt, 12 pt, 28 pt, one half) are named parameters the stage tunes on fixtures.
@@ -371,7 +377,7 @@ One place every path-taking in-process tool consults; today it allows everything
   and only then is it reopened through `/proc/self/fd` with `O_NOCTTY | O_NONBLOCK`, so a path swapped after the check is never opened.
   Where pinning is unavailable the sequence is `stat`, open with `O_NOCTTY | O_NONBLOCK`, `fstat`, and a regular file of the same device and inode;
   a swap between `stat` and the open can then open a device, and a policy does not rely on the stronger property there.
-  A path that does not exist is created exclusively (`O_EXCL`), and a write truncates only after the check.
+  `open_write` creates a path that does not exist exclusively (`O_EXCL`) and truncates only after the check; `open_read` of a missing path is an error and creates nothing.
   The refusal is the `ValueError` `dev_mcp._require_regular_file` raises today, which these calls replace.
 - `current()` returns the active implementation, `AllowAll`; `installed(access)` is a context manager that swaps it, for tests.
 - Wired: the `file::` tools;
@@ -402,7 +408,7 @@ A page with millions of tiny text objects can exhaust the address-space bound in
 |---|---|
 | bad `pages`, `view` or `type`; `pages` for a view that takes none; an unreadable or non-regular path; a file over `max_bytes`; no, several or an unknown type, or none installed; a damaged file (error 3) or an unsupported security handler (error 5); a password-protected file given to `view`; no pages, too many pages, a page beyond the count; a view over a cap | `ValueError` naming the cause and the fix |
 | the seam denies a path | `FileAccessDenied`, unchanged |
-| a protection missing, or no backend on this platform; wall exceeded (or the worker's own alarm); a signal (SIGABRT: PDFium out of memory; SIGSEGV: engine crash; SIGXCPU: CPU bound; SIGSYS: sandbox violation; an unsolicited SIGKILL: CPU hard bound if the worker's CPU time reached it, else possibly out of memory); an `engine` error; no reply; a reply too large, malformed or invalid | `RuntimeError` naming the cause |
+| a protection missing, or no backend on this platform; the queue wait, the read or the wall clock exceeded (or the worker's own alarm); a signal (SIGABRT: PDFium out of memory; SIGSEGV: engine crash; SIGXCPU: CPU bound; SIGSYS: sandbox violation; an unsolicited SIGKILL: CPU hard bound if the worker's CPU time reached it, else possibly out of memory); an `engine` error; no reply; a reply too large, malformed or invalid | `RuntimeError` naming the cause |
 
 Claude's session server returns only a failure's message, so every message states its cause and, for a caller fault, the fix; the exception class is not relied on to tell the two apart.
 A successful call does not promise completeness: damaged documents give partial text, and `text_layer`, `page_numbers_without_text` and the `unreadable` notes show what is missing.
@@ -556,6 +562,7 @@ Later stages append their own entries here.
 - `has text` is decided over the same characters as the text view, entries are counted over every list element, and a cap error names a page number or an ordinal and never a name from the document (§8).
 - An unknown form field type has a kind, and `nearby_text` has a deterministic algorithm (§8).
 - The seam pins a file with `O_PATH` on Linux and says what `glob` does not confine (§9).
+- The slot lease covers every exit before a worker, and the queue wait and the read have a failure class (§3, §6, §10); `nearby_text` assembles only its selected characters under an explicit order (§8); a missing read creates nothing (§9).
 - The mixed-version and fork-replay claims say what actually happens, and `read_reference` works with no type installed (§4, §14).
 
 **Other tasks**
