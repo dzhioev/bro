@@ -1,6 +1,5 @@
 import json
 import re
-import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro.base import credentials
+from bro.base.condition import Entry, Iff, Variables, When, select
 from bro.procedures import parse_frontmatter
 
 if TYPE_CHECKING:
@@ -63,32 +63,80 @@ class _Interpretation(BaseModel):
     return self
 
 
-def declared_spells(cls: type, entries: Iterable[str]) -> dict[str, Path]:
-  """the spell files one class's `spells` declaration names, by spell name:
-  each entry is a markdown file's path relative to the `spells/` directory
-  beside the declaring module, and the file's stem is the spell's name."""
-  module = sys.modules.get(cls.__module__)
-  module_file = getattr(module, '__file__', None) if module is not None else None
-  if module_file is None:
-    raise ValueError(
-      f'{cls.__name__}.spells: module {cls.__module__!r} has no file to resolve spell paths against'
-    )
-  directory = Path(module_file).resolve().parent / 'spells'
-  found: dict[str, Path] = {}
+@dataclass(frozen=True)
+class SpellFile:
+  """a spell's markdown file and the spells it runs in its own session.
+  the file's stem is the spell's name. `requires` names spells in the
+  declaration grammar of a bro's `spells` (plain names, `when`, `iff`): a bro
+  offering this spell must offer every requirement that resolves."""
+
+  path: Path
+  requires: tuple[Entry[str], ...] = ()
+
+  def __post_init__(self) -> None:
+    if self.path.suffix != '.md':
+      raise ValueError(f'spell file {self.path} is not a markdown file')
+    if not self.path.is_file():
+      raise ValueError(f'spell file {self.path} does not exist')
+    _validate_requires(self)
+
+  @property
+  def name(self) -> str:
+    return self.path.stem
+
+
+def _validate_requires(spell: SpellFile) -> None:
+  for item in _items(spell.requires):
+    if not isinstance(item, str):
+      raise TypeError(f'spell {spell.name!r} requires {item!r}, not a spell name')
+
+
+def _items(entries: Iterable[Entry[Any]]) -> list[Any]:
+  """every value a declarative list can resolve to, whatever its conditions."""
+  items: list[Any] = []
   for entry in entries:
-    relative = Path(entry)
-    if relative.is_absolute() or '..' in relative.parts:
-      raise ValueError(f'{cls.__name__}.spells: {entry!r} must be a path inside {directory}')
-    if relative.suffix != '.md':
-      raise ValueError(f'{cls.__name__}.spells: {entry!r} is not a markdown file')
-    path = directory / relative
-    if not path.is_file():
-      raise ValueError(f'{cls.__name__}.spells: {entry!r} names no file under {directory}')
-    name = relative.stem
-    if name in found:
-      raise ValueError(f'{cls.__name__}.spells: {entry!r} repeats spell {name!r}')
-    found[name] = path
-  return found
+    if isinstance(entry, When):
+      items.append(entry.item)
+    elif isinstance(entry, Iff):
+      items.extend(item for _, item in entry.branches)
+      if entry.otherwise is not None:
+        items.append(entry.otherwise[0])
+    else:
+      items.append(entry)
+  return items
+
+
+def declared_files(owner: str, entries: Iterable[Entry[SpellFile]]) -> list[SpellFile]:
+  """every spell file a class's `spells` declaration can resolve to, failing
+  for an entry that is not a `SpellFile`."""
+  files: list[SpellFile] = []
+  for item in _items(entries):
+    if not isinstance(item, SpellFile):
+      raise TypeError(f'{owner}.spells: {item!r} is not a SpellFile')
+    files.append(item)
+  return files
+
+
+def select_spells(
+  declarations: Iterable[tuple[str, Iterable[Entry[SpellFile]]]], variables: Variables
+) -> dict[str, SpellFile]:
+  """the spells the declarations offer under `variables`, by name:
+  `declarations` run base class first and a derived class's file replaces a
+  parent's of the same name. a spell whose resolved requirement is not
+  offered fails."""
+  offered: dict[str, SpellFile] = {}
+  for owner, entries in declarations:
+    declared: dict[str, SpellFile] = {}
+    for spell in select(entries, variables):
+      if spell.name in declared:
+        raise ValueError(f'{owner}.spells: {spell.path.name!r} repeats spell {spell.name!r}')
+      declared[spell.name] = spell
+    offered.update(declared)
+  for spell in offered.values():
+    for required in select(spell.requires, variables):
+      if required not in offered:
+        raise ValueError(f'spell {spell.name!r} requires spell {required!r}, which is not offered')
+  return offered
 
 
 def _validate_name(kind: str, name: str, path: Path) -> None:

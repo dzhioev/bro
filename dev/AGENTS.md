@@ -38,7 +38,9 @@ build the wheel with `uv build --package bro-dev`.
 - `bro/prompts/dev/style.md` — the development style policy, tool-served by the Dev and Eyebro personas through `dev-style-source::read`
 - `bro/prompts/dev/{concurrency,testing,markdown}.md` — the guide pages the style policy points to, declared by the same personas into their `man` manual
 - `bro/prompts/dev/rebase_conflicts.md` — resolving a rebase that stops on a conflict, tool-served by the Dev persona through `rebase-conflicts-source::read`
-- `bros/dev/` — generic developer with the `files`, unrestricted `brash`, `web`, and `delegation` tool groups, and the audit, framework-bump, design, task, PR, PR-resume, and landing spells.
+- `bro/dev/spells/` — the spells more than one development persona offers, as `SpellFile` values in the `bro.dev.spells` package:
+  audit, framework bump, design, task, task creation (`open-task`), PR, PR resume, and landing
+- `bros/dev/` — generic developer with the `files`, unrestricted `brash`, `web`, and `delegation` tool groups, and those spells (the task ones gated on its `brog` feature).
   Its optional `brog` feature mounts tracker tooling;
   its provisioning declaration installs the commit hooks
 - `bros/eyebro/` — code reviewer with the `review-diff` (revision/branch → findings list) and `review-pr` (drive a PR to a verdict through `poll-pr`) spells.

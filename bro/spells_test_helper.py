@@ -9,13 +9,19 @@ from typing import Any, Optional
 import pytest
 
 from bro.bro import BaseBro
+from bro.spells import SpellFile
 
 
 @dataclass(frozen=True)
 class SpellPackage:
   name: str
-  # the `spells` declaration naming every file written under the package
-  spells: tuple[str, ...]
+  # every file written under the package, by its path under `spells/` without the suffix
+  files: dict[str, SpellFile]
+
+  @property
+  def spells(self) -> tuple[SpellFile, ...]:
+    """the `spells` declaration naming every file written under the package."""
+    return tuple(self.files.values())
 
   def bro_class(self, parent: type[BaseBro] = BaseBro, **attributes: Any) -> type[BaseBro]:
     return type(
@@ -44,14 +50,14 @@ def spell_package(
   package_dir.mkdir()
   init_path = package_dir / '__init__.py'
   init_path.write_text('')
-  declared: list[str] = []
+  files: dict[str, SpellFile] = {}
   if spells is not None:
     for relative, content in spells.items():
       path = package_dir / 'spells' / f'{relative}.md'
       path.parent.mkdir(parents=True, exist_ok=True)
       path.write_text(content)
-      declared.append(f'{relative}.md')
+      files[relative] = SpellFile(path)
   module = types.ModuleType(name)
   module.__file__ = str(init_path)
   monkeypatch.setitem(sys.modules, name, module)
-  return SpellPackage(name, tuple(declared))
+  return SpellPackage(name, files)
