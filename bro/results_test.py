@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -45,11 +46,12 @@ class TestStore:
   def test_a_second_store_over_the_directory_continues_without_overwriting(self, tmp_path):
     directory = tmp_path / 'results'
     earlier = results.Store(directory)
-    kept = earlier.keep('a::b', {}, 'before the restart')
+    text = '{\n  "body": "Привет 漢字"\n}'
+    kept = earlier.keep('a::b', {}, text)
     later = results.Store(directory)
     assert later.tag() == earlier.tag()
     assert later.keep('a::b', {}, 'after') == f'{later.tag()}-2'
-    assert later.read(kept)[1] == 'before the restart'
+    assert later.read(kept)[1] == text
 
   def test_stores_sharing_a_directory_never_claim_one_number(self, tmp_path):
     directory = tmp_path / 'results'
@@ -191,8 +193,38 @@ class TestKeptTools:
     store, registry = kept_registry
     reply = await registry.call('test__structured', {})
     assert isinstance(reply, str)
-    assert reply.startswith('{\n  "body": "xxx')
+    assert reply.startswith('{"body":"xxx')
     assert _MARKER.search(reply) is not None
+
+  @pytest.mark.asyncio
+  @pytest.mark.parametrize('character', ['Я', '漢'])
+  @pytest.mark.parametrize('row_adjustment', [-3, 0])
+  async def test_structured_windows_count_compact_unicode_text(
+    self, tmp_path, character, row_adjustment
+  ):
+    payload = {'rows': [character] * (BYTE_LIMIT // 4 + row_adjustment)}
+
+    def document() -> dict[str, list[str]]:
+      return payload
+
+    store = results.Store(tmp_path / 'results')
+    server = InProcessMCPServer('test', [FunctionTool(document, description='read a document')])
+    registry = ToolRegistry(results.kept([server], lambda: store))
+    reply = await registry.call('test__document', {})
+    (entry,) = store.entries()
+    _, text = store.read(entry.id)
+
+    assert text == '{"rows":["' + '","'.join(payload['rows']) + '"]}'
+    assert entry.characters == len(text)
+    if len(text) <= BYTE_LIMIT:
+      assert reply == payload
+    else:
+      assert isinstance(reply, str)
+      match = _MARKER.search(reply)
+      assert match is not None
+      assert int(match.group(3)) == BYTE_LIMIT
+      assert reply[: match.start()] == text[:BYTE_LIMIT]
+      assert json.loads(''.join(_pages(store, entry.id, reply))) == payload
 
   @pytest.mark.asyncio
   async def test_kept_tools_declare_no_output_schema(self, kept_registry):

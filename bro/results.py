@@ -24,7 +24,7 @@ from pydantic import Field
 
 from bro.base.offload import off_loop
 from bro.base.text_window import BYTE_LIMIT
-from bro.llm.mcp import FunctionTool, MCPServer, Tool, canonical_name, wire_name
+from bro.llm.mcp import FunctionTool, MCPServer, Tool, canonical_name, encode_tool_result, wire_name
 from bro.monitor import SESSION_DIR_ENV, session_dir
 
 DIRNAME = 'results'
@@ -218,7 +218,7 @@ class _KeptTool(Tool):
 
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str:
     result = await self._tool.call(arguments)
-    text = result if isinstance(result, str) else json.dumps(result, indent=2, ensure_ascii=False)
+    text = encode_tool_result(result)
     result_id = await off_loop(self._store().keep, self._canonical, arguments, text)
     if len(text) <= BYTE_LIMIT:
       return result
