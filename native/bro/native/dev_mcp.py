@@ -6,11 +6,13 @@ tool's description.
 """
 
 import subprocess
+from io import TextIOWrapper
 from pathlib import Path
 from typing import Optional
 
 from bro.base import spawn
 from bro.base.text_window import DEFAULT_LIMIT, apply_limit, numbered_window
+from bro.files import access
 from bro.mcp import Toolset
 
 # default wall-clock cap for grep. On expiry its whole process group is killed;
@@ -22,18 +24,6 @@ _REFERENCE_PATH = Path(__file__).parent / 'dev_reference.md'
 toolset = Toolset('dev')
 # the tools that leave the workspace as they found it
 READ_ONLY = ('read_reference', 'read_file', 'grep', 'glob')
-
-
-def _require_regular_file(path: Path) -> None:
-  # the file-op tools read/write in-process, so they can't be killed by a timeout
-  # the way the shell-out tools can. A FIFO or device would hang `open()`/`read_text`
-  # forever (or, for `/dev/zero`, run away before any cap could fire), so reject
-  # anything that isn't a regular file up front.
-  if path.exists() and not path.is_file():
-    raise ValueError(
-      f'{path} is not a regular file; refusing to open a FIFO, device, socket, or '
-      'directory (the read or write could block forever)'
-    )
 
 
 @toolset.tool(
@@ -53,8 +43,8 @@ def read_reference() -> str:
 )
 def read_file(file_path: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> str:
   path = Path(file_path)
-  _require_regular_file(path)
-  return numbered_window(path.read_text(), offset, limit)
+  with TextIOWrapper(access.current().open_read(path)) as stream:
+    return numbered_window(stream.read(), offset, limit)
 
 
 @toolset.tool(
@@ -63,9 +53,8 @@ def read_file(file_path: str, offset: int = 0, limit: int = DEFAULT_LIMIT) -> st
 )
 def write_file(file_path: str, content: str) -> str:
   path = Path(file_path)
-  _require_regular_file(path)
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(content)
+  with TextIOWrapper(access.current().open_write(path, create_parents=True)) as stream:
+    stream.write(content)
   return f'wrote {len(content)} chars to {file_path}'
 
 
@@ -76,8 +65,8 @@ def write_file(file_path: str, content: str) -> str:
 )
 def edit_file(file_path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
   path = Path(file_path)
-  _require_regular_file(path)
-  text = path.read_text()
+  with TextIOWrapper(access.current().open_read(path)) as stream:
+    text = stream.read()
   count = text.count(old_string)
   if count == 0:
     raise ValueError(f'old_string not found in {file_path!r}')
@@ -86,7 +75,8 @@ def edit_file(file_path: str, old_string: str, new_string: str, replace_all: boo
       f'old_string occurs {count} times in {file_path!r}; pass replace_all=True or '
       'expand old_string with more context to make it unique'
     )
-  path.write_text(text.replace(old_string, new_string))
+  with TextIOWrapper(access.current().open_write(path)) as stream:
+    stream.write(text.replace(old_string, new_string))
   return f'replaced {count} occurrence(s) of old_string in {file_path}'
 
 
@@ -112,7 +102,8 @@ async def grep(
     command.append('-i')
   if glob is not None:
     command.extend(['--include', glob])
-  command.extend(['--', pattern, path])
+  search_path = access.current().search_directory(Path(path))
+  command.extend(['--', pattern, str(search_path)])
   try:
     process = await spawn.run_async(command, timeout=timeout_seconds)
   except subprocess.TimeoutExpired:
@@ -130,10 +121,12 @@ async def grep(
 @toolset.tool(
   'list files matching the glob pattern (e.g. "**/*.py", "src/*.ts"). path defaults '
   'to cwd. results sorted by mtime, newest first. limit: see read_reference for the '
-  'shared output cap policy.'
+  'shared output cap policy. pattern must be relative and contain no .. components.'
 )
 def glob(pattern: str, path: Optional[str] = None, limit: int = DEFAULT_LIMIT) -> str:
-  base = Path(path) if path is not None else Path.cwd()
+  if Path(pattern).is_absolute() or '..' in Path(pattern).parts:
+    raise ValueError('glob pattern must be relative and contain no .. components')
+  base = access.current().search_directory(Path(path) if path is not None else Path.cwd())
   if not base.is_absolute():
     base = base.resolve()
   matches = sorted(base.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)

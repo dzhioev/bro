@@ -64,8 +64,9 @@ extending = FileSource(
   'extending',
   summary=(
     'how a distribution extends the framework: declaring and registering a bro, '
-    'adding a data source or a toolset, and the entry-point groups. Read it when '
-    'writing or changing a persona declaration.'
+    'adding a data source, toolset or file type (bro.file_types), and the entry-point groups. '
+    'Read it when '
+    'writing or changing a persona declaration or file-type provider.'
   ),
   path=reference.DIRECTORY / 'extending.md',
   # carries directive examples; rendering would execute them

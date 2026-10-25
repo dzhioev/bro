@@ -138,6 +138,8 @@ Preserve an existing project's narrower setup selection instead of forcing all g
 The operator group must still install `bro-ride` and `bro-native`:
 `ride` spawns the native loop as the `bro` command of the environment it froze, so a native launch or summon fails in a workspace whose environment lacks `bro-native`.
 `bro-dev` remains a runtime dependency because the consumer class imports `bros.dev.Dev`.
+A consumer mounting the `file` toolset also installs `bro-filetypes` as a runtime dependency, with a Git source pointing at `subdirectory = "filetypes"`.
+Pin it to the same framework commit as the other distributions.
 
 For a fresh integrated root, use normalized project metadata, version `0.1.0`, the confirmed description, `requires-python = ">=3.12"`, and this packaging shape after substituting the chosen identifiers:
 

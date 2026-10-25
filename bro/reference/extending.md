@@ -21,12 +21,16 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   each entry's name matches its `bro.worker_types.WorkerType.name`
 - `bro.harnesses` — one installed driving-harness object per entry, `<name> = "<module>:<object>"`;
   each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
+- `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
+  each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
 - `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
   each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 
 Entry points are installation metadata:
 sync the environment (`uv sync`) after adding or removing one, while editing an already-declared target module needs no reinstall.
-Name-keyed groups load only the matching entry, while credential-registry assembly loads every `bro.credentials` contribution, so those target modules must remain import-cheap.
+Name-keyed groups load only the matching entry, except file-type identification (`bro.files.registry.identify`), which loads every installed type to match content.
+Credential-registry assembly also loads every `bro.credentials` contribution.
+These target modules must remain import-cheap.
 
 ## Declaring a bro
 
@@ -181,7 +185,6 @@ Input redirects may read any path into an admitted command.
 Output redirects may write files only when the persona's file reach is writable;
 here-documents, here-strings, descriptor duplication and closure, and `/dev/null`, `/dev/stdout`, and `/dev/stderr` are always available.
 
-
 ## Registering a bro
 
 Register the class under the distribution's `bro` entry-point group, `your-name = "your.module:YourBro"`, and sync ("Entry-point groups" above).
@@ -244,3 +247,102 @@ def lookup(product_id: str, context: Context[Catalog]) -> str:
   a `bro.toolsets` entry named after the namespace (`catalog = "acme.catalog:toolset"`) additionally lets `mcp-server catalog` serve the toolset standalone.
 - `MCPServerSpec.of('<namespace>', ServerClass, *ctor_args)` is the manifest escape hatch for a server class of another shape, naming the namespace the built server serves;
   wrap it in `ToolLayer(server_specs=(spec,))` to mount it.
+
+## Adding a file type
+
+Register a frozen `FileType` instance from `bro.files` in `bro.file_types`:
+
+```toml
+[project.entry-points."bro.file_types"]
+report = "acme.report:TYPE"
+```
+
+The declaration module imports no parser.
+It declares pydantic model classes for `details` and each view's `content`, a `Limits` instance, the shipped markdown manual's `Path`, and a `provider` string in `module:attribute` form.
+Only the worker imports the provider.
+The entry name and the declaration's `name` must agree and follow `[a-z][a-z0-9-]*`.
+Two distributions claiming the same name are an error, not a priority order.
+
+- `signatures` is a tuple of `Signature(marker, within)` objects:
+  `marker` is nonempty bytes beginning at an offset no greater than `within`, and the whole search must fit in `bro.files.types.IDENTIFICATION_BYTES`.
+  An empty tuple makes the type accessible only by explicit `type`.
+- `views` is a tuple of `View(name, about, content, paged)` objects with unique names:
+  `about` is a nonempty single line and `paged` says whether the view accepts page selection.
+- `limits` declares `max_bytes`, `max_pages`, `max_view_characters` and `max_view_entries` as positive integers.
+  `max_pages=None` describes a type without pages, which cannot declare a paged view.
+  Sandbox bounds belong to the runner, not the type.
+- `manual` documents every field returned by `details` and by each view's `content`, including nested models, plus the type's transformations, omissions, limits and rejections.
+  `bro.files.operations.validate_manual` checks field coverage, and `read_reference(type)` performs that check when serving the manual.
+
+Installed names are read from metadata without loading declarations, and `TypeRegistry` caches each selected type.
+`identify(head)` loads every installed declaration, matches its signatures and requires exactly one match; a broken declaration fails identification by name.
+An explicit `type` loads only that entry, bypasses signature matching and leaves the provider to reject unreadable bytes.
+A file's extension is never consulted.
+The framework validates provider replies against the declared models and returns the validated objects as dictionaries under the fixed result envelopes.
+Result keys and manual coverage use model field names, not serialization aliases, including in nested models.
+
+Providers use `bro.files.text.sanitize` on strings before returning them.
+It supplies stripped text and decoded tag-character payloads with input offsets, so page-text providers can report those payloads in their notes.
+ZWNJ and ZWJ are retained.
+`validate_strings` refuses lone surrogates and control characters other than TAB, LF and CR throughout a JSON reply, object keys included.
+
+Without a type installed, selection fails with an installation hint, while `read_reference()` still returns shared rules and an empty type list.
+The shared rules ship in `bro/files/reference.md` and are independent of any parser distribution.
+
+### Implementing the provider
+
+The `provider` attribute resolves to an object implementing `bro.files.protocol.Provider`, not a factory:
+
+- `prepare() -> str` loads the parser, native libraries and codecs, warms every required parser path with built-in data, and returns a nonempty engine version.
+  It runs before confinement, once in each fresh worker.
+- `info(snapshot: bytes, limits: Limits) -> dict` returns the declared `details` payload.
+- `view(snapshot: bytes, view: str, pages: list[int] | None, limits: Limits) -> dict` returns the selected view's `content` payload.
+  `pages` is a sorted, deduplicated, one-based selection or `None` for all pages;
+  use `bro.files.pages.select_pages` to check it against the document's actual count.
+
+Both operations receive the same immutable snapshot that core hashed, not a path.
+Return only the type-specific payload: core supplies the `InfoResult` or `ViewResult` envelope.
+Use strict pydantic models with `extra='forbid'` to reject unexpected fields and types.
+For page text, declare notes before text so a kept-result window presents warnings before the document's content.
+
+The provider enforces the document's page count and cumulative view character and entry caps from `limits`.
+Define what counts as a character or an entry in its manual, including nested collections;
+reject an oversized selection rather than silently truncating it.
+Raise `bro.files.protocol.InvalidInput` for a document or selection fault, with a cause and a fix constructed from fixed phrases and counts, never document-derived text.
+Other exceptions become an engine failure, with their traceback confined to the log.
+Messages must stand alone: the HTTP tool client receives the message, not the exception class.
+
+After `prepare`, the worker is single-threaded and cannot open files, load further modules or libraries, start processes or threads, create sockets, or change its resource limits.
+Preload every lazy parser path, codec and built-in fixture it needs before returning from `prepare`;
+perform all parsing of caller bytes in `info` or `view`, under confinement.
+Unavailable protections fail closed, with no weaker mode.
+Runner bounds and the required protections are defined in `bro.files.confinement`;
+a provider needing a different execution environment needs a runner that supports it, not an in-process parser fallback.
+
+### Mounting and testing
+
+A persona opts in explicitly:
+
+```python
+from bro.files import mcp as file_mcp
+from bro.mcp import mount
+from bros.bro import Bro
+
+
+class ReportReader(Bro):
+  name = 'report-reader'
+  description = 'reads report files'
+  tools = [mount(file_mcp.toolset)]
+```
+
+Install the provider distribution alongside the persona.
+For PDFs the distribution is `bro-filetypes`;
+consumers pin it with their other framework distributions (`BOOTSTRAP.md`).
+No published persona mounts the file tools by default.
+The tools accept filesystem paths, not artifact references, and consult `bro.files.access.current()`;
+its default `AllowAll` implementation is not a path policy.
+
+Test declaration and model validation without importing the parser, then exercise generated fixtures through the real worker and the installed entry point.
+A worker test needs a Linux kernel supporting confinement;
+this repository puts those tests in its `sandbox` gate stage, and tests of an in-process provider in `unit`.
+Exercise an assembled persona through both the native tool registry and HTTP `tools/call`, including non-ASCII results, kept-result paging and named failures.

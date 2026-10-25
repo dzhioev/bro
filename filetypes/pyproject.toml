@@ -1,0 +1,32 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-filetypes"
+version = "0.1.0"
+description = "sandboxed file-type providers for bro"
+requires-python = ">=3.12"
+dependencies = ["bro", "pydantic", "pypdfium2==5.14.0"]
+
+[project.entry-points."bro.file_types"]
+pdf = "bro.pdf:TYPE"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+pypdfium2 = ["pypdfium2", "pypdfium2_raw"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.pdf"]
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/AGENTS.md",
+  "**/*.egg-info",
+]

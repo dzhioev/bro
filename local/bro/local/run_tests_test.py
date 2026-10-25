@@ -351,19 +351,19 @@ def test_lint_covers_the_root_for_a_change_no_nested_project_holds(repository):
 def test_a_change_the_benchmark_project_imports_keeps_its_stage(repository):
   (repository / 'thing/store.py').write_text('CHANGED = 1\n')
 
-  assert run_tests.select('main').dropped == frozenset()
+  assert run_tests.select('main').dropped == frozenset({'sandbox'})
 
 
 def test_a_change_the_benchmark_project_cannot_reach_drops_its_stage(repository):
   (repository / 'thing/elsewhere.py').write_text('CHANGED = 1\n')
 
-  assert run_tests.select('main').dropped == frozenset({'benchmark'})
+  assert run_tests.select('main').dropped == frozenset({'benchmark', 'sandbox'})
 
 
 def test_a_project_metadata_change_keeps_the_benchmark_stage(repository):
   (repository / 'pyproject.toml').write_text('[tool.uv.workspace]\nmembers = ["member", "other"]\n')
 
-  assert run_tests.select('main').dropped == frozenset()
+  assert run_tests.select('main').dropped == frozenset({'sandbox'})
 
 
 def test_the_lint_stage_refuses_a_file_the_formatter_would_rewrite(monkeypatch, tmp_path):
@@ -403,7 +403,9 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
   monkeypatch.setattr(
     run_tests,
     'select',
-    lambda base: run_tests.Selection(roster=(), distributions=(), dropped=frozenset({'benchmark'})),
+    lambda base: run_tests.Selection(
+      roster=(), distributions=(), dropped=frozenset({'benchmark', 'sandbox'})
+    ),
   )
 
   assert run_tests.main(['run-tests', '--changed']) is None
@@ -455,6 +457,7 @@ def rosters(repository, monkeypatch):
     'WEBVIEW_E2E_PYTEST_FILES',
     'LLM_PYTEST_FILES',
     'CONFORMANCE_PYTEST_FILES',
+    'SANDBOX_PYTEST_FILES',
     'BENCHMARK_E2E_PYTEST_FILES',
   ):
     monkeypatch.setattr(run_tests, name, [])
@@ -561,3 +564,69 @@ def test_a_worktree_with_edits_notes_nothing(noted, monkeypatch):
   assert run_tests.main([]) is None
   assert run_tests.main([]) is None
   assert ran == ['types', 'unit', 'types', 'unit']
+
+
+@pytest.mark.parametrize('path', ['bro/files/worker.py', 'filetypes/bro/pdf/engine.py'])
+def test_the_sandbox_stage_follows_workers_and_providers_reached_by_name(repository, path):
+  file = repository / path
+  file.parent.mkdir(parents=True, exist_ok=True)
+  file.write_text('CHANGED = 1\n')
+  assert 'sandbox' not in run_tests.select('main').dropped
+
+
+@pytest.mark.parametrize(
+  'path',
+  [
+    'local/bro/local/files_sandbox_test.py',
+    'local/bro/local/files_test_helper.py',
+    'local/bros/bro_file_probe/__init__.py',
+    'bro/results.py',
+    'bro/runtime/mcp_server.py',
+  ],
+)
+def test_the_sandbox_stage_follows_serving_tests_and_their_imported_dependencies(monkeypatch, path):
+  monkeypatch.setattr(run_tests, 'changed_paths', lambda root, base: [path])
+  assert 'sandbox' not in run_tests.select('main').dropped
+
+
+def test_an_unavailable_sandbox_is_skipped_with_its_reason_off_ci(monkeypatch, capsys):
+  monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
+  monkeypatch.setattr(run_tests, 'sandbox_unavailable', lambda: 'missing Landlock')
+  monkeypatch.setattr(
+    run_tests, 'STAGES', [run_tests.Stage('sandbox', run_tests.sandbox_stage, 'probe')]
+  )
+  assert run_tests.main([]) is None
+  written = capsys.readouterr().err
+  assert 'missing Landlock' in written
+  assert 'sandbox skipped' in written
+
+
+def test_an_unavailable_sandbox_fails_ci_instead_of_skipping(monkeypatch, capsys):
+  monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+  monkeypatch.setattr(run_tests, 'sandbox_unavailable', lambda: 'missing Landlock')
+  monkeypatch.setattr(
+    run_tests, 'STAGES', [run_tests.Stage('sandbox', run_tests.sandbox_stage, 'probe')]
+  )
+  assert run_tests.main([]) == 1
+  written = capsys.readouterr().err
+  assert 'missing Landlock' in written
+  assert 'sandbox FAILED' in written
+
+
+def test_an_available_sandbox_runs_its_whole_roster(monkeypatch, invocations):
+  monkeypatch.setattr(run_tests, 'sandbox_unavailable', lambda: None)
+  run_tests.sandbox_stage()
+  assert invocations == [
+    (*run_tests.pytest_command(sys.executable), *run_tests.SANDBOX_PYTEST_FILES)
+  ]
+
+
+def test_github_expands_two_native_sandbox_runners_not_an_augmented_axis_row():
+  workflow = yaml.safe_load((run_tests.DIR / '.github/workflows/tests.yml').read_text())
+  matrix = workflow['jobs']['stage']['strategy']['matrix']
+  # GitHub augments compatible axis rows; two standalone includes must stay standalone.
+  assert 'sandbox' not in matrix['stage']
+  runners = [
+    (entry['arch'], entry['runner']) for entry in matrix['include'] if entry['stage'] == 'sandbox'
+  ]
+  assert sorted(runners) == [('arm64', 'ubuntu-24.04-arm'), ('x86_64', 'ubuntu-latest')]
