@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.14.0
+version: 2.15.0
 ---
 
 # orchestrate
@@ -54,7 +54,6 @@ and ends.
 Read the appended `# Arguments` section:
 
 - `new` — seed text for the work to open (Step 0).
-  The seed is the user's own words, passed through unchanged.
   An empty value means collect the seed from the user.
 - `task` — ref of an existing root task:
   resume it.
@@ -70,9 +69,8 @@ Never redo a completed phase.
 
 ## Step 0 — open the root task
 
-1. Discuss scope with the user only far enough to pin down a name and tags
-   — you are framing the work, not designing it.
-   Names start with a lowercase letter (except proper nouns).
+1. The seed is `new`, the user's own words, kept unchanged.
+   You are framing the work, not designing it.
 2. Settle the **bro** for each phase.
    Read your live usable bro targets off the banner (`bro::banner`, `may_summon`):
    where it names one plausible candidate, take it for every phase;
@@ -83,11 +81,8 @@ Never redo a completed phase.
    The design and review-and-plan bros must expose `spell::design`;
    check their `bro show` cards before choosing them.
    Then check every phase's summon the way you check any summon, all of them at once, so the user settles each way out before the work starts.
-3. Show the user the name, the tags, and the `## Goal` body, then `brog::create_task` with them.
-   The `## Goal` body is the user's own brief with only spelling and grammar fixed
-   — nothing condensed, reordered, or dropped;
-   a few lines stating what the work must achieve go above it only when the brief does not.
-   The task is born open.
+3. [[Open a task]] from the seed, with the body under a `## Goal` heading;
+   a few lines stating what the work must achieve go above the seed only when it does not state that.
    Its returned url is the root task URL every phase prompt carries.
 4. Record the kickoff comment, naming who runs the phases so a resumed session recovers it,
    then start the design phase.

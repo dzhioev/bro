@@ -54,6 +54,7 @@ The bro-native engine and provider clients live in `bro.native`.
   then raise `llm.py`'s provider-neutral `LLMUnavailable`.
 - `mcp.py` — the live tool layer.
   `Tool` / `MCPServer` ABCs, `FunctionTool`, and `ToolRegistry`, which assembles servers under `namespace__tool` wire names and dispatches calls.
+  `encode_tool_result(dict | str)` returns compact JSON with non-ASCII characters unescaped, or the string unchanged.
   `Context[T]` is the per-call state envelope;
   `ToolControlSignal` escapes an agent loop instead of becoming a tool result.
   Rendering, validation, `InProcessMCPServer`, namespace wrappers, and canonical/wire-name conversion complete the serving path.

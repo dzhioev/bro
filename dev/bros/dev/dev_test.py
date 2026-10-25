@@ -2,9 +2,11 @@ from typing import ClassVar
 
 import pytest
 
+import bro.dev as dev
 from bro.authority_view_test_helper import publish
 from bro.dev import references
 from bro.harness import get_harness
+from bros.bro import Bro
 from bros.dev import Dev
 
 
@@ -91,3 +93,38 @@ def test_review_delegation_uses_one_asynchronous_tool_shape(monkeypatch):
   assert native_body == claude_body
   assert '`bro::summon` targeting the eyebro' in native_body
   assert 'detach' not in native_body
+
+
+def test_the_task_spells_are_offered_only_where_a_tracker_resolves(monkeypatch):
+  monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
+  assert {'fix', 'open-task'}.isdisjoint(Dev().spell_paths)
+  assert 'run-pr' in Dev().spell_paths
+
+  monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
+  assert {'fix', 'open-task'} <= set(Dev().spell_paths)
+
+
+def test_run_pr_cannot_be_offered_without_the_spells_it_runs():
+  class Incomplete(Bro):
+    name = 'incomplete'
+    description = 'test bro'
+    spells = (dev.spells.run_pr,)
+
+  with pytest.raises(ValueError, match="requires spell 'land'"):
+    Incomplete()
+
+
+def test_run_pr_and_resume_pr_are_offered_together():
+  class Pair(Bro):
+    name = 'pair'
+    description = 'test bro'
+    spells = (dev.spells.run_pr, dev.spells.land, dev.spells.resume_pr)
+
+  class RunPrOnly(Bro):
+    name = 'run-pr-only'
+    description = 'test bro'
+    spells = (dev.spells.run_pr, dev.spells.land)
+
+  assert {'run-pr', 'resume-pr'} <= set(Pair().spell_paths)
+  with pytest.raises(ValueError, match="requires spell 'resume-pr'"):
+    RunPrOnly()

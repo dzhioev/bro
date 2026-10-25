@@ -33,6 +33,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   it reports running jobs as harness background work, posts notices through the inbox, ends by returning the last reply, and otherwise idles on the inbox until job or watch news, or a job's silence notice, wakes the next turn.
   `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/reference/ride.md`, "Bro harness").
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
+  OpenAI sends tool-result text through `bro.llm.mcp.encode_tool_result`; recording keeps the original object or string.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;
   `bro list` and `bro show <name> [--system-prompt HOLD]` remain metadata paths (card renderer in core `show.py`);
@@ -45,7 +46,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   it replays bro-native records, so a trail from another harness is refused up front rather than partway into a header that never carried what replay needs.
   A fork runs under the hold it is given, guided when omitted, and recomposes the prompt under it when the recorded hold differs.
   Same-provider/model forks at an `llm_call` under the recorded prompt use the provider's `previous_response_id`;
-  every other case replays the prefix client-side.
+  every other case replays the prefix client-side, encoding structured tool results with `bro.llm.mcp.encode_tool_result` while leaving recorded strings unchanged.
   Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
 - `bro/trails/record/bro.py` — native tracker-to-trails recorder
 

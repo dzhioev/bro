@@ -54,6 +54,7 @@ from bro.datasources.web_search import WebSearch
 from bro.llm.llms import openai
 from bro.mcp import cli, creds, files, man, mount, source
 from bros.bro import Bro
+from bros.triage import spells
 
 SYSTEM_PROMPT = """\
 You triage the issues of this repository: read a report against the code,
@@ -89,7 +90,7 @@ class Triage(Bro):
     source(WebSearch()),
     man(environment),
   ]
-  spells = ('triage.md',)
+  spells = (spells.triage,)
   system_prompt = SYSTEM_PROMPT
 ```
 
@@ -177,7 +178,7 @@ Read the class line by line and nothing is left to configure elsewhere:
 - `may_summon = ('browser', 'devoops')` is whom it may summon on its own authority:
   the built-in browser, which reproduces a report on the live page, and devoops, which probes the deployed service.
   Every other delegate is a launch grant, and a `{{when #may_summon contains …}}` paragraph shows only in a session that may.
-- `spells = ('triage.md',)` names its procedure, `bros/triage/spells/triage.md` beside the class, served as the `spell::triage` tool.
+- `spells = (spells.triage,)` names its procedure, a `SpellFile` over `bros/triage/spells/triage.md`, served as the `spell::triage` tool.
 
 **A command is a tool.**
 `cli('rewind show', 'trail_id')` reads the arguments `rewind show` declares

@@ -2,6 +2,7 @@ from bro.datasources.references import permission_model, permissions, permission
 from bro.dev import references
 from bro.mcp import ANY, brash, creds, files, man, source, web
 from bros.bro import Bro
+from bros.eyebro import spells
 
 SYSTEM_PROMPT = """\
 You are a code reviewer. You judge changes against the standards that bind
@@ -51,5 +52,5 @@ class Eyebro(Bro):
     man(permissions),
     man(permissions_cheatsheet),
   ]
-  spells = ('review-diff.md', 'review-pr.md')
+  spells = (spells.review_diff, spells.review_pr)
   system_prompt = SYSTEM_PROMPT

@@ -12,3 +12,11 @@ def test_orchestrate_grants_a_derived_eyebro_to_every_pull_request_phase(monkeyp
 
   assert granted.count('`grant` `@<the eyebro>`') == 3
   assert granted.count('`grant`') == 3
+
+
+def test_orchestrate_opens_the_root_task_through_the_shared_spell():
+  bro = Lead()
+  assert 'open-task' in bro.spell_paths
+  assert '`brog::create_task`' in bro.get_spell_body(
+    'open-task', harness='claude', hold='unattended'
+  )

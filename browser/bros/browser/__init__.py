@@ -4,7 +4,7 @@ from bro.llm.llms import openai
 from bro.mcp import mount, source
 from bro.webview import mcp as webview_mcp
 from bros.bro import Bro
-from bros.browser import mcp
+from bros.browser import mcp, spells
 
 SYSTEM_PROMPT = """\
 You are a browser: the semantic interface to a webview mission.
@@ -65,5 +65,5 @@ class Browser(Bro):
     source(CurrentTime()),
   ]
   llm_spec = openai.LLMSpec(reasoning_effort='medium')
-  spells = ('browse.md',)
+  spells = (spells.browse,)
   system_prompt = SYSTEM_PROMPT

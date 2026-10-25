@@ -5,6 +5,7 @@ from bro.bro import feature
 from bro.mcp import ANY, brash, creds, mount
 from bro.oops import mcp as operations_mcp
 from bros.bro import Bro
+from bros.devoops import spells
 
 SYSTEM_PROMPT = """\
 You are the devoops Bro. You operate the services a repository declares: deploy them,
@@ -33,5 +34,5 @@ class Devoops(Bro):
     when(feature('brog'), mount(brog_mcp.toolset)),
     brash(ANY),
   ]
-  spells = ('deploy.md',)
+  spells = (spells.deploy,)
   system_prompt = SYSTEM_PROMPT
