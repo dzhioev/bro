@@ -574,6 +574,21 @@ def test_the_sandbox_stage_follows_workers_and_providers_reached_by_name(reposit
   assert 'sandbox' not in run_tests.select('main').dropped
 
 
+@pytest.mark.parametrize(
+  'path',
+  [
+    'local/bro/local/files_sandbox_test.py',
+    'local/bro/local/files_test_helper.py',
+    'local/bros/bro_file_probe/__init__.py',
+    'bro/results.py',
+    'bro/runtime/mcp_server.py',
+  ],
+)
+def test_the_sandbox_stage_follows_serving_tests_and_their_imported_dependencies(monkeypatch, path):
+  monkeypatch.setattr(run_tests, 'changed_paths', lambda root, base: [path])
+  assert 'sandbox' not in run_tests.select('main').dropped
+
+
 def test_an_unavailable_sandbox_is_skipped_with_its_reason_off_ci(monkeypatch, capsys):
   monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
   monkeypatch.setattr(run_tests, 'sandbox_unavailable', lambda: 'missing Landlock')

@@ -288,3 +288,61 @@ ZWNJ and ZWJ are retained.
 
 Without a type installed, selection fails with an installation hint, while `read_reference()` still returns shared rules and an empty type list.
 The shared rules ship in `bro/files/reference.md` and are independent of any parser distribution.
+
+### Implementing the provider
+
+The `provider` attribute resolves to an object implementing `bro.files.protocol.Provider`, not a factory:
+
+- `prepare() -> str` loads the parser, native libraries and codecs, warms every required parser path with built-in data, and returns a nonempty engine version.
+  It runs before confinement, once in each fresh worker.
+- `info(snapshot: bytes, limits: Limits) -> dict` returns the declared `details` payload.
+- `view(snapshot: bytes, view: str, pages: list[int] | None, limits: Limits) -> dict` returns the selected view's `content` payload.
+  `pages` is a sorted, deduplicated, one-based selection or `None` for all pages;
+  use `bro.files.pages.select_pages` to check it against the document's actual count.
+
+Both operations receive the same immutable snapshot that core hashed, not a path.
+Return only the type-specific payload: core supplies the `InfoResult` or `ViewResult` envelope.
+Use strict pydantic models with `extra='forbid'` to reject unexpected fields and types.
+For page text, declare notes before text so a kept-result window presents warnings before the document's content.
+
+The provider enforces the document's page count and cumulative view character and entry caps from `limits`.
+Define what counts as a character or an entry in its manual, including nested collections;
+reject an oversized selection rather than silently truncating it.
+Raise `bro.files.protocol.InvalidInput` for a document or selection fault, with a cause and a fix constructed from fixed phrases and counts, never document-derived text.
+Other exceptions become an engine failure, with their traceback confined to the log.
+Messages must stand alone: the HTTP tool client receives the message, not the exception class.
+
+After `prepare`, the worker is single-threaded and cannot open files, load further modules or libraries, start processes or threads, create sockets, or change its resource limits.
+Preload every lazy parser path, codec and built-in fixture it needs before returning from `prepare`;
+perform all parsing of caller bytes in `info` or `view`, under confinement.
+Unavailable protections fail closed, with no weaker mode.
+Runner bounds and the required protections are defined in `bro.files.confinement`;
+a provider needing a different execution environment needs a runner that supports it, not an in-process parser fallback.
+
+### Mounting and testing
+
+A persona opts in explicitly:
+
+```python
+from bro.files import mcp as file_mcp
+from bro.mcp import mount
+from bros.bro import Bro
+
+
+class ReportReader(Bro):
+  name = 'report-reader'
+  description = 'reads report files'
+  tools = [mount(file_mcp.toolset)]
+```
+
+Install the provider distribution alongside the persona.
+For PDFs the distribution is `bro-filetypes`;
+consumers pin it with their other framework distributions (`BOOTSTRAP.md`).
+No published persona mounts the file tools by default.
+The tools accept filesystem paths, not artifact references, and consult `bro.files.access.current()`;
+its default `AllowAll` implementation is not a path policy.
+
+Test declaration and model validation without importing the parser, then exercise generated fixtures through the real worker and the installed entry point.
+A worker test needs a Linux kernel supporting confinement;
+this repository puts those tests in its `sandbox` gate stage, and tests of an in-process provider in `unit`.
+Exercise an assembled persona through both the native tool registry and HTTP `tools/call`, including non-ASCII results, kept-result paging and named failures.
