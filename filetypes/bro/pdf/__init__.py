@@ -102,6 +102,38 @@ class AttachmentsContent(BaseModel):
   attachments: list[Attachment]
 
 
+FieldKind = Literal[
+  'text', 'checkbox', 'radio', 'combobox', 'listbox', 'pushbutton', 'signature', 'unknown'
+]
+
+
+class FieldOption(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  label: str
+  selected: bool
+
+
+class FormField(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  page_number: int = Field(gt=0)
+  name: str
+  kind: FieldKind
+  value: str | None
+  checked: bool | None
+  options: list[FieldOption] | None
+  hidden: bool
+  read_only: bool
+  nearby_text: str | None
+
+
+class FieldsContent(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  fields: list[FormField]
+
+
 TYPE = FileType(
   name='pdf',
   signatures=(Signature(b'%PDF-', within=1024),),
@@ -123,6 +155,12 @@ TYPE = FileType(
       about='Embedded-file names and exact small UTF-8 text attachments.',
       content=AttachmentsContent,
       paged=False,
+    ),
+    View(
+      name='fields',
+      about='Form widget values and nearby printed labels, in page and annotation order.',
+      content=FieldsContent,
+      paged=True,
     ),
   ),
   details=Details,

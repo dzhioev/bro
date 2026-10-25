@@ -8,6 +8,7 @@ from bro.files.types import Limits
 from bro.pdf import TYPE, Details, PageText, Unreadable
 from bro.pdf.attachments import attachments
 from bro.pdf.engine import Engine
+from bro.pdf.form_fields import fields_view
 from bro.pdf.links import page_links
 from bro.pdf.page_text import text_and_notes
 from bro.pdf.view_limits import ATTACHMENT_NAMES, NAME_CHARACTERS, ViewBudget
@@ -97,7 +98,7 @@ class PdfProvider:
         if pages is not None:
           raise InvalidInput('PDF attachments view takes no pages; omit pages')
         return attachments(document, limits)
-      if view not in ('text', 'links'):
+      if view not in ('text', 'links', 'fields'):
         raise InvalidInput('unknown PDF view; use a declared view')
       if limits.max_pages is None:
         raise RuntimeError('PDF limits must declare max_pages')
@@ -106,6 +107,8 @@ class PdfProvider:
       except ValueError as error:
         raise InvalidInput(str(error)) from error
       budget = ViewBudget(limits)
+      if view == 'fields':
+        return fields_view(document, selected, budget)
       result = []
       for number in selected:
         with document.page(number - 1) as page:

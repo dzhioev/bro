@@ -316,11 +316,62 @@ def make_pdf(
         )
       )
     }
-  page_references = []
-  widget_references = []
-  for page_index, content in enumerate(['Hello PDF'] if pages is None else pages):
-    page = writer.add()
-    page_references.append(page)
+  contents = ['Hello PDF'] if pages is None else pages
+  page_references = [writer.add() for _ in contents]
+  field_references = []
+  widgets_by_page: dict[int, list[Reference]] = {}
+  for entry in fields:
+    dictionary = {
+      'FT': Name(entry.get('type', 'Tx')),
+      'T': text_string(entry.get('name', 'field')),
+      'Ff': entry.get('field_flags', 0),
+    }
+    if 'value' in entry:
+      value = entry['value']
+      dictionary['V'] = (
+        Name(value)
+        if entry.get('type') == 'Btn'
+        else [text_string(item) for item in value]
+        if isinstance(value, list)
+        else text_string(value)
+      )
+    if 'options' in entry:
+      dictionary['Opt'] = [
+        [text_string(export), text_string(label)] for export, label in entry['options']
+      ]
+    parent = writer.add() if 'widgets' in entry else None
+    widgets = []
+    for widget_entry in entry.get('widgets', [entry]):
+      widget_dictionary = {
+        'Type': Name('Annot'),
+        'Subtype': Name('Widget'),
+        'P': page_references[widget_entry.get('page', 0)],
+        'Rect': widget_entry.get('rectangle', [150, 700, 300, 720]),
+        'F': widget_entry.get('flags', 0),
+      }
+      if parent is not None:
+        widget_dictionary['Parent'] = parent
+        if 'name' in widget_entry:
+          widget_dictionary['T'] = text_string(widget_entry['name'])
+      else:
+        widget_dictionary.update(dictionary)
+      if entry.get('type') == 'Btn':
+        export = widget_entry.get('export', 'Yes')
+        appearance = writer.add(
+          Stream(b'', {'Type': Name('XObject'), 'Subtype': Name('Form'), 'BBox': [0, 0, 10, 10]})
+        )
+        widget_dictionary['AP'] = {'N': {'Off': appearance, export: appearance}}
+        widget_dictionary['AS'] = Name(widget_entry.get('state', 'Off'))
+      widget = writer.add(widget_dictionary)
+      widgets.append(widget)
+      widgets_by_page.setdefault(widget_entry.get('page', 0), []).append(widget)
+    if parent is not None:
+      writer.set(parent, {**dictionary, 'Kids': widgets})
+      field_references.append(parent)
+    else:
+      field_references.extend(widgets)
+  for page_index, content in enumerate(contents):
+    page = page_references[page_index]
     dictionary = {
       'Type': Name('Page'),
       'Parent': tree,
@@ -353,24 +404,7 @@ def make_pdf(
           }
         )
       )
-    for entry in fields:
-      if entry.get('page', 0) != page_index:
-        continue
-      widget = writer.add(
-        {
-          'Type': Name('Annot'),
-          'Subtype': Name('Widget'),
-          'P': page,
-          'FT': Name(entry.get('type', 'Tx')),
-          'T': text_string(entry.get('name', 'field')),
-          'V': text_string(entry.get('value', 'value')),
-          'Rect': entry.get('rectangle', [150, 700, 300, 720]),
-          'F': entry.get('flags', 0),
-          'Ff': entry.get('field_flags', 0),
-        }
-      )
-      annotations.append(widget)
-      widget_references.append(widget)
+    annotations.extend(widgets_by_page.get(page_index, []))
     if annotations:
       dictionary['Annots'] = annotations
     writer.set(page, dictionary)
@@ -408,8 +442,8 @@ def make_pdf(
       filespec = writer.add(filespec_entries)
       names.extend([text_string(name), filespec])
     catalog_dictionary['Names'] = {'EmbeddedFiles': {'Names': names}}
-  if widget_references or xfa:
-    form: dict[str, Any] = {'Fields': widget_references}
+  if field_references or xfa:
+    form: dict[str, Any] = {'Fields': field_references}
     if xfa:
       form['XFA'] = writer.add(Stream(b'<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/"/>'))
     catalog_dictionary['AcroForm'] = writer.add(form)
@@ -877,3 +911,192 @@ def attachments_view_cases(
       )
     )
   return result
+
+
+def fields_view_cases() -> list[tuple[str, dict[str, Any], list[dict[str, Any]]]]:
+  def expected(
+    name: str, kind: str = 'text', value: str | None = '', **values: Any
+  ) -> dict[str, Any]:
+    return {
+      'page_number': 1,
+      'name': name,
+      'kind': kind,
+      'value': value,
+      'checked': None,
+      'options': None,
+      'hidden': False,
+      'read_only': False,
+      'nearby_text': None,
+      **values,
+    }
+
+  return [
+    (
+      'kinds',
+      {
+        'pages': [None, None],
+        'fields': [
+          {'name': 'invoice', 'value': 'INV-42', 'field_flags': 1},
+          {'name': 'unset'},
+          {'name': 'agreed', 'type': 'Btn', 'value': 'Yes', 'state': 'Yes'},
+          {'name': 'unchecked', 'type': 'Btn', 'value': 'Off'},
+          {
+            'name': 'country',
+            'type': 'Ch',
+            'field_flags': 1 << 17,
+            'options': [('DE', 'Germany'), ('FR', 'France')],
+            'value': 'FR',
+          },
+          {
+            'name': 'currencies',
+            'type': 'Ch',
+            'field_flags': 1 << 21,
+            'options': [('EUR', 'Euro'), ('USD', 'Dollar')],
+            'value': ['EUR', 'USD'],
+          },
+          {'name': 'submit', 'type': 'Btn', 'field_flags': 1 << 16, 'value': 'not returned'},
+          {'name': 'signature', 'type': 'Sig'},
+          {'name': 'opaque', 'type': 'Unrecognized', 'value': 'unknown value'},
+          {
+            'name': 'choice',
+            'type': 'Btn',
+            'field_flags': 1 << 15,
+            'value': 'B',
+            'widgets': [{'export': 'A', 'state': 'Off'}, {'export': 'B', 'state': 'B'}],
+          },
+          {
+            'name': 'repeated',
+            'value': 'inherited',
+            'field_flags': 1,
+            'widgets': [{}, {'page': 1}],
+          },
+        ],
+      },
+      [
+        expected('invoice', value='INV-42', read_only=True),
+        expected('unset'),
+        expected('agreed', 'checkbox', 'Yes', checked=True),
+        expected('unchecked', 'checkbox', 'Off', checked=False),
+        expected(
+          'country',
+          'combobox',
+          'FR',
+          options=[{'label': 'Germany', 'selected': False}, {'label': 'France', 'selected': True}],
+        ),
+        expected(
+          'currencies',
+          'listbox',
+          'EUR',
+          options=[{'label': 'Euro', 'selected': True}, {'label': 'Dollar', 'selected': True}],
+        ),
+        expected('submit', 'pushbutton', None),
+        expected('signature', 'signature', None),
+        expected('opaque', 'unknown', 'unknown value'),
+        expected('choice', 'radio', 'B', checked=False),
+        expected('choice', 'radio', 'B', checked=True),
+        expected('repeated', value='inherited', read_only=True),
+        expected('repeated', value='inherited', read_only=True, page_number=2),
+      ],
+    ),
+    (
+      'qualified-name',
+      {
+        'pages': [None],
+        'fields': [
+          {'name': 'parent', 'value': 'inherited', 'field_flags': 1, 'widgets': [{'name': 'child'}]}
+        ],
+      },
+      [expected('parent.child', value='inherited', read_only=True)],
+    ),
+    ('no-form', {'pages': [None]}, []),
+    (
+      'xfa-acroform',
+      {'pages': [None], 'xfa': True, 'fields': [{'name': 'acroform', 'value': 'static'}]},
+      [expected('acroform', value='static')],
+    ),
+    (
+      'visibility',
+      {
+        'pages': [None],
+        'fields': [
+          {'name': 'hidden', 'flags': 2},
+          {'name': 'no-view', 'flags': 32},
+          {'name': 'invisible-flag', 'flags': 1},
+          {'name': 'flat', 'rectangle': [10, 10, 10, 20]},
+          {'name': 'outside', 'rectangle': [900, 900, 920, 920]},
+          {'name': 'inverted', 'rectangle': [300, 720, 150, 700]},
+        ],
+      },
+      [
+        expected('hidden', hidden=True),
+        expected('no-view', hidden=True),
+        expected('invisible-flag'),
+        expected('flat', hidden=True),
+        expected('outside', hidden=True),
+        expected('inverted'),
+      ],
+    ),
+    (
+      'left-label',
+      {
+        'pages': [text_operators('Invoice number:', x=72, y=706)],
+        'fields': [{'name': 'invoice', 'rectangle': [160, 700, 300, 720]}],
+      },
+      [expected('invoice', nearby_text='Invoice number:')],
+    ),
+    (
+      'above-label',
+      {
+        'pages': [text_operators('Your first name', x=150, y=730)],
+        'fields': [{'name': 'first_name'}],
+      },
+      [expected('first_name', nearby_text='Yourfirstname')],
+    ),
+    (
+      'no-label',
+      {
+        'pages': [text_operators('Too far above', x=150, y=770)],
+        'fields': [{'name': 'unlabelled'}],
+      },
+      [expected('unlabelled')],
+    ),
+    (
+      'hidden-between',
+      {
+        'pages': [
+          text_operators('Invoice', x=30, y=706)
+          + text_operators('DROP', x=60, y=706, mode=3)
+          + text_operators('number:', x=73, y=706)
+        ],
+        'fields': [{'name': 'invoice', 'rectangle': [125, 700, 300, 720]}],
+      },
+      [expected('invoice', nearby_text='Invoice number:')],
+    ),
+  ]
+
+
+def tax_form_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+  """A 199-widget tax-form layout with labels above and to the left."""
+  pages = [bytearray(), bytearray()]
+  fields = []
+  expected = []
+  for index in range(199):
+    page = index // 100
+    column = (index % 100) // 50
+    row = index % 50
+    x = 40 + column * 280
+    y = 750 - row * 14
+    label = f'Line {index + 1}'
+    rectangle = [x + 80, y - 3, x + 220, y + 7]
+    if row == 0:
+      pages[page].extend(
+        text_operators('Line', x=x + 80, y=y + 10, size=7)
+        + text_operators(str(index + 1), x=x + 100, y=y + 10, size=7)
+      )
+    else:
+      pages[page].extend(text_operators(label, x=x, y=y, size=7))
+    name = f'topmostSubform[0].Page{page + 1}[0].f{page + 1}_{index + 1:03}[0]'
+    value = str(index * 100) if index % 5 == 0 else ''
+    fields.append({'page': page, 'name': name, 'value': value, 'rectangle': rectangle})
+    expected.append({'page_number': page + 1, 'name': name, 'value': value, 'nearby_text': label})
+  return {'pages': [bytes(page) for page in pages], 'fields': fields, 'xfa': True}, expected

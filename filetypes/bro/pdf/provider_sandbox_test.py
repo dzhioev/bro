@@ -11,8 +11,10 @@ from bro.pdf.attachments import TEXT_BYTES
 from bro.pdf.page_text import HIDDEN_EXCERPT_CHARACTERS, HIDDEN_NOTES
 from bro.pdf.pdf_test_helper import (
   attachments_view_cases,
+  fields_view_cases,
   links_view_cases,
   make_pdf,
+  tax_form_fixture,
   text_view_cases,
 )
 
@@ -221,3 +223,54 @@ async def test_attachment_bomb_fails_the_whole_view_and_following_call_succeeds(
     assert result.content['attachments'][1]['size_bytes'] is None
     path.write_bytes(make_pdf(['still healthy']))
     assert (await state.view(str(path), 'text')).content['pages'][0]['text'] == 'still healthy'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name,arguments,expected', fields_view_cases())
+async def test_fields_view_fixtures_through_real_worker(tmp_path, name, arguments, expected):
+  path = tmp_path / name
+  path.write_bytes(make_pdf(**arguments))
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'fields')
+  assert result.content == {'fields': expected}
+
+
+@pytest.mark.asyncio
+async def test_tax_form_through_real_worker(tmp_path):
+  arguments, expected = tax_form_fixture()
+  path = tmp_path / 'tax-form.pdf'
+  path.write_bytes(make_pdf(**arguments))
+  with closing(Operations()) as state:
+    assert (await state.info(str(path))).details['form'] == 'xfa'
+    fields = (await state.view(str(path), 'fields')).content['fields']
+  assert len(fields) == len(expected)
+  assert [
+    {key: field[key] for key in sample} for field, sample in zip(fields, expected, strict=True)
+  ] == expected
+
+
+@pytest.mark.asyncio
+async def test_field_options_cap_selection_and_following_call_through_worker(tmp_path):
+  from dataclasses import replace
+
+  data = make_pdf(
+    [None, None],
+    count=3,
+    fields=[
+      {'name': 'first'},
+      {'page': 1, 'name': 'choice', 'type': 'Ch', 'options': [('x', 'Label')], 'value': 'x'},
+    ],
+  )
+  file_type = replace(TYPE, limits=replace(TYPE.limits, max_view_entries=2))
+  with closing(SubprocessRunner()) as runner:
+    with pytest.raises(ValueError, match='field 2 on page 2; narrow pages'):
+      await runner.run(Job(file_type, 'view', {'view': 'fields', 'pages': None}, data))
+    result = await runner.run(Job(file_type, 'view', {'view': 'fields', 'pages': [2, 3]}, data))
+    assert [(field['page_number'], field['name']) for field in result.ok['fields']] == [
+      (2, 'choice')
+    ]
+  path = tmp_path / 'document'
+  path.write_bytes(data)
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'fields', pages='3,1,1')
+    assert [field['name'] for field in result.content['fields']] == ['first']
