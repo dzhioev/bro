@@ -50,6 +50,7 @@ def _launch_args(
   *,
   vnc: bool,
   vnc_port: int | None,
+  downloads: bool,
   cookies: str | None,
   allowed_origins: list[str],
   blocked_origins: list[str],
@@ -59,6 +60,7 @@ def _launch_args(
   args: dict[str, Any] = {
     'type': WEBVIEW,
     'vnc': vnc,
+    'downloads': downloads,
     'allowed_origins': allowed_origins,
     'blocked_origins': blocked_origins,
   }
@@ -124,6 +126,7 @@ def open_webview(
   *,
   vnc: bool = False,
   vnc_port: int | None = None,
+  downloads: bool = False,
   cookies: str | None = None,
   allowed_origins: Optional[list[str]] = None,
   blocked_origins: Optional[list[str]] = None,
@@ -140,6 +143,7 @@ def open_webview(
   launch_args = _launch_args(
     vnc=vnc,
     vnc_port=vnc_port,
+    downloads=downloads,
     cookies=cookies,
     allowed_origins=[] if allowed_origins is None else allowed_origins,
     blocked_origins=[] if blocked_origins is None else blocked_origins,
@@ -292,6 +296,7 @@ def _non_empty_instance(value: str) -> str:
 def _open(
   vnc: bool,
   port: int | None,
+  downloads: bool,
   cookies: str | None,
   allowed_origins: Optional[list[str]],
   blocked_origins: Optional[list[str]],
@@ -302,6 +307,7 @@ def _open(
     opened = open_webview(
       vnc=vnc,
       vnc_port=port,
+      downloads=downloads,
       cookies=cookies,
       allowed_origins=allowed_origins,
       blocked_origins=blocked_origins,
@@ -379,6 +385,11 @@ def main(argv: list[str]) -> Optional[int]:
     type=_host_port,
     metavar='PORT',
     help='publish the noVNC view on this loopback port; requires --vnc',
+  )
+  open_parser.add_argument(
+    '--downloads',
+    action='store_true',
+    help='let the page download files and share each as an artifact',
   )
   open_parser.add_argument(
     '--cookies',

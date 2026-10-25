@@ -29,7 +29,7 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 ## Browser persona
 
 `browser` is the semantic interface to webview missions.
-Its own seed grants the whole webview worker type, while profile selection and a visible view require the guarded `webview.cred` and `webview.vnc` permissions.
+Its own seed grants the whole webview worker type, while profile selection, a visible view, and page downloads require the guarded `webview.cred`, `webview.vnc`, and `webview.downloads` permissions.
 It mounts `webview::`, `browser::`, and `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
 Its answers omit element refs, page markup such as snapshot syntax or HTML, and tool names;
 Markdown formatting is allowed.
@@ -49,7 +49,7 @@ The `webview` toolset is the typed owner surface over the mission wire.
 
 ## Owner command
 
-`webview open` forwards optional VNC, a requested VNC port, a `cookies` profile pass, origin allow and block lists, shared artifact refs, and a lifetime bound to `launch`,
+`webview open` forwards optional VNC, a requested VNC port, downloads, a `cookies` profile pass, origin allow and block lists, shared artifact refs, and a lifetime bound to `launch`,
 then waits through the accepted and started marks for the daemon's ready event.
 `--cookies <instance>` passes that profile without putting it in the owner's store;
 `--vnc --port <port>` fixes the noVNC view's launcher-loopback port.
@@ -85,7 +85,8 @@ An oversized reply names the artifact holding its text or its whole object inste
 The `ready` say is `{event: ready, vnc}`, and a close ends the mission with the number of successful tool calls.
 
 The daemon mints the files a tool result names — link lines in its `Result` and `Snapshot` sections and download lines in its `Events` section — when the call wrote them anywhere under `/workspace` outside the read-only artifact view;
-a named file the call did not write is reported as an error entry, and every other file the call wrote is removed unminted.
+a named file the call did not write is reported as an error entry, and every other file the call wrote outside the output directory is removed unminted.
+A finished download is named by the first reply after it finishes, so it is minted from the output directory whenever a reply names it, and unnamed files in the output directory are left in place.
 `named_files` owns the result format, and `serve_test.py` pins it case by case, so a Playwright MCP bump that changes the layout fails there and in `webview_e2e` instead of silently dropping files.
 It withholds every tool in `WITHHELD_TOOLS` from both the live roster and calls.
 A webview mission has an empty base authority.

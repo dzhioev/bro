@@ -673,6 +673,8 @@ def one_file(reply):
 try:
   denied = run('webview', 'open', '--vnc', expected=1)
   assert 'use rule' in denied.stderr and 'webview.vnc' in denied.stderr, denied.stderr
+  denied_downloads = run('webview', 'open', '--downloads', expected=1)
+  assert 'use rule' in denied_downloads.stderr and 'webview.downloads' in denied_downloads.stderr, denied_downloads.stderr
 
   upload = workspace / 'upload.txt'
   upload.write_text('shared upload payload')
@@ -830,6 +832,89 @@ try:
       }
     )
   )
+except Exception:
+  error_path.write_text(traceback.format_exc())
+  raise
+"""
+
+_DOWNLOAD_ROUTE = r"""
+import json
+import subprocess
+import time
+import traceback
+from pathlib import Path
+
+workspace = Path('/workspace')
+report_path = workspace / '.webview-download-report.json'
+error_path = workspace / '.webview-download-error'
+deadline_seconds = 120
+
+
+def run(*arguments):
+  completed = subprocess.run(arguments, capture_output=True, text=True)
+  if completed.returncode != 0:
+    raise RuntimeError(
+      f'{arguments!r} returned {completed.returncode}'
+      f'\nstdout:\n{completed.stdout}\nstderr:\n{completed.stderr}'
+    )
+  return completed
+
+
+def ask(mission, payload, tolerate_error=False):
+  completed = run(
+    'mission', 'ask', mission, json.dumps(payload, separators=(',', ':')), '--wait', '180'
+  )
+  reply = json.loads(completed.stdout)
+  assert tolerate_error or 'error' not in reply, reply
+  return reply
+
+
+def downloaded(reply, name):
+  return f'Downloaded file {name} to' in reply.get('text', '')
+
+
+def collect(mission, name, first_reply):
+  # a download finishes after the action that starts it, so any later reply may name it
+  replies = [first_reply]
+  deadline = time.monotonic() + deadline_seconds
+  while not any(downloaded(reply, name) for reply in replies):
+    if time.monotonic() >= deadline:
+      raise TimeoutError(f'no reply named the finished download {name}: {replies}')
+    time.sleep(0.2)
+    replies.append(ask(mission, {'tool': 'browser_snapshot', 'arguments': {}}))
+  files = [file for reply in replies for file in reply.get('files', []) if file['name'] == f'output/{name}']
+  assert len(files) == 1, (name, replies)
+  assert set(files[0]) == {'name', 'ref'}, files
+  return files[0], (Path('/var/ride/artifacts') / files[0]['ref']).read_bytes()
+
+
+try:
+  opened = json.loads(run('webview', 'open', '--downloads').stdout)
+  mission = opened['mission']
+  ask(mission, {'tool': 'browser_navigate', 'arguments': {'url': __PAGE_URL__}})
+
+  immediate = ask(
+    mission,
+    {'tool': 'browser_click', 'arguments': {'element': 'immediate link', 'target': '#immediate'}},
+  )
+  immediate_file, immediate_bytes = collect(mission, 'immediate.txt', immediate)
+  assert immediate_bytes == __IMMEDIATE_BODY__, immediate_bytes
+
+  # the click waits on the unfinished download, so it may time out while the download goes on
+  slow = ask(
+    mission,
+    {'tool': 'browser_click', 'arguments': {'element': 'slow link', 'target': '#slow'}},
+    tolerate_error=True,
+  )
+  assert not downloaded(slow, 'slow.txt'), slow
+  assert all(file['name'] != 'output/slow.txt' for file in slow.get('files', [])), slow
+  (workspace / '.webview-download-slow-held').touch()
+  slow_file, slow_bytes = collect(mission, 'slow.txt', slow)
+  assert slow_bytes == __SLOW_BODY__, slow_bytes
+
+  closed = json.loads(run('webview', 'close', mission).stdout)
+  assert closed['outcome'] == 'ok', closed
+  report_path.write_text(json.dumps({'refs': [immediate_file['ref'], slow_file['ref']]}))
 except Exception:
   error_path.write_text(traceback.format_exc())
   raise
@@ -1100,11 +1185,22 @@ _NETWORK_PAGE = b'<!doctype html><link rel=icon href=data:,><title>webview netwo
 
 
 @contextlib.contextmanager
-def _served_page(page: bytes) -> Iterator[str]:
-  """serve `page` on the one address a container reaches the host at, yielding the
-  URL a container fetches it at."""
+def _served(handler: type[http.server.BaseHTTPRequestHandler]) -> Iterator[str]:
+  """serve requests with `handler` on the one address a container reaches the host at,
+  yielding the URL a container fetches it at."""
   import ride.broker_root as broker_root
 
+  gateways = [host for host in broker_root.broker_bind_hosts() if host != LOCAL_HOST]
+  host = gateways[0] if len(gateways) > 0 else LOCAL_HOST
+  with contextlib.ExitStack() as stack:
+    server = stack.enter_context(http.server.ThreadingHTTPServer((host, 0), handler))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    stack.callback(server.shutdown)
+    yield f'http://{workspace_docker.CONTAINER_BROKER_HOST}:{server.server_address[1]}/'
+
+
+@contextlib.contextmanager
+def _served_page(page: bytes) -> Iterator[str]:
   class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self) -> None:
       self.send_response(200)
@@ -1113,13 +1209,49 @@ def _served_page(page: bytes) -> Iterator[str]:
       self.end_headers()
       self.wfile.write(page)
 
-  gateways = [host for host in broker_root.broker_bind_hosts() if host != LOCAL_HOST]
-  host = gateways[0] if len(gateways) > 0 else LOCAL_HOST
-  with contextlib.ExitStack() as stack:
-    server = stack.enter_context(http.server.ThreadingHTTPServer((host, 0), Handler))
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    stack.callback(server.shutdown)
-    yield f'http://{workspace_docker.CONTAINER_BROKER_HOST}:{server.server_address[1]}/'
+  with _served(Handler) as url:
+    yield url
+
+
+_DOWNLOAD_PAGE = (
+  b'<!doctype html><link rel=icon href=data:,><title>webview downloads</title>'
+  b'<a id=immediate href=/immediate>immediate</a> <a id=slow href=/slow>slow</a>'
+)
+_IMMEDIATE_BODY = b'immediate download body'
+_SLOW_BODY = b'slow download body'
+
+
+@contextlib.contextmanager
+def _served_downloads(release: threading.Event) -> Iterator[str]:
+  """serve a page linking an attachment that is complete at once and one whose body waits
+  for `release` after its headers are sent."""
+
+  class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+      bodies = {'/immediate': (_IMMEDIATE_BODY, 'immediate.txt'), '/slow': (_SLOW_BODY, 'slow.txt')}
+      if self.path == '/':
+        body, headers = _DOWNLOAD_PAGE, {'Content-Type': 'text/html'}
+      elif self.path in bodies:
+        body, name = bodies[self.path]
+        headers = {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition': f'attachment; filename="{name}"',
+        }
+      else:
+        self.send_error(404)
+        return
+      self.send_response(200)
+      for header, value in headers.items():
+        self.send_header(header, value)
+      self.send_header('Content-Length', str(len(body)))
+      self.end_headers()
+      self.wfile.flush()
+      if self.path == '/slow':
+        assert release.wait(timeout=180), 'host never released the slow download'
+      self.wfile.write(body)
+
+  with _served(Handler) as url:
+    yield url
 
 
 @contextlib.contextmanager
@@ -1601,6 +1733,40 @@ def test_real_webview_routes_commands_files_sharing_refusals_and_cleanup(
   assert not any(
     directory.name.startswith('webview-') for directory in workspace.path.parent.iterdir()
   )
+  assert _live_containers(workspace) == []
+
+
+def test_downloads_reach_the_owner_as_refs_whether_they_finish_at_once_or_later(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  release = threading.Event()
+
+  def release_slow_download(workspace: Workspace, route_ended: threading.Event) -> None:
+    held = workspace.tree / '.webview-download-slow-held'
+    _wait_until(
+      lambda: held.is_file() or route_ended.is_set(),
+      1500,
+      'webview slow download checkpoint',
+      None,
+    )
+    release.set()
+
+  with _served_downloads(release) as page_url:
+    code, workspace = _run_route(
+      isolated_env,
+      monkeypatch,
+      suffix='downloads',
+      source=_DOWNLOAD_ROUTE.replace('__PAGE_URL__', repr(page_url))
+      .replace('__IMMEDIATE_BODY__', repr(_IMMEDIATE_BODY))
+      .replace('__SLOW_BODY__', repr(_SLOW_BODY)),
+      vnc=False,
+      grants=('webview', 'webview.downloads'),
+      observer=release_slow_download,
+    )
+
+  assert code == 0, _diagnostic(workspace, '.webview-download-error')
+  report = json.loads((workspace.tree / '.webview-download-report.json').read_text())
+  assert len(report['refs']) == 2
   assert _live_containers(workspace) == []
 
 

@@ -114,7 +114,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   The host's depth cap separately bounds the tree.
 - `may_launch = ('webview',)` seeds the type's start permission with full use and give.
   The declaration is MRO-walked and unioned like `may_summon`.
-  Guarded option values, such as profiles or VNC, need their own grants.
+  Guarded option values, such as profiles, VNC, or downloads, need their own grants.
   `bro` is refused because the framework already seeds it; an uninstalled type fails an applicable launch.
   The [permission reference](permissions.md) defines type options, configuration layers, and the checks.
 - `provisioning = (provision_hooks,)` declares session-start steps for the session's workspace

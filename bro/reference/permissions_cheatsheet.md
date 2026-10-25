@@ -118,6 +118,7 @@ The command prints the mission id and a launcher-loopback VNC URL.
 The port must be free; omit `--port` to choose one automatically.
 Omit `--cookies` for an isolated browser without a saved profile; omit `--vnc` if no human view is needed.
 Close the returned mission when finished with `webview close <mission-id>`.
+Grant `webview.downloads` and add `--downloads` to let the page download files, each returned as an artifact ref in the first command reply after it finishes.
 Profiles are made on the host with `webview setup assistant`.
 Origin allow/block filters are browsing controls, not a permission security boundary.
 

@@ -61,6 +61,7 @@ _PROCESS_POLL_SECONDS = 0.05
 @dataclass(frozen=True)
 class Options:
   vnc: bool
+  downloads: bool
   allowed_origins: tuple[str, ...]
   blocked_origins: tuple[str, ...]
 
@@ -92,8 +93,9 @@ def decode_options(raw: str) -> Options:
     raise DaemonError(f'{OPTIONS_ENV} is not valid JSON: {error}') from error
   if not isinstance(value, dict):
     raise DaemonError(f'{OPTIONS_ENV} must decode to an object')
-  unknown = sorted(set(value) - {'vnc', 'allowed_origins', 'blocked_origins'})
-  missing = sorted({'vnc', 'allowed_origins', 'blocked_origins'} - set(value))
+  fields = {'vnc', 'downloads', 'allowed_origins', 'blocked_origins'}
+  unknown = sorted(set(value) - fields)
+  missing = sorted(fields - set(value))
   if len(unknown) > 0 or len(missing) > 0:
     details = []
     if len(unknown) > 0:
@@ -101,11 +103,14 @@ def decode_options(raw: str) -> Options:
     if len(missing) > 0:
       details.append(f'missing field(s): {", ".join(missing)}')
     raise DaemonError(f'{OPTIONS_ENV} {"; ".join(details)}')
-  vnc = value['vnc']
-  if not isinstance(vnc, bool):
-    raise DaemonError(f"{OPTIONS_ENV} field 'vnc' must be a boolean")
+  flags = {}
+  for flag in ('vnc', 'downloads'):
+    if not isinstance(value[flag], bool):
+      raise DaemonError(f"{OPTIONS_ENV} field '{flag}' must be a boolean")
+    flags[flag] = value[flag]
   return Options(
-    vnc=vnc,
+    vnc=flags['vnc'],
+    downloads=flags['downloads'],
     allowed_origins=_origins(value['allowed_origins'], 'allowed_origins'),
     blocked_origins=_origins(value['blocked_origins'], 'blocked_origins'),
   )
@@ -233,11 +238,13 @@ def _vnc(display: str) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
 
 
 @contextlib.contextmanager
-def _browser_config(storage_state: dict[str, Any] | None) -> Iterator[tuple[Path, Path | None]]:
+def _browser_config(
+  storage_state: dict[str, Any] | None, *, downloads: bool
+) -> Iterator[tuple[Path, Path | None]]:
   with tempfile.TemporaryDirectory(prefix='bro-browser-') as directory:
     root = Path(directory)
     config = root / 'playwright.json'
-    config.write_text(json.dumps({'browser': {'contextOptions': {'acceptDownloads': False}}}))
+    config.write_text(json.dumps({'browser': {'contextOptions': {'acceptDownloads': downloads}}}))
     storage_path = None
     if storage_state is not None:
       storage_path = root / 'storage-state.json'
@@ -540,25 +547,32 @@ def _downloaded_file(line: str) -> str | None:
   return None if opener < 0 else line[opener + len(DOWNLOADED_FILE_PATH_OPENER) - 1 : -1]
 
 
-def named_files(text: str) -> list[Path]:
-  """The files a Playwright MCP result text names, in order and without repeats.
+@dataclass(frozen=True)
+class NamedFiles:
+  """Files a result text names: those the command wrote, and downloads that finished."""
+
+  written: list[Path]
+  downloaded: list[Path]
+
+
+def named_files(text: str) -> NamedFiles:
+  """Read a Playwright MCP result text for the files it names, in order and without repeats.
 
   Result text includes page-controlled lines, so every line is read in linear time.
   """
-  named: dict[Path, None] = {}
+  written: dict[Path, None] = {}
+  downloaded: dict[Path, None] = {}
   section = ''
   for line in text.splitlines():
     if line.startswith('### '):
       section = line[len('### ') :]
-      continue
-    path = None
-    if section in LINKED_FILE_SECTIONS:
-      path = _linked_file(line)
+    elif section in LINKED_FILE_SECTIONS:
+      if (path := _linked_file(line)) is not None:
+        written[Path(path)] = None
     elif section == DOWNLOAD_FILE_SECTION:
-      path = _downloaded_file(line)
-    if path is not None:
-      named[Path(path)] = None
-  return list(named)
+      if (path := _downloaded_file(line)) is not None:
+        downloaded[Path(path)] = None
+  return NamedFiles(list(written), list(downloaded))
 
 
 def _workspace_relative(path: Path) -> Path | None:
@@ -568,30 +582,58 @@ def _workspace_relative(path: Path) -> Path | None:
     return None
 
 
+def _is_output(relative: Path) -> bool:
+  return OUTPUT_DIRECTORY.is_relative_to(WORKSPACE) and relative.is_relative_to(
+    OUTPUT_DIRECTORY.relative_to(WORKSPACE)
+  )
+
+
 async def collect_files(before: Mapping[Path, FileState], text: str) -> list[dict[str, Any]]:
-  """Mint the files `text` names that the command wrote, and remove every file it wrote."""
+  """Mint the files `text` names and remove the files the command wrote outside the output directory.
+
+  A file the command wrote must be named by `text`.
+  A finished download is named by the first reply after it finishes, which may be a later command's,
+  so it is minted from the output directory whenever it exists.
+  Files left unnamed in the output directory stay there, because a download that finished during
+  the command may be named by the next reply, and count with the command's own files toward the
+  output limit.
+  """
   after = await asyncio.to_thread(workspace_files)
   changed = _changed_files(before, after)
-  total = sum(after[path].size for path in changed)
+  held = {path for path in after if _is_output(path)} | set(changed)
+  total = sum(after[path].size for path in held)
   if total > OUTPUT_LIMIT_BYTES:
-    for path in changed:
+    for path in held:
       _remove_workspace_file(path)
     raise DaemonError(
-      f'command wrote {total} bytes, exceeding the {OUTPUT_LIMIT_BYTES}-byte output limit'
+      f'command output holds {total} bytes, exceeding the {OUTPUT_LIMIT_BYTES}-byte output limit'
     )
-  collected: list[dict[str, Any]] = []
+  named = named_files(text)
   written = set(changed)
-  named = set()
-  for path in named_files(text):
+  collected: list[dict[str, Any]] = []
+  minted: set[Path] = set()
+  for path in named.written:
     relative = _workspace_relative(path)
     if relative is None or relative not in written:
       collected.append({'name': str(path), 'error': 'named file was not written by the command'})
       continue
-    named.add(relative)
+    minted.add(relative)
+    with _removing_workspace_file(relative):
+      collected.append(await _minted_file(relative, after[relative]))
+  for path in named.downloaded:
+    relative = _workspace_relative(path)
+    if relative is None or not _is_output(relative) or relative not in after:
+      collected.append(
+        {'name': str(path), 'error': 'named download is not in the output directory'}
+      )
+      continue
+    if relative in minted:
+      continue
+    minted.add(relative)
     with _removing_workspace_file(relative):
       collected.append(await _minted_file(relative, after[relative]))
   for path in changed:
-    if path not in named:
+    if path not in minted and not _is_output(path):
       _remove_workspace_file(path)
   return collected
 
@@ -821,7 +863,9 @@ async def serve() -> None:
       sync_processes.extend(vnc_processes)
       host_port = _published_port(VNC_PORT, os.environ.get(PUBLISHED_PORTS_ENV, ''))
       vnc_url = format_vnc_url(host_port)
-    config, storage_path = process_stack.enter_context(_browser_config(storage_state))
+    config, storage_path = process_stack.enter_context(
+      _browser_config(storage_state, downloads=options.downloads)
+    )
 
     async with AsyncExitStack() as async_stack:
       session, mcp_process = await async_stack.enter_async_context(
