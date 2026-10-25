@@ -53,9 +53,14 @@ Neither path truncates before checking the opened file, and missing write target
 - `text.py` — `sanitize` strips invisible characters and reports printable tag payloads with input offsets;
   `sanitize_strings` and `validate_strings` traverse JSON objects, including keys.
 - `models.py` — `InfoResult` and `ViewResult` core envelopes.
-  Their `from_reply` constructors validate the type-declared payload and preserve its serialized dictionary.
-- `operations.py` — `read_reference` and manual field coverage validation.
-  Shared caller rules are in `reference.md`; a type ships its own manual.
+  Their `from_validated` constructors preserve the serialized dictionary validated by the runner.
+- `operations.py` — async `info` and `view`, synchronous `read_reference`, and manual field coverage validation.
+  `Operations` owns the call lifecycle and closes active workers with its tool server.
+- `snapshots.py` — bounded, hashed reads through the seam in a daemon thread.
+  A cancelled or timed-out read retains its slot until its thread returns.
+- `mcp.py` — the registered `file` toolset: `info`, `view` and `read_reference`.
+
+Shared caller rules are in `reference.md`; a type ships its own manual.
 
 The type and result tests run in the gate's `unit` stage without a worker or a parser installation.
 File-type authors start at `bro/reference/extending.md`, "Adding a file type".
@@ -80,7 +85,8 @@ It spawns on the awaiting thread, multiplexes nonblocking pipes and a pidfd on t
 their awaiting calls own reaping.
 A reply requires a zero exit, exactly one frame, valid strings, a complete sandbox report and the type's declared payload model.
 
-`slots.py` owns lazy `WorkerSlots` admission, separate from the runner so callers can acquire before reading.
+`slots.py` owns lazy, thread-safe `WorkerSlots` admission, separate from the runner so callers can acquire before reading.
+The default pool is shared process-wide, across operations states and event loops.
 Use the acquired `SlotLease` as a context manager for ordinary exits.
 For an abandoned read, `transfer()` moves release responsibility to that read's thread;
 its `release()` is thread-safe and idempotent.

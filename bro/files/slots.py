@@ -3,6 +3,8 @@
 import asyncio
 import os
 import threading
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -43,10 +45,8 @@ def memory_budget_bytes() -> int:
 
 
 class SlotLease:
-  def __init__(self, semaphore: asyncio.Semaphore, loop: asyncio.AbstractEventLoop):
-    self._semaphore = semaphore
-    self._loop = loop
-    self._thread = threading.get_ident()
+  def __init__(self, release: Callable[[], None]):
+    self._release = release
     self._lock = threading.Lock()
     self._released = False
     self._transferred = False
@@ -73,10 +73,7 @@ class SlotLease:
       if self._released:
         return
       self._released = True
-    if threading.get_ident() == self._thread:
-      self._semaphore.release()
-    else:
-      self._loop.call_soon_threadsafe(self._semaphore.release)
+    self._release()
 
 
 class WorkerSlots:
@@ -94,27 +91,62 @@ class WorkerSlots:
     self.limits = limits or SandboxLimits()
     self.budget_bytes = budget_bytes
     self.queue_seconds = queue_seconds
-    self._semaphore: asyncio.Semaphore | None = None
-    self._loop: asyncio.AbstractEventLoop | None = None
+    self._lock = threading.Lock()
+    self._available: int | None = None
+    self._waiters: set[tuple[asyncio.AbstractEventLoop, asyncio.Future[None]]] = set()
+
+  @contextmanager
+  def _waiting(self) -> Iterator[asyncio.Future[None] | None]:
+    loop = asyncio.get_running_loop()
+    waiter = None
+    with self._lock:
+      if self._available is None:
+        if self.budget_bytes is None:
+          self.budget_bytes = memory_budget_bytes()
+        if self.budget_bytes < self.limits.address_space_bytes:
+          raise RuntimeError(
+            f'file sandbox unavailable: the memory budget of {self.budget_bytes} bytes '
+            f'cannot hold one worker of {self.limits.address_space_bytes} bytes'
+          )
+        self._available = self.budget_bytes // self.limits.address_space_bytes
+      if self._available:
+        self._available -= 1
+      else:
+        waiter = loop.create_future()
+        self._waiters.add((loop, waiter))
+    try:
+      yield waiter
+    finally:
+      if waiter is not None:
+        with self._lock:
+          self._waiters.remove((loop, waiter))
+
+  @staticmethod
+  async def _wait(waiter: asyncio.Future[None]) -> None:
+    await waiter
+
+  def _release(self) -> None:
+    with self._lock:
+      assert self._available is not None
+      self._available += 1
+      for loop, waiter in self._waiters:
+        loop.call_soon_threadsafe(self._wake, waiter)
+
+  @staticmethod
+  def _wake(waiter: asyncio.Future[None]) -> None:
+    if not waiter.done():
+      waiter.set_result(None)
 
   async def acquire(self) -> SlotLease:
-    loop = asyncio.get_running_loop()
-    if self._semaphore is None:
-      if self.budget_bytes is None:
-        self.budget_bytes = memory_budget_bytes()
-      self._semaphore = asyncio.Semaphore(self.budget_bytes // self.limits.address_space_bytes)
-      self._loop = loop
-    if loop is not self._loop:
-      raise RuntimeError('file worker slots belong to another event loop')
-    assert self.budget_bytes is not None
-    if self.budget_bytes < self.limits.address_space_bytes:
-      raise RuntimeError(
-        f'file sandbox unavailable: the memory budget of {self.budget_bytes} bytes '
-        f'cannot hold one worker of {self.limits.address_space_bytes} bytes'
-      )
     try:
       async with asyncio.timeout(self.queue_seconds):
-        await self._semaphore.acquire()
+        while True:
+          with self._waiting() as waiter:
+            if waiter is None:
+              return SlotLease(self._release)
+            await self._wait(waiter)
     except TimeoutError:
       raise RuntimeError('file worker queue timed out: every slot is busy')
-    return SlotLease(self._semaphore, loop)
+
+
+default_slots = WorkerSlots()
