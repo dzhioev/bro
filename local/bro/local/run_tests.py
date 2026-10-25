@@ -183,6 +183,9 @@ PYTEST_FILES = [
   'bro/files/models_test.py',
   'bro/files/operations_test.py',
   'bro/files/confinement_test.py',
+  'bro/files/protocol_test.py',
+  'bro/files/runner_test.py',
+  'bro/files/slots_test.py',
   'local/bro/local/syscall_tables_test.py',
   'bro/artifact_mcp_test.py',
   'bro/run_lifecycle_test.py',
@@ -458,7 +461,10 @@ CONFORMANCE_PYTEST_FILES = [
 ]
 
 
-SANDBOX_PYTEST_FILES = ['bro/files/confinement_sandbox_test.py']
+SANDBOX_PYTEST_FILES = [
+  'bro/files/confinement_sandbox_test.py',
+  'bro/files/runner_sandbox_test.py',
+]
 
 
 def _rosters() -> list[tuple[str, Sequence[str]]]:

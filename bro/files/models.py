@@ -8,7 +8,9 @@ from bro.files.text import sanitize, sanitize_strings, validate_strings
 from bro.files.types import FileType
 
 
-def _payload(model: type[BaseModel], value: dict[str, Any], *, label: str) -> dict[str, Any]:
+def validate_payload(
+  model: type[BaseModel], value: dict[str, Any], *, label: str
+) -> dict[str, Any]:
   try:
     validate_strings(value)
     result = model.model_validate(sanitize_strings(value), strict=True).model_dump(
@@ -53,7 +55,7 @@ class InfoResult(BaseModel):
       views=[
         ViewDescription(name=view.name, about=sanitize(view.about).text) for view in file_type.views
       ],
-      details=_payload(file_type.details, details, label=f'{file_type.name} details'),
+      details=validate_payload(file_type.details, details, label=f'{file_type.name} details'),
     )
 
 
@@ -74,5 +76,5 @@ class ViewResult(BaseModel):
       type=file_type.name,
       sha256=sha256,
       view=view,
-      content=_payload(declaration.content, content, label=f'{file_type.name} view {view}'),
+      content=validate_payload(declaration.content, content, label=f'{file_type.name} view {view}'),
     )

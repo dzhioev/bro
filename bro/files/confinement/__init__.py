@@ -34,6 +34,10 @@ class SandboxLimits:
       if type(value) is not int or value <= 0:
         raise ValueError(f'{name} must be a positive integer')
 
+  @property
+  def cpu_hard_seconds(self) -> int:
+    return self.cpu_seconds + 2
+
 
 class SandboxReport(TypedDict):
   backend: str

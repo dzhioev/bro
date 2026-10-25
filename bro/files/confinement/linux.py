@@ -110,7 +110,7 @@ def kernel_abi(arch: str) -> int:
 def _limits(limits: SandboxLimits) -> list[str]:
   bounds = {
     'as': (resource.RLIMIT_AS, limits.address_space_bytes, limits.address_space_bytes),
-    'cpu': (resource.RLIMIT_CPU, limits.cpu_seconds, limits.cpu_seconds + 2),
+    'cpu': (resource.RLIMIT_CPU, limits.cpu_seconds, limits.cpu_hard_seconds),
     'fsize': (resource.RLIMIT_FSIZE, limits.file_size_bytes, limits.file_size_bytes),
     'nofile': (resource.RLIMIT_NOFILE, limits.open_files, limits.open_files),
     'core': (resource.RLIMIT_CORE, 0, 0),
