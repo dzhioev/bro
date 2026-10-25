@@ -9,7 +9,6 @@
 import asyncio
 import contextlib
 import importlib.metadata
-import json
 import os
 import secrets
 import socket
@@ -103,6 +102,8 @@ def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
   from jsonschema.validators import validator_for
   from mcp.server import Server, ServerRequestContext
 
+  from bro.llm.mcp import encode_tool_result
+
   def validator(schema: dict[str, Any]) -> Validator:
     validator_class = validator_for(schema)
     validator_class.check_schema(schema)
@@ -166,7 +167,7 @@ def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
         return error_result(f'Output validation error: {invalid.message}')
     if isinstance(result, dict):
       return types.CallToolResult(
-        content=[types.TextContent(type='text', text=json.dumps(result, indent=2))],
+        content=[types.TextContent(type='text', text=encode_tool_result(result))],
         structured_content=result,
       )
     return types.CallToolResult(content=[types.TextContent(type='text', text=result)])

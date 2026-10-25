@@ -172,7 +172,7 @@ the fragments and hold text are described in `bro/prompts/AGENTS.md`, "Session f
 
 ### Kept results
 
-Every assembly wraps each tool it serves, `page` and `results` aside, so that its whole result is kept in the run's result store, a structured one as JSON text.
+Every assembly wraps each tool it serves, `page` and `results` aside, so that its whole result is kept in the run's result store, a structured one as JSON text through `bro.llm.mcp.encode_tool_result`.
 A reply longer than `BYTE_LIMIT` characters returns its head, closing on the `bro::page` call that continues it, so paging never calls the producing tool again.
 A wrapped tool declares no output schema, since a structured result too long for one reply arrives as text.
 The store is the `LiveRun`'s:

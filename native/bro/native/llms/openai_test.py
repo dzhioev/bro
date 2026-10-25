@@ -16,7 +16,14 @@ import bro.llm.usage as usage
 import bro.native.llms.openai as openai_llm
 from bro.inbox import Inbox
 from bro.jobs import Job, Registry
-from bro.llm.mcp import InProcessMCPServer, Tool, ToolControlSignal, ToolRegistry, wire_name
+from bro.llm.mcp import (
+  FunctionTool,
+  InProcessMCPServer,
+  Tool,
+  ToolControlSignal,
+  ToolRegistry,
+  wire_name,
+)
 from bro.llm.observer import (
   InterimAssistantTextEvent,
   NotificationEvent,
@@ -276,6 +283,25 @@ async def test_successful_tool_call_returns_output_unchanged():
 
   assert len(results) == 1
   assert cast(dict, results[0])['output'] == 'ok'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('text', ['Привет', '漢字'])
+async def test_structured_tool_output_is_compact_unicode_but_tracker_keeps_object(text):
+  def document() -> dict[str, list[str]]:
+    return {'pages': [text, 'second']}
+
+  gpt, tracker, _ = _make_openai_with_tracker(
+    [FunctionTool(document, description='read a document')]
+  )
+  results = await gpt._execute_tool_calls(
+    _function_call_response('document'), turn_index=0, call_index=1
+  )
+
+  assert cast(dict, results[0])['output'] == '{"pages":["' + text + '","second"]}'
+  assert [(kind, body) for kind, body, _ in tracker.steps if kind == 'tool_result'] == [
+    ('tool_result', {'pages': [text, 'second']})
+  ]
 
 
 class TestToolResultTrackerEmission:
