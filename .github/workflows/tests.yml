@@ -8,8 +8,8 @@ on:
 
 jobs:
   stage:
-    name: ${{ matrix.stage }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.stage }}${{ matrix.arch && format(' {0}', matrix.arch) || '' }}${{ matrix.shard && format(' {0}', matrix.shard) || '' }}
+    runs-on: ${{ matrix.runner || 'ubuntu-latest' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -19,6 +19,12 @@ jobs:
         # scenarios one after another, so it is dealt over shards, a runner each
         stage: [lint, types, unit, benchmark, cdk, docker, webview_e2e]
         include:
+          - stage: sandbox
+            arch: x86_64
+            runner: ubuntu-latest
+          - stage: sandbox
+            arch: arm64
+            runner: ubuntu-24.04-arm
           - stage: broker_e2e
             shard: 1/3
           - stage: broker_e2e

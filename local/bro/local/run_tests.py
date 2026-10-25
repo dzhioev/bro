@@ -182,6 +182,8 @@ PYTEST_FILES = [
   'bro/files/text_test.py',
   'bro/files/models_test.py',
   'bro/files/operations_test.py',
+  'bro/files/confinement_test.py',
+  'local/bro/local/syscall_tables_test.py',
   'bro/artifact_mcp_test.py',
   'bro/run_lifecycle_test.py',
   'native/bro/fork_test.py',
@@ -456,6 +458,9 @@ CONFORMANCE_PYTEST_FILES = [
 ]
 
 
+SANDBOX_PYTEST_FILES = ['bro/files/confinement_sandbox_test.py']
+
+
 def _rosters() -> list[tuple[str, Sequence[str]]]:
   """every roster, with the directory its paths are relative to."""
   return [
@@ -465,6 +470,7 @@ def _rosters() -> list[tuple[str, Sequence[str]]]:
     ('.', WEBVIEW_E2E_PYTEST_FILES),
     ('.', LLM_PYTEST_FILES),
     ('.', CONFORMANCE_PYTEST_FILES),
+    ('.', SANDBOX_PYTEST_FILES),
     *((project.directory, project.pytest_files) for project in PROJECTS),
     (BENCHMARK, BENCHMARK_E2E_PYTEST_FILES),
   ]
@@ -665,7 +671,18 @@ def select(base: str) -> Selection:
   return Selection(
     roster=[test for test in PYTEST_FILES if reached(test)],
     distributions=touched_distributions(changed),
-    dropped=frozenset(project.stage for project in PROJECTS if not project_reached(project)),
+    dropped=frozenset(
+      [project.stage for project in PROJECTS if not project_reached(project)]
+      + (
+        []
+        if any(
+          path.startswith(('bro/files/', 'filetypes/'))
+          or path in ('local/bro/local/run_tests.py', '.github/workflows/tests.yml')
+          for path in changed
+        )
+        else ['sandbox']
+      )
+    ),
   )
 
 
@@ -702,6 +719,45 @@ def webview_e2e_stage() -> None:
   run(*pytest_command(sys.executable), *WEBVIEW_E2E_PYTEST_FILES)
 
 
+class StageUnavailable(Exception):
+  pass
+
+
+def sandbox_unavailable() -> Optional[str]:
+  command = (
+    sys.executable,
+    '-c',
+    """
+import os, sys
+from bro.files import confinement
+try:
+  limits = confinement.SandboxLimits()
+  confinement.arm_parent_death(os.getppid(), limits)
+  confinement.apply(limits)
+except RuntimeError as error:
+  print(error)
+  sys.exit(77)
+os._exit(0)
+""",
+  )
+  process = subprocess.run(command, capture_output=True, text=True, timeout=10)
+  if process.returncode == 77:
+    return process.stdout.strip()
+  process.check_returncode()
+  return None
+
+
+def sandbox_stage() -> None:
+  step('probe kernel confinement')
+  reason = sandbox_unavailable()
+  if reason is not None:
+    if 'GITHUB_ACTIONS' in os.environ:
+      raise subprocess.CalledProcessError(1, ('sandbox-probe',), output=reason + '\n')
+    raise StageUnavailable(reason)
+  step('pytest over the kernel confinement roster')
+  run(*pytest_command(sys.executable), *SANDBOX_PYTEST_FILES)
+
+
 def llm_stage() -> None:
   step('pytest')
   run(*pytest_command(sys.executable), *LLM_PYTEST_FILES)
@@ -735,6 +791,7 @@ STAGES = [
   Stage('lint', lint_stage, lint_scope(DISTRIBUTIONS)),
   Stage('types', types_stage, 'pyright'),
   Stage('unit', unit_stage, unit_scope(PYTEST_FILES)),
+  Stage('sandbox', sandbox_stage, 'pytest over the kernel confinement roster'),
   *(
     Stage(
       project.stage,
@@ -903,6 +960,9 @@ def main(argv: list[str]) -> Optional[int]:
       try:
         stage.run()
         verdict = 'ok'
+      except StageUnavailable as error:
+        display.skipped(stage.name, str(error))
+        verdict = 'skipped'
       except subprocess.CalledProcessError as error:
         failed_step = display.step_text
         assert failed_step is not None, 'a command ran outside a step'
