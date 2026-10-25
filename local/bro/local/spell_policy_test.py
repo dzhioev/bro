@@ -18,7 +18,9 @@ def _declared_spell_files() -> set[Path]:
     for base in cls.__mro__:
       declaration = vars(base).get('spells')
       if declaration is not None:
-        files.update(spell_store.declared_spells(base, declaration).values())
+        files.update(
+          spell.path.resolve() for spell in spell_store.declared_files(base.__name__, declaration)
+        )
   return files
 
 
@@ -26,7 +28,7 @@ def test_every_checked_in_spell_file_is_declared_by_a_bro():
   checked_in = {
     path.resolve()
     for root in distribution_roots(_ROOT, [project.directory for project in PROJECTS])
-    for path in root.glob('bros/*/spells/**/*.md')
+    for path in [*root.glob('bros/*/spells/**/*.md'), *root.glob('bro/*/spells/**/*.md')]
   }
   assert len(checked_in) > 0
   undeclared = sorted(str(path.relative_to(_ROOT)) for path in checked_in - _declared_spell_files())
