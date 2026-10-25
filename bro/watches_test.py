@@ -12,7 +12,7 @@ import pytest
 
 from bro import watch_run, watches
 from bro.base.liveness_test_helper import Liveness
-from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT
+from bro.base.text_window import BYTE_LIMIT
 from bro.brash import REFUSED_STATUS, Policy
 from bro.monitor import SESSION_DIR_ENV
 
@@ -98,16 +98,6 @@ class TestArrivals:
       watches.BatchLine('producer', 'partial', wakes=True, arrived=1.0),
       watches.BatchLine('producer', 'next', wakes=False, arrived=2.0),
     )
-
-  def test_a_line_split_across_batches_keeps_its_arrival(self, owner, monkeypatch):
-    monkeypatch.setattr(watches, 'time', _Clock(5))
-    _seed(owner.store, 'wide', f'{"x" * (BYTE_LIMIT * 2)}\n')
-
-    first = owner.store.take()
-    second = owner.store.take()
-
-    assert first is not None and second is not None
-    assert {line.arrived for line in first.lines + second.lines} == {5.0}
 
   def test_a_quiet_line_wakes_the_session_only_where_its_watch_wakes_on_quiet(self, owner):
     _seed(owner.store, 'quiet', f'{watches.quiet("held")}\n')
@@ -249,27 +239,6 @@ class TestStore:
     assert batch is not None
     assert sorted(batch.splitlines()) == ['[a] quiet', '[b] wake']
 
-  def test_a_quiet_line_cut_across_batches_stays_quiet(self, owner):
-    content = 'q' * (BYTE_LIMIT + 500)
-    size_marker = f'[line: {(len(content) / 1_000):.1f} KB] '
-    watch = _seed(owner.store, 'wide', f'wake\n{watches.quiet(content)}\n')
-
-    first = _taken(owner.store)
-    assert first is not None and first.startswith('[wide] wake\n')
-    assert '[...pending watch lines...]' not in first
-    assert _taken(owner.store) is None
-
-    _append(watch, 'later\n')
-    second = _taken(owner.store)
-    assert second is not None and second.endswith('\n[wide] later')
-    delivered = ''.join(
-      line.removeprefix('[wide] ').removeprefix(size_marker)
-      for batch in (first, second)
-      for line in batch.splitlines()
-      if line not in ('[wide] wake', '[wide] later')
-    )
-    assert delivered == content
-
   def test_a_watch_set_to_wake_on_quiet_lines_wakes_on_them(self, owner):
     _seed(owner.store, 'producer', f'{watches.quiet("quiet")}\n')
 
@@ -304,24 +273,27 @@ class TestStore:
     assert not owner.store.mark_notified(frozenset({'mission:M1'}))
     assert owner.store.mark_notified(frozenset({'mission:M2'}))
 
-  def test_take_stays_within_the_shared_bounds_and_marks_pending(self, owner):
-    _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(150)))
+  def test_take_commits_every_complete_line_as_one_batch(self, owner):
+    watch = _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(5_000)))
 
-    first = _taken(owner.store)
-    assert first is not None
-    assert len(first.splitlines()) == DEFAULT_LIMIT
-    assert len(first.encode()) <= BYTE_LIMIT
-    assert first.splitlines()[-1] == '[...pending watch lines...]'
+    batch = owner.store.take()
 
-    second = _taken(owner.store)
-    assert second is not None
-    delivered = [
-      int(line.removeprefix('[seq] '))
-      for batch in (first, second)
-      for line in batch.splitlines()
-      if line.startswith('[seq] ')
+    assert batch is not None
+    assert [line.content for line in batch.lines] == [str(number) for number in range(5_000)]
+    assert watch.saved_offset() == watch.log.stat().st_size
+    assert owner.store.take() is None
+
+  def test_a_batch_groups_its_lines_by_watch(self, owner):
+    _seed(owner.store, 'a', 'a0\na1\n')
+    _seed(owner.store, 'b', 'b0\n')
+
+    batch = owner.store.take()
+
+    assert batch is not None
+    assert [[line.content for line in group] for group in batch.by_command()] == [
+      ['a0', 'a1'],
+      ['b0'],
     ]
-    assert delivered == list(range(150))
 
   def test_two_readers_commit_disjoint_batches_under_the_lock(self, owner):
     _seed(owner.store, 'seq', ''.join(f'{number}\n' for number in range(180)))
@@ -338,49 +310,6 @@ class TestStore:
     ]
     assert sorted(delivered) == list(range(180))
     assert len(delivered) == len(set(delivered))
-
-  def test_a_cut_watch_yields_the_first_turn_of_the_next_batch(self, owner):
-    a = _seed(owner.store, 'a', ''.join(f'a{number}\n' for number in range(99)))
-    _seed(owner.store, 'b', 'b0\n')
-
-    first = _taken(owner.store)
-    _append(a, ''.join(f'a{number}\n' for number in range(99, 198)))
-    second = _taken(owner.store)
-
-    assert first is not None and first.startswith('[a] a0\n')
-    assert second is not None and second.startswith('[b] b0\n')
-
-  def test_a_wide_line_is_paged_without_loss_and_names_its_size_once(self, owner):
-    content = 'x' * (BYTE_LIMIT + 500)
-    _seed(owner.store, 'wide', f'{content}\n')
-
-    first = _taken(owner.store)
-    second = _taken(owner.store)
-
-    assert first is not None and second is not None
-    assert f'[line: {(len(content) / 1_000):.1f} KB]' in first
-    assert '[line:' not in second
-    delivered = ''.join(
-      line.split('] ', 1)[1].removeprefix(f'[line: {(len(content) / 1_000):.1f} KB] ')
-      for batch in (first, second)
-      for line in batch.splitlines()
-      if line.startswith('[wide] ')
-    )
-    assert delivered == content
-
-  def test_invalid_utf8_expansion_stays_bounded_and_advances(self, owner):
-    watch = _seed(owner.store, 'binary', b'\xff' * BYTE_LIMIT + b'\n')
-
-    batches = []
-    while watch.saved_offset() < BYTE_LIMIT + 1:
-      batch = _taken(owner.store)
-      assert batch is not None
-      batches.append(batch)
-      assert len(batch.encode()) <= BYTE_LIMIT
-      assert len(batch.splitlines()) <= DEFAULT_LIMIT
-
-    assert len(batches) > 1
-    assert watch.saved_offset() == BYTE_LIMIT + 1
 
   def test_a_replacement_does_not_commit_the_next_buffered_lead_byte(self, owner):
     watch = _seed(owner.store, 'binary', b'\xc2\xc2\n')
@@ -403,19 +332,6 @@ class TestStore:
     assert 'sha256:' in lines[1]
     assert multiline.saved_offset() == len('line\n')
     assert oversized.saved_offset() == len('line\n')
-
-  def test_a_large_line_pages_by_advancing_its_cursor(self, owner):
-    content = 'z' * (BYTE_LIMIT * 4)
-    watch = _seed(owner.store, 'large', f'{content}\n')
-    offsets = []
-
-    while watch.saved_offset() < len(content) + 1:
-      batch = _taken(owner.store)
-      assert batch is not None
-      offsets.append(watch.saved_offset())
-
-    assert offsets == sorted(set(offsets))
-    assert offsets[-1] == len(content) + 1
 
 
 class TestProducers:

@@ -11,7 +11,7 @@ import sys
 import time
 from typing import TextIO
 
-from bro import watches
+from bro import results, watch_delivery, watches
 from ride.claude.waiter_state import REWAKE_STATUS, WaiterState
 
 POLL_SECONDS = 0.5
@@ -34,12 +34,13 @@ def _bound_notice(bound_seconds: float) -> watches.Batch:
 def wait(
   state: WaiterState,
   store: watches.Store,
+  kept: results.Store,
   runner_process_id: int,
   bound_seconds: float,
   out: TextIO,
 ) -> int:
-  """Write the store's next batch to `out` and return the rewake status, or
-  return 0 once superseded, stood down, or outlived by the session runner."""
+  """Write the store's next batch to `out`, a large one's lines kept in `kept`, and return
+  the rewake status, or return 0 once superseded, stood down, or outlived by the session runner."""
   with state.locked():
     token = state.register()
   deadline = time.monotonic() + bound_seconds - _BOUND_MARGIN_SECONDS
@@ -51,8 +52,9 @@ def wait(
       if batch is None and time.monotonic() >= deadline:
         batch = _bound_notice(bound_seconds)
       if batch is not None:
-        state.record_rewake(batch)
-        out.write(f'\n{batch.text()}\n')
+        delivery = watch_delivery.deliver(batch, kept)
+        state.record_rewake(delivery)
+        out.write(f'\n{delivery.text}\n')
         out.flush()
         return REWAKE_STATUS
     time.sleep(POLL_SECONDS)
@@ -66,6 +68,7 @@ def main(argv: list[str]) -> int:
   return wait(
     WaiterState.for_session(),
     watches.session_store(),
+    results.session_store(),
     int(os.environ['RIDE_RUNNER_PID']),
     bound_seconds,
     sys.stderr,

@@ -206,7 +206,7 @@ async def test_text_returns_on_immediate_eof(capsys):
 
 
 @pytest.mark.asyncio
-async def test_idle_race_gives_buffered_lines_the_turn_after_one_output_page():
+async def test_idle_race_gives_buffered_lines_the_turn_after_one_notification():
   runner = _MockRunner(response='reply')
   lines = _LineBuffer()
   first = ('line', 'first')
@@ -222,7 +222,7 @@ async def test_idle_race_gives_buffered_lines_the_turn_after_one_output_page():
     second_event = await _next_idle_event(runner, lines, prefer_lines=True)
 
     assert first_kind == 'notification'
-    assert batch is not None and 'pending watch lines' in batch.text
+    assert batch is not None and '[seq 1 201; sleep 30] 1' in batch.text
     assert second_event == first
     assert lines.get() == second
 

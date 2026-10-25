@@ -883,9 +883,9 @@ class TestNativeTurnEnd:
     cancelled = threading.Event()
     post = runner.inbox.post
 
-    def recording_post(notice: str) -> int:
+    def recording_post(notice: str) -> None:
       events.append('posted')
-      return post(notice)
+      post(notice)
 
     monkeypatch.setattr(runner.inbox, 'post', recording_post)
 
@@ -909,7 +909,7 @@ class TestNativeTurnEnd:
 
     assert events == ['posted', 'stood down']
 
-  def test_watch_pump_keeps_only_one_batch_in_flight(self):
+  def test_watch_pump_takes_the_next_batch_without_waiting_for_a_drain(self):
     class Store:
       def __init__(self):
         self.batches = [
@@ -937,14 +937,12 @@ class TestNativeTurnEnd:
     store = Store()
     runner = PumpRunner(store)
     with runner:
-      assert runner.inbox.wait(time.monotonic() + 10, threading.Event())
-      assert store.take_calls == 1
-      first = runner.inbox.drain()
-      assert first is not None and first.text == 'first'
-      assert runner.inbox.wait(time.monotonic() + 10, threading.Event())
-      assert store.take_calls == 2
-      second = runner.inbox.drain()
-      assert second is not None and second.text == 'second'
+      deadline = time.monotonic() + 10
+      while store.take_calls < 2:
+        assert time.monotonic() < deadline, 'the pump waited for the model to drain'
+        time.sleep(0.01)
+      drained = runner.inbox.drain()
+      assert drained is not None and drained.text == 'first\nsecond'
 
   @pytest.mark.asyncio
   async def test_a_delivered_answer_ends_the_run_without_settlement(self):
