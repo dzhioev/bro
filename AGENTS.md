@@ -25,6 +25,7 @@ core imports none of them, and `bro-native` depends on `bro-ride` for the manage
 | `oops/cdk/` | `bro-oops-cdk` | the AWS CDK stacks `bro-oops` deploys, and this repository's CDK app; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `oops/cdk/AGENTS.md` |
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |
 | `browser/` | `bro-browser` | the browser persona and page reader, registered webview worker type, owner and profile-setup commands, image, daemon, and capture process | `browser/AGENTS.md` |
+| `filetypes/` | `bro-filetypes` | sandboxed file-type providers, including PDF inspection | `filetypes/AGENTS.md` |
 | `local/` | `bro-local` | this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group | `local/AGENTS.md` |
 | `benchmark/` | `bro-benchmark` | the Terminal-Bench harness adapter; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `benchmark/AGENTS.md` |
 
