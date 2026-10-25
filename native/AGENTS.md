@@ -15,6 +15,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   `harness.py:BRO` owns native recipe resolution among the providers `providers.py` has clients for, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
   Its `Harness.facts` contributes native prompt passages, `Harness.prompt_instructions` supplies the skill-loader contract, and `Harness.own_tools` contributes `skill` and the shell-gated job tools.
   Its `Harness.serve` mounts `dev_mcp.py`, the file and search toolset whose shared output rules are `dev_reference.md`, for the `files` group.
+  Path-taking dev tools consult `bro.files.access`;
+  the seam owns file opens and authorizes search roots.
   It also owns the `bro run|chat …` spawn with exact-recipe continuation and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, trail, and an in-process run's temporary watch store and, outside a managed session, its temporary result store;

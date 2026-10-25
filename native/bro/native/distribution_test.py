@@ -15,6 +15,7 @@ _PROJECTS = {
   'bro-bench': _ROOT / 'bench',
   'bro-benchmark': _ROOT / 'benchmark',
   'bro-dev': _ROOT / 'dev',
+  'bro-filetypes': _ROOT / 'filetypes',
   'bro-native': _ROOT / 'native',
   'bro-oops': _ROOT / 'oops',
   'bro-oops-cdk': _ROOT / 'oops' / 'cdk',
@@ -53,6 +54,7 @@ _CORE_DOMAIN = {
 _NAMESPACE_MODULES = {
   'bro.extra.github.api': 'bro/extra/github/api.py',
   'bro.extra.github.poll_pr': 'bro/extra/github/poll_pr.py',
+  'bro.pdf': 'bro/pdf/__init__.py',
   'bro.launch.call': 'bro/launch/call.py',
   'bro.launch.hold': 'bro/launch/hold.py',
   'bro.oops.cdk.app': 'bro/oops/cdk/app.py',
@@ -169,6 +171,10 @@ def test_core_registers_the_builtin_trail_formats(wheels):
   }
 
 
+def test_core_registers_file_toolset(wheels):
+  assert _entry_points(wheels['bro'])['bro.toolsets']['file'] == 'bro.files.mcp:toolset'
+
+
 def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   native_requirements = {
     _requirement_name(requirement)
@@ -209,6 +215,11 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'aws-cdk-lib',
     'bro-oops',
   }
+  assert _project_dependencies(_ROOT / 'filetypes' / 'pyproject.toml') == {
+    'bro',
+    'pydantic',
+    'pypdfium2',
+  }
   assert _project_dependencies(_ROOT / 'bench' / 'pyproject.toml') == {'bro'}
   assert _project_dependencies(_ROOT / 'benchmark' / 'pyproject.toml') >= {
     'bro',
@@ -222,7 +233,8 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
 def test_shared_namespaces_resolve_from_editable_source_roots():
   _assert_namespace_modules(
     os.pathsep.join(
-      str(_ROOT / directory) for directory in ('.', 'dev', 'native', 'oops', 'oops/cdk')
+      str(_ROOT / directory)
+      for directory in ('.', 'dev', 'native', 'oops', 'oops/cdk', 'filetypes')
     )
   )
 
@@ -310,3 +322,17 @@ def test_shared_namespaces_resolve_after_wheel_install(wheels, tmp_path):
     with zipfile.ZipFile(wheel) as archive:
       archive.extractall(tmp_path)
   _assert_namespace_modules(str(tmp_path))
+
+
+def test_pdf_type_registers_from_its_own_wheel(wheels, wheel_files):
+  assert _entry_points(wheels['bro-filetypes'])['bro.file_types']['pdf'] == 'bro.pdf:TYPE'
+  assert {
+    'bro/pdf/__init__.py',
+    'bro/pdf/engine.py',
+    'bro/pdf/provider.py',
+    'bro/pdf/manual.md',
+  } <= wheel_files['bro-filetypes']
+  assert not any(path.startswith('bro/pdf/') for path in wheel_files['bro'])
+  requirements = _metadata(wheels['bro-filetypes']).get_all('Requires-Dist')
+  assert requirements is not None
+  assert 'pypdfium2==5.14.0' in requirements
