@@ -59,7 +59,7 @@ Every member builds through uv's own backend, which ships each declared module r
 held against the built wheels by `dev/bro/dev/packaging_policy.py` and enforced repository-wide by its sibling `packaging_policy_test.py`.
 That module derives the distributions from the root's `members`, so the projects shipped from outside the workspace are named to it explicitly;
 `local/` holds their names, next to the gate's other checkout-specific facts
-— the modules a wheel must carry among them.
+— the modules and file-type manuals a wheel must carry among them.
 
 ## Commit metadata
 

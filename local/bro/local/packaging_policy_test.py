@@ -30,6 +30,7 @@ def test_repository_packaging_policy():
     siblings=[project.directory for project in PROJECTS],
     required_modules=(
       _REBUILD_MODULE_PATH,
+      'bro/pdf/manual.md',
       *_WEBVIEW_MODULE_PATHS,
       *_RIDE_CLAUDE_PLUGIN_PATHS,
       *_PERMISSION_REFERENCE_PATHS,

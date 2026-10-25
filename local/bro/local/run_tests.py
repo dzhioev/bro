@@ -76,6 +76,7 @@ DISTRIBUTIONS = [
       '^oops/',
       '^ride/',
       '^browser/',
+      '^filetypes/',
       f'^{BENCHMARK}/',
       '.venv/',
       '.claude/',
@@ -125,6 +126,11 @@ DISTRIBUTIONS = [
     deptry_known_first_party=('bro',),
   ),
   Distribution(
+    directory='filetypes',
+    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_known_first_party=('bro',),
+  ),
+  Distribution(
     directory=BENCHMARK,
     deptry_exclude=(TEST_MODULE_PATTERN, '.venv/'),
     deptry_known_first_party=('bro',),
@@ -132,6 +138,7 @@ DISTRIBUTIONS = [
 ]
 
 PYTEST_FILES = [
+  'filetypes/bro/pdf/provider_test.py',
   'bro/authority/values_test.py',
   'bro/authority/patterns_test.py',
   'bro/authority/authority_test.py',
@@ -467,6 +474,7 @@ SANDBOX_PYTEST_FILES = [
   'bro/files/confinement_sandbox_test.py',
   'bro/files/runner_sandbox_test.py',
   'bro/files/operations_sandbox_test.py',
+  'filetypes/bro/pdf/provider_sandbox_test.py',
 ]
 
 
