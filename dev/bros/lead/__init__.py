@@ -1,4 +1,5 @@
 import bro.brog.mcp as brog_mcp
+import bro.dev as dev
 from bro.datasources.references import (
   dive_in,
   environment,
@@ -9,6 +10,7 @@ from bro.datasources.references import (
 )
 from bro.mcp import cli, man, mount
 from bros.bro import Bro
+from bros.lead import spells
 
 SYSTEM_PROMPT = """\
 You are the lead — the coordinator of work too large for a single session. You own
@@ -81,5 +83,5 @@ class Lead(Bro):
     man(permissions),
     man(permissions_cheatsheet),
   ]
-  spells = ('orchestrate.md',)
+  spells = (spells.orchestrate, dev.spells.open_task)
   system_prompt = SYSTEM_PROMPT

@@ -252,7 +252,54 @@ class TestReplayMessages:
     )
     result = replay_messages(trail, 4)
     fco = result[-1]
-    assert fco['output'] == json.dumps({'rows': [1, 2]})
+    assert fco['output'] == '{"rows":[1,2]}'
+
+  @pytest.mark.parametrize('text', ['Привет', '漢字'])
+  def test_reencodes_structured_output_from_a_trail_with_escaped_wire_text(self, text):
+    payload = {'pages': [text, 'second']}
+    old_output = {
+      'type': 'function_call_output',
+      'call_id': 'c1',
+      'output': json.dumps(payload),
+    }
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id=0),
+        _step('user_input', 'read a document', step_id=1),
+        _step('llm_call', _llm_call_body(_output_function_call('read', call_id='c1')), step_id=2),
+        _step('tool_result', payload, step_id=3, call_id='c1'),
+        _step(
+          'llm_call',
+          _llm_call_body(_output_message('done'), request_input=[old_output]),
+          step_id=4,
+        ),
+      ],
+    )
+
+    replayed = replay_messages(trail, 4)
+
+    assert replayed[-2] == {
+      'type': 'function_call_output',
+      'call_id': 'c1',
+      'output': '{"pages":["' + text + '","second"]}',
+    }
+    assert trail.steps[3].body == payload
+    assert trail.steps[4].body['request']['input'] == [old_output]
+
+  def test_replays_windowed_json_text_unchanged(self):
+    text = '{\n  "pages": ["Привет 漢字' + '\n[...more characters — bro::page(...)]'
+    trail = RecordedTrail(
+      header=_trail_header(),
+      steps=[
+        _step('system_prompt', _SYS_TEXT, step_id=0),
+        _step('user_input', 'read a document', step_id=1),
+        _step('llm_call', _llm_call_body(_output_function_call('read', call_id='c1')), step_id=2),
+        _step('tool_result', text, step_id=3, call_id='c1'),
+      ],
+    )
+
+    assert replay_messages(trail, 3)[-1]['output'] == text
 
   def test_replays_notification_as_user_input(self):
     trail = RecordedTrail(

@@ -14,10 +14,9 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.10.0
+version: 4.11.0
 ---
 
-{{iff #features contains brog}}
 # fix
 
 Resolve a task, plan an approach, implement, and hand off to [[run pr]].
@@ -53,11 +52,8 @@ Otherwise, pick the right tool for the invocation form:
 - Existing task:
   `brog::get_task("<ref>")` + `brog::read_task("<ref>")` + `brog::read_comments("<ref>")`.
 - New task:
-  discuss with the user as needed to pin down name, tags, and body (names start with a lowercase letter except proper nouns);
-  call `brog::create_task` with the agreed properties
-  — the task is born open (workable)
-  — and use the returned id for the rest of the flow.
-  Anything richer than name/tags/body (importance, deadline, project) is post-hoc triage on the tracker's own surface, not part of this flow.
+  [[open a task]] from the `new` seed
+  and use the returned id for the rest of the flow.
 
 **Already-done guard.**
 For an existing task, check the status and comment stream you just read before doing any work:
@@ -170,11 +166,3 @@ Once the goal is confirmed met, close the task with `brog::update_task(<id>, sta
 
 [[run pr]] and [[land]] together cover code-change closure ([[land]] handles `brog::update_task status='done'` after the merge).
 For non-code tasks, close per step 7 once the goal is confirmed met.
-{{else}}
-# fix
-
-This session has no task tracker:
-no `brog` configuration resolves in this environment, so the `brog::` task tools this spell drives are not mounted.
-Report that to the user and stop
-— the spell cannot run here.
-{{end}}

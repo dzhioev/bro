@@ -14,11 +14,23 @@ from bro.llm.mcp import (
   ToolRegistry,
   UnknownToolError,
   canonical_name,
+  encode_tool_result,
   namespaced_tools,
   render_return_shape,
   wire_name,
 )
 from bro.mcp import describe
+
+
+class TestEncodeToolResult:
+  def test_structured_result_is_compact_without_escaping_unicode(self):
+    assert encode_tool_result({'текст': ['漢字', {'line': 'a\nb "c"'}], 'empty': None}) == (
+      '{"текст":["漢字",{"line":"a\\nb \\"c\\""}],"empty":null}'
+    )
+
+  @pytest.mark.parametrize('text', ['', 'Привет 世界\n', '{\n  "текст": "漢字"\n}'])
+  def test_strings_pass_through_unchanged(self, text):
+    assert encode_tool_result(text) == text
 
 
 class _Color(Enum):

@@ -366,6 +366,16 @@ class TestToolResults:
     assert json.loads(result['content'][0]['text']) == {'x': 1}
     assert not result.get('isError', False)
 
+  @pytest.mark.parametrize('text', ['Привет', '漢字'])
+  def test_structured_text_block_is_compact_and_unescaped(self, text):
+    def document() -> dict[str, list[str]]:
+      return {'pages': [text, 'second']}
+
+    result = self._call([FunctionTool(document, description='read a document')], 'document', {})
+
+    assert result['structuredContent'] == {'pages': [text, 'second']}
+    assert result['content'] == [{'type': 'text', 'text': '{"pages":["' + text + '","second"]}'}]
+
   def test_a_raising_tool_answers_with_an_error_result(self):
     def fail() -> str:
       raise RuntimeError('backend down')

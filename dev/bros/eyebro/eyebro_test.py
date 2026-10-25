@@ -52,3 +52,16 @@ def test_review_pr_drives_the_pull_request_only_under_a_github_identity(monkeypa
   without_identity = bro.get_spell_body('review-pr', harness='claude', hold='unattended')
   assert 'no GitHub identity' in without_identity
   assert 'pr-state' not in without_identity
+
+
+def test_review_pr_cannot_be_offered_without_the_spells_it_runs():
+  import bros.eyebro as eyebro
+  from bros.bro import Bro
+
+  class Incomplete(Bro):
+    name = 'incomplete'
+    description = 'test bro'
+    spells = (eyebro.spells.review_pr,)
+
+  with pytest.raises(ValueError, match="requires spell 'review-diff'"):
+    Incomplete()

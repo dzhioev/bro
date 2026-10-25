@@ -15,7 +15,7 @@ from bro.llm.llms.openai import (
   LLMSpec as _OpenAISpec,
   ReasoningEffort as _ReasoningEffort,
 )
-from bro.llm.mcp import MCPServer, Tool, ToolControlSignal
+from bro.llm.mcp import MCPServer, Tool, ToolControlSignal, encode_tool_result
 from bro.llm.observer import (
   InterimAssistantTextEvent,
   NotificationEvent,
@@ -295,9 +295,13 @@ class OpenAI(LLM):
         call_id=item.call_id,
         is_error=is_error,
       )
-      if isinstance(output, dict):
-        output = json.dumps(output)
-      results.append({'type': 'function_call_output', 'call_id': item.call_id, 'output': output})
+      results.append(
+        {
+          'type': 'function_call_output',
+          'call_id': item.call_id,
+          'output': encode_tool_result(output),
+        }
+      )
     return results
 
   async def _interrupted_outputs(

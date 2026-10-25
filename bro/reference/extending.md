@@ -125,8 +125,11 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`do-ride` for a managed one, on either harness).
   MRO-walked and concatenated like `extra_secrets`.
   Every session start runs them, resumes included, so each step is idempotent.
-- `spells = ('fix.md', 'run-pr.md')` declares spells:
-  each entry is a markdown file's path relative to the `spells/` directory beside the declaring module.
+- `spells = (fix, when(feature('brog'), open_task))` declares spells:
+  each entry is a `SpellFile` (`bro.spells`) over a markdown file, or a `when` / `iff` of them gated like `tools`, so a spell absent from the environment is absent from the bro's roster.
+  `SpellFile(path, requires=(...))` names, by spell name and in the same grammar, the spells it runs in its own session (two spells may name each other);
+  a bro offering a spell must offer every requirement that resolves, and construction fails otherwise.
+  A package that owns spells defines their values in its `spells` package (`bros.lead.spells`, `bro.dev.spells`) beside the files, and bros import them from there, so one spell is shared by importing its value.
   The file opens with flat frontmatter
   — `name`, `description`, an optional one-line JSON `parameters` map, and an optional informational `version` bumped when the spell changes
   — and carries the markdown body after the closing `---`.
@@ -135,7 +138,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   — folded into one paragraph on single spaces, so a long description breaks semantically in the file (one clause per line, for reviewable diffs) and still reaches the tool as one paragraph.
   The filename stem is the spell's name, canonical and validated against `name:`;
   spell and parameter names must fit the wire charset, and malformed declarations fail at load;
-  an entry naming no file, one escaping the directory, or two entries sharing a stem fails the bro's construction.
+  a missing or non-markdown file, an entry that is not a `SpellFile`, or two entries sharing a stem fails the bro's construction.
   Spell names are imperative verb phrases (`fix`, `land`, `run-pr`, `orchestrate`), kebab-cased when multi-word.
   Prose that refers to *running* one
   — in a spell, a prompt, or a doc
