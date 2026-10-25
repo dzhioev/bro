@@ -47,6 +47,14 @@ COMMAND_DEADLINE = 120.0
 OUTPUT_LIMIT_BYTES = 256 << 20
 ERROR_HEAD_CHARACTERS = 1024
 WITHHELD_TOOLS = frozenset({'browser_run_code_unsafe'})
+# Playwright MCP names each file it writes in a result section as `- [title](absolute path)`
+# and each download in the Events section as `- Downloaded file name to "absolute path"`.
+LINKED_FILE_SECTIONS = frozenset({'Result', 'Snapshot'})
+DOWNLOAD_FILE_SECTION = 'Events'
+LINKED_FILE_PREFIX = '- ['
+LINKED_FILE_PATH_OPENER = '](/'
+DOWNLOADED_FILE_PREFIX = '- Downloaded file '
+DOWNLOADED_FILE_PATH_OPENER = ' to "/'
 _PROCESS_POLL_SECONDS = 0.05
 
 
@@ -518,7 +526,50 @@ def _removing_workspace_file(relative: Path) -> Iterator[None]:
     _remove_workspace_file(relative)
 
 
-async def collect_files(before: Mapping[Path, FileState]) -> list[dict[str, Any]]:
+def _linked_file(line: str) -> str | None:
+  if not (line.startswith(LINKED_FILE_PREFIX) and line.endswith(')')):
+    return None
+  opener = line.find(LINKED_FILE_PATH_OPENER)
+  return None if opener < 0 else line[opener + len(LINKED_FILE_PATH_OPENER) - 1 : -1]
+
+
+def _downloaded_file(line: str) -> str | None:
+  if not (line.startswith(DOWNLOADED_FILE_PREFIX) and line.endswith('"')):
+    return None
+  opener = line.rfind(DOWNLOADED_FILE_PATH_OPENER)
+  return None if opener < 0 else line[opener + len(DOWNLOADED_FILE_PATH_OPENER) - 1 : -1]
+
+
+def named_files(text: str) -> list[Path]:
+  """The files a Playwright MCP result text names, in order and without repeats.
+
+  Result text includes page-controlled lines, so every line is read in linear time.
+  """
+  named: dict[Path, None] = {}
+  section = ''
+  for line in text.splitlines():
+    if line.startswith('### '):
+      section = line[len('### ') :]
+      continue
+    path = None
+    if section in LINKED_FILE_SECTIONS:
+      path = _linked_file(line)
+    elif section == DOWNLOAD_FILE_SECTION:
+      path = _downloaded_file(line)
+    if path is not None:
+      named[Path(path)] = None
+  return list(named)
+
+
+def _workspace_relative(path: Path) -> Path | None:
+  try:
+    return path.relative_to(WORKSPACE)
+  except ValueError:
+    return None
+
+
+async def collect_files(before: Mapping[Path, FileState], text: str) -> list[dict[str, Any]]:
+  """Mint the files `text` names that the command wrote, and remove every file it wrote."""
   after = await asyncio.to_thread(workspace_files)
   changed = _changed_files(before, after)
   total = sum(after[path].size for path in changed)
@@ -529,18 +580,30 @@ async def collect_files(before: Mapping[Path, FileState]) -> list[dict[str, Any]
       f'command wrote {total} bytes, exceeding the {OUTPUT_LIMIT_BYTES}-byte output limit'
     )
   collected: list[dict[str, Any]] = []
+  written = set(changed)
+  named = set()
+  for path in named_files(text):
+    relative = _workspace_relative(path)
+    if relative is None or relative not in written:
+      collected.append({'name': str(path), 'error': 'named file was not written by the command'})
+      continue
+    named.add(relative)
+    with _removing_workspace_file(relative):
+      collected.append(await _minted_file(relative, after[relative]))
   for path in changed:
-    with _removing_workspace_file(path):
-      if after[path].kind != 'file':
-        collected.append({'name': str(path), 'error': f'unsupported {after[path].kind} output'})
-        continue
-      try:
-        minted = await asyncio.to_thread(mint_artifact, str(path))
-      except (ArtifactError, OSError, ValueError) as error:
-        collected.append({'name': str(path), 'error': str(error)})
-      else:
-        collected.append({'name': str(path), 'ref': minted.ref})
+    if path not in named:
+      _remove_workspace_file(path)
   return collected
+
+
+async def _minted_file(relative: Path, state: FileState) -> dict[str, Any]:
+  if state.kind != 'file':
+    return {'name': str(relative), 'error': f'unsupported {state.kind} output'}
+  try:
+    minted = await asyncio.to_thread(mint_artifact, str(relative))
+  except (ArtifactError, OSError, ValueError) as error:
+    return {'name': str(relative), 'error': str(error)}
+  return {'name': str(relative), 'ref': minted.ref}
 
 
 def _content_text(result: mcp_types.CallToolResult) -> str:
@@ -652,11 +715,11 @@ async def _tool_reply(
     )
   except TimeoutError:
     raise DaemonError(f'Playwright MCP command {tool!r} exceeded {COMMAND_DEADLINE:.0f}s') from None
+  text = _content_text(result)
   try:
-    files = await collect_files(before)
+    files = await collect_files(before, text)
   except DaemonError as error:
     return {'error': str(error)}
-  text = _content_text(result)
   if result.is_error:
     return {'error': text}
   return {'text': text, 'files': files}
