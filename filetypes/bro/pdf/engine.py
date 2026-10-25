@@ -101,6 +101,22 @@ class Engine:
     self.attachment_name = self.bind(
       'FPDFAttachment_GetName', _UNSIGNED_LONG, _POINTER, _POINTER, _UNSIGNED_LONG
     )
+    self.attachment_subtype = self.bind(
+      'FPDFAttachment_GetSubtype', _UNSIGNED_LONG, _POINTER, _POINTER, _UNSIGNED_LONG
+    )
+    self.attachment_file = self.bind(
+      'FPDFAttachment_GetFile', _INTEGER, _POINTER, _POINTER, _UNSIGNED_LONG, _POINTER
+    )
+    self.enumerate_link = self.bind('FPDFLink_Enumerate', _INTEGER, _POINTER, _POINTER, _POINTER)
+    self.link_rectangle = self.bind('FPDFLink_GetAnnotRect', _INTEGER, _POINTER, _POINTER)
+    self.link_annotation = self.bind('FPDFLink_GetAnnot', _POINTER, _POINTER, _POINTER)
+    self.annotation_flags = self.bind('FPDFAnnot_GetFlags', _INTEGER, _POINTER)
+    self.close_annotation = self.bind('FPDFPage_CloseAnnot', None, _POINTER)
+    self.link_action = self.bind('FPDFLink_GetAction', _POINTER, _POINTER)
+    self.action_type = self.bind('FPDFAction_GetType', _UNSIGNED_LONG, _POINTER)
+    self.action_uri = self.bind(
+      'FPDFAction_GetURIPath', _UNSIGNED_LONG, _POINTER, _POINTER, _POINTER, _UNSIGNED_LONG
+    )
     if PDFIUM_INFO.flags:
       raise RuntimeError('PDFium must be built without optional features')
     self.initialize()
@@ -225,8 +241,11 @@ class TextPage:
       code = engine.unicode(text, index)
       generated = bool(engine.generated(text, index))
       hyphen = bool(engine.hyphen(text, index))
+      if not engine.character_box(text, index, *box_pointers):
+        raise RuntimeError('PDFium failed to read a character box')
+      box = (left.value, right.value, bottom.value, top.value)
       if generated:
-        characters.append(Character(code, generated, hyphen))
+        characters.append(Character(code, generated, hyphen, box=box))
         continue
       handle = engine.text_object(text, index)
       if not handle:
@@ -235,9 +254,6 @@ class TextPage:
       if style is None:
         style = self.style(handle, index)
         styles[handle] = style
-      if not engine.character_box(text, index, *box_pointers):
-        raise RuntimeError('PDFium failed to read a character box')
-      box = (left.value, right.value, bottom.value, top.value)
       reason: HiddenReason | None = None
       if style.invisible:
         reason = 'invisible'

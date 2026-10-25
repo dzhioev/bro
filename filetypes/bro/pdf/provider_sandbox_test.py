@@ -7,8 +7,14 @@ from bro.files.operations import Operations, read_reference
 from bro.files.protocol import Job
 from bro.files.runner import SubprocessRunner
 from bro.pdf import TYPE
+from bro.pdf.attachments import TEXT_BYTES
 from bro.pdf.page_text import HIDDEN_EXCERPT_CHARACTERS, HIDDEN_NOTES
-from bro.pdf.pdf_test_helper import make_pdf, text_view_cases
+from bro.pdf.pdf_test_helper import (
+  attachments_view_cases,
+  links_view_cases,
+  make_pdf,
+  text_view_cases,
+)
 
 
 @pytest.mark.asyncio
@@ -142,3 +148,76 @@ async def test_text_selection_unreadable_page_and_cap_through_worker(tmp_path):
       Job(file_type, 'view', {'view': 'text', 'pages': [2]}, path.read_bytes())
     )
   assert result.ok['pages'][0]['text'] == 'second'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name,arguments,expected', links_view_cases())
+async def test_links_view_fixtures_through_real_worker(tmp_path, name, arguments, expected):
+  path = tmp_path / name
+  path.write_bytes(make_pdf(**arguments))
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'links')
+  assert result.content == {'links': expected}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name,entries,expected', attachments_view_cases(TEXT_BYTES))
+async def test_attachments_view_fixtures_through_real_worker(tmp_path, name, entries, expected):
+  path = tmp_path / name
+  path.write_bytes(make_pdf(attachments=entries))
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'attachments')
+    with pytest.raises(ValueError, match='takes no pages'):
+      await state.view(str(path), 'attachments', pages='1')
+  assert result.content == {'attachment_count': len(entries), 'attachments': expected}
+
+
+@pytest.mark.asyncio
+async def test_link_selection_and_attachment_caps_through_worker(tmp_path):
+  from dataclasses import replace
+
+  path = tmp_path / 'document'
+  path.write_bytes(make_pdf(['first', 'second'], count=3, links=[{}, {'page': 1}]))
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'links', pages='3,2,2')
+    assert [entry['page_number'] for entry in result.content['links']] == [2]
+  file_type = replace(TYPE, limits=replace(TYPE.limits, max_view_entries=1))
+  with closing(SubprocessRunner()) as runner:
+    with pytest.raises(ValueError, match='link 2 on page 2; narrow pages'):
+      await runner.run(Job(file_type, 'view', {'view': 'links', 'pages': None}, path.read_bytes()))
+    data = make_pdf(attachments=[('first.xml', b'a', None), ('second.xml', b'b', None)])
+    with pytest.raises(ValueError, match='attachment 2; reduce attachment content'):
+      await runner.run(Job(file_type, 'view', {'view': 'attachments', 'pages': None}, data))
+
+
+@pytest.mark.asyncio
+async def test_attachment_bomb_fails_the_whole_view_and_following_call_succeeds(tmp_path):
+  from bro.pdf.pdf_test_helper import flate_stream
+
+  bomb = flate_stream(1500 * 1024**2)
+  path = tmp_path / 'invoice'
+  path.write_bytes(
+    make_pdf(
+      attachments=[
+        ('factur-x.xml', b'<invoice/>', 'application/xml'),
+        ('bomb.xml', bomb, 'application/xml'),
+      ]
+    )
+  )
+  with closing(Operations()) as state:
+    assert (await state.info(str(path))).details['attachment_count'] == 2
+    with pytest.raises(RuntimeError, match='SIGABRT'):
+      await state.view(str(path), 'attachments')
+    path.write_bytes(
+      make_pdf(
+        attachments=[
+          ('factur-x.xml', b'<invoice/>', 'application/xml'),
+          ('bomb.xml', bomb, 'application/octet-stream'),
+        ]
+      )
+    )
+    result = await state.view(str(path), 'attachments')
+    assert result.content['attachments'][0]['text'] == '<invoice/>'
+    assert result.content['attachments'][1]['size_bytes'] is None
+    path.write_bytes(make_pdf(['still healthy']))
+    assert (await state.view(str(path), 'text')).content['pages'][0]['text'] == 'still healthy'

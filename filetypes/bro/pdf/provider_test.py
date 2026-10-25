@@ -7,6 +7,7 @@ import pytest
 from bro.files.operations import validate_manual
 from bro.files.protocol import InvalidInput
 from bro.pdf import TYPE
+from bro.pdf.attachments import TEXT_BYTES
 from bro.pdf.engine import TextPage
 from bro.pdf.page_text import (
   HIDDEN_EXCERPT_CHARACTERS,
@@ -15,7 +16,14 @@ from bro.pdf.page_text import (
   assemble,
   text_and_notes,
 )
-from bro.pdf.pdf_test_helper import decoy_font, make_pdf, text_operators, text_view_cases
+from bro.pdf.pdf_test_helper import (
+  attachments_view_cases,
+  decoy_font,
+  links_view_cases,
+  make_pdf,
+  text_operators,
+  text_view_cases,
+)
 from bro.pdf.provider import (
   ATTACHMENT_NAMES,
   NAME_CHARACTERS,
@@ -373,3 +381,182 @@ def test_text_styles_are_read_once_per_text_object(monkeypatch):
   monkeypatch.setattr(provider.engine, 'render_mode', read)
   provider.view(make_pdf(['Long enough to share a text object']), 'text', None, TYPE.limits)
   assert reads == matrix_reads == 1
+
+
+@pytest.mark.parametrize('name,arguments,expected', links_view_cases())
+def test_links_view_fixtures(name, arguments, expected):
+  result = provider.view(make_pdf(**arguments), 'links', None, TYPE.limits)
+  assert result == {'links': expected}
+  TYPE.get_view('links').content.model_validate(result, strict=True)
+
+
+def test_links_selection_skips_unreadable_pages():
+  data = make_pdf(['first', 'second'], count=3, links=[{}, {'page': 1}])
+  result = provider.view(data, 'links', [3, 2, 2], TYPE.limits)
+  assert [link['page_number'] for link in result['links']] == [2]
+  with pytest.raises(InvalidInput, match='document count'):
+    provider.view(data, 'links', [4], TYPE.limits)
+
+
+def test_link_anchor_sanitization_and_truncation():
+  from bro.pdf.links import ANCHOR_CHARACTERS
+
+  data = make_pdf(
+    ['A' * (ANCHOR_CHARACTERS + 9)],
+    links=[{'rectangle': [0, 0, 4000, 792]}],
+    media_box=[0, 0, 4000, 792],
+    character_map={65: 'A\u200b'},
+  )
+  assert (
+    provider.view(data, 'links', None, TYPE.limits)['links'][0]['text'] == 'A' * ANCHOR_CHARACTERS
+  )
+
+
+@pytest.mark.parametrize('limit,cap', [('max_view_characters', 30), ('max_view_entries', 1)])
+def test_link_caps_are_cumulative_and_count_targets(limit, cap):
+  data = make_pdf(['anchor', 'anchor'], links=[{}, {'page': 1, 'uri': b'private:document-name'}])
+  with pytest.raises(InvalidInput, match=f'{limit} at link 2 on page 2; narrow pages') as error:
+    provider.view(data, 'links', None, replace(TYPE.limits, **{limit: cap}))
+  assert 'private:document-name' not in str(error.value)
+
+
+@pytest.mark.parametrize('name,entries,expected', attachments_view_cases(TEXT_BYTES))
+def test_attachments_view_fixtures(name, entries, expected):
+  result = provider.view(make_pdf(attachments=entries), 'attachments', None, TYPE.limits)
+  assert result == {'attachment_count': len(entries), 'attachments': expected}
+  TYPE.get_view('attachments').content.model_validate(result, strict=True)
+
+
+def test_attachment_buffer_protocol_and_decoded_size(monkeypatch):
+  import zlib
+
+  from bro.pdf.pdf_test_helper import Name, Stream
+
+  original = provider.engine.attachment_file
+  calls = []
+
+  def read(handle, buffer, size, length):
+    calls.append((buffer is None, size))
+    return original(handle, buffer, size, length)
+
+  monkeypatch.setattr(provider.engine, 'attachment_file', read)
+  text = b'Invoice\r\n\t42\r\n'
+  stream = Stream(zlib.compress(text), {'Filter': Name('FlateDecode'), 'Params': {'Size': 999999}})
+  entry = provider.view(
+    make_pdf(attachments=[('invoice.xml', stream, None)]), 'attachments', None, TYPE.limits
+  )['attachments'][0]
+  assert calls == [(True, 0), (False, len(text))]
+  assert entry['text'] == text.decode()
+  assert entry['size_bytes'] == len(text)
+
+
+def test_binary_attachment_is_never_queried(monkeypatch):
+  def fail(*arguments):
+    pytest.fail('a binary attachment must not be inflated')
+
+  monkeypatch.setattr(provider.engine, 'attachment_file', fail)
+  result = provider.view(
+    make_pdf(attachments=[('invoice.xml', b'payload', 'application/octet-stream')]),
+    'attachments',
+    None,
+    TYPE.limits,
+  )
+  assert result['attachments'][0]['size_bytes'] is None
+
+
+def test_attachment_size_boundary_and_large_stream_only_queried(monkeypatch):
+  from bro.pdf.attachments import TEXT_BYTES
+
+  original = provider.engine.attachment_file
+  calls = []
+
+  def read(handle, buffer, size, length):
+    calls.append((buffer is None, size))
+    return original(handle, buffer, size, length)
+
+  monkeypatch.setattr(provider.engine, 'attachment_file', read)
+  data = make_pdf(
+    attachments=[
+      ('limit.txt', b'a' * TEXT_BYTES, None),
+      ('above.txt', b'a' * (TEXT_BYTES + 1), None),
+    ]
+  )
+  result = provider.view(data, 'attachments', None, TYPE.limits)['attachments']
+  assert result[0]['text'] == 'a' * TEXT_BYTES
+  assert result[1]['text'] is None
+  assert result[1]['size_bytes'] == TEXT_BYTES + 1
+  assert calls == [(True, 0), (False, TEXT_BYTES), (True, 0)]
+
+
+def test_attachment_names_and_listing_are_capped_before_content():
+  from bro.pdf.view_limits import ATTACHMENT_NAMES, NAME_CHARACTERS
+
+  data = make_pdf(
+    attachments=[('a' * (NAME_CHARACTERS + 3) + '.xml', b'', None)] * (ATTACHMENT_NAMES + 2)
+  )
+  result = provider.view(data, 'attachments', None, TYPE.limits)
+  assert result['attachment_count'] == ATTACHMENT_NAMES + 2
+  assert len(result['attachments']) == ATTACHMENT_NAMES
+  assert all(
+    entry['name'] == 'a' * NAME_CHARACTERS and entry['text'] == ''
+    for entry in result['attachments']
+  )
+
+
+@pytest.mark.parametrize('limit,cap', [('max_view_characters', 10), ('max_view_entries', 1)])
+def test_attachment_caps_are_cumulative_and_offer_no_pages(limit, cap):
+  data = make_pdf(attachments=[('a.xml', b'x', None), ('secret-name.xml', b'y', None)])
+  with pytest.raises(
+    InvalidInput, match=f'{limit} at attachment 2; reduce attachment content'
+  ) as error:
+    provider.view(data, 'attachments', None, replace(TYPE.limits, **{limit: cap}))
+  assert 'secret-name' not in str(error.value)
+  assert 'pages' not in str(error.value)
+
+
+def test_attachments_reject_pages_and_empty_tree_is_empty():
+  with pytest.raises(InvalidInput, match='takes no pages'):
+    provider.view(make_pdf(), 'attachments', [], TYPE.limits)
+  assert provider.view(make_pdf(), 'attachments', None, TYPE.limits) == {
+    'attachment_count': 0,
+    'attachments': [],
+  }
+
+
+def test_attachment_name_fallback_kids_order_and_annotation_exclusion():
+  from bro.pdf.pdf_test_helper import Name, PdfWriter, Stream, text_string
+
+  writer = PdfWriter()
+  embedded = writer.add(Stream(b'<invoice/>', {'Subtype': Name('application/xml')}))
+  fallback = writer.add({'F': b'fallback.xml', 'EF': {'F': embedded}})
+  unicode = writer.add(
+    {'UF': text_string('factur-x.xml'), 'F': b'ignored.bin', 'EF': {'F': embedded}}
+  )
+  annotation = writer.add(
+    {'Subtype': Name('FileAttachment'), 'Rect': [0, 0, 10, 10], 'FS': fallback}
+  )
+  page_tree = writer.add()
+  page = writer.add(
+    {
+      'Type': Name('Page'),
+      'Parent': page_tree,
+      'MediaBox': [0, 0, 612, 792],
+      'Annots': [annotation],
+    }
+  )
+  writer.set(page_tree, {'Type': Name('Pages'), 'Count': 1, 'Kids': [page]})
+  root = writer.add(
+    {
+      'Type': Name('Catalog'),
+      'Pages': page_tree,
+      'Names': {
+        'EmbeddedFiles': {
+          'Kids': [writer.add({'Names': [b'a', fallback, b'b', unicode], 'Limits': [b'a', b'b']})]
+        }
+      },
+    }
+  )
+  result = provider.view(writer.build(root), 'attachments', None, TYPE.limits)
+  assert result['attachment_count'] == 2
+  assert [entry['name'] for entry in result['attachments']] == ['fallback.xml', 'factur-x.xml']
+  assert all(entry['text'] == '<invoice/>' for entry in result['attachments'])
