@@ -1,22 +1,23 @@
 # Design review: files step 1, born-digital PDFs
 
 This file is a design review only and is never merged.
-It carries the `## Design` of [#1045](https://github.com/dzhioev/bro/issues/1045) so that reviewers can comment on it in line.
-The task page is the single source of truth, and this pull request closes without merging once the design is settled.
+It carries the design of [#1045](https://github.com/dzhioev/bro/issues/1045) so that reviewers can comment on it in line.
+When the review ends, this pull request closes without merging, and this file at its last commit is the design: the task's `## Design` links to it.
 
 Review it as a document: gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives; not as code, tests or CI.
 The specification comes first.
 The changelog and the evidence of the review probes (E10) follow it and are not part of the specification.
-The starting suggestion and evidence E1–E9 are on the task page.
+The task page keeps the starting suggestion and evidence E1–E9.
 
 ## Design
 
 Settles step 1.
-It supersedes the draft sections above (`## Suggested scope`, `## Suggested acceptance`, `## Limits (draft values)`, `## Failure behavior (draft)`, `## Design draft: relevant decisions`, `## Open questions`),
-which stay as the record of the starting suggestion.
-`## Goal` no longer carries its verification clause, since the roadmap drops the audit.
-Evidence is cited as E1–E10; facts measured while designing are marked "probe", E10 holds the probes of the design review, and the benchmark (§11) reproduces the ones about the shipped engine.
-`## Design changelog` records how this text differs from the version first approved.
+It supersedes the task page's draft sections (`## Suggested scope`, `## Out of scope`, `## Suggested acceptance`, `## Limits (draft values)`, `## Failure behavior (draft)`, `## Design draft` and `## Open questions`),
+which stay on the page as the record of the starting suggestion.
+Evidence is cited as E1–E10: E1–E9 are on the task page, and E10 at the end of this document holds the probes of the design review.
+Facts measured while designing are marked "probe", and the benchmark (§11) reproduces those about the shipped engine.
+The changelog at the end of this document records how this text differs from the version first approved;
+changes made while building are appended to the task's `## Design changelog`.
 
 ### 1. Model
 
@@ -148,9 +149,11 @@ One loop multiplexes the pipes:
 - it enforces the wall clock, counted from the worker's start and not from waiting for a slot;
 - on expiry, on an overflow or on cancellation it kills the whole process group before reaping its leader.
 
-A counting semaphore of `worker_memory_budget_bytes // address_space_bytes` slots, at least one, admits a call before it reads its snapshot (§3) and releases at the end of the call:
+A counting semaphore of `worker_memory_budget_bytes // address_space_bytes` slots admits a call before it reads its snapshot (§3) and releases at the end of the call:
 when its worker is reaped, at once on a failure before a worker, and, for an abandoned read, when its thread returns.
 The budget is the lower of 4 GiB and half the memory the process may use, the cgroup `memory.max` where readable and finite and else physical memory: four slots at the 1 GiB bound on the 8 GiB box.
+A budget that cannot hold one worker, on a host or in a container with under 2 GiB, leaves no slot, and every call fails before it reads with `file sandbox unavailable: the memory budget of <n> bytes cannot hold one worker of <m> bytes`:
+admitting a worker the budget does not hold could let a document drive the cgroup's out-of-memory killer onto the tool server.
 A bound caps resident memory too, so the budget caps the total; cgroups are read-only in the box and differ between hosts, so the kernel cannot enforce one of our own.
 The runner's state is built at the first call, never when the toolset is built, because `bro show` and the stdio path build servers without a loop; the toolset's `close` kills the workers still running.
 Each call logs its operation, type, SHA-256, engine, duration and outcome, and on a failure the first 4 KiB of the worker's stderr, escaped.
@@ -345,8 +348,9 @@ a document without a form gives an empty list.
 
 `nearby_text` is chosen from the non-hidden, non-generated characters by their boxes, in the widget's coordinate space (unrotated page space, rectangles normalised):
 1. a character is *left* of the widget when its vertical extent overlaps the widget's by at least half of the character's height and its right edge is at most 2 pt right of the widget's left edge;
-   the left characters are ordered by right edge, greatest first, then by text index,
-   and the left run takes them in that order while each one's right edge is under 12 pt left of the run's leftmost left edge (an overlap counts), stopping at the first that is not;
+   the left characters are ordered by right edge, greatest first, then by text index;
+   the first seeds the *left run*, and each following one joins it while its right edge is under 12 pt left of the run's leftmost left edge so far (an overlap counts), the run ending at the first that does not;
+   with no left character there is no left run;
 2. without a left run, the *above* run is chosen among the characters that overlap the widget horizontally and whose bottom edge lies 0 to 28 pt above its top:
    those whose bottom edge is within half a character height of the lowest such bottom edge;
 3. the text is the run's characters alone, in text order, with a single space wherever a generated space or line break lies between two consecutive ones in the page text and nothing otherwise,
@@ -399,7 +403,7 @@ Bounds carry their unit in their names (`max_bytes`, `wall_seconds`, `address_sp
 | `view` | strings 1,000,000 characters in all; 20,000 entries; attachment text 256 KiB each; 20 attachments |
 | cut strings | title 200, names 255, link anchor 200, `nearby_text` 80, hidden-text excerpt 120; 5 notes a page; 100 page numbers without text |
 | sandbox, per call | queue 30 s; read 10 s; wall 30 s; CPU 30 s soft, 32 s hard; address space 1 GiB; file size 64 MiB; 64 open files; no core; reply 8 MiB; stderr 64 KiB |
-| sandbox, per process | worker memory budget: the lower of 4 GiB and half the memory the process may use |
+| sandbox, per process | worker memory budget: the lower of 4 GiB and half the memory the process may use; under 1 GiB no call can run (§6) |
 
 A single-threaded worker cannot spend 30 CPU seconds inside 30 wall seconds, so the CPU limits are a backstop to the wall clock, and the confinement suite proves them by lowering the limit (§12).
 A page with millions of tiny text objects can exhaust the address-space bound inside PDFium and ends as the SIGABRT outcome below.
@@ -408,7 +412,7 @@ A page with millions of tiny text objects can exhaust the address-space bound in
 |---|---|
 | bad `pages`, `view` or `type`; `pages` for a view that takes none; an unreadable or non-regular path; a file over `max_bytes`; no, several or an unknown type, or none installed; a damaged file (error 3) or an unsupported security handler (error 5); a password-protected file given to `view`; no pages, too many pages, a page beyond the count; a view over a cap | `ValueError` naming the cause and the fix |
 | the seam denies a path | `FileAccessDenied`, unchanged |
-| a protection missing, or no backend on this platform; the queue wait, the read or the wall clock exceeded (or the worker's own alarm); a signal (SIGABRT: PDFium out of memory; SIGSEGV: engine crash; SIGXCPU: CPU bound; SIGSYS: sandbox violation; an unsolicited SIGKILL: CPU hard bound if the worker's CPU time reached it, else possibly out of memory); an `engine` error; no reply; a reply too large, malformed or invalid | `RuntimeError` naming the cause |
+| a protection missing, no backend on this platform, or a memory budget that cannot hold one worker; the queue wait, the read or the wall clock exceeded (or the worker's own alarm); a signal (SIGABRT: PDFium out of memory; SIGSEGV: engine crash; SIGXCPU: CPU bound; SIGSYS: sandbox violation; an unsolicited SIGKILL: CPU hard bound if the worker's CPU time reached it, else possibly out of memory); an `engine` error; no reply; a reply too large, malformed or invalid | `RuntimeError` naming the cause |
 
 Claude's session server returns only a failure's message, so every message states its cause and, for a caller fault, the fix; the exception class is not relied on to tell the two apart.
 A successful call does not promise completeness: damaged documents give partial text, and `text_layer`, `page_numbers_without_text` and the `unreadable` notes show what is missing.
@@ -452,7 +456,7 @@ A test that needs a confining kernel lives in the `sandbox` stage (§11); the re
 | layer | proves |
 |---|---|
 | registry, `pages`, snapshots, sanitizer | stub entry points count loads; duplicates, name mismatch, signatures; a broken type fails `identify` by name and leaves an explicit `type` alone; none installed; `type` overriding a signature; the `pages` table of §2; FIFOs, devices, directories, the size cap; a stuck read holds its slot and stalls no other call; the sanitizer over the code-point classes of §8 |
-| runner, over test providers | success; `InvalidInput`; SIGSEGV and SIGABRT; a hang killed with its group; stdout and stderr floods; an engine writing to fd 1; a 32 MiB request with concurrent floods; an early exit during the write; malformed frames, trailing bytes or a signal after a frame; cancel; the slots and the queue bound; empty environment and only fds 0–2; a worker whose parent dies; `close`; an engine failure after confinement still reports |
+| runner, over test providers | success; `InvalidInput`; SIGSEGV and SIGABRT; a hang killed with its group; stdout and stderr floods; an engine writing to fd 1; a 32 MiB request with concurrent floods; an early exit during the write; malformed frames, trailing bytes or a signal after a frame; cancel; the slots and the queue bound, and a budget that holds no worker failing the call by name; empty environment and only fds 0–2; a worker whose parent dies; `close`; an engine failure after confinement still reports |
 | confinement (`sandbox` stage, both architectures, each attempt in a fresh real worker) | reading `/etc/passwd`, `/proc/self/environ` and a decoy; creating, truncating, renaming, linking, `chmod` and `utime` on files; every socket family against loopback listeners; exec, fork, creating a thread, `setsid`; signalling and `ptrace`-ing a decoy standing in for the parent; mount, namespaces, `io_uring`, `bpf`, `memfd_create`, SysV and POSIX IPC; `int 0x80`, an x32 number and an unassigned number; raising a limit. A spinning worker under a lowered CPU limit ends as SIGXCPU, and anonymous executable `mmap` and stdin and stdout still work. The suite runs at every Landlock ABI cap from 1 to the kernel's, with a negative control against decoys only. A stacked filter that removes a required syscall, or a report that lacks a required protection, fails closed. The classification covers the pinned table |
 | PDF fixtures, through the real worker | one per rule of §8: digital pages, wrapped strings, a table, a line-end hyphen pair, each hidden-text reason (white on white against white on dark, stroke-only white, a layer, tag characters), a zero-width space inside an IBAN, a link with its target only in the annotation and a hidden link, a Factur-X-style attachment, a form with each field kind, an unknown kind and a hidden field, unmapped fonts, `/Rotate`, supplementary-plane characters, password-protected, owner-restricted, damaged and unsupported-handler files, empty pages, a non-embedded Helvetica page beside a decoy font directory (identical text), and a lying ToUnicode (the tool returns the mapping) |
 | hostile corpus | one case per family of E3 sized to finish in seconds, the families this design adds (a page of millions of tiny text objects, thousands of links with whole-page rectangles, thousands of widgets and attachments, nested form XObjects, huge `/Info` strings, an attachment inflating past the bound, a text-typed bomb beside a real attachment), and seeded mutants and truncations. Each family's expected outcome (`ok`, a `ValueError`, or a §10 failure class) is pinned from its first run, a different outcome fails, a following call succeeds in the same process, and no worker survives |
@@ -519,7 +523,7 @@ The work needs no step between merges to master: nothing accepts both of two sha
 
 How the design above differs from the version first approved on 2026-10-25, and why.
 Sources: *probe* (E10), *review* (an independent read of the text and the code), *owner* (decided in the review session).
-Later stages append their own entries here.
+Changes made while building are appended to the task's `## Design changelog`, not to this document.
 
 **Tools and results**
 - `file::read_reference(type?)` is new, and `details` and `content` are the file type's declared models under a fixed core envelope (owner).
@@ -553,17 +557,19 @@ Later stages append their own entries here.
 - Tool results become text in four places, not three, the fork replay among them; Claude's serving test uses the persona target over HTTP (review).
 - The benchmark covers pypdfium2 only and has numeric gates (owner, review).
 - Section 14 and E10 are new; per-type sandbox bounds, the line-end hyphen vocabulary and the `wall_seconds` slip are gone.
-- Proposed, awaiting the owner: the page outgrew GitHub's 65,536-character limit, so the draft sections and E1–E10 move verbatim to the comments `history` and `evidence`, and the description keeps the design, this changelog and the plan.
+- The design stays in this pull request, closed without merging, and the task's `## Design` links to it at its approved revision; the draft sections and E1–E9 stay on the task page unchanged (owner).
 
-**Review of the pull request, round 1**
+**Review of the pull request**
 - A call's queue wait and read have bounds of their own, and an abandoned read keeps its slot until its thread returns (§3, §6).
   Thread creation is denied, since `RLIMIT_AS` does not bound kernel tasks (§7).
 - The Landlock rule is monotonic and the report names both ABIs; every syscall number absent from the tables returns ENOSYS (§7).
 - `has text` is decided over the same characters as the text view, entries are counted over every list element, and a cap error names a page number or an ordinal and never a name from the document (§8).
 - An unknown form field type has a kind, and `nearby_text` has a deterministic algorithm (§8).
 - The seam pins a file with `O_PATH` on Linux and says what `glob` does not confine (§9).
-- The slot lease covers every exit before a worker, and the queue wait and the read have a failure class (§3, §6, §10); `nearby_text` assembles only its selected characters under an explicit order (§8); a missing read creates nothing (§9).
 - The mixed-version and fork-replay claims say what actually happens, and `read_reference` works with no type installed (§4, §14).
+- Round 2: the slot lease covers every exit before a worker, and the queue wait and the read have a failure class (§3, §6, §10); `nearby_text` assembles only its selected characters under an explicit order (§8);
+  a missing read creates nothing (§9).
+- Round 3: a budget that cannot hold one worker leaves no slot and fails the call by name, instead of admitting a worker the budget does not hold (§6, §10); the first ordered left character seeds the `nearby_text` run (§8).
 
 **Other tasks**
 - #1041 follows this design (edited); #1046 builds on the encoding helper (same four sites); #1048's reader calls `bro.files.operations`, and `file::check` and `hidden_only` do not exist.
