@@ -16,7 +16,9 @@ dependencies = [
 [project.scripts]
 # bro
 "bro.local.run-tests" = "bro.local._entrypoints:bro_local_run_tests"
+"bro.local.syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
 "run-tests" = "bro.local._entrypoints:bro_local_run_tests"
+"syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
 
 [tool.uv.sources]
 bro = { workspace = true }
