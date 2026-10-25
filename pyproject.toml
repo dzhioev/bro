@@ -136,6 +136,7 @@ claude = "bro.trails.claude_format:CLAUDE_FORMAT"
 [project.entry-points."bro.toolsets"]
 artifact = "bro.artifact_mcp:toolset"
 brog = "bro.brog.mcp:toolset"
+file = "bro.files.mcp:toolset"
 
 [tool.bro]
 default = "bro-dev"

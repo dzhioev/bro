@@ -182,6 +182,8 @@ PYTEST_FILES = [
   'bro/files/text_test.py',
   'bro/files/models_test.py',
   'bro/files/operations_test.py',
+  'bro/files/snapshots_test.py',
+  'bro/files/mcp_test.py',
   'bro/files/confinement_test.py',
   'bro/files/protocol_test.py',
   'bro/files/runner_test.py',
@@ -464,6 +466,7 @@ CONFORMANCE_PYTEST_FILES = [
 SANDBOX_PYTEST_FILES = [
   'bro/files/confinement_sandbox_test.py',
   'bro/files/runner_sandbox_test.py',
+  'bro/files/operations_sandbox_test.py',
 ]
 
 

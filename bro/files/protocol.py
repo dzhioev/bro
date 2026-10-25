@@ -46,6 +46,8 @@ class Job:
 
 @dataclass(frozen=True)
 class Reply:
+  """A runner's payload, validated and serialized against the declared model."""
+
   ok: dict[str, Any]
   engine: str
   sandbox: SandboxReport

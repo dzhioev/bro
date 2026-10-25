@@ -169,6 +169,10 @@ def test_core_registers_the_builtin_trail_formats(wheels):
   }
 
 
+def test_core_registers_file_toolset(wheels):
+  assert _entry_points(wheels['bro'])['bro.toolsets']['file'] == 'bro.files.mcp:toolset'
+
+
 def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   native_requirements = {
     _requirement_name(requirement)

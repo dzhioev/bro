@@ -424,3 +424,41 @@ def test_file_tools_use_authorized_streams(name, tmp_path):
       edit_file(str(requested), 'before', 'after')
   assert authorized.read_text() == ('before' if name == 'read_file' else 'after')
   assert requested.read_text() == 'private'
+
+
+_WIRED_FILE_TOOLS = {'info', 'view'}
+_PATH_FREE_FILE_TOOLS = {'read_reference'}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', sorted(_WIRED_FILE_TOOLS | _PATH_FREE_FILE_TOOLS))
+async def test_file_tools_consult_access_only_for_paths(name, tmp_path, monkeypatch):
+  from bro.files import mcp, operations, registry
+  from bro.files.operations_test_helper import Content, Details, StubRunner
+  from bro.files.types import View
+  from bro.files.types_test_helper import EntryPoint, make_type
+
+  file_type = make_type(
+    tmp_path, details=Details, views=(View('text', 'Read text', Content, True),)
+  )
+  monkeypatch.setattr(registry, '_entry_points', lambda: (EntryPoint('sample', file_type),))
+  monkeypatch.setattr(operations, 'registry', registry.TypeRegistry())
+  state = operations.Operations(StubRunner())
+  tools = {tool.name: tool for tool in mcp.toolset.tools(state)}
+  assert tools.keys() == _WIRED_FILE_TOOLS | _PATH_FREE_FILE_TOOLS
+  assert _WIRED_FILE_TOOLS.isdisjoint(_PATH_FREE_FILE_TOOLS)
+  path = tmp_path / 'file'
+  path.write_bytes(b'SAMPLE')
+  arguments = {
+    'info': {'path': str(path)},
+    'view': {'path': str(path), 'view': 'text'},
+    'read_reference': {},
+  }
+  recording = RecordingAccess()
+  with access.installed(recording):
+    await tools[name].call(arguments[name])
+  assert recording.calls == ([('open_read', path, False)] if name in _WIRED_FILE_TOOLS else [])
+  assert all(stream.closed for stream in recording.streams)
+  if name in _WIRED_FILE_TOOLS:
+    with access.installed(DenyingAccess()), pytest.raises(access.FileAccessDenied):
+      await tools[name].call(arguments[name])

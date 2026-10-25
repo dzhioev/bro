@@ -45,7 +45,7 @@ class InfoResult(BaseModel):
   details: dict[str, Any]
 
   @classmethod
-  def from_reply(
+  def from_validated(
     cls, file_type: FileType, *, size_bytes: int, sha256: str, details: dict[str, Any]
   ) -> Self:
     return cls(
@@ -55,7 +55,7 @@ class InfoResult(BaseModel):
       views=[
         ViewDescription(name=view.name, about=sanitize(view.about).text) for view in file_type.views
       ],
-      details=validate_payload(file_type.details, details, label=f'{file_type.name} details'),
+      details=details,
     )
 
 
@@ -68,13 +68,13 @@ class ViewResult(BaseModel):
   content: dict[str, Any]
 
   @classmethod
-  def from_reply(
+  def from_validated(
     cls, file_type: FileType, *, sha256: str, view: str, content: dict[str, Any]
   ) -> Self:
-    declaration = file_type.get_view(view)
+    file_type.get_view(view)
     return cls(
       type=file_type.name,
       sha256=sha256,
       view=view,
-      content=validate_payload(declaration.content, content, label=f'{file_type.name} view {view}'),
+      content=content,
     )

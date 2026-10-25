@@ -54,14 +54,14 @@ async def test_transferred_lease_is_held_until_the_read_thread_releases_it():
 async def test_cancelled_wait_does_not_consume_a_slot(monkeypatch):
   slots = WorkerSlots(budget_bytes=SandboxLimits().address_space_bytes)
   started = asyncio.Event()
-  original = asyncio.Semaphore.acquire
+  original = slots._wait
 
-  async def observed_acquire(semaphore):
+  async def observed_wait(waiter):
     started.set()
-    return await original(semaphore)
+    return await original(waiter)
 
   with await slots.acquire():
-    monkeypatch.setattr(asyncio.Semaphore, 'acquire', observed_acquire)
+    monkeypatch.setattr(slots, '_wait', observed_wait)
     waiting = asyncio.create_task(slots.acquire())
     await started.wait()
     waiting.cancel()
@@ -94,3 +94,33 @@ def test_budget_respects_process_cgroup_and_its_finite_ancestors(monkeypatch):
   }
   monkeypatch.setattr(slots.Path, 'read_text', lambda path: files[str(path)])
   assert memory_budget_bytes() == 500
+
+
+@pytest.mark.asyncio
+async def test_pool_budget_is_shared_across_event_loops_in_different_threads():
+  from contextlib import ExitStack
+
+  from bro.base.offload import off_loop
+
+  slots = WorkerSlots(budget_bytes=SandboxLimits().address_space_bytes, queue_seconds=0.01)
+  entered = asyncio.Event()
+  release = threading.Event()
+  loop = asyncio.get_running_loop()
+
+  async def hold():
+    with await slots.acquire():
+      loop.call_soon_threadsafe(entered.set)
+      await off_loop(release.wait)
+
+  thread = threading.Thread(target=lambda: asyncio.run(hold()))
+  with ExitStack() as stack:
+    thread.start()
+    stack.callback(thread.join)
+    stack.callback(release.set)
+    await entered.wait()
+    with pytest.raises(RuntimeError, match='every slot is busy'):
+      await slots.acquire()
+    release.set()
+    thread.join()
+    with await slots.acquire():
+      pass

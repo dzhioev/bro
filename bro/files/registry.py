@@ -1,6 +1,7 @@
 """Installed file types and process-local lazy loading."""
 
 import importlib.metadata
+import threading
 from typing import Optional, cast
 
 from bro.files.types import FileType, type_name
@@ -35,7 +36,10 @@ def get_type(name: str) -> FileType:
   if len(matches) > 1:
     raise ValueError(f'duplicate file type {name!r}')
   entry = matches[0]
-  loaded = entry.load()
+  try:
+    loaded = entry.load()
+  except Exception as error:
+    raise RuntimeError(f'failed to load file type {name!r}: {error}') from error
   if not isinstance(loaded, FileType):
     raise TypeError(f'file-type entry point {name!r} must load a FileType instance')
   file_type = cast(FileType, loaded)
@@ -47,11 +51,13 @@ def get_type(name: str) -> FileType:
 class TypeRegistry:
   def __init__(self) -> None:
     self._types: dict[str, FileType] = {}
+    self._lock = threading.RLock()
 
   def get(self, name: str) -> FileType:
-    if name not in self._types:
-      self._types[name] = get_type(name)
-    return self._types[name]
+    with self._lock:
+      if name not in self._types:
+        self._types[name] = get_type(name)
+      return self._types[name]
 
   def identify(self, head: bytes) -> FileType:
     names = installed_type_names()
