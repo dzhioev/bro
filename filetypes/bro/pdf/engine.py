@@ -96,6 +96,40 @@ class Engine:
       'FPDF_GetMetaText', _UNSIGNED_LONG, _POINTER, ctypes.c_char_p, _POINTER, _UNSIGNED_LONG
     )
     self.form_type = self.bind('FPDF_GetFormType', _INTEGER, _POINTER)
+    self.initialize_forms = self.bind(
+      'FPDFDOC_InitFormFillEnvironment', _POINTER, _POINTER, _POINTER
+    )
+    self.close_forms = self.bind('FPDFDOC_ExitFormFillEnvironment', None, _POINTER)
+    self.after_load_page = self.bind('FORM_OnAfterLoadPage', None, _POINTER, _POINTER)
+    self.before_close_page = self.bind('FORM_OnBeforeClosePage', None, _POINTER, _POINTER)
+    self.annotation_count = self.bind('FPDFPage_GetAnnotCount', _INTEGER, _POINTER)
+    self.annotation = self.bind('FPDFPage_GetAnnot', _POINTER, _POINTER, _INTEGER)
+    self.close_annotation = self.bind('FPDFPage_CloseAnnot', None, _POINTER)
+    self.annotation_subtype = self.bind('FPDFAnnot_GetSubtype', _INTEGER, _POINTER)
+    self.annotation_rectangle = self.bind('FPDFAnnot_GetRect', _INTEGER, _POINTER, _POINTER)
+    self.annotation_flags = self.bind('FPDFAnnot_GetFlags', _INTEGER, _POINTER)
+    self.field_type = self.bind('FPDFAnnot_GetFormFieldType', _INTEGER, _POINTER, _POINTER)
+    self.field_flags = self.bind('FPDFAnnot_GetFormFieldFlags', _INTEGER, _POINTER, _POINTER)
+    self.field_name = self.bind(
+      'FPDFAnnot_GetFormFieldName', _UNSIGNED_LONG, _POINTER, _POINTER, _POINTER, _UNSIGNED_LONG
+    )
+    self.field_value = self.bind(
+      'FPDFAnnot_GetFormFieldValue', _UNSIGNED_LONG, _POINTER, _POINTER, _POINTER, _UNSIGNED_LONG
+    )
+    self.field_checked = self.bind('FPDFAnnot_IsChecked', _INTEGER, _POINTER, _POINTER)
+    self.option_count = self.bind('FPDFAnnot_GetOptionCount', _INTEGER, _POINTER, _POINTER)
+    self.option_label = self.bind(
+      'FPDFAnnot_GetOptionLabel',
+      _UNSIGNED_LONG,
+      _POINTER,
+      _POINTER,
+      _INTEGER,
+      _POINTER,
+      _UNSIGNED_LONG,
+    )
+    self.option_selected = self.bind(
+      'FPDFAnnot_IsOptionSelected', _INTEGER, _POINTER, _POINTER, _INTEGER
+    )
     self.attachment_count = self.bind('FPDFDoc_GetAttachmentCount', _INTEGER, _POINTER)
     self.attachment = self.bind('FPDFDoc_GetAttachment', _POINTER, _POINTER, _INTEGER)
     self.attachment_name = self.bind(
@@ -110,8 +144,6 @@ class Engine:
     self.enumerate_link = self.bind('FPDFLink_Enumerate', _INTEGER, _POINTER, _POINTER, _POINTER)
     self.link_rectangle = self.bind('FPDFLink_GetAnnotRect', _INTEGER, _POINTER, _POINTER)
     self.link_annotation = self.bind('FPDFLink_GetAnnot', _POINTER, _POINTER, _POINTER)
-    self.annotation_flags = self.bind('FPDFAnnot_GetFlags', _INTEGER, _POINTER)
-    self.close_annotation = self.bind('FPDFPage_CloseAnnot', None, _POINTER)
     self.link_action = self.bind('FPDFLink_GetAction', _POINTER, _POINTER)
     self.action_type = self.bind('FPDFAction_GetType', _UNSIGNED_LONG, _POINTER)
     self.action_uri = self.bind(
@@ -188,6 +220,29 @@ class Document:
   page_count: int
 
   @contextmanager
+  def form_environment(self):
+    info = raw.FPDF_FORMFILLINFO(version=2)
+    environment = self.engine.initialize_forms(self.handle, ctypes.byref(info))
+    if not environment:
+      raise RuntimeError('PDFium failed to initialize a form environment')
+    try:
+      yield environment
+    finally:
+      self.engine.close_forms(environment)
+
+  @contextmanager
+  def form_page(self, index: int, environment: int):
+    with self.page(index) as page:
+      if page is None:
+        yield None
+        return
+      self.engine.after_load_page(page.handle, environment)
+      try:
+        yield page
+      finally:
+        self.engine.before_close_page(page.handle, environment)
+
+  @contextmanager
   def page(self, index: int):
     page = self.engine.load_page(self.handle, index)
     if not page:
@@ -210,6 +265,16 @@ class TextPage:
   engine: Engine
   handle: int
   text_handle: int
+
+  @contextmanager
+  def annotation(self, index: int):
+    handle = self.engine.annotation(self.handle, index)
+    if not handle:
+      raise RuntimeError('PDFium failed to load an annotation')
+    try:
+      yield handle
+    finally:
+      self.engine.close_annotation(handle)
 
   def count(self) -> int:
     count = self.engine.character_count(self.text_handle)

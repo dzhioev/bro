@@ -14,7 +14,7 @@ Scans without a text layer do not acquire text through OCR.
 | `page_count` | The page count PDFium reports. A root `/Count` from 1 to 1,048,574 is taken as written; otherwise PDFium counts the page tree. A smaller count hides pages; a larger count can include unreadable pages. |
 | `title` | The Info-dictionary Title, sanitized and shortened; null when absent or empty. |
 | `password_required` | True when a user password is needed or PDFium cannot understand the Standard encryption dictionary. Empty user passwords and owner-only restrictions do not prevent inspection. |
-| `form` | `none`, `acroform` or `xfa`. Dynamic XFA data is not read. |
+| `form` | `none`, `acroform` or `xfa`. Dynamic XFA data is not read; its AcroForm widgets are available through the fields view. |
 | `attachment_count` | The total embedded-file name-tree count. File-attachment annotations are not included. |
 | `attachments` | A bounded list of sanitized, shortened attachment names in name-tree order. No attachment content is read by info. |
 | `text_layer` | `full` when every page has text, `partial` when some do, or `none` when none do. |
@@ -123,6 +123,44 @@ A declared binary type is never overridden by the filename.
 Listing names and subtypes does not inflate content.
 Querying an eligible stream's size inflates the entire stream inside the worker, even if it exceeds the text limit.
 A stream exhausting the worker's address space fails the whole view, including other attachments; no partial result is returned.
+
+## Fields view
+
+`file::view(path, view="fields", pages=...)` returns `content` with a `fields` list in page then annotation order.
+There is one entry per widget, so a radio group or a field with several widgets repeats its name.
+A document without a form returns an empty list; unreadable pages contribute no widgets.
+Values are read through PDFium's form environment without running scripts.
+
+| Field | Meaning |
+|---|---|
+| `page_number` | The one-based page number. |
+| `name` | The fully qualified field name, sanitized and cut at 255 characters. |
+| `kind` | `text`, `checkbox`, `radio`, `combobox`, `listbox`, `pushbutton`, `signature`, or `unknown` when PDFium reports no known type. |
+| `value` | The value PDFium resolves, including inherited values; the export value for checkboxes and radio buttons. Empty when unset; null for pushbuttons and signatures. |
+| `checked` | Whether this checkbox or radio widget is on; null for other kinds. |
+| `options` | A list of `{label, selected}` for a combobox or listbox; null otherwise. Each label is sanitized and each selected flag describes that option. |
+| `hidden` | True for Hidden or NoView annotation flags, a rectangle with no area, or a rectangle wholly outside the page box. |
+| `read_only` | Whether the field's ReadOnly flag is set. |
+| `nearby_text` | A hint from printed text next to the widget, null when none is found. It can be wrong. |
+
+An unknown widget has null `checked` and `options`, and its `value` is whatever PDFium resolves.
+The fields view shares the view-wide string and entry caps; each field and each option counts as an entry.
+A cap error names the field ordinal and page, never a name from the document, and says to narrow `pages`.
+
+### Nearby printed text
+
+Characters with a hidden-text reason and generated characters are excluded from label selection.
+Rectangles are normalized and page rotation is not applied: left and above refer to unrotated page space.
+
+1. A left character overlaps the widget vertically by at least half the character's height, with its right edge at most 2 pt right of the widget's left edge.
+   Candidates are ordered by right edge, greatest first, then by text index.
+   The first seeds the left run; following candidates join while their right edge is less than 12 pt left of the run's leftmost left edge so far, including overlap.
+   The first candidate outside that gap bound ends the run.
+2. Without a left run, above candidates overlap the widget horizontally and have a bottom edge from 0 to 28 pt above its top.
+   The run keeps candidates whose bottom edge is within half their own height of the lowest candidate bottom edge.
+3. Only the selected characters contribute text, in text order.
+   A generated space or line break between consecutive selected characters contributes one space; hidden and unselected characters contribute nothing.
+   Whitespace is collapsed and the hint is cut at 80 characters.
 
 ## Failures
 

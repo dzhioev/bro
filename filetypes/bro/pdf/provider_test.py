@@ -19,6 +19,7 @@ from bro.pdf.page_text import (
 from bro.pdf.pdf_test_helper import (
   attachments_view_cases,
   decoy_font,
+  fields_view_cases,
   links_view_cases,
   make_pdf,
   text_operators,
@@ -560,3 +561,215 @@ def test_attachment_name_fallback_kids_order_and_annotation_exclusion():
   assert result['attachment_count'] == 2
   assert [entry['name'] for entry in result['attachments']] == ['fallback.xml', 'factur-x.xml']
   assert all(entry['text'] == '<invoice/>' for entry in result['attachments'])
+
+
+@pytest.mark.parametrize('name,arguments,expected', fields_view_cases())
+def test_fields_view_fixtures(name, arguments, expected):
+  result = provider.view(make_pdf(**arguments), 'fields', None, TYPE.limits)
+  assert result == {'fields': expected}
+  TYPE.get_view('fields').content.model_validate(result, strict=True)
+
+
+def test_fields_selection_and_unreadable_pages():
+  fields = [
+    {'name': 'second', 'page': 1},
+    {'name': 'first'},
+    {'name': 'also-first'},
+  ]
+  data = make_pdf([None, None], count=3, fields=fields, links=[{'page': 0}])
+  result = provider.view(data, 'fields', [3, 2, 1, 1], TYPE.limits)['fields']
+  assert [(field['page_number'], field['name']) for field in result] == [
+    (1, 'first'),
+    (1, 'also-first'),
+    (2, 'second'),
+  ]
+  assert provider.view(data, 'fields', [2], TYPE.limits)['fields'] == result[2:]
+  assert provider.view(data, 'fields', [3], TYPE.limits) == {'fields': []}
+  with pytest.raises(InvalidInput, match='document count'):
+    provider.view(data, 'fields', [4], TYPE.limits)
+  with pytest.raises(InvalidInput, match='requires a password'):
+    provider.view(make_pdf(user_password='secret'), 'fields', None, TYPE.limits)
+
+
+def test_field_names_values_and_options_are_sanitized_and_names_cut():
+  data = make_pdf(
+    [None],
+    fields=[
+      {'name': '\u200b' + 'N' * (NAME_CHARACTERS + 1), 'value': 'INV\u202e-42\x01'},
+      {'name': 'choice', 'type': 'Ch', 'options': [('one', 'La\u200bbel\x01')], 'value': 'one'},
+    ],
+  )
+  fields = provider.view(data, 'fields', None, TYPE.limits)['fields']
+  assert fields[0]['name'] == 'N' * NAME_CHARACTERS
+  assert fields[0]['value'] == 'INV-42\ufffd'
+  assert fields[1]['options'] == [{'label': 'Label\ufffd', 'selected': True}]
+
+
+def test_fields_do_not_appear_in_page_text():
+  data = make_pdf(['Printed label'], fields=[{'name': 'secret-value', 'value': 'VALUE-42'}])
+  assert provider.view(data, 'text', None, TYPE.limits)['pages'][0]['text'] == 'Printed label'
+  assert provider.view(data, 'fields', None, TYPE.limits)['fields'][0]['value'] == 'VALUE-42'
+
+
+def test_fields_budget_includes_options_and_every_string():
+  data = make_pdf(
+    [None, None],
+    fields=[
+      {'name': 'first'},
+      {
+        'name': 'untrusted-name',
+        'page': 1,
+        'type': 'Ch',
+        'options': [('x', 'Option')],
+        'value': 'x',
+      },
+    ],
+  )
+  result = provider.view(data, 'fields', None, TYPE.limits)
+  characters = sum(map(len, ('first', 'text', 'untrusted-name', 'listbox', 'x', 'Option')))
+  entries = 3
+  assert (
+    provider.view(
+      data,
+      'fields',
+      None,
+      replace(TYPE.limits, max_view_characters=characters, max_view_entries=entries),
+    )
+    == result
+  )
+  for limits in (
+    replace(TYPE.limits, max_view_characters=characters - 1),
+    replace(TYPE.limits, max_view_entries=entries - 1),
+  ):
+    with pytest.raises(InvalidInput, match='field 2 on page 2; narrow pages') as error:
+      provider.view(data, 'fields', None, limits)
+    assert 'untrusted-name' not in str(error.value)
+    assert len(provider.view(data, 'fields', [1], limits)['fields']) == 1
+
+
+def test_tax_form_has_199_widgets_with_values_and_labels():
+  from bro.pdf.pdf_test_helper import tax_form_fixture
+
+  arguments, expected = tax_form_fixture()
+  data = make_pdf(**arguments)
+  assert inspect(data)['form'] == 'xfa'
+  fields = provider.view(data, 'fields', None, TYPE.limits)['fields']
+  assert len(fields) == len(expected)
+  assert [
+    {key: field[key] for key in sample} for field, sample in zip(fields, expected, strict=True)
+  ] == expected
+
+
+def test_nearby_label_on_rotated_page_uses_unrotated_coordinates():
+  data = make_pdf(
+    [text_operators('Invoice:', x=72, y=706)],
+    rotation=90,
+    fields=[{'rectangle': [125, 700, 300, 720]}],
+  )
+  assert provider.view(data, 'fields', None, TYPE.limits)['fields'][0]['nearby_text'] == 'Invoice:'
+
+
+def test_nearby_text_left_seed_order_and_first_gap():
+  from bro.pdf.form_fields import nearby_text
+
+  characters = [
+    Character(ord('F'), box=(0, 5, 2, 8)),
+    Character(ord('a'), box=(60, 71, 2, 8)),
+    Character(ord('b'), box=(82, 90, 2, 8)),
+    Character(ord('c'), box=(88, 100, 2, 8)),
+    Character(ord('d'), box=(99, 102, 2, 8)),
+    Character(ord('e'), box=(102, 103, 2, 8)),
+  ]
+  assert nearby_text(characters, (100, 150, 0, 10)) == 'abcd'
+  assert (
+    nearby_text([Character(ord('a'), box=(60, 70, 2, 8)), characters[2]], (100, 150, 0, 10)) == 'b'
+  )
+  tied = [
+    Character(ord('A'), box=(90, 100, 2, 8)),
+    Character(ord('B'), box=(60, 100, 2, 8)),
+    Character(ord('C'), box=(65, 70, 2, 8)),
+  ]
+  assert nearby_text(tied, (100, 150, 0, 10)) == 'ABC'
+
+
+def test_nearby_text_vertical_overlap_and_above_band():
+  from bro.pdf.form_fields import nearby_text
+
+  characters = [
+    Character(ord('L'), box=(90, 100, 5, 15)),
+    Character(ord('N'), box=(90, 100, 5.1, 15.1)),
+    Character(ord('A'), box=(105, 115, 10, 20)),
+    Character(ord('B'), box=(115, 125, 15, 25)),
+    Character(ord('C'), box=(125, 135, 15.1, 25.1)),
+    Character(ord('D'), box=(135, 145, 39, 49)),
+    Character(ord('E'), box=(99, 100, 10, 20)),
+  ]
+  assert nearby_text(characters, (100, 150, 0, 10)) == 'L'
+  assert nearby_text(characters[1:], (100, 150, 0, 10)) == 'AB'
+  assert nearby_text([characters[5]], (100, 150, 0, 10)) is None
+
+
+def test_nearby_text_assembles_selected_characters_only_and_bounds_hint():
+  from bro.pdf.form_fields import NEARBY_TEXT_CHARACTERS, nearby_text
+
+  left = (90, 100, 2, 8)
+  other = (300, 310, 2, 8)
+  characters = [
+    Character(ord('A'), box=left),
+    Character(ord('X'), reason='white', box=left),
+    Character(ord('Z'), box=other),
+    Character(ord('B'), box=left),
+    Character(13, generated=True),
+    Character(10, generated=True),
+    Character(ord('C'), box=left),
+    Character(ord('D'), box=other),
+    Character(32, generated=True),
+    Character(ord('E'), box=left),
+  ]
+  assert nearby_text(characters, (100, 150, 0, 10)) == 'AB C E'
+  assert nearby_text([], (100, 150, 0, 10)) is None
+  assert (
+    nearby_text([Character(ord('X'), box=left)] * (NEARBY_TEXT_CHARACTERS + 1), (100, 150, 0, 10))
+    == 'X' * NEARBY_TEXT_CHARACTERS
+  )
+
+
+def test_nearby_text_normalizes_character_and_widget_rectangles():
+  from bro.pdf.form_fields import nearby_text
+
+  assert nearby_text([Character(ord('L'), box=(100, 90, 8, 2))], (150, 100, 10, 0)) == 'L'
+
+
+def test_form_handles_close_in_order_after_a_view_cap(monkeypatch):
+  engine = provider.engine
+  events = []
+  for name in (
+    'initialize_forms',
+    'after_load_page',
+    'close_annotation',
+    'before_close_page',
+    'close_text',
+    'close_page',
+    'close_forms',
+    'close_document',
+  ):
+    original = getattr(engine, name)
+
+    def record(*arguments, name=name, original=original):
+      events.append(name)
+      return original(*arguments)
+
+    monkeypatch.setattr(engine, name, record)
+  data = make_pdf([None], fields=[{'name': 'field'}])
+  with pytest.raises(InvalidInput, match='max_view_characters'):
+    provider.view(data, 'fields', None, replace(TYPE.limits, max_view_characters=1))
+  assert events == [
+    'initialize_forms',
+    'after_load_page',
+    'close_annotation',
+    'before_close_page',
+    'close_text',
+    'close_page',
+    'close_forms',
+    'close_document',
+  ]
