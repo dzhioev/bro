@@ -26,18 +26,22 @@ A page has text when its assembled text contains any character that is neither w
 Hidden text still counts as text.
 A successful inspection does not promise a complete reading of a damaged document.
 
+## Views
+
+The strings in a view total at most `max_view_characters`, including labels, names, reasons and excerpts.
+Every list element counts against `max_view_entries`, including each page, note, link and attachment.
+A view crossing either declared cap is rejected rather than truncated;
+the error names the page or entry ordinal that crossed it, never quoting a document name.
+For a paged view, narrow `pages`; for attachments, reduce the embedded content.
+A selection beyond the document count is rejected.
+A password-required document cannot be viewed.
+
 ## Text view
 
 `file::view(path, view="text", pages=...)` returns `content` with a `pages` list in ascending selected-page order.
 Each page has its one-based `page_number`, `notes` before `text`, and an empty `text` when it has none.
 Hidden text remains in the output.
 The view does not read image pixels, annotation text or targets, attachments, or form values.
-
-The strings in a view total at most `max_view_characters`, including note labels, reasons and excerpts.
-Every list element counts against `max_view_entries`, including each page and each note.
-A selection crossing either declared cap is rejected rather than truncated; the error names the page that crossed it and says to narrow `pages`, never quoting a document name.
-A selection beyond the document count is also rejected.
-A password-required document cannot be viewed.
 
 ### Notes
 
@@ -79,6 +83,46 @@ PDFium can expand Latin ligatures.
 
 Every returned string is stripped of U+00AD, U+061C, U+180E, U+200B, U+200E–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+206F, U+FEFF, U+FFF9–U+FFFB and U+E0000–U+E007F.
 Non-embedded fonts use PDFium's built-in substitutes, not host fonts.
+
+## Links view
+
+`file::view(path, view="links", pages=...)` returns a `links` list in page then annotation order.
+It lists every Link annotation, not URLs guessed from page text.
+Unreadable pages contribute no links.
+
+| Field | Meaning |
+|---|---|
+| `page_number` | The one-based page number. |
+| `hidden` | The annotation has Hidden or NoView flags, its normalized rectangle has no area, or it lies wholly outside the page box. The Invisible flag alone does not hide a link. |
+| `text` | Non-hidden page characters whose box centres lie in the normalized annotation rectangle, in text order, with whitespace collapsed and shortened to 200 characters. |
+| `uri` | The URI action's stored bytes, with each byte outside printable ASCII shown as `%XX`; null for another action or no action. |
+
+A relative URI has the catalog's `/URI /Base` prepended as PDFium concatenates it, without path resolution (`../x` remains unresolved).
+Schemes are not filtered: a `javascript:` or `file:` target is data, not a request to follow it.
+The annotation rectangle and character boxes use unrotated page space.
+Hidden annotations still list their target and any non-hidden anchor text.
+
+## Attachments view
+
+`file::view(path, view="attachments")` takes no `pages` argument.
+It returns `attachment_count`, the total embedded-file name-tree count, and `attachments`, the first 20 entries in name-tree order.
+File-attachment annotations are not listed.
+
+| Field | Meaning |
+|---|---|
+| `name` | The `/UF` name, falling back to `/F`, sanitized and cut at 255 characters. |
+| `media_type` | The declared subtype, or null when absent. |
+| `size_bytes` | The decoded stream size after a size query; null when content is not read or no embedded file exists. A declared `/Size` is not trusted. |
+| `text` | Strict UTF-8 text of at most 256 KiB without control characters except TAB, LF and CR, with invisible characters stripped as described above; otherwise null. Whitespace, including CRLF, is preserved. |
+| `not_shown` | Null when text is returned; otherwise `not a declared text type`, `larger than 256 KiB`, `not valid text`, or `no embedded file`. |
+
+Only declared text types are read: `text/*`, `application/xml`, `application/json`, `*+xml` or `*+json`.
+With no declared type, a `.xml`, `.txt`, `.json` or `.csv` name qualifies instead.
+A declared binary type is never overridden by the filename.
+
+Listing names and subtypes does not inflate content.
+Querying an eligible stream's size inflates the entire stream inside the worker, even if it exceeds the text limit.
+A stream exhausting the worker's address space fails the whole view, including other attachments; no partial result is returned.
 
 ## Failures
 

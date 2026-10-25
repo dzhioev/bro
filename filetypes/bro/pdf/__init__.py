@@ -70,6 +70,38 @@ class TextContent(BaseModel):
   pages: list[PageText]
 
 
+class Link(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  page_number: int = Field(gt=0)
+  hidden: bool
+  text: str
+  uri: str | None
+
+
+class LinksContent(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  links: list[Link]
+
+
+class Attachment(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  name: str
+  media_type: str | None
+  size_bytes: int | None = Field(ge=0)
+  text: str | None
+  not_shown: str | None
+
+
+class AttachmentsContent(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  attachment_count: int = Field(ge=0)
+  attachments: list[Attachment]
+
+
 TYPE = FileType(
   name='pdf',
   signatures=(Signature(b'%PDF-', within=1024),),
@@ -79,6 +111,18 @@ TYPE = FileType(
       about='Exact page text in text-layer order, with hidden and unmapped text notes.',
       content=TextContent,
       paged=True,
+    ),
+    View(
+      name='links',
+      about='Link annotations with their real URI targets and non-hidden anchor text.',
+      content=LinksContent,
+      paged=True,
+    ),
+    View(
+      name='attachments',
+      about='Embedded-file names and exact small UTF-8 text attachments.',
+      content=AttachmentsContent,
+      paged=False,
     ),
   ),
   details=Details,

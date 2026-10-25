@@ -204,8 +204,9 @@ def make_pdf(
   *,
   title: str | None = None,
   count: int | None = None,
-  attachments: Sequence[tuple[str, bytes, str | None]] = (),
+  attachments: Sequence[tuple[str, bytes | Stream | None, str | None]] = (),
   links: Sequence[dict[str, Any]] = (),
+  uri_base: bytes | None = None,
   fields: Sequence[dict[str, Any]] = (),
   xfa: bool = False,
   character_map: dict[int, str] | None = None,
@@ -341,10 +342,14 @@ def make_pdf(
         writer.add(
           {
             'Type': Name('Annot'),
-            'Subtype': Name('Link'),
+            'Subtype': Name(link.get('subtype', 'Link')),
             'Rect': link.get('rectangle', [72, 715, 200, 735]),
             'F': link.get('flags', 0),
-            'A': {'S': Name('URI'), 'URI': link.get('uri', b'https://example.test/')},
+            **(
+              {'A': link['action']}
+              if 'action' in link
+              else {'A': {'S': Name('URI'), 'URI': link.get('uri', b'https://example.test/')}}
+            ),
           }
         )
       )
@@ -378,6 +383,8 @@ def make_pdf(
     },
   )
   catalog_dictionary: dict[str, Any] = {'Type': Name('Catalog'), 'Pages': tree}
+  if uri_base is not None:
+    catalog_dictionary['URI'] = {'Base': uri_base}
   if layer is not None:
     catalog_dictionary['OCProperties'] = {'OCGs': [layer], 'D': {'OFF': [layer]}}
   if attachments:
@@ -386,15 +393,19 @@ def make_pdf(
       stream_entries = {'Type': Name('EmbeddedFile')}
       if media_type is not None:
         stream_entries['Subtype'] = Name(media_type)
-      embedded = writer.add(Stream(data, stream_entries))
-      filespec = writer.add(
-        {
-          'Type': Name('Filespec'),
-          'F': text_string(name),
-          'UF': text_string(name),
-          'EF': {'F': embedded},
-        }
-      )
+      filespec_entries = {
+        'Type': Name('Filespec'),
+        'F': text_string(name),
+        'UF': text_string(name),
+      }
+      if data is not None:
+        stream = (
+          Stream(data.data, {**stream_entries, **data.entries})
+          if isinstance(data, Stream)
+          else Stream(data, stream_entries)
+        )
+        filespec_entries['EF'] = {'F': writer.add(stream)}
+      filespec = writer.add(filespec_entries)
       names.extend([text_string(name), filespec])
     catalog_dictionary['Names'] = {'EmbeddedFiles': {'Names': names}}
   if widget_references or xfa:
@@ -696,3 +707,173 @@ def text_view_cases(
     )
   )
   return cases
+
+
+def links_view_cases() -> list[tuple[str, dict[str, Any], list[dict[str, Any]]]]:
+  def link(
+    *,
+    text='Download report',
+    uri: str | None = 'https://annotation.test/opaque',
+    hidden=False,
+    page=1,
+  ):
+    return {'page_number': page, 'hidden': hidden, 'text': text, 'uri': uri}
+
+  return [
+    (
+      'annotation-only',
+      {'pages': ['Download report'], 'links': [{'uri': b'https://annotation.test/opaque'}]},
+      [link()],
+    ),
+    (
+      'hidden-anchors',
+      {
+        'pages': [
+          text_operators('Download report')
+          + text_operators('secret', mode=3, y=700)
+          + b'1 g\n'
+          + text_operators('white', y=680)
+        ],
+        'links': [{'rectangle': [0, 0, 612, 792]}],
+      },
+      [link(uri='https://example.test/')],
+    ),
+    (
+      'generated-space',
+      {'pages': [text_operators('Download') + text_operators('report', x=130)], 'links': [{}]},
+      [link(uri='https://example.test/')],
+    ),
+    (
+      'reversed-rectangle',
+      {'pages': ['Download report'], 'links': [{'rectangle': [200, 735, 72, 715]}]},
+      [link(uri='https://example.test/')],
+    ),
+    (
+      'centre-not-intersection',
+      {'pages': ['AB'], 'links': [{'rectangle': [78, 715, 80, 735]}]},
+      [link(text='', uri='https://example.test/')],
+    ),
+    ('no-action', {'pages': ['Download report'], 'links': [{'action': None}]}, [link(uri=None)]),
+    (
+      'other-action',
+      {'pages': ['Download report'], 'links': [{'action': {'S': Name('Launch'), 'F': b'program'}}]},
+      [link(uri=None)],
+    ),
+    ('other-subtype', {'links': [{'subtype': 'Text'}]}, []),
+    (
+      'uri-bytes',
+      {'pages': ['Download report'], 'links': [{'uri': b'custom: !~\x00\x1f\x7f\xc3\xa9\xff'}]},
+      [link(uri='custom: !~%00%1F%7F%C3%A9%FF')],
+    ),
+    (
+      'relative-base',
+      {
+        'pages': ['Download report'],
+        'links': [{'uri': b'../x'}],
+        'uri_base': b'https://base.test/dir/',
+      },
+      [link(uri='https://base.test/dir/../x')],
+    ),
+    (
+      'base-no-slash',
+      {
+        'pages': ['Download report'],
+        'links': [{'uri': b'child'}],
+        'uri_base': b'https://base.test/dir',
+      },
+      [link(uri='https://base.test/dirchild')],
+    ),
+    (
+      'unfiltered-scheme',
+      {
+        'pages': ['Download report'],
+        'links': [{'uri': b'javascript:hello()'}, {'uri': b'file:///data'}],
+      },
+      [link(uri='javascript:hello()'), link(uri='file:///data')],
+    ),
+    (
+      'rotation',
+      {'pages': ['Download report'], 'links': [{}], 'rotation': 90},
+      [link(uri='https://example.test/')],
+    ),
+    (
+      'page-order',
+      {
+        'pages': ['First', 'Second'],
+        'links': [{'page': 1}, {'uri': b'first:'}, {'uri': b'second:'}],
+      },
+      [
+        link(text='First', uri='first:'),
+        link(text='First', uri='second:'),
+        link(text='Second', uri='https://example.test/', page=2),
+      ],
+    ),
+    *[
+      (
+        f'flags-{flags}',
+        {'pages': ['Download report'], 'links': [{'flags': flags}]},
+        [link(hidden=hidden, uri='https://example.test/')],
+      )
+      for flags, hidden in [(1, False), (2, True), (32, True), (4, False)]
+    ],
+    *[
+      (
+        f'rectangle-{index}',
+        {'pages': ['Download report'], 'links': [{'rectangle': rectangle}]},
+        [link(text='', hidden=True, uri='https://example.test/')],
+      )
+      for index, rectangle in enumerate(
+        [[0, 0, 0, 20], [0, 0, 20, 0], [700, 700, 800, 750], [0, 800, 200, 820]]
+      )
+    ],
+  ]
+
+
+def attachments_view_cases(
+  text_bytes: int,
+) -> list[tuple[str, list[tuple[str, bytes | Stream | None, str | None]], list[dict[str, Any]]]]:
+  cases = [
+    (
+      'factur-x.xml',
+      b'<?xml version="1.0"?>\r\n<Invoice>\n\t<Amount>42.00</Amount>\n</Invoice>\r\n',
+      'application/xml',
+      None,
+    ),
+    ('binary.xml', b'not read', 'application/octet-stream', 'not a declared text type'),
+    ('large.txt', b'a' * (text_bytes + 1), 'text/plain', f'larger than {text_bytes // 1024} KiB'),
+    ('missing.xml', None, None, 'no embedded file'),
+    ('empty.txt', b'', None, None),
+    ('bad-utf8.xml', b'\xff', None, 'not valid text'),
+    ('controls.txt', b'A\x00B', None, 'not valid text'),
+    ('c1.txt', 'A\u0085B'.encode(), None, 'not valid text'),
+    ('invoice.bin', b'{"amount":42}', 'application/vnd.invoice+json', None),
+    ('invoice.bin', b'<invoice/>', 'application/vnd.invoice+xml', None),
+    ('invoice.bin', b'{"amount":42}', 'application/json', None),
+    ('upper.TXT', b'plain', None, None),
+    ('no-type.bin', b'plain', None, 'not a declared text type'),
+    ('unknown.xml', b'plain', 'unknown/type', 'not a declared text type'),
+    ('unicode.txt', 'A\u200b\u200d\U0001f600\ufeff'.encode(), 'text/plain', None),
+  ]
+  result = []
+  for name, data, media_type, reason in cases:
+    text = data.decode() if data is not None and reason is None else None
+    if name == 'unicode.txt':
+      text = 'A\u200d\U0001f600'
+    result.append(
+      (
+        name,
+        [(name, data, media_type)],
+        [
+          {
+            'name': name,
+            'media_type': media_type,
+            'size_bytes': len(data)
+            if data is not None and reason not in ('not a declared text type', 'no embedded file')
+            else None,
+            'text': text,
+            'not_shown': reason,
+          }
+        ],
+      )
+    )
+  return result

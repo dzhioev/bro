@@ -5,6 +5,9 @@ from typing import Any
 from bro.files.protocol import InvalidInput
 from bro.files.types import Limits
 
+NAME_CHARACTERS = 255
+ATTACHMENT_NAMES = 20
+
 
 def measure(value: Any) -> tuple[int, int]:
   if isinstance(value, str):
@@ -21,8 +24,9 @@ def measure(value: Any) -> tuple[int, int]:
 
 
 class ViewBudget:
-  def __init__(self, limits: Limits):
+  def __init__(self, limits: Limits, *, paged: bool = True):
     self.limits = limits
+    self.advice = 'narrow pages' if paged else 'reduce attachment content'
     self.characters = 0
     self.entries = 0
 
@@ -31,6 +35,6 @@ class ViewBudget:
     self.characters += characters
     self.entries += entries + 1
     if self.characters > self.limits.max_view_characters:
-      raise InvalidInput(f'PDF view exceeds max_view_characters at {location}; narrow pages')
+      raise InvalidInput(f'PDF view exceeds max_view_characters at {location}; {self.advice}')
     if self.entries > self.limits.max_view_entries:
-      raise InvalidInput(f'PDF view exceeds max_view_entries at {location}; narrow pages')
+      raise InvalidInput(f'PDF view exceeds max_view_entries at {location}; {self.advice}')
