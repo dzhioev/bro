@@ -1,10 +1,10 @@
 """Lifetime-owned command producers and their one session-local output store."""
 
-import codecs
 import contextlib
 import errno
 import fcntl
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -24,7 +24,7 @@ from typing import BinaryIO, Optional, Self
 
 from bro.base import log, spawn
 from bro.base.credential_environment import overlay
-from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, format_size
+from bro.base.text_window import format_size
 from bro.monitor import SESSION_DIR_ENV, session_dir
 
 WATCH_DIRNAME = 'watch'
@@ -41,7 +41,6 @@ SESSION_WATCH_COMMAND = 'mission watch'
 BEAT_MISSES_ALLOWED = 3
 RESTART_INTERVAL_SECONDS = 1.0
 _QUIET_MARK = b'\x1f'
-_PENDING_MARKER = '[...pending watch lines...]'
 _COMMAND_SUFFIX = '.command'
 _LOG_SUFFIX = '.log'
 _TIMES_SUFFIX = '.times'
@@ -54,7 +53,6 @@ _WAKE_ON_QUIET_SUFFIX = '.wake-on-quiet'
 _BEAT_SUFFIX = '.beat'
 _DIAGNOSTICS_SUFFIX = '.diagnostics'
 _STALL_REPORTED_SUFFIX = '.beat-reported'
-_TURN_FILENAME = '.turn'
 _NOTIFIED_FILENAME = '.notified'
 _LOCK_FILENAME = '.lock'
 _OWNER_FILENAME = '.owner'
@@ -193,11 +191,6 @@ class ProcessIdentity:
 @dataclass(frozen=True)
 class Cursor:
   offset: int = 0
-  line_size: Optional[int] = None
-  line_remaining: Optional[int] = None
-  quiet: bool = False
-  # when the line the cursor stands inside arrived, in epoch seconds
-  arrived: Optional[float] = None
 
   @classmethod
   def read(cls, path: Path) -> Self:
@@ -205,48 +198,18 @@ class Cursor:
       value = json.loads(path.read_text())
     except FileNotFoundError:
       return cls()
-    if not isinstance(value, dict) or not isinstance(value.get('offset'), int):
-      raise WatchError(f'{path} carries a malformed watch offset')
-    line_size = value.get('line_size')
-    line_remaining = value.get('line_remaining')
-    quiet = value.get('quiet', False)
-    arrived = value.get('arrived')
-    if not (line_size is None) == (line_remaining is None) == (arrived is None):
-      raise WatchError(f'{path} carries a malformed watch offset')
-    if not isinstance(quiet, bool) or (quiet and line_size is None):
-      raise WatchError(f'{path} carries a malformed watch offset')
-    if line_size is not None and (
-      not isinstance(line_size, int)
-      or not isinstance(line_remaining, int)
-      or not isinstance(arrived, float)
-      or line_size <= 0
-      or line_remaining <= 0
+    if (
+      not isinstance(value, dict)
+      or set(value) != {'offset'}
+      or not isinstance(value['offset'], int)
     ):
       raise WatchError(f'{path} carries a malformed watch offset')
-    return cls(value['offset'], line_size, line_remaining, quiet, arrived)
+    return cls(value['offset'])
 
   def write(self, path: Path) -> None:
     staging = path.with_name(f'{path.name}.{os.getpid()}.tmp')
-    value: dict[str, int | float] = {'offset': self.offset}
-    if self.line_size is not None:
-      assert self.line_remaining is not None and self.arrived is not None
-      value.update(
-        line_size=self.line_size, line_remaining=self.line_remaining, arrived=self.arrived
-      )
-      if self.quiet:
-        value['quiet'] = True
-    staging.write_text(json.dumps(value))
+    staging.write_text(json.dumps({'offset': self.offset}))
     os.replace(staging, path)
-
-
-@dataclass(frozen=True)
-class Line:
-  data: bytes
-  size: int
-  remaining: int
-  start: int
-  quiet: bool
-  arrived: float
 
 
 @dataclass(frozen=True)
@@ -269,17 +232,20 @@ class BatchLine:
 
 @dataclass(frozen=True)
 class Batch:
-  """The lines one wake delivers, and whether complete lines wait past them."""
+  """The lines one wake delivers: every complete line up to the take, each
+  watch's together."""
 
   lines: tuple[BatchLine, ...]
-  pending: bool = False
 
   def text(self) -> str:
     """The batch as the model reads it."""
-    rendered = [line.text for line in self.lines]
-    if self.pending:
-      rendered.append(_PENDING_MARKER)
-    return '\n'.join(rendered)
+    return '\n'.join(line.text for line in self.lines)
+
+  def by_command(self) -> list[tuple[BatchLine, ...]]:
+    """The lines grouped by the watch that produced them, in batch order."""
+    return [
+      tuple(group) for _, group in itertools.groupby(self.lines, key=lambda line: line.command)
+    ]
 
 
 @dataclass(frozen=True)
@@ -444,24 +410,30 @@ class Watch:
       return None
     return line.removeprefix(_QUIET_MARK).decode(errors='replace')
 
-  def arrival(self, offset: int) -> float:
-    """When the log line starting at `offset` began to arrive, in epoch seconds."""
+  def arrivals(self, starts: list[int]) -> list[float]:
+    """When the log lines starting at `starts`, ascending, began to arrive, in epoch seconds."""
     try:
       with self.times.open('rb') as records:
         low, high = 0, records.seek(0, os.SEEK_END) // _ARRIVAL.size
         while low < high:
           middle = (low + high) // 2
           records.seek(middle * _ARRIVAL.size)
-          start, milliseconds = _ARRIVAL.unpack(records.read(_ARRIVAL.size))
-          if start == offset:
-            return milliseconds / 1000
-          if start < offset:
+          (start, _milliseconds) = _ARRIVAL.unpack(records.read(_ARRIVAL.size))
+          if start < starts[0]:
             low = middle + 1
           else:
             high = middle
+        records.seek(low * _ARRIVAL.size)
+        data = records.read(len(starts) * _ARRIVAL.size)
     except FileNotFoundError:
-      pass
-    raise WatchError(f'`{self.command}` log has no arrival time for its line at {offset}')
+      data = b''
+    arrived = []
+    for index, start in enumerate(starts):
+      record = data[index * _ARRIVAL.size : (index + 1) * _ARRIVAL.size]
+      if len(record) < _ARRIVAL.size or _ARRIVAL.unpack(record)[0] != start:
+        raise WatchError(f'`{self.command}` log has no arrival time for its line at {start}')
+      arrived.append(_ARRIVAL.unpack(record)[1] / 1000)
+    return arrived
 
   def clear_producer(self) -> None:
     """Remove what belongs to one producer process, leaving the log and its delivery state."""
@@ -822,119 +794,28 @@ class Store:
       shutil.rmtree(self.directory)
     self.directory.mkdir(parents=True)
 
-  def _ordered_locked(self) -> list[Watch]:
-    watches = self._declared_locked()
-    if len(watches) < 2:
-      return watches
-    try:
-      last = (self.directory / _TURN_FILENAME).read_text().strip()
-    except FileNotFoundError:
-      return watches
-    for index, watch in enumerate(watches):
-      if watch.slug == last:
-        return watches[index + 1 :] + watches[: index + 1]
-    return watches
-
   @staticmethod
-  def _read_line(watch: Watch, cursor: Cursor) -> Optional[Line]:
+  def _complete_lines(watch: Watch, offset: int) -> tuple[list[tuple[int, bytes]], int]:
+    """The complete log lines from `offset`, each with where it starts, and where they end."""
     try:
       with watch.log.open('rb') as log_file:
-        log_file.seek(cursor.offset)
-        if cursor.line_remaining is not None:
-          assert cursor.line_size is not None
-          read_size = min(cursor.line_remaining, BYTE_LIMIT + 4)
-          data = log_file.read(read_size)
-          if len(data) != read_size:
-            raise WatchError(f'`{watch.command}` log was truncated behind its committed offset')
-          if cursor.line_remaining == read_size and log_file.read(1) != b'\n':
-            raise WatchError(f'`{watch.command}` log changed behind its committed offset')
-          assert cursor.arrived is not None
-          return Line(
-            data,
-            cursor.line_size,
-            cursor.line_remaining,
-            cursor.offset,
-            cursor.quiet,
-            cursor.arrived,
-          )
-
-        retained = bytearray()
-        size = 0
-        while True:
-          chunk = log_file.read(_READ_CHUNK_BYTES)
-          if len(chunk) == 0:
-            return None
-          newline = chunk.find(b'\n')
-          content = chunk if newline < 0 else chunk[:newline]
-          size += len(content)
-          if len(retained) < BYTE_LIMIT + 4:
-            keep = min(len(content), BYTE_LIMIT + 4 - len(retained))
-            retained.extend(content[:keep])
-          if newline >= 0:
-            arrived = watch.arrival(cursor.offset)
-            if retained.startswith(_QUIET_MARK):
-              mark_size = len(_QUIET_MARK)
-              data = bytes(retained[mark_size:])
-              remaining = size - mark_size
-              return Line(data, remaining, remaining, cursor.offset + mark_size, True, arrived)
-            return Line(bytes(retained), size, size, cursor.offset, False, arrived)
+        log_file.seek(offset)
+        data = log_file.read()
     except FileNotFoundError:
-      return None
+      return [], offset
+    lines = []
+    start = offset
+    for line in data[: data.rfind(b'\n') + 1].split(b'\n')[:-1]:
+      lines.append((start, line))
+      start += len(line) + 1
+    return lines, start
 
   @classmethod
-  def _decoded_prefix(cls, data: bytes, limit: int, *, final: bool) -> tuple[str, int]:
-    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
-    parts: list[str] = []
-    used_bytes = 0
-    consumed = 0
-    pending_start = 0
-    for index, byte in enumerate(data):
-      decoded = decoder.decode(bytes((byte,)), final=False)
-      if len(decoded) == 0:
-        continue
-      visible = _visible(decoded)
-      size = len(visible.encode())
-      if used_bytes + size > limit:
-        return ''.join(parts), pending_start
-      parts.append(visible)
-      used_bytes += size
-      buffered_bytes = len(decoder.getstate()[0])
-      consumed = index + 1 - buffered_bytes
-      pending_start = consumed
-    if final and pending_start < len(data):
-      visible = _visible(decoder.decode(b'', final=True))
-      size = len(visible.encode())
-      if used_bytes + size <= limit:
-        parts.append(visible)
-        consumed = len(data)
-    return ''.join(parts), consumed
-
-  @classmethod
-  def _line_fits(cls, line: Line, fixed: str, available: int) -> bool:
-    if line.remaining > len(line.data):
-      return False
-    payload_bytes = available - len(fixed.encode()) - 1
-    if payload_bytes < 0:
-      return False
-    _, consumed = cls._decoded_prefix(line.data, payload_bytes, final=True)
-    return consumed == line.remaining
-
-  @classmethod
-  def _has_complete_line(cls, watch: Watch, cursor: Cursor) -> bool:
-    return cls._read_line(watch, cursor) is not None
-
-  @classmethod
-  def _has_waking_line(cls, watch: Watch, cursor: Cursor) -> bool:
-    if watch.wakes_on_quiet():
-      return cls._has_complete_line(watch, cursor)
-    start = cursor.offset
-    if cursor.line_remaining is not None:
-      if not cursor.quiet:
-        return True
-      start += cursor.line_remaining + 1
+  def _has_waking_line(cls, watch: Watch, offset: int) -> bool:
+    waking_only = not watch.wakes_on_quiet()
     try:
       with watch.log.open('rb') as log_file:
-        log_file.seek(start)
+        log_file.seek(offset)
         line_quiet: Optional[bool] = None
         while True:
           chunk = log_file.read(_READ_CHUNK_BYTES)
@@ -947,7 +828,7 @@ class Store:
             newline = chunk.find(b'\n', position)
             if newline < 0:
               break
-            if not line_quiet:
+            if not (waking_only and line_quiet):
               return True
             line_quiet = None
             position = newline + 1
@@ -956,107 +837,30 @@ class Store:
 
   @classmethod
   def _has_waking_line_locked(cls, declared: list[Watch]) -> bool:
-    return any(cls._has_waking_line(watch, Cursor.read(watch.offset_file)) for watch in declared)
-
-  @classmethod
-  def _pending_after(
-    cls,
-    ordered: list[Watch],
-    watch_index: int,
-    watch: Watch,
-    cursor: Cursor,
-  ) -> bool:
-    if cls._has_complete_line(watch, cursor):
-      return True
     return any(
-      cls._has_complete_line(candidate, Cursor.read(candidate.offset_file))
-      for candidate in ordered[watch_index + 1 :]
+      cls._has_waking_line(watch, Cursor.read(watch.offset_file).offset) for watch in declared
     )
 
   def take(self) -> Optional[Batch]:
-    """Commit and return the next bounded, fair batch, or None while no complete
-    line that wakes the session waits."""
-    marker_bytes = len(f'{_PENDING_MARKER}\n'.encode())
-    byte_budget = BYTE_LIMIT - marker_bytes
-    line_budget = DEFAULT_LIMIT - 1
-    pieces: list[BatchLine] = []
-    pending = False
-    used_bytes = 0
-    cut_watch: Optional[Watch] = None
-    last_served_watch: Optional[Watch] = None
-
+    """Commit and return every complete line up to now, or None while no
+    complete line that wakes the session waits."""
+    lines: list[BatchLine] = []
     with self._locked():
-      ordered = self._ordered_locked()
-      if not self._has_waking_line_locked(ordered):
+      declared = self._declared_locked()
+      if not self._has_waking_line_locked(declared):
         return None
-      for watch_index, watch in enumerate(ordered):
-        cursor = Cursor.read(watch.offset_file)
-        while True:
-          if len(pieces) >= line_budget or used_bytes >= byte_budget:
-            if self._pending_after(ordered, watch_index, watch, cursor):
-              cut_watch = last_served_watch
-            break
-          line = self._read_line(watch, cursor)
-          if line is None:
-            break
-
-          tag = _command_tag(watch.command)
-          continuing = cursor.line_remaining is not None
-          wide = continuing or not self._line_fits(line, tag, byte_budget)
-          size_marker = f'[line: {format_size(line.size)}] ' if wide and not continuing else ''
-          fixed = f'{tag}{size_marker}'
-          available = byte_budget - used_bytes - len(fixed.encode()) - 1
-          if available <= 0:
-            cut_watch = last_served_watch
-            break
-
-          text, content_consumed = self._decoded_prefix(
-            line.data,
-            available,
-            final=line.remaining <= len(line.data),
-          )
-          if content_consumed < line.remaining and not wide:
-            cut_watch = last_served_watch
-            break
-          if content_consumed == 0 and line.remaining > 0:
-            if last_served_watch is None:
-              raise WatchError(f'`{watch.command}` cannot fit one output character in a batch')
-            cut_watch = last_served_watch
-            break
-
-          remaining = line.remaining - content_consumed
-          if remaining == 0:
-            next_cursor = Cursor(line.start + content_consumed + 1)
-          else:
-            next_cursor = Cursor(
-              line.start + content_consumed, line.size, remaining, line.quiet, line.arrived
-            )
-          content = f'{size_marker}{text}'
-          wakes = not line.quiet or watch.wakes_on_quiet()
-          pieces.append(BatchLine(_visible(watch.command), content, wakes, line.arrived))
-          used_bytes += len(f'{tag}{content}'.encode()) + 1
-          cursor = next_cursor
-          cursor.write(watch.offset_file)
-          last_served_watch = watch
-
-          if len(pieces) >= line_budget or used_bytes >= byte_budget:
-            if self._pending_after(ordered, watch_index, watch, cursor):
-              cut_watch = watch
-            break
-        if cut_watch is not None:
-          break
-
-      if cut_watch is not None:
-        (self.directory / _TURN_FILENAME).write_text(f'{cut_watch.slug}\n')
-        pending = self._has_waking_line_locked(ordered)
-
-    if len(pieces) == 0:
-      return None
-    batch = Batch(tuple(pieces), pending)
-    text = batch.text()
-    if len(text.splitlines()) > DEFAULT_LIMIT or len(text.encode()) > BYTE_LIMIT:
-      raise RuntimeError('watch batch exceeded the shared output bounds')
-    return batch
+      for watch in declared:
+        found, end = self._complete_lines(watch, Cursor.read(watch.offset_file).offset)
+        if len(found) == 0:
+          continue
+        arrivals = watch.arrivals([start for start, _ in found])
+        command = _visible(watch.command)
+        for (_start, data), arrived in zip(found, arrivals, strict=True):
+          quiet = data.startswith(_QUIET_MARK)
+          content = _visible(data.removeprefix(_QUIET_MARK).decode(errors='replace'))
+          lines.append(BatchLine(command, content, not quiet or watch.wakes_on_quiet(), arrived))
+        Cursor(end).write(watch.offset_file)
+    return Batch(tuple(lines))
 
 
 class Owner:

@@ -13,7 +13,7 @@ PATIENCE_CAP_SECONDS = 4 * 60 * 60.0
 
 
 class LineSink(Protocol):
-  """A harness destination for one bounded batch of watch lines."""
+  """A harness destination for the text of one batch of watch lines."""
 
   def deliver(self, batch: str) -> None: ...
 

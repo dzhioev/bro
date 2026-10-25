@@ -55,10 +55,10 @@ Claude Code's own harness themed with the session's bro.
   — leaf modules invoked by Claude settings through the runner interpreter (`spawn.module_argv('ride.claude.<module>')`);
   the command gate rewrites each Bash and Monitor call of a finite command list into a brash call,
   the read gate holds the `Read` of a persona without files to the session's own Claude folders,
-  the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch,
+  the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch, each watch's lines kept in the session's results store,
   and the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`bro/reference/ride.md`, "Claude harness").
 - `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
-  the current waiter's registration, the record of the rewakes waiters began with the latest one's batch, the stand-down mark, the stdout mark that attributes a waiter's hook events,
+  the current waiter's registration, the record of the rewakes waiters began with the latest one's delivery, the stand-down mark, the stdout mark that attributes a waiter's hook events,
   and the lock a waiter registers and takes a batch under and the runner settles a turn end under.
 - `session_end_state.py` — what the session-end hook and the runner share:
   the service tools that end a session, and the mark naming the call whose turn the hook stopped and the transcript that turn lands in.

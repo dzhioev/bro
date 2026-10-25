@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 import ride.claude.interrupt as interrupt
-from bro import turn_end, watches
+from bro import turn_end, watch_delivery, watches
 from bro.monitor import SESSION_DIR_ENV
 from bro.workspace import session as workspace_session
 from ride.claude.fake_claude_test_helper import fake_claude_argv
@@ -226,7 +226,9 @@ class TestRunStreaming:
     self, tmp_path, store, waiters
   ):
     with waiters.locked():
-      waiters.record_rewake(watches.Batch((watches.BatchLine(None, '[w] line', True, 0.0),)))
+      waiters.record_rewake(
+        watch_delivery.Delivery('[w] line', (watches.BatchLine(None, '[w] line', True, 0.0),), ())
+      )
     script = (
       f'tasks("t1")\nresult("first")\nhook("Stop", 2, "[w] line", {_WAITER_STDOUT})\ntasks()\n'
       'result("rewoken")\nresult("stdin: " + repr(next_message()))\n'
@@ -248,7 +250,9 @@ class TestRunStreaming:
 
   def test_another_stop_hooks_exit_is_no_rewake_of_the_waiter(self, tmp_path, store, waiters):
     with waiters.locked():
-      waiters.record_rewake(watches.Batch((watches.BatchLine(None, '[w] line', True, 0.0),)))
+      waiters.record_rewake(
+        watch_delivery.Delivery('[w] line', (watches.BatchLine(None, '[w] line', True, 0.0),), ())
+      )
     script = (
       'tasks("t1")\nresult("first")\nhook("Stop", 2, "project feedback")\nresult("second")\n'
       f'hook("Stop", 2, "[w] line", {_WAITER_STDOUT})\ntasks()\nresult("rewoken")\n'

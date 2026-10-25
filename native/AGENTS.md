@@ -26,7 +26,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   interactive owners call `wake()` when the inbox reports news.
   In a managed session, `do-ride` owns the shared watch store and arms its `mission watch` producer;
   an in-process `bro run|chat` keeps model-started watches in the temporary store its `Runner` tears down.
-  A pump hands the inbox one bounded watch batch at a time and takes the next only after the model drains the last.
+  A pump hands the inbox each watch batch as `watch_delivery` renders it.
   At each one-shot turn end, `Runner` applies the shared `bro.turn_end` rule:
   it reports running jobs as harness background work, posts notices through the inbox, ends by returning the last reply, and otherwise idles on the inbox until job or watch news, or a job's silence notice, wakes the next turn.
   `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/reference/ride.md`, "Bro harness").

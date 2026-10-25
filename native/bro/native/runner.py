@@ -11,7 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Optional, Self
 
-from bro import brash_policy, results, turn_end, watches
+from bro import brash_policy, results, turn_end, watch_delivery, watches
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
@@ -96,7 +96,6 @@ class Runner:
     self._lifetime_resources: Optional[ExitStack] = None
     self._watch_pump_cancelled = threading.Event()
     self._watch_delivery_lock = threading.Lock()
-    self._watch_delivery_pending = False
     self._watch_pump_error: Optional[BaseException] = None
     self._turn_ended = False
     self._silence_clock = turn_end.SilenceClock()
@@ -163,25 +162,21 @@ class Runner:
         store = self.watch_store
         with self._watch_delivery_lock:
           batch = store.take()
-          self._watch_delivery_pending = batch is not None
+          if batch is not None:
+            self.deliver(watch_delivery.deliver(batch, self.result_store).text)
         # a beat moves when a watch's stall falls due, which an idle wait's deadline must follow
         current = store.next_beat_deadline()
         if current != beat_deadline:
           beat_deadline = current
           self.inbox.notify()
-        if batch is not None:
-          self.deliver(batch.text())
-        else:
+        if batch is None:
           self._watch_pump_cancelled.wait(_WATCH_POLL_SECONDS)
     except BaseException as error:
       self._watch_pump_error = error
       self.inbox.post('[notification: native watch delivery failed]')
 
   def deliver(self, batch: str) -> None:
-    delivery_id = self.inbox.post(batch)
-    with self._watch_delivery_lock:
-      self._watch_delivery_pending = False
-    self.inbox.wait_until_drained(delivery_id, self._watch_pump_cancelled)
+    self.inbox.post(batch)
 
   @property
   def silence_clock(self) -> turn_end.SilenceClock:
@@ -214,7 +209,7 @@ class Runner:
     with self._watch_delivery_lock:
       self._raise_watch_pump_error()
       self._turn_ended = False
-      if self._watch_delivery_pending or self.inbox.has_news():
+      if self.inbox.has_news():
         return False
       turn_end.settle(self)
       return self._turn_ended

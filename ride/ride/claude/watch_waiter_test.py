@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from bro import watches
+from bro import results, watch_delivery, watches
 from bro.monitor import SESSION_DIR_ENV
 from ride.claude import watch_waiter
 from ride.claude.claude_argv import watch_waiter_hooks
@@ -43,8 +43,9 @@ def _seed(store: watches.Store, command: str, content: str) -> watches.Watch:
   return watch
 
 
-def _batch(text: str) -> watches.Batch:
-  return watches.Batch((watches.BatchLine(None, text, wakes=True, arrived=0.0),))
+def _delivery(text: str) -> watch_delivery.Delivery:
+  line = watches.BatchLine(None, text, wakes=True, arrived=0.0)
+  return watch_delivery.Delivery(text, (line,), ())
 
 
 class _PolledStore(watches.Store):
@@ -69,7 +70,7 @@ class _BlockingStore(watches.Store):
   def take(self) -> watches.Batch:
     self.taking.set()
     assert self.release.wait(10), 'the test never released the batch'
-    return _batch('[held] line')
+    return watches.Batch((watches.BatchLine(None, '[held] line', wakes=True, arrived=0.0),))
 
 
 class _RegistrationSpy(WaiterState):
@@ -98,7 +99,13 @@ def _waiting(
   out = io.StringIO()
   executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
   future = executor.submit(
-    watch_waiter.wait, state, store, os.getpid() if runner is None else runner, bound, out
+    watch_waiter.wait,
+    state,
+    store,
+    results.Store(state.directory / 'results'),
+    os.getpid() if runner is None else runner,
+    bound,
+    out,
   )
   executor.shutdown(wait=False)
   return future, out
@@ -127,22 +134,22 @@ class TestWait:
           'command': 'printf lines',
           'content': 'held',
           'wakes': False,
-          'arrived': watch.arrival(0),
+          'arrived': watch.arrivals([0])[0],
         },
         {
           'command': 'printf lines',
           'content': 'hello',
           'wakes': True,
-          'arrived': watch.arrival(len(watches.quiet('held')) + 1),
+          'arrived': watch.arrivals([len(watches.quiet('held')) + 1])[0],
         },
       ],
-      'pending': False,
+      'kept': [],
     }
     assert not owner.store.has_waking_lines()
 
   def test_a_later_rewake_records_its_own_batch(self, owner, state):
     with state.locked():
-      state.record_rewake(_batch('[earlier] line'))
+      state.record_rewake(_delivery('[earlier] line'))
     _seed(owner.store, 'printf lines', 'hello\n')
 
     future, _ = _waiting(state, owner.store)
@@ -151,6 +158,20 @@ class TestWait:
     record = json.loads(state.rewake_record.read_text())
     assert record['count'] == 2
     assert [line['content'] for line in record['lines']] == ['hello']
+
+  def test_a_large_batch_wakes_the_session_with_its_head_and_keeps_the_rest(self, owner, state):
+    _seed(owner.store, 'flood', ''.join(f'{"x" * 99}{number:05}\n' for number in range(1_000)))
+
+    future, out = _waiting(state, owner.store)
+
+    assert future.result(timeout=10) == REWAKE_STATUS
+    record = json.loads(state.rewake_record.read_text())
+    (kept,) = record['kept']
+    assert kept['command'] == 'flood'
+    assert len(record['lines']) + kept['hidden'] == 1_000
+    assert f'bro::page(result="{kept["result"]}"' in out.getvalue()
+    _, text = results.Store(state.directory / 'results').read(kept['result'])
+    assert len(text.splitlines()) == 1_000
 
   def test_a_superseded_waiter_stands_aside(self, state):
     future, out = _polling(state)
@@ -251,7 +272,7 @@ def test_a_waiter_that_fails_to_start_still_reports_as_the_waiter(owner, state, 
 def test_a_reset_forgets_an_earlier_session(state):
   state.stand_down()
   with state.locked():
-    state.record_rewake(_batch('[w] line'))
+    state.record_rewake(_delivery('[w] line'))
 
   state.reset()
 

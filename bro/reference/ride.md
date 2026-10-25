@@ -159,11 +159,14 @@ If the copy fails, the producer ends the command's whole process group.
 A job carries the same backstop from the process that started it.
 
 `take()` is the store's single reader.
-Under an exclusive lock it commits complete output past each watch's offset and returns at most the shared 100-line and 30 KB bounds, with every line tagged by command.
+Under an exclusive lock it commits every complete line past each watch's offset and returns them as one batch, each line tagged by command.
 Each line of the batch also carries its arrival time and whether it wakes the session, for a harness to show its human;
 the model reads the tagged lines alone.
-A cut batch ends in a pending marker when a line that wakes the session remains, and the next batch starts after the watch that was cut, so a busy producer cannot exclude another.
-A line wider than the byte bound is delivered in successive pieces, with its first piece naming the whole line size.
+A harness delivers each watch's lines of a batch separately:
+kept whole in the session's results store (`bro::results` lists them as `bro::watch`),
+and delivered as their head, up to one kept-result window.
+Where they are cut, the message closes on the `bro::page` call that reads on.
+A model pages, greps or ignores the rest, and a busy producer cannot bury another watch's lines.
 
 A producer marks a line quiet by opening it with the ASCII unit separator (0x1F), which `take()` strips.
 A quiet line never wakes the session on its own:
@@ -262,7 +265,7 @@ Each job and watch starts its line under the job supervisor:
 in brash under a finite command list, with the brash policy the native runner writes from the bro's reach into a directory its run owns, and in bash under `brash(ANY)`.
 It leaves `web` and `delegation` unserved, which `bro show` marks.
 
-The native runner pumps each bounded batch from the session's watch store into the LLM inbox, taking the next only after the model drains the last.
+The native runner pumps each batch from the session's watch store into the LLM inbox as `watch_delivery` renders it.
 A managed session's runtime-owned `mission watch` therefore reaches the model without a watch-mode job;
 an in-process run uses the same path for each `bro::watch` it starts in its temporary store.
 Watch lines enter the model after tool results or wake an idle turn.

@@ -12,7 +12,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Self
 
-from bro import watches
+from bro import watch_delivery
 from bro.monitor import SESSION_DIR_ENV, harness_session_dir
 
 # the hook events Claude Code runs the waiter on
@@ -75,12 +75,12 @@ class WaiterState:
   @property
   def rewake_record(self) -> Path:
     """The JSON record of the rewakes waiters have begun: their `count`, and the
-    batch the latest one wakes the model with, its `lines` and whether more are
-    `pending`."""
+    lines the latest one wakes the model with shows whole, its `lines`, and the
+    watches whose remaining lines it `kept` in the results store."""
     return self.directory / _REWAKE_FILENAME
 
-  def record_rewake(self, batch: watches.Batch) -> None:
-    """Record a rewake a waiter begins with `batch`; called under `locked`."""
+  def record_rewake(self, delivery: watch_delivery.Delivery) -> None:
+    """Record a rewake a waiter begins with `delivery`; called under `locked`."""
     lines = [
       {
         'command': line.command,
@@ -88,9 +88,13 @@ class WaiterState:
         'wakes': line.wakes,
         'arrived': line.arrived,
       }
-      for line in batch.lines
+      for line in delivery.shown
     ]
-    record = {'count': self.rewakes() + 1, 'lines': lines, 'pending': batch.pending}
+    kept = [
+      {'command': entry.command, 'result': entry.result, 'hidden': entry.hidden}
+      for entry in delivery.kept
+    ]
+    record = {'count': self.rewakes() + 1, 'lines': lines, 'kept': kept}
     self._replace(_REWAKE_FILENAME, json.dumps(record))
 
   def rewakes(self) -> int:

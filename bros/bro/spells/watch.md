@@ -20,7 +20,7 @@ Keep the model-owned `command` argument running for the rest of this run and act
 `bro::watch('<command>')` starts it, and one call keeps it running for the rest of the run;
 a watch stopped early is started again the same way.
 Its lines arrive as notifications, each tagged `[<command>]`.
-Use the pending marker to know when another bounded batch remains.
+A watch with many lines arrives as its head and a `bro::page` call that reads the rest.
 Whenever waiting is all that is left, end the turn:
 the run wakes on the next line and idles at no cost in between.
 End the watch with `bro::unwatch('<command>')` once it is no longer needed;

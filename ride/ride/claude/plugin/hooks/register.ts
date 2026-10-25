@@ -5,7 +5,8 @@ import type { EngineInterface, Register } from 'claude-code'
 // (`ride.claude.waiter_state.WaiterState.rewake_record`)
 // `arrived` in epoch seconds
 type RewakeLine = { command: string | null; content: string; wakes: boolean; arrived: number }
-type Rewake = { count: number; lines: RewakeLine[]; pending: boolean }
+type KeptLines = { command: string; result: string; hidden: number }
+type Rewake = { count: number; lines: RewakeLine[]; kept: KeptLines[] }
 
 const TAG_CHARACTERS = 30
 const CONTENT_CHARACTERS = 200
@@ -61,11 +62,25 @@ function isRewake(value: unknown): value is Rewake {
     value !== null &&
     'count' in value &&
     Number.isInteger(value.count) &&
-    'pending' in value &&
-    typeof value.pending === 'boolean' &&
+    'kept' in value &&
+    Array.isArray(value.kept) &&
+    value.kept.every(isKeptLines) &&
     'lines' in value &&
     Array.isArray(value.lines) &&
     value.lines.every(isRewakeLine)
+  )
+}
+
+function isKeptLines(value: unknown): value is KeptLines {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'command' in value &&
+    typeof value.command === 'string' &&
+    'result' in value &&
+    typeof value.result === 'string' &&
+    'hidden' in value &&
+    Number.isInteger(value.hidden)
   )
 }
 
@@ -116,9 +131,10 @@ function rows(rewake: Rewake, time: (milliseconds: number) => string): string[] 
     const tag = line.command === null ? '' : `[${clipped(line.command, TAG_CHARACTERS)}]${line.wakes ? '*' : ''} `
     return `${time(line.arrived * 1000)} ${tag}${clipped(line.content, CONTENT_CHARACTERS)}`
   })
-  if (rewake.pending) {
-    const blank = ' '.repeat(time(0).length)
-    lines.push(`${blank} … more watch lines wait for the next wake`)
+  const blank = ' '.repeat(time(0).length)
+  for (const kept of rewake.kept) {
+    const tag = `[${clipped(kept.command, TAG_CHARACTERS)}]`
+    lines.push(`${blank} ${tag} … ${kept.hidden} more lines, stored as ${kept.result}`)
   }
   return lines
 }

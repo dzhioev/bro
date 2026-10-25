@@ -66,7 +66,7 @@ test('a rewake logs its lines once, at the notification that delivers it', async
       line('quest watch', 'summon started', false),
       line('quest watch', 'summon ended ok', true, ARRIVED + 2),
     ],
-    pending: false,
+    kept: [],
   }
   await $.session.append(typed)
   await $.session.append(notification)
@@ -75,16 +75,20 @@ test('a rewake logs its lines once, at the notification that delivers it', async
   expect(rows).toEqual(['13:05:07Z [quest watch] summon started', '13:05:09Z [quest watch]* summon ended ok'])
 })
 
-test('lines left for the next wake close the rows under a blank time', async ($, on) => {
-  session(on, () => ({ count: 1, lines: [line('seq', '1')], pending: true }))
+test('lines a watch kept close the rows under a blank time', async ($, on) => {
+  session(on, () => ({
+    count: 1,
+    lines: [line('seq', '1')],
+    kept: [{ command: 'seq', result: 'ab12-3', hidden: 4000 }],
+  }))
   const rows = logged(on)
   await $.session.append(notification)
 
-  expect(rows).toEqual(['13:05:07Z [seq]* 1', '          … more watch lines wait for the next wake'])
+  expect(rows).toEqual(['13:05:07Z [seq]* 1', '          [seq] … 4000 more lines, stored as ab12-3'])
 })
 
 test('the times follow the clock the session shows', async ($, on) => {
-  session(on, () => ({ count: 1, lines: [line('seq', '1')], pending: false }), '12-hour')
+  session(on, () => ({ count: 1, lines: [line('seq', '1')], kept: [] }), '12-hour')
   const rows = logged(on)
   await $.session.append(notification)
 
@@ -93,7 +97,7 @@ test('the times follow the clock the session shows', async ($, on) => {
 })
 
 test('a rewake recorded before the plugin loaded is not logged again', async ($, on) => {
-  session(on, () => ({ count: 2, lines: [line('quest watch', 'ended')], pending: false }))
+  session(on, () => ({ count: 2, lines: [line('quest watch', 'ended')], kept: [] }))
   const rows = logged(on)
   await $.session.start({ cwd: '/' })
 
@@ -105,7 +109,7 @@ test('a rewake recorded before the plugin loaded is not logged again', async ($,
 test('a long command and a long line are cut, their control characters dropped', async ($, on) => {
   const command = `tail -f ${'/deep'.repeat(10)}`
   const content = `\u001b[31mred\u001b[0m ${'x'.repeat(300)}`
-  session(on, () => ({ count: 1, lines: [line(command, content)], pending: false }))
+  session(on, () => ({ count: 1, lines: [line(command, content)], kept: [] }))
   const rows = logged(on)
   await $.session.append(notification)
 
@@ -117,7 +121,7 @@ test('a long command and a long line are cut, their control characters dropped',
 })
 
 test("the waiter's own notice is drawn without a tag", async ($, on) => {
-  session(on, () => ({ count: 1, lines: [line(null, 'No watch line arrived for 24 hours')], pending: false }))
+  session(on, () => ({ count: 1, lines: [line(null, 'No watch line arrived for 24 hours')], kept: [] }))
   const rows = logged(on)
   await $.session.append(notification)
 

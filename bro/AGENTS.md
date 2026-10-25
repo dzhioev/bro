@@ -50,8 +50,9 @@ A subpackage with a map of its own is pointed at, not described here.
   A timed-out read reconnects from the stream's cursor, and a restarted producer resumes from the journal head its predecessor published.
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
 - `watches.py` and `watch_run.py` (`watch-run`) — one session-local watch store and its producer.
-  `take()` commits fair, bounded batches under one exclusive lock;
-  each line names its command and carries the arrival time its producer recorded, and a cut batch carries a pending marker.
+  `take()` commits every complete line as one batch under one exclusive lock;
+  each line names its command and carries the arrival time its producer recorded.
+  `watch_delivery.py` turns a batch into what a model reads, keeping each watch's lines in the results store and cutting its message at one window.
   A producer's quiet line waits for the next waking line unless its watch is set to wake on quiet lines (`bro/reference/ride.md`, "Session watches").
   The store also reports whether waking lines remain undelivered, carries each stream's journal head, and remembers the live sets already noticed;
   a producer publishes a head its command sends only once the output written before it is in the log.

@@ -57,23 +57,6 @@ def test_wait_ends_through_its_own_cancel_event():
   assert result == [False]
 
 
-def test_posted_notice_reports_when_a_drain_takes_it():
-  inbox = Inbox()
-  cancelled = threading.Event()
-  notice_id = inbox.post('one batch')
-  result: list[bool] = []
-  waiter = threading.Thread(
-    target=lambda: result.append(inbox.wait_until_drained(notice_id, cancelled))
-  )
-  waiter.start()
-
-  assert waiter.is_alive()
-  assert inbox.drain() is not None
-  waiter.join(timeout=10)
-
-  assert result == [True]
-
-
 def test_background_exit_tail_jumps_the_cursor_and_is_consumed_once():
   inbox = Inbox()
   job = Job('job-1', 'seq 1 20; exit 3', 'bg', inbox=inbox)
