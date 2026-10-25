@@ -12,12 +12,13 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 
 ## Components
 
-- `bros/` — this checkout's developer and reviewer persona declarations, and `bro-watch-probe`, the bare bro with a shell the conformance probes launch.
+- `bros/` — this checkout's developer and reviewer persona declarations, `bro-watch-probe` for shell conformance, and `bro-file-probe` for file-reading conformance.
 - `bro/local/prompts.py` — framework-project context shared by those personas.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.
 - `bro/local/syscall_tables.py` (`syscall-tables`) — generate `bro.files.confinement`'s syscall tables from the pinned Linux tag, recording source hashes and refusing unclassified names.
   `syscall-tables --check` fetches the sources again and compares without writing; run it by hand when bumping the pin and review every classification decision.
   The arm64 parser resolves the native ABI's conditional definitions and rejects unreviewed preprocessor expressions.
+- `bro/local/files_test_helper.py` — generated invoices shared by the assembled native/HTTP serving tests (`files_sandbox_test.py`) and the live-model probe (`files_conformance_test.py`).
 - `bro/local/gate_display.py` — how the gate reports: plain lines on a pipe, a live table on a terminal.
 - `bro/local/green_trees.py` — the gate stages a tree has passed, kept as git notes on the tree object under `refs/notes/run-tests`.
 - `bro/local/*_policy_test.py` — repository-wide policy assertions that have no consumer-neutral package owner.
@@ -53,7 +54,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;
   `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving both ruff checks and ShellCheck repo-wide;
   a project's stage is skipped whole unless the change reaches something that project imports or edits any project's metadata;
-  `sandbox` runs for changes under `bro/files/` or `filetypes/`, and changes to the gate or its workflow, because providers and workers are loaded by name;
+  `sandbox` runs when a change reaches a test in its roster through the import graph, as well as for changes under `bro/files/` or `filetypes/` and changes to the gate or its workflow, because providers and workers are loaded by name;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
   A stage that passes over a clean worktree is noted on the tree `HEAD` names,

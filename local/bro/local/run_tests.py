@@ -467,10 +467,12 @@ LLM_PYTEST_FILES = [
 CONFORMANCE_PYTEST_FILES = [
   'local/bro/local/session_activity_conformance_test.py',
   'local/bro/local/watch_wait_conformance_test.py',
+  'local/bro/local/files_conformance_test.py',
 ]
 
 
 SANDBOX_PYTEST_FILES = [
+  'local/bro/local/files_sandbox_test.py',
   'bro/files/confinement_sandbox_test.py',
   'bro/files/runner_sandbox_test.py',
   'bro/files/operations_sandbox_test.py',
@@ -697,6 +699,7 @@ def select(base: str) -> Selection:
           or path in ('local/bro/local/run_tests.py', '.github/workflows/tests.yml')
           for path in changed
         )
+        or any(module_name(source_roots, DIR / test) in hit for test in SANDBOX_PYTEST_FILES)
         else ['sandbox']
       )
     ),

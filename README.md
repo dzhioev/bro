@@ -424,6 +424,9 @@ the container's network is unrestricted, and `--unboxed` runs as the launching u
 - **Personas.**
   `dev`, `eyebro`, `lead`, `terminal`, `devoops`, and `browser` ship ready to derive from;
   `browser` is the semantic interface to webview missions.
+- **File types.**
+  A persona can mount `bro.files.mcp.toolset` to inspect and read files through sandboxed providers registered in `bro.file_types`.
+  `bro-filetypes` supplies born-digital PDFs with text, link, attachment and form-field views; no published persona opts in by default.
 - **Artifacts.**
   Peers pass files by content-addressed reference, and reach follows the launch tree.
 - **One conditioning model.**
