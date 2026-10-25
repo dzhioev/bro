@@ -59,3 +59,29 @@ Neither path truncates before checking the opened file, and missing write target
 
 The type and result tests run in the gate's `unit` stage without a worker or a parser installation.
 File-type authors start at `bro/reference/extending.md`, "Adding a file type".
+
+## Provider protocol and runner
+
+`protocol.py` defines `Provider`, `InvalidInput`, `Job`, `Reply` and the bounded JSON frame reader.
+A provider spec resolves to an object, not a factory.
+Its `prepare` returns an engine version after preloading and warming the parser;
+`info` and `view` receive only snapshot bytes, arguments and type limits.
+`InvalidInput` messages contain fixed phrases and counts, never document text.
+
+`worker.py` is the isolated module entry point.
+Its argv contains the provider spec, parent pid, sandbox bounds and type limits.
+Stdin carries a request frame followed by the snapshot;
+the private reply descriptor carries one success or error frame.
+Engine writes to fd 1 go to stderr after preparation.
+
+`runner.py` implements the one-method `Runner` interface with `SubprocessRunner`.
+It spawns on the awaiting thread, multiplexes nonblocking pipes and a pidfd on that thread's event loop, and kills the process group before reaping the leader.
+`close()` prevents new calls and kills active workers;
+their awaiting calls own reaping.
+A reply requires a zero exit, exactly one frame, valid strings, a complete sandbox report and the type's declared payload model.
+
+`slots.py` owns lazy `WorkerSlots` admission, separate from the runner so callers can acquire before reading.
+Use the acquired `SlotLease` as a context manager for ordinary exits.
+For an abandoned read, `transfer()` moves release responsibility to that read's thread;
+its `release()` is thread-safe and idempotent.
+Protocol and admission tests run in `unit`, while real-worker tests run in `sandbox`.
