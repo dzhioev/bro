@@ -20,7 +20,8 @@ A subpackage with a map of its own is pointed at, not described here.
   and the `files` / `brash` / `web` / `delegation` group constructors beside `mount` / `cli` / `source` / `man` / `revoke`.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `spells.py` — the spell store:
-  validation of the files a bro's `spells` declaration names and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
+  the `SpellFile` value a `spells` declaration is made of, the selection of the spells a bro offers (conditions and `requires`),
+  and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
 - `results.py` — the session's kept tool results:
   the store, one file per result under `<tag>-<n>` ids, whose numbers processes sharing its directory claim by exclusive link;
   the wrapper an assembly puts around every tool it serves;
@@ -135,7 +136,7 @@ A subpackage with a map of its own is pointed at, not described here.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.
   Bros normally inherit from this `Bro`, so they pick up the shared defaults via the MRO walk;
   inherit from `BaseBro` only when opting out of those defaults is the persona's point.
-  It owns the shared spells inherited by the concrete-Bro family (`bros/bro/spells/`):
+  It owns the shared spells inherited by the concrete-Bro family (the `bros.bro.spells` package):
   `spell::ask` — the summon UX:
   phrasing → target + self-contained prompt, least-authority talk rights, client pick (the `summon` and `quest` CLIs vs the `summon` and `quest_*` service tools), foreground-vs-background, the question/reply/check loop, and failure relay;
   protocol and enforcement live in `bro/summon.py`, `bro/mission.py`, `bro/quest.py`, `ride/ride/launch_control.py`, and `ride/ride/bro_worker.py`, not in the spell

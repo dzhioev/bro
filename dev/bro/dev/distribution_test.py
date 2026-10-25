@@ -13,7 +13,7 @@ _DEVELOPMENT_DOMAIN = {
   'bro/workflow/hooks/commit-msg',
   'bro/workflow/hooks/post-commit',
   'bros/dev/__init__.py',
-  'bros/dev/spells/fix.md',
+  'bro/dev/spells/fix.md',
   'bros/eyebro/__init__.py',
   'bros/eyebro/spells/review-diff.md',
   'bros/lead/__init__.py',

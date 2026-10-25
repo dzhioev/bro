@@ -9,16 +9,16 @@ import pytest
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro import bro as bro_module, results, spells as spell_store
-from bro.base.condition import SetVariable
+from bro.base.condition import SetVariable, when
 from bro.base.text_window import BYTE_LIMIT
-from bro.bro import BaseBro
+from bro.bro import BaseBro, feature
 from bro.harness import get_harness, installed_harness_names
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.monitor import SESSION_DIR_ENV
 from bro.prompts import get_prompt
 from bro.registry import create_bro, declared_specs
-from bro.spells import CAST_SECRET, NAMESPACE, load_spell
+from bro.spells import CAST_SECRET, NAMESPACE, SpellFile, load_spell
 from bro.spells_test_helper import SpellPackage, spell_package
 
 
@@ -112,45 +112,75 @@ class TestSpellDeclaration:
 
   def test_only_declared_files_are_spells(self, fake_packages):
     package = fake_packages('_spell_declared', {'named': _spell(), 'stray': _spell()})
-    assert list(package.bro_class(spells=('named.md',))().spell_paths) == ['named']
+    assert list(package.bro_class(spells=(package.files['named'],))().spell_paths) == ['named']
 
   def test_a_nested_path_names_the_spell_by_its_stem(self, fake_packages):
     package = fake_packages('_spell_nested', {'review/pr': _spell(body='nested')})
     assert package.bro_class()().get_spell_body('pr', harness='bro', hold='unattended') == 'nested'
 
-  @pytest.mark.parametrize(
-    ('entry', 'match'),
-    [
-      ('missing.md', 'names no file'),
-      ('/absolute.md', 'inside'),
-      ('../outside.md', 'inside'),
-      ('known.txt', 'not a markdown file'),
-    ],
-  )
-  def test_an_invalid_entry_fails_construction(self, fake_packages, entry, match):
-    package = fake_packages(f'_spell_entry_{len(sys.modules)}', {'known': _spell()})
-    with pytest.raises(ValueError, match=match):
-      package.bro_class(spells=(entry,))()
+  def test_a_missing_or_non_markdown_file_cannot_be_a_spell_file(self, tmp_path):
+    (tmp_path / 'known.txt').write_text('text')
+    with pytest.raises(ValueError, match='does not exist'):
+      SpellFile(tmp_path / 'missing.md')
+    with pytest.raises(ValueError, match='not a markdown file'):
+      SpellFile(tmp_path / 'known.txt')
+
+  def test_a_declaration_entry_must_be_a_spell_file(self, fake_packages):
+    package = fake_packages('_spell_entry', {'known': _spell()})
+    with pytest.raises(TypeError, match='not a SpellFile'):
+      package.bro_class(spells=('known.md',))()
+
+  def test_a_gated_spell_is_offered_only_where_its_condition_holds(self, fake_packages):
+    package = fake_packages('_spell_gate', {'always': _spell(), 'gated': _spell()})
+    declaration = (package.files['always'], when(feature('x'), package.files['gated']))
+
+    on = package.bro_class(spells=declaration, features={'x': True})()
+    off = package.bro_class(spells=declaration, features={'x': False})()
+
+    assert list(on.spell_paths) == ['always', 'gated']
+    assert list(off.spell_paths) == ['always']
+
+  def test_an_offered_spell_needs_the_spells_it_requires(self, fake_packages, tmp_path):
+    package = fake_packages('_spell_requires', {'needs': _spell(), 'needed': _spell()})
+    needed = package.files['needed']
+    needs = SpellFile(package.files['needs'].path, requires=('needed',))
+
+    with pytest.raises(ValueError, match="spell 'needs' requires spell 'needed'"):
+      package.bro_class(spells=(needs,))()
+    assert list(package.bro_class(spells=(needs, needed))().spell_paths) == ['needs', 'needed']
+
+  def test_a_gated_requirement_binds_only_where_it_resolves(self, fake_packages):
+    package = fake_packages('_spell_gated_requires', {'needs': _spell(), 'needed': _spell()})
+    needs = SpellFile(package.files['needs'].path, requires=(when(feature('x'), 'needed'),))
+
+    assert list(package.bro_class(spells=(needs,), features={'x': False})().spell_paths) == [
+      'needs'
+    ]
+    with pytest.raises(ValueError, match='requires spell'):
+      package.bro_class(spells=(needs,), features={'x': True})()
+
+  def test_spells_may_require_each_other(self, fake_packages):
+    package = fake_packages('_spell_cycle', {'one': _spell(), 'two': _spell()})
+    one = SpellFile(package.files['one'].path, requires=('two',))
+    two = SpellFile(package.files['two'].path, requires=('one',))
+
+    assert list(package.bro_class(spells=(one, two))().spell_paths) == ['one', 'two']
+    with pytest.raises(ValueError, match="requires spell 'two'"):
+      package.bro_class(spells=(one,))()
+
+  def test_a_derived_declaration_satisfies_a_requirement_by_name(self, fake_packages):
+    parent_package = fake_packages('_spell_requires_parent', {'needed': _spell(body='parent')})
+    child_package = fake_packages('_spell_requires_child', {'needs': _spell(), 'needed': _spell()})
+    needs = SpellFile(child_package.files['needs'].path, requires=('needed',))
+    child = child_package.bro_class(
+      parent_package.bro_class(), spells=(needs, child_package.files['needed'])
+    )
+    assert set(child().spell_paths) == {'needs', 'needed'}
 
   def test_one_declaration_cannot_repeat_a_spell_name(self, fake_packages):
     package = fake_packages('_spell_repeat', {'a/fix': _spell(), 'b/fix': _spell()})
     with pytest.raises(ValueError, match="repeats spell 'fix'"):
       package.bro_class()()
-
-  def test_a_module_without_a_file_cannot_declare_spells(self, monkeypatch):
-    monkeypatch.setitem(sys.modules, '_spell_fileless', types.ModuleType('_spell_fileless'))
-    fileless = type(
-      'Fileless',
-      (BaseBro,),
-      {
-        '__module__': '_spell_fileless',
-        'name': 'fileless',
-        'description': 'test bro',
-        'spells': ('x.md',),
-      },
-    )
-    with pytest.raises(ValueError, match='no file'):
-      fileless()
 
 
 class TestSpellStore:

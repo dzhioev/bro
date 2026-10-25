@@ -1,4 +1,5 @@
 import bro.brog.mcp as brog_mcp
+import bro.dev as dev
 from bro import brog
 from bro.base.condition import when
 from bro.bro import feature
@@ -66,12 +67,13 @@ class Dev(Bro):
     man(permissions_cheatsheet),
   ]
   spells = (
-    'audit.md',
-    'bump-bro.md',
-    'design.md',
-    'fix.md',
-    'land.md',
-    'resume-pr.md',
-    'run-pr.md',
+    dev.spells.audit,
+    dev.spells.bump_bro,
+    dev.spells.design,
+    when(feature('brog'), dev.spells.fix),
+    dev.spells.land,
+    when(feature('brog'), dev.spells.open_task),
+    dev.spells.resume_pr,
+    dev.spells.run_pr,
   )
   system_prompt = SYSTEM_PROMPT
