@@ -175,6 +175,7 @@ PYTEST_FILES = [
   'bro/quest_test.py',
   'bro/turn_end_test.py',
   'bro/artifact_test.py',
+  'bro/files/access_test.py',
   'bro/artifact_mcp_test.py',
   'bro/run_lifecycle_test.py',
   'native/bro/fork_test.py',

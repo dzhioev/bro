@@ -1,10 +1,13 @@
 import asyncio
 import os
 import tempfile
+from pathlib import Path
+from typing import BinaryIO
 
 import pytest
 
 from bro.base.text_window import DEFAULT_LIMIT
+from bro.files import access
 from bro.mcp import mount
 from bro.native.dev_mcp import (
   edit_file,
@@ -238,3 +241,186 @@ def test_toolset_subset_filters_tools():
 def test_mount_unknown_tool_raises():
   with pytest.raises(ValueError, match='unknown dev tools'):
     mount(toolset, 'nope')
+
+
+_WIRED_TOOLS = {
+  'read_file': ('open_read',),
+  'write_file': ('open_write',),
+  'edit_file': ('open_read', 'open_write'),
+  'grep': ('search_directory',),
+  'glob': ('search_directory',),
+}
+_PATH_FREE_TOOLS = {'read_reference'}
+
+
+class RecordingAccess(access.AllowAll):
+  def __init__(self):
+    self.calls: list[tuple[str, Path, bool]] = []
+    self.streams: list[BinaryIO] = []
+
+  def open_read(self, path: Path) -> BinaryIO:
+    self.calls.append(('open_read', path, False))
+    stream = super().open_read(path)
+    self.streams.append(stream)
+    return stream
+
+  def open_write(self, path: Path, *, create_parents: bool = False) -> BinaryIO:
+    self.calls.append(('open_write', path, create_parents))
+    stream = super().open_write(path, create_parents=create_parents)
+    self.streams.append(stream)
+    return stream
+
+  def search_directory(self, path: Path) -> Path:
+    self.calls.append(('search_directory', path, False))
+    return super().search_directory(path)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', _WIRED_TOOLS)
+async def test_every_path_taking_tool_consults_access(name, tmp_path):
+  path = tmp_path / 'file'
+  path.write_text('before')
+  arguments = {
+    'read_file': {'file_path': str(path)},
+    'write_file': {'file_path': str(path), 'content': 'after'},
+    'edit_file': {'file_path': str(path), 'old_string': 'before', 'new_string': 'after'},
+    'grep': {'pattern': 'before', 'path': str(tmp_path)},
+    'glob': {'pattern': '*', 'path': str(tmp_path)},
+  }
+  tools = {tool.name: tool for tool in await toolset.build().list_tools()}
+  recording = RecordingAccess()
+  with access.installed(recording):
+    await tools[name].call(arguments[name])
+  expected_path = tmp_path if name in {'grep', 'glob'} else path
+  assert recording.calls == [
+    (operation, expected_path, name == 'write_file') for operation in _WIRED_TOOLS[name]
+  ]
+  assert all(stream.closed for stream in recording.streams)
+
+
+@pytest.mark.asyncio
+async def test_access_wiring_covers_registered_dev_tools():
+  names = {tool.name for tool in await toolset.build().list_tools()}
+  assert names == _WIRED_TOOLS.keys() | _PATH_FREE_TOOLS
+  assert _PATH_FREE_TOOLS.isdisjoint(_WIRED_TOOLS)
+  recording = RecordingAccess()
+  with access.installed(recording):
+    read_reference()
+  assert not recording.calls
+
+
+class DenyingAccess(access.AllowAll):
+  def open_read(self, path: Path) -> BinaryIO:
+    raise access.FileAccessDenied(path, 'test read denial')
+
+  def open_write(self, path: Path, *, create_parents: bool = False) -> BinaryIO:
+    raise access.FileAccessDenied(path, 'test write denial')
+
+  def search_directory(self, path: Path) -> Path:
+    raise access.FileAccessDenied(path, 'test search denial')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', _WIRED_TOOLS)
+async def test_access_denial_propagates_without_touching_paths(name, tmp_path):
+  path = tmp_path / 'missing' / 'file'
+  arguments = {
+    'read_file': {'file_path': str(path)},
+    'write_file': {'file_path': str(path), 'content': 'after'},
+    'edit_file': {'file_path': str(path), 'old_string': 'before', 'new_string': 'after'},
+    'grep': {'pattern': 'before', 'path': str(path)},
+    'glob': {'pattern': '*', 'path': str(path)},
+  }
+  tools = {tool.name: tool for tool in await toolset.build().list_tools()}
+  with access.installed(DenyingAccess()), pytest.raises(access.FileAccessDenied):
+    await tools[name].call(arguments[name])
+  assert list(tmp_path.iterdir()) == []
+
+
+def test_edit_write_is_separately_authorized(tmp_path):
+  class ReadOnlyAccess(DenyingAccess):
+    def open_read(self, path: Path) -> BinaryIO:
+      return access.AllowAll().open_read(path)
+
+  path = tmp_path / 'file'
+  path.write_text('before')
+  with access.installed(ReadOnlyAccess()), pytest.raises(access.FileAccessDenied):
+    edit_file(str(path), 'before', 'after')
+  assert path.read_text() == 'before'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', ['grep', 'glob'])
+async def test_search_uses_authorized_path(name, tmp_path):
+  authorized = tmp_path / 'authorized'
+  authorized.mkdir()
+  (authorized / 'public').write_text('public')
+  requested = tmp_path / 'requested'
+  requested.mkdir()
+  (requested / 'private').write_text('private')
+
+  class RedirectedAccess(access.AllowAll):
+    def search_directory(self, path: Path) -> Path:
+      assert path == requested
+      return authorized
+
+  with access.installed(RedirectedAccess()):
+    if name == 'grep':
+      result = await grep('.', path=str(requested))
+    else:
+      result = glob('*', path=str(requested))
+  assert 'public' in result
+  assert 'private' not in result
+
+
+@pytest.mark.parametrize('pattern', ['/tmp/*', '../*', 'nested/../../*', '**/../*'])
+def test_glob_rejects_escaping_patterns(tmp_path, pattern):
+  with pytest.raises(ValueError, match='relative.*no .. components'):
+    glob(pattern, path=str(tmp_path))
+
+
+def test_glob_follows_explicit_symlinked_directory(tmp_path):
+  outside = tmp_path / 'outside'
+  outside.mkdir()
+  (outside / 'file').touch()
+  base = tmp_path / 'base'
+  base.mkdir()
+  (base / 'link').symlink_to(outside, target_is_directory=True)
+  assert str(base / 'link' / 'file') in glob('link/*', path=str(base))
+
+
+def test_file_tools_preserve_text_encoding_and_newlines(tmp_path):
+  path = tmp_path / 'file'
+  path.write_bytes('Привет\r\nsecond\rline'.encode())
+  assert read_file(str(path)).splitlines() == ['    1\tПривет', '    2\tsecond', '    3\tline']
+  edit_file(str(path), 'second', 'мир')
+  assert path.read_bytes() == 'Привет\nмир\nline'.encode()
+  write_file(str(path), 'Привет\n')
+  assert path.read_text() == 'Привет\n'
+
+
+@pytest.mark.parametrize('name', ['read_file', 'write_file', 'edit_file'])
+def test_file_tools_use_authorized_streams(name, tmp_path):
+  requested = tmp_path / 'requested'
+  requested.write_text('private')
+  authorized = tmp_path / 'authorized'
+  authorized.write_text('before')
+
+  class RedirectedAccess(access.AllowAll):
+    def open_read(self, path: Path) -> BinaryIO:
+      assert path == requested
+      return super().open_read(authorized)
+
+    def open_write(self, path: Path, *, create_parents: bool = False) -> BinaryIO:
+      assert path == requested
+      return super().open_write(authorized, create_parents=create_parents)
+
+  with access.installed(RedirectedAccess()):
+    if name == 'read_file':
+      assert 'before' in read_file(str(requested))
+    elif name == 'write_file':
+      write_file(str(requested), 'after')
+    else:
+      edit_file(str(requested), 'before', 'after')
+  assert authorized.read_text() == ('before' if name == 'read_file' else 'after')
+  assert requested.read_text() == 'private'
