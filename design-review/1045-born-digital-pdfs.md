@@ -639,61 +639,85 @@ Fixtures came from a stdlib-only PDF writer with an RC4 handler; the IRS Form 10
 ```python
 import ctypes
 from ctypes import byref, c_double, c_int, c_uint, c_ulong
+
 import pypdfium2.raw as raw
 
-# open: `data` must stay alive until FPDF_CloseDocument
-doc = raw.FPDF_LoadMemDocument64(data, len(data), password)     # password: bytes or None
+# open: `data` must stay alive until FPDF_CloseDocument; password is bytes or None
+doc = raw.FPDF_LoadMemDocument64(data, len(data), password)
 if not doc:
-  error = raw.FPDF_GetLastError()                               # 3, 4 or 5; sticky, so read it at once
+  # 3, 4 or 5; the error is sticky, so read it at once
+  error = raw.FPDF_GetLastError()
 count = raw.FPDF_GetPageCount(doc)
-page = raw.FPDF_LoadPage(doc, index) or None                    # None: the page is unreadable
-box = raw.FS_RECTF(); raw.FPDF_GetPageBoundingBox(page, box)    # box.left .bottom .right .top
+# None: the page is unreadable
+page = raw.FPDF_LoadPage(doc, index) or None
+box = raw.FS_RECTF()
+raw.FPDF_GetPageBoundingBox(page, box)  # box.left .bottom .right .top
 
 # per character; the handles stay valid while the page is open
 text_page = raw.FPDFText_LoadPage(page)
 count = raw.FPDFText_CountChars(text_page)
-code = raw.FPDFText_GetUnicode(text_page, i)                    # with IsGenerated, IsHyphen, HasUnicodeMapError
-text_object = raw.FPDFText_GetTextObject(text_page, i)          # NULL for most generated characters
+# IsGenerated, IsHyphen and HasUnicodeMapError give the flags
+code = raw.FPDFText_GetUnicode(text_page, i)
+# NULL for most generated characters
+text_object = raw.FPDFText_GetTextObject(text_page, i)
 mode = raw.FPDFTextObj_GetTextRenderMode(text_object)
-matrix = raw.FS_MATRIX(); raw.FPDFText_GetMatrix(text_page, i, byref(matrix))        # a b c d e f
+matrix = raw.FS_MATRIX()
+raw.FPDFText_GetMatrix(text_page, i, byref(matrix))  # a b c d e f
 red, green, blue, alpha = (c_uint() for _ in range(4))
-raw.FPDFText_GetFillColor(text_page, i, byref(red), byref(green), byref(blue), byref(alpha))   # GetStrokeColor likewise
+# GetStrokeColor likewise
+raw.FPDFText_GetFillColor(text_page, i, byref(red), byref(green), byref(blue), byref(alpha))
 left, right, bottom, top = (c_double() for _ in range(4))
-raw.FPDFText_GetCharBox(text_page, i, byref(left), byref(right), byref(bottom), byref(top))    # this order
-marks = raw.FPDFPageObj_CountMarks(text_object)                 # FPDFPageObj_GetMark, FPDFPageObjMark_GetName: "OC"
-# FPDFText_GetText(text_page, 0, count, buffer): the bulk text for `info`, UTF-16LE, count + 1 units
+# the order is left, right, bottom, top
+raw.FPDFText_GetCharBox(text_page, i, byref(left), byref(right), byref(bottom), byref(top))
+# a mark named "OC" is optional content: FPDFPageObj_GetMark, FPDFPageObjMark_GetName
+marks = raw.FPDFPageObj_CountMarks(text_object)
+# FPDFText_GetText(text_page, 0, count, buffer) is the bulk text for `info`: UTF-16LE, count + 1 units
 
 # links
-position = c_int(0); link = raw.FPDF_LINK()
+position = c_int(0)
+link = raw.FPDF_LINK()
 while raw.FPDFLink_Enumerate(page, byref(position), byref(link)):
-  rect = raw.FS_RECTF(); raw.FPDFLink_GetAnnotRect(link, byref(rect))     # not normalised
+  # the rectangle is not normalised
+  rect = raw.FS_RECTF()
+  raw.FPDFLink_GetAnnotRect(link, byref(rect))
   annotation = raw.FPDFLink_GetAnnot(page, link)
-  flags = raw.FPDFAnnot_GetFlags(annotation); raw.FPDFPage_CloseAnnot(annotation)
-  action = raw.FPDFLink_GetAction(link)                                   # NULL without /A
-  if action and raw.FPDFAction_GetType(action) == 3:                      # 3 is URI
-    size = raw.FPDFAction_GetURIPath(doc, action, None, 0)                # including the NUL
+  flags = raw.FPDFAnnot_GetFlags(annotation)
+  raw.FPDFPage_CloseAnnot(annotation)
+  # NULL without /A; action type 3 is URI
+  action = raw.FPDFLink_GetAction(link)
+  if action and raw.FPDFAction_GetType(action) == 3:
+    # the size includes the NUL
+    size = raw.FPDFAction_GetURIPath(doc, action, None, 0)
     buffer = ctypes.create_string_buffer(size)
     raw.FPDFAction_GetURIPath(doc, action, buffer, size)
-    uri = buffer.raw[:size - 1]                                           # `.value` would stop at an embedded NUL
+    # `.value` would stop at an embedded NUL
+    uri = buffer.raw[: size - 1]
 
 # attachments: GetFile must be given exactly the length it reported
 attachment = raw.FPDFDoc_GetAttachment(doc, i)
 length = c_ulong()
-raw.FPDFAttachment_GetFile(attachment, None, 0, byref(length))           # inflates the whole stream
+# the size query inflates the whole stream
+raw.FPDFAttachment_GetFile(attachment, None, 0, byref(length))
 buffer = ctypes.create_string_buffer(length.value)
-raw.FPDFAttachment_GetFile(attachment, buffer, length.value, byref(length))   # inflates it again
-# FPDFAttachment_GetName and GetSubtype: UTF-16LE two-call protocol, size in bytes including the NUL
+# the read inflates it again
+raw.FPDFAttachment_GetFile(attachment, buffer, length.value, byref(length))
+# names and subtypes: FPDFAttachment_GetName and GetSubtype, UTF-16LE two-call, size in bytes with the NUL
 
 # forms, as pypdfium2's PdfDocument.init_forms and get_page do
-info = raw.FPDF_FORMFILLINFO(version=2)                                   # no callbacks
-environment = raw.FPDFDOC_InitFormFillEnvironment(doc, info)              # before pages are loaded
-# FORM_OnAfterLoadPage(page, environment) after each load, FORM_OnBeforeClosePage before each close,
-# FPDFDOC_ExitFormFillEnvironment(environment) at the end; FPDF_GetFormType(doc): 0 none, 1 AcroForm, 2 and 3 XFA
-kind = raw.FPDFAnnot_GetFormFieldType(environment, annotation)           # 1 pushbutton 2 checkbox 3 radio 4 combobox 5 listbox 6 text 7 signature
-# FPDFAnnot_GetFormFieldName, GetFormFieldValue, GetFormFieldAlternateName: UTF-16LE two-call, inherited values resolved
-# FPDFAnnot_IsChecked, GetOptionCount, GetOptionLabel, IsOptionSelected; GetFormFieldFlags (bit 1 is ReadOnly)
+# the form-fill environment has no callbacks and exists before pages are loaded
+info = raw.FPDF_FORMFILLINFO(version=2)
+environment = raw.FPDFDOC_InitFormFillEnvironment(doc, info)
+# FORM_OnAfterLoadPage(page, environment) after each load and FORM_OnBeforeClosePage before each close
+# FPDFDOC_ExitFormFillEnvironment(environment) at the end
+# FPDF_GetFormType(doc): 0 none, 1 AcroForm, 2 and 3 XFA
+# the kinds: 1 pushbutton 2 checkbox 3 radio 4 combobox 5 listbox 6 text 7 signature
+kind = raw.FPDFAnnot_GetFormFieldType(environment, annotation)
+# FPDFAnnot_GetFormFieldName, GetFormFieldValue and GetFormFieldAlternateName: UTF-16LE two-call
+# inherited values are resolved; FPDFAnnot_IsChecked, GetOptionCount, GetOptionLabel, IsOptionSelected
+# GetFormFieldFlags: bit 1 is ReadOnly
 
 # fonts: before the first document; keep `info` alive
-info = raw.FPDF_SYSFONTINFO(); info.version = 1
+info = raw.FPDF_SYSFONTINFO()
+info.version = 1
 raw.FPDF_SetSystemFontInfo(byref(info))
 ```
