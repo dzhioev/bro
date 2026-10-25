@@ -8,8 +8,9 @@ The declaration imports models only; `provider.py` and `engine.py` belong in the
 
 - `bro/pdf/__init__.py` — the PDF declaration and details model.
 - `bro/pdf/engine.py` — direct ctypes bindings, initialized PDFium and scoped document/page/text handles.
-- `bro/pdf/page_text.py` — assembly of the per-character list into sanitized text.
-- `bro/pdf/provider.py` — preparation and inspection, including the has-text fast path.
+- `bro/pdf/page_text.py` — assembly of the per-character list into sanitized text and ordered notes.
+- `bro/pdf/provider.py` — preparation and inspection, including the has-text fast path and the text view.
+- `bro/pdf/view_limits.py` — cumulative string and entry accounting for views.
 - `bro/pdf/manual.md` — the shipped caller reference.
 - `bro/pdf/pdf_test_helper.py` — stdlib-only PDF generation for tests and checkout benchmarks; excluded from the wheel.
 

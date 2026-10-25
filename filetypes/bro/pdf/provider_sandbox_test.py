@@ -7,7 +7,8 @@ from bro.files.operations import Operations, read_reference
 from bro.files.protocol import Job
 from bro.files.runner import SubprocessRunner
 from bro.pdf import TYPE
-from bro.pdf.pdf_test_helper import make_pdf
+from bro.pdf.page_text import HIDDEN_EXCERPT_CHARACTERS, HIDDEN_NOTES
+from bro.pdf.pdf_test_helper import make_pdf, text_view_cases
 
 
 @pytest.mark.asyncio
@@ -102,3 +103,42 @@ def test_nonembedded_helvetica_with_decoy_fonts_before_and_after_confinement(tmp
     )
     results.append(json.loads(result.stdout))
   assert results[0] == results[1] == ['HelloWorld', 'Invoice INV-2024-001']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'name,arguments,text,notes',
+  text_view_cases(note_limit=HIDDEN_NOTES, excerpt_characters=HIDDEN_EXCERPT_CHARACTERS),
+)
+async def test_text_view_fixtures_through_real_worker(tmp_path, name, arguments, text, notes):
+  path = tmp_path / name
+  path.write_bytes(make_pdf(**arguments))
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'text')
+  assert result.content == {'pages': [{'page_number': 1, 'notes': notes, 'text': text}]}
+
+
+@pytest.mark.asyncio
+async def test_text_selection_unreadable_page_and_cap_through_worker(tmp_path):
+  from dataclasses import replace
+
+  path = tmp_path / 'document'
+  path.write_bytes(make_pdf(['first', 'second'], count=3))
+  with closing(Operations()) as state:
+    result = await state.view(str(path), 'text', pages='3,1,1')
+    assert result.content == {
+      'pages': [
+        {'page_number': 1, 'notes': [], 'text': 'first'},
+        {'page_number': 3, 'notes': [{'note': 'unreadable'}], 'text': ''},
+      ]
+    }
+    with pytest.raises(ValueError, match='document count'):
+      await state.view(str(path), 'text', pages='4')
+  file_type = replace(TYPE, limits=replace(TYPE.limits, max_view_characters=6))
+  with closing(SubprocessRunner()) as runner:
+    with pytest.raises(ValueError, match='page 2; narrow pages'):
+      await runner.run(Job(file_type, 'view', {'view': 'text', 'pages': None}, path.read_bytes()))
+    result = await runner.run(
+      Job(file_type, 'view', {'view': 'text', 'pages': [2]}, path.read_bytes())
+    )
+  assert result.ok['pages'][0]['text'] == 'second'
