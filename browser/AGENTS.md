@@ -24,6 +24,7 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 - `bro/webview/mcp.py` — the registered `webview` toolset for typed owner-side open, command, live-roster, sharing, reopen, and close operations
 - `bros/browser/__init__.py` — the registered browser persona, its webview launch seed, bounded tool roster, policy, and reporting contract
 - `bros/browser/mcp.py` — `browser::look`, the focused snapshot, text, and artifact reader with checked element refs
+- `bros/browser/scenarios.md` — the `browser-scenarios` man page (declared in `references.py`) for personas that summon the browser: profile grants, signing in with `webview setup`, persistence, remote views, and downloads
 - `bros/browser/spells/browse.md` — the owner-led instruction loop, clarification threads, uploads, and session log
 
 ## Browser persona

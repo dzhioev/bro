@@ -357,6 +357,7 @@ PYTEST_FILES = [
   'browser/bro/webview/cli_test.py',
   'browser/bro/webview/mcp_test.py',
   'browser/bros/browser/browser_test.py',
+  'browser/bros/browser/references_test.py',
   'browser/bros/browser/mcp_test.py',
   'local/bro/local/run_tests_test.py',
   'local/bro/local/green_trees_test.py',
