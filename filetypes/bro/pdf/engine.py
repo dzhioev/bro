@@ -4,6 +4,7 @@ import ctypes
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
+from math import hypot
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from pypdfium2_raw.version import PDFIUM_INFO
 from bro.files.protocol import InvalidInput
 from bro.files.text import sanitize
 from bro.files.types import Limits
+from bro.pdf import HiddenReason
 from bro.pdf.page_text import Character, assemble
 
 _POINTER = ctypes.c_void_p
@@ -70,6 +72,26 @@ class Engine:
     self.generated = self.bind('FPDFText_IsGenerated', _INTEGER, _POINTER, _INTEGER)
     self.hyphen = self.bind('FPDFText_IsHyphen', _INTEGER, _POINTER, _INTEGER)
     self.bulk_text = self.bind('FPDFText_GetText', _INTEGER, _POINTER, _INTEGER, _INTEGER, _POINTER)
+    self.text_object = self.bind('FPDFText_GetTextObject', _POINTER, _POINTER, _INTEGER)
+    self.render_mode = self.bind('FPDFTextObj_GetTextRenderMode', _INTEGER, _POINTER)
+    self.font_size = self.bind('FPDFText_GetFontSize', ctypes.c_double, _POINTER, _INTEGER)
+    self.character_matrix = self.bind('FPDFText_GetMatrix', _INTEGER, _POINTER, _INTEGER, _POINTER)
+    self.character_box = self.bind(
+      'FPDFText_GetCharBox', _INTEGER, _POINTER, _INTEGER, _POINTER, _POINTER, _POINTER, _POINTER
+    )
+    self.page_box = self.bind('FPDF_GetPageBoundingBox', _INTEGER, _POINTER, _POINTER)
+    self.fill_color = self.bind(
+      'FPDFPageObj_GetFillColor', _INTEGER, _POINTER, _POINTER, _POINTER, _POINTER, _POINTER
+    )
+    self.stroke_color = self.bind(
+      'FPDFPageObj_GetStrokeColor', _INTEGER, _POINTER, _POINTER, _POINTER, _POINTER, _POINTER
+    )
+    self.mark_count = self.bind('FPDFPageObj_CountMarks', _INTEGER, _POINTER)
+    self.mark = self.bind('FPDFPageObj_GetMark', _POINTER, _POINTER, _UNSIGNED_LONG)
+    self.mark_name = self.bind(
+      'FPDFPageObjMark_GetName', _INTEGER, _POINTER, _POINTER, _UNSIGNED_LONG, _POINTER
+    )
+    self.unmapped = self.bind('FPDFText_HasUnicodeMapError', _INTEGER, _POINTER, _INTEGER)
     self.metadata = self.bind(
       'FPDF_GetMetaText', _UNSIGNED_LONG, _POINTER, ctypes.c_char_p, _POINTER, _UNSIGNED_LONG
     )
@@ -140,7 +162,7 @@ class Engine:
       with document.page(0) as page:
         if page is None or not page.has_text():
           raise RuntimeError('PDFium could not read its built-in document')
-        page.characters()
+        page.classified_characters()
 
 
 @dataclass
@@ -189,6 +211,92 @@ class TextPage:
       for index in range(self.count())
     ]
 
+  def classified_characters(self) -> list[Character]:
+    engine = self.engine
+    text = self.text_handle
+    bounds = raw.FS_RECTF()
+    if not engine.page_box(self.handle, ctypes.byref(bounds)):
+      raise RuntimeError('PDFium failed to read a page box')
+    left, right, bottom, top = (ctypes.c_double() for _ in range(4))
+    box_pointers = tuple(ctypes.byref(value) for value in (left, right, bottom, top))
+    styles: dict[int, TextStyle] = {}
+    characters = []
+    for index in range(self.count()):
+      code = engine.unicode(text, index)
+      generated = bool(engine.generated(text, index))
+      hyphen = bool(engine.hyphen(text, index))
+      if generated:
+        characters.append(Character(code, generated, hyphen))
+        continue
+      handle = engine.text_object(text, index)
+      if not handle:
+        raise RuntimeError('PDFium returned no text object for a non-generated character')
+      style = styles.get(handle)
+      if style is None:
+        style = self.style(handle, index)
+        styles[handle] = style
+      if not engine.character_box(text, index, *box_pointers):
+        raise RuntimeError('PDFium failed to read a character box')
+      box = (left.value, right.value, bottom.value, top.value)
+      reason: HiddenReason | None = None
+      if style.invisible:
+        reason = 'invisible'
+      elif (
+        right.value < bounds.left
+        or left.value > bounds.right
+        or top.value < bounds.bottom
+        or bottom.value > bounds.top
+      ):
+        reason = 'outside_page'
+      elif style.effective_size < 2:
+        reason = 'tiny'
+      elif style.white:
+        reason = 'white'
+      elif style.layer:
+        reason = 'layer'
+      characters.append(
+        Character(code, False, hyphen, reason, bool(engine.unmapped(text, index)), box)
+      )
+    return characters
+
+  def style(self, handle: int, index: int) -> 'TextStyle':
+    engine = self.engine
+    mode = engine.render_mode(handle)
+    if mode not in range(8):
+      raise RuntimeError('PDFium returned an invalid text render mode')
+    colors = []
+    red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
+    pointers = tuple(ctypes.byref(value) for value in (red, green, blue, alpha))
+    for function in (engine.fill_color, engine.stroke_color):
+      if not function(handle, *pointers):
+        raise RuntimeError('PDFium failed to read a text color')
+      colors.append((red.value, green.value, blue.value, alpha.value))
+    painted = [colors[0]] if mode in (0, 4) else [colors[1]] if mode in (1, 5) else colors
+    invisible = mode in (3, 7) or all(color[3] == 0 for color in painted)
+    white = all(color[3] == 0 or min(color[:3]) >= 250 for color in painted)
+    count = engine.mark_count(handle)
+    if count < 0:
+      raise RuntimeError('PDFium failed to count text-object marks')
+    layer = False
+    for mark_index in range(count):
+      mark = engine.mark(handle, mark_index)
+      if not mark:
+        raise RuntimeError('PDFium failed to read a text-object mark')
+      size = ctypes.c_ulong()
+      if (
+        not engine.mark_name(mark, None, 0, ctypes.byref(size)) or size.value < 2 or size.value % 2
+      ):
+        raise RuntimeError('PDFium failed to read a text-object mark name')
+      buffer = ctypes.create_string_buffer(size.value)
+      if not engine.mark_name(mark, buffer, len(buffer), ctypes.byref(size)):
+        raise RuntimeError('PDFium failed to read a text-object mark name')
+      layer |= buffer.raw[:-2].decode('utf-16-le', errors='replace') == 'OC'
+    matrix = raw.FS_MATRIX()
+    if not engine.character_matrix(self.text_handle, index, ctypes.byref(matrix)):
+      raise RuntimeError('PDFium failed to read a character matrix')
+    effective_size = abs(engine.font_size(self.text_handle, index)) * hypot(matrix.c, matrix.d)
+    return TextStyle(effective_size, invisible, white, layer)
+
   def has_text(self) -> bool:
     count = self.count()
     if count == 0:
@@ -201,3 +309,11 @@ class TextPage:
     if clean_string(bulk).strip():
       return True
     return bool(assemble(self.characters()).strip())
+
+
+@dataclass(frozen=True)
+class TextStyle:
+  effective_size: float
+  invisible: bool
+  white: bool
+  layer: bool

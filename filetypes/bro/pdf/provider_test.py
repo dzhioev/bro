@@ -8,8 +8,14 @@ from bro.files.operations import validate_manual
 from bro.files.protocol import InvalidInput
 from bro.pdf import TYPE
 from bro.pdf.engine import TextPage
-from bro.pdf.page_text import Character, assemble
-from bro.pdf.pdf_test_helper import decoy_font, make_pdf, text_operators
+from bro.pdf.page_text import (
+  HIDDEN_EXCERPT_CHARACTERS,
+  HIDDEN_NOTES,
+  Character,
+  assemble,
+  text_and_notes,
+)
+from bro.pdf.pdf_test_helper import decoy_font, make_pdf, text_operators, text_view_cases
 from bro.pdf.provider import (
   ATTACHMENT_NAMES,
   NAME_CHARACTERS,
@@ -250,3 +256,120 @@ def test_nonembedded_helvetica_is_independent_of_a_decoy_font_directory(tmp_path
     )
     results.append(json.loads(result.stdout))
   assert results[0] == results[1] == ['HelloWorld', 'Invoice INV-2024-001']
+
+
+@pytest.mark.parametrize(
+  'name,arguments,text,notes',
+  text_view_cases(note_limit=HIDDEN_NOTES, excerpt_characters=HIDDEN_EXCERPT_CHARACTERS),
+)
+def test_text_view_fixtures(name, arguments, text, notes):
+  result = provider.view(make_pdf(**arguments), 'text', None, TYPE.limits)
+  assert result == {'pages': [{'page_number': 1, 'notes': notes, 'text': text}]}
+  TYPE.get_view('text').content.model_validate(result, strict=True)
+
+
+def test_hidden_runs_use_priority_and_include_only_internal_generated_characters():
+  text, notes = text_and_notes(
+    [
+      Character(ord('a'), reason='white'),
+      Character(13, generated=True),
+      Character(10, generated=True),
+      Character(ord('b'), reason='invisible'),
+      Character(32, generated=True),
+      Character(ord('c')),
+      Character(ord('d'), reason='tiny'),
+      Character(32, generated=True),
+    ]
+  )
+  assert text == 'a\nb cd '
+  assert [note.model_dump() for note in notes] == [
+    {'note': 'hidden_text', 'reason': 'invisible', 'text': 'a b'},
+    {'note': 'hidden_text', 'reason': 'tiny', 'text': 'd'},
+  ]
+
+
+def test_tag_and_physical_runs_are_ordered_and_bounded_with_unmapped_count():
+  characters = [Character(ord('X'))]
+  characters += [Character(0xE0000 + ord(character)) for character in 'first']
+  for _ in range(HIDDEN_NOTES + 2):
+    characters += [Character(ord('V'))]
+    characters += [Character(ord('h'), reason='white', unmapped=True)] * (
+      HIDDEN_EXCERPT_CHARACTERS + 2
+    )
+  text, notes = text_and_notes(characters)
+  assert text.startswith('XVhh')
+  values = [note.model_dump() for note in notes]
+  assert values[0] == {'note': 'hidden_text', 'reason': 'tag_characters', 'text': 'first'}
+  assert values[1:HIDDEN_NOTES] == [
+    {'note': 'hidden_text', 'reason': 'white', 'text': 'h' * HIDDEN_EXCERPT_CHARACTERS}
+  ] * (HIDDEN_NOTES - 1)
+  assert values[-2:] == [
+    {'note': 'hidden_text_more', 'run_count': 3},
+    {
+      'note': 'unmapped_characters',
+      'character_count': (HIDDEN_NOTES + 2) * (HIDDEN_EXCERPT_CHARACTERS + 2),
+    },
+  ]
+
+
+def test_text_page_selection_and_unreadable_pages():
+  data = make_pdf(['first', 'second'], count=3)
+  assert provider.view(data, 'text', [3, 1, 1], TYPE.limits) == {
+    'pages': [
+      {'page_number': 1, 'notes': [], 'text': 'first'},
+      {'page_number': 3, 'notes': [{'note': 'unreadable'}], 'text': ''},
+    ]
+  }
+  with pytest.raises(InvalidInput, match='document count'):
+    provider.view(data, 'text', [4], TYPE.limits)
+  with pytest.raises(InvalidInput, match='unknown PDF view'):
+    provider.view(data, 'absent', None, TYPE.limits)
+
+
+@pytest.mark.parametrize('limit,cap', [('max_view_characters', 10), ('max_view_entries', 1)])
+def test_text_caps_are_cumulative_and_name_only_the_page(limit, cap):
+  data = make_pdf(['first', 'untrusted-document-name'])
+  limits = replace(TYPE.limits, **{limit: cap})
+  with pytest.raises(InvalidInput, match=f'{limit} at page 2; narrow pages') as error:
+    provider.view(data, 'text', None, limits)
+  assert 'untrusted-document-name' not in str(error.value)
+  assert provider.view(data, 'text', [1], limits)['pages'][0]['text'] == 'first'
+
+
+def test_caps_include_notes_and_their_string_values():
+  data = make_pdf([text_operators('x', mode=3)])
+  with pytest.raises(InvalidInput, match='max_view_characters at page 1'):
+    provider.view(data, 'text', None, replace(TYPE.limits, max_view_characters=2))
+  with pytest.raises(InvalidInput, match='max_view_entries at page 1'):
+    provider.view(data, 'text', None, replace(TYPE.limits, max_view_entries=1))
+  assert (
+    provider.view(
+      make_pdf(['12345', '67890']),
+      'text',
+      None,
+      replace(TYPE.limits, max_view_characters=10, max_view_entries=2),
+    )['pages'][1]['text']
+    == '67890'
+  )
+
+
+def test_text_styles_are_read_once_per_text_object(monkeypatch):
+  reads = 0
+  matrix_reads = 0
+  original_matrix = provider.engine.character_matrix
+  original = provider.engine.render_mode
+
+  def read(handle):
+    nonlocal reads
+    reads += 1
+    return original(handle)
+
+  def read_matrix(*arguments):
+    nonlocal matrix_reads
+    matrix_reads += 1
+    return original_matrix(*arguments)
+
+  monkeypatch.setattr(provider.engine, 'character_matrix', read_matrix)
+  monkeypatch.setattr(provider.engine, 'render_mode', read)
+  provider.view(make_pdf(['Long enough to share a text object']), 'text', None, TYPE.limits)
+  assert reads == matrix_reads == 1

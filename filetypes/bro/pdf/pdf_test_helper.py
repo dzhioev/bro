@@ -213,6 +213,13 @@ def make_pdf(
   embedded_font: bytes | None = None,
   media_box: list[float] | None = None,
   page_tree_cycle: bool = False,
+  rotation: int = 0,
+  crop_box: list[float] | None = None,
+  optional_content: bool = False,
+  graphics_states: dict[str, Any] | None = None,
+  unmapped_font: bool = False,
+  form_content: bytes | None = None,
+  form_matrix: list[float] | None = None,
   **build_arguments: Any,
 ) -> bytes:
   writer = PdfWriter()
@@ -268,7 +275,46 @@ def make_pdf(
     for code, name in glyph_names.items():
       differences.extend([code, Name(name)])
     font_dictionary['Encoding'] = {'Type': Name('Encoding'), 'Differences': differences}
+  if unmapped_font:
+    font_dictionary = {
+      'Type': Name('Font'),
+      'Subtype': Name('Type0'),
+      'BaseFont': Name('Arial'),
+      'Encoding': Name('Identity-H'),
+      'DescendantFonts': [
+        writer.add(
+          {
+            'Type': Name('Font'),
+            'Subtype': Name('CIDFontType2'),
+            'BaseFont': Name('Arial'),
+            'CIDSystemInfo': {'Registry': b'Adobe', 'Ordering': b'Identity', 'Supplement': 0},
+          }
+        )
+      ],
+    }
   font = writer.add(font_dictionary)
+  resources: dict[str, Any] = {'Font': {'F1': font}}
+  layer = None
+  if optional_content:
+    layer = writer.add({'Type': Name('OCG'), 'Name': b'Fixture layer'})
+    resources['Properties'] = {'MC0': layer}
+  if graphics_states is not None:
+    resources['ExtGState'] = graphics_states
+  if form_content is not None:
+    resources['XObject'] = {
+      'Form': writer.add(
+        Stream(
+          form_content,
+          {
+            'Type': Name('XObject'),
+            'Subtype': Name('Form'),
+            'BBox': [0, 0, 612, 792],
+            'Resources': {'Font': {'F1': font}},
+            'Matrix': form_matrix or [1, 0, 0, 1, 0, 0],
+          },
+        )
+      )
+    }
   page_references = []
   widget_references = []
   for page_index, content in enumerate(['Hello PDF'] if pages is None else pages):
@@ -278,8 +324,11 @@ def make_pdf(
       'Type': Name('Page'),
       'Parent': tree,
       'MediaBox': media_box or [0, 0, 612, 792],
-      'Resources': {'Font': {'F1': font}},
+      'Resources': resources,
+      'Rotate': rotation,
     }
+    if crop_box is not None:
+      dictionary['CropBox'] = crop_box
     if content is not None:
       dictionary['Contents'] = writer.add(
         Stream(text_operators(content) if isinstance(content, str) else content)
@@ -329,6 +378,8 @@ def make_pdf(
     },
   )
   catalog_dictionary: dict[str, Any] = {'Type': Name('Catalog'), 'Pages': tree}
+  if layer is not None:
+    catalog_dictionary['OCProperties'] = {'OCGs': [layer], 'D': {'OFF': [layer]}}
   if attachments:
     names = []
     for name, data, media_type in attachments:
@@ -440,3 +491,208 @@ def decoy_font(*, advance: int = 1800) -> bytes:
   checksum = sum(struct.unpack(f'>{len(font) // 4}I', font)) & 0xFFFFFFFF
   struct.pack_into('>I', font, head_offset + 8, (0xB1B0AFBA - checksum) & 0xFFFFFFFF)
   return bytes(font)
+
+
+def text_view_cases(
+  *, note_limit: int, excerpt_characters: int
+) -> list[tuple[str, dict[str, Any], str, list[dict[str, Any]]]]:
+  def hidden(reason: str, text: str) -> list[dict[str, Any]]:
+    return [{'note': 'hidden_text', 'reason': reason, 'text': text}]
+
+  cases: list[tuple[str, dict[str, Any], str, list[dict[str, Any]]]] = [
+    ('empty', {'pages': [None]}, '', []),
+    (
+      'repeated-form',
+      {
+        'pages': [b'/Form Do q .1 0 0 .1 100 100 cm /Form Do Q'],
+        'form_content': text_operators('same', x=100, y=100),
+      },
+      'same same',
+      hidden('tiny', 'same'),
+    ),
+    (
+      'wrapped',
+      {'pages': [text_operators('ACCOUNT', y=720) + text_operators('NUMBER', y=705)]},
+      'ACCOUNT\nNUMBER',
+      [],
+    ),
+    (
+      'table',
+      {
+        'pages': [
+          b''.join(
+            text_operators(value, x=x, y=y)
+            for value, x, y in [
+              ('Item', 72, 720),
+              ('Price', 200, 720),
+              ('Book', 72, 700),
+              ('42.00', 200, 700),
+            ]
+          )
+        ]
+      },
+      'Item Price\nBook 42.00',
+      [],
+    ),
+    (
+      'hyphen',
+      {'pages': [b'BT /F1 12 Tf 72 720 Td (inter-) Tj 0 -15 Td (national) Tj ET']},
+      'inter-national',
+      [],
+    ),
+    (
+      'crop',
+      {'pages': [text_operators('outside', x=10)], 'crop_box': [100, 0, 612, 792]},
+      'outside',
+      hidden('outside_page', 'outside'),
+    ),
+    (
+      'layer',
+      {'pages': [b'/OC /MC0 BDC ' + text_operators('layer') + b' EMC'], 'optional_content': True},
+      'layer',
+      hidden('layer', 'layer'),
+    ),
+    (
+      'form-small',
+      {
+        'pages': [b'/Form Do'],
+        'form_content': text_operators('form', x=100, y=100),
+        'form_matrix': [0.1, 0, 0, 0.1, 100, 100],
+      },
+      'form',
+      hidden('tiny', 'form'),
+    ),
+    (
+      'form-scaled',
+      {
+        'pages': [b'/Form Do'],
+        'form_content': text_operators('form', x=10, y=10, size=1),
+        'form_matrix': [12, 0, 0, 12, 0, 0],
+      },
+      'form',
+      [],
+    ),
+    (
+      'rotated',
+      {'pages': [text_operators('first', y=720) + text_operators('second', y=700)], 'rotation': 90},
+      'second\nfirst',
+      [],
+    ),
+    ('rotated-box', {'pages': [text_operators('inside')], 'rotation': 90}, 'inside', []),
+    (
+      'iban',
+      {
+        'pages': ['ABCD'],
+        'character_map': {65: 'DE89', 66: '\u200b', 67: '37040044', 68: '0532013000'},
+      },
+      'DE89370400440532013000',
+      [],
+    ),
+    ('supplementary-pair', {'pages': ['A'], 'character_map': {65: '\U0001f600'}}, '\U0001f600', []),
+    (
+      'supplementary-scalar',
+      {'pages': ['A'], 'glyph_names': {65: 'u1F600'}, 'embedded_font': decoy_font()},
+      '\U0001f600',
+      [],
+    ),
+    (
+      'lying-map',
+      {'pages': ['BANK'], 'character_map': {66: 'X', 65: 'Y', 78: 'Z', 75: '!'}},
+      'XYZ!',
+      [],
+    ),
+    (
+      'tag',
+      {
+        'pages': ['ABC'],
+        'character_map': {
+          65: 'A',
+          66: ''.join(chr(0xE0000 + ord(character)) for character in 'secret payload'),
+          67: 'C',
+        },
+      },
+      'AC',
+      hidden('tag_characters', 'secret payload'),
+    ),
+    (
+      'tag-spaces',
+      {'pages': ['ABC'], 'character_map': {65: 'A', 66: '\U000e0020\U000e0020', 67: 'C'}},
+      'AC',
+      [],
+    ),
+    (
+      'unmapped',
+      {'pages': [b'BT /F1 12 Tf 72 720 Td <002b0048004f004f0052> Tj ET'], 'unmapped_font': True},
+      '+HOOR',
+      [{'note': 'unmapped_characters', 'character_count': 5}],
+    ),
+  ]
+  for mode in range(8):
+    cases.append(
+      (
+        f'mode-{mode}',
+        {'pages': [text_operators('mode', mode=mode)]},
+        'mode',
+        hidden('invisible', 'mode') if mode in (3, 7) else [],
+      )
+    )
+  for name, prefix, arguments, reason in [
+    ('white-background', b'1 g ', {}, 'white'),
+    ('dark-background', b'0 g 0 0 612 792 re f 1 g ', {}, 'white'),
+    ('white-stroke', b'1 G ', {'mode': 1}, 'white'),
+    ('black-stroke-white-fill', b'1 g 0 G ', {'mode': 1}, None),
+    ('black-stroke-both', b'1 g 0 G ', {'mode': 2}, None),
+    ('both-white', b'1 g 1 G ', {'mode': 2}, 'white'),
+    ('near-white', b'0.97 g ', {}, None),
+    ('white-threshold', b'0.99 g ', {}, 'white'),
+    ('tiny', b'', {'size': 1}, 'tiny'),
+    ('size-threshold', b'', {'size': 2}, None),
+    ('negative-size', b'', {'size': -12}, None),
+    ('outside', b'', {'x': 1000}, 'outside_page'),
+    ('outside-before-tiny', b'1 g ', {'x': 1000, 'size': 1}, 'outside_page'),
+    ('invisible-before-outside', b'', {'mode': 3, 'x': 1000}, 'invisible'),
+  ]:
+    cases.append(
+      (
+        name,
+        {'pages': [prefix + text_operators('payload', **arguments)]},
+        'payload',
+        hidden(reason, 'payload') if reason else [],
+      )
+    )
+  for name, state, mode, reason in [
+    ('transparent-fill', {'ca': 0}, 0, 'invisible'),
+    ('transparent-stroke', {'CA': 0}, 1, 'invisible'),
+    ('transparent-both', {'ca': 0, 'CA': 0}, 2, 'invisible'),
+    ('visible-stroke', {'ca': 0}, 2, None),
+    ('white-transparent-stroke', {'CA': 0}, 2, 'white'),
+  ]:
+    cases.append(
+      (
+        name,
+        {
+          'pages': [b'/State gs 1 g ' + text_operators('alpha', mode=mode)],
+          'graphics_states': {'State': state},
+        },
+        'alpha',
+        hidden(reason, 'alpha') if reason else [],
+      )
+    )
+  long_payload = 'x' * (excerpt_characters + 3)
+  content = b''.join(
+    b'q 1 g '
+    + text_operators(long_payload, y=750 - 24 * index, size=3)
+    + b' Q '
+    + text_operators('visible', y=738 - 24 * index, size=3)
+    for index in range(note_limit + 2)
+  )
+  cases.append(
+    (
+      'bounded-notes',
+      {'pages': [content]},
+      '\n'.join([long_payload, 'visible'] * (note_limit + 2)),
+      hidden('white', long_payload[:excerpt_characters]) * note_limit
+      + [{'note': 'hidden_text_more', 'run_count': 2}],
+    )
+  )
+  return cases
