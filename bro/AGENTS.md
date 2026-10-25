@@ -100,7 +100,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `datasources/` — the `DataSource` ABC and the read-only connectors;
   see `datasources/AGENTS.md`
 - `extra/github/` — the GitHub API client (`api.py`), the GitHub App authentication source (`app.py`), and pull-request reads (`pulls.py`)
-- `files/` — file-access decisions and regular-file opens;
+- `files/` — file-access decisions, file-type declarations and selection, page parsing, text safety and result envelopes;
   see `files/AGENTS.md`
 - `harness/` — the framework half of a driving harness and what a consuming harness brings of its own.
   `__init__.py` holds the `Harness` interface and the `bro.harnesses` registry:

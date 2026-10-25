@@ -21,12 +21,16 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   each entry's name matches its `bro.worker_types.WorkerType.name`
 - `bro.harnesses` — one installed driving-harness object per entry, `<name> = "<module>:<object>"`;
   each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
+- `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
+  each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
 - `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
   each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 
 Entry points are installation metadata:
 sync the environment (`uv sync`) after adding or removing one, while editing an already-declared target module needs no reinstall.
-Name-keyed groups load only the matching entry, while credential-registry assembly loads every `bro.credentials` contribution, so those target modules must remain import-cheap.
+Name-keyed groups load only the matching entry, except file-type identification (`bro.files.registry.identify`), which loads every installed type to match content.
+Credential-registry assembly also loads every `bro.credentials` contribution.
+These target modules must remain import-cheap.
 
 ## Declaring a bro
 
@@ -178,7 +182,6 @@ Input redirects may read any path into an admitted command.
 Output redirects may write files only when the persona's file reach is writable;
 here-documents, here-strings, descriptor duplication and closure, and `/dev/null`, `/dev/stdout`, and `/dev/stderr` are always available.
 
-
 ## Registering a bro
 
 Register the class under the distribution's `bro` entry-point group, `your-name = "your.module:YourBro"`, and sync ("Entry-point groups" above).
@@ -241,3 +244,44 @@ def lookup(product_id: str, context: Context[Catalog]) -> str:
   a `bro.toolsets` entry named after the namespace (`catalog = "acme.catalog:toolset"`) additionally lets `mcp-server catalog` serve the toolset standalone.
 - `MCPServerSpec.of('<namespace>', ServerClass, *ctor_args)` is the manifest escape hatch for a server class of another shape, naming the namespace the built server serves;
   wrap it in `ToolLayer(server_specs=(spec,))` to mount it.
+
+## Adding a file type
+
+Register a frozen `FileType` instance from `bro.files` in `bro.file_types`:
+
+```toml
+[project.entry-points."bro.file_types"]
+report = "acme.report:TYPE"
+```
+
+The declaration module imports no parser.
+It declares pydantic model classes for `details` and each view's `content`, a `Limits` instance, the shipped markdown manual's `Path`, and a `provider` string in `module:attribute` form.
+Only the worker imports the provider.
+The entry name and the declaration's `name` must agree and follow `[a-z][a-z0-9-]*`.
+Two distributions claiming the same name are an error, not a priority order.
+
+- `signatures` is a tuple of `Signature(marker, within)` objects:
+  `marker` is nonempty bytes beginning at an offset no greater than `within`, and the whole search must fit in `bro.files.types.IDENTIFICATION_BYTES`.
+  An empty tuple makes the type accessible only by explicit `type`.
+- `views` is a tuple of `View(name, about, content, paged)` objects with unique names:
+  `about` is a nonempty single line and `paged` says whether the view accepts page selection.
+- `limits` declares `max_bytes`, `max_pages`, `max_view_characters` and `max_view_entries` as positive integers.
+  `max_pages=None` describes a type without pages, which cannot declare a paged view.
+  Sandbox bounds belong to the runner, not the type.
+- `manual` documents every field returned by `details` and by each view's `content`, including nested models, plus the type's transformations, omissions, limits and rejections.
+  `bro.files.operations.validate_manual` checks field coverage, and `read_reference(type)` performs that check when serving the manual.
+
+Installed names are read from metadata without loading declarations, and `TypeRegistry` caches each selected type.
+`identify(head)` loads every installed declaration, matches its signatures and requires exactly one match; a broken declaration fails identification by name.
+An explicit `type` loads only that entry, bypasses signature matching and leaves the provider to reject unreadable bytes.
+A file's extension is never consulted.
+The framework validates provider replies against the declared models and returns the validated objects as dictionaries under the fixed result envelopes.
+Result keys and manual coverage use model field names, not serialization aliases, including in nested models.
+
+Providers use `bro.files.text.sanitize` on strings before returning them.
+It supplies stripped text and decoded tag-character payloads with input offsets, so page-text providers can report those payloads in their notes.
+ZWNJ and ZWJ are retained.
+`validate_strings` refuses lone surrogates and control characters other than TAB, LF and CR throughout a JSON reply, object keys included.
+
+Without a type installed, selection fails with an installation hint, while `read_reference()` still returns shared rules and an empty type list.
+The shared rules ship in `bro/files/reference.md` and are independent of any parser distribution.
