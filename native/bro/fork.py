@@ -24,13 +24,13 @@ at record time. cross-model forks discard reasoning by design — a different
 model wouldn't have used the prior model's thinking anyway.
 """
 
-import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional, cast
 
 import bro.native.llms.openai as native_openai
 from bro.llm.llm import LLMSpec, NativeLLMSpec
+from bro.llm.mcp import encode_tool_result
 from bro.llm.tracker import NullTracker, Tracker
 from bro.native.harness import BRO
 from bro.native.llm import LLM
@@ -124,7 +124,7 @@ def _replay_step_items(trail: RecordedTrail, up_to_step_id: int) -> list[dict]:
         {
           'type': 'function_call_output',
           'call_id': step.extras['call_id'],
-          'output': _encode_tool_output(step.body),
+          'output': encode_tool_result(step.body),
         }
       )
     if step.step_id == up_to_step_id:
@@ -359,14 +359,6 @@ def _response_output_items(llm_call_body: Any) -> list[dict]:
     for item in output
     if isinstance(item, dict) and item.get('type') != 'compaction'
   ]
-
-
-def _encode_tool_output(output: Any) -> str:
-  # mirrors `OpenAI._execute_tool_calls`: dicts go on the wire as JSON; other
-  # tool outputs (str, already-stringified) pass through.
-  if isinstance(output, dict):
-    return json.dumps(output)
-  return output if isinstance(output, str) else str(output)
 
 
 def _preseed(inner_llm: LLM, prefix: list[dict]) -> None:
