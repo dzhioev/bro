@@ -18,6 +18,7 @@ _REQUIRED_FILES = {
   'bro/oops/infra/server_base/Dockerfile',
   'bro/oops/infra/server_base/install_launcher.sh',
   'bros/devoops/__init__.py',
+  'bros/devoops/devoops.py',
   'bros/devoops/spells/deploy.md',
 }
 

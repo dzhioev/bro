@@ -124,7 +124,7 @@ Classify each changed file by its reach:
 - **Commands** — a member's `[project.scripts]` or `bro.session_commands` table, or the module behind a command.
   Grep the repository for the command name in scripts, CI workflows, git hooks, docs, `cli(...)` tool declarations, and deploy-target commands, and read each use the same way:
   the flags it passes, the output it consumes, the exit status it relies on, the environment and files it assumes.
-- **Declaration strings** — the persona API (`bro/bro.py`, `bro/mcp.py`, `bros/dev/__init__.py`, `bro/datasources/references.py`, `bro/harness/*`).
+- **Declaration strings** — the persona API (`bro/bro.py`, `bro/mcp.py`, `bros/dev/dev.py`, `bro/datasources/references.py`, `bro/harness/*`).
   The repository's type check holds its imports and signatures;
   the strings are yours:
   `cli('<command>')` commands, `mount(toolset, '<tool>')` names, feature names, `[[…]]` spell markers in prompt text, and `{{…}}` directive vocabulary.

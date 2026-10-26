@@ -1,9 +1,5 @@
-from bro.bro import BaseBro
+# `spells` is bound before the persona module, which reads it as `bro.spells`
 from bros.bro import spells
+from bros.bro.bro import Bro
 
-
-class Bro(BaseBro):
-  name = 'bro'
-  description = 'your go-to bro: a generic agent with default settings'
-  spells = (spells.ask, spells.reflect, spells.watch)
-  system_prompt = 'You are a bro.'
+__all__ = ['Bro', 'spells']
