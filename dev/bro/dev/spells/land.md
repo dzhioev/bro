@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.5.0
+version: 5.6.0
 ---
 
 # land
@@ -48,6 +48,16 @@ If they still read as working commits
 — a checkpoint, a review fix standing on its own
 — the branch never went through [[run pr]]'s fold step, and merging would put that noise on `<base>`.
 Fold it now per that step and force-push, then wait for the approval the push costs where the repo requires the last push to be approved.
+
+Then look for pull requests stacked on this branch, because the merge deletes it and GitHub closes a pull request whose base disappears and then refuses to reopen or retarget it:
+
+```bash
+gh api --paginate -X GET "repos/{owner}/{repo}/pulls" -f state=open -f base="$(git branch --show-current)" --jq '.[] | "\(.number) \(.title)"'
+```
+
+Retarget each one to `<base>` first (`gh pr edit <n> --base <base>`).
+Where questions reach the user, say which they are before the merge;
+rebasing a retargeted branch onto `<base>` once this lands is its own session's.
 
 ## Step 2 — merge: run `land-pr`{{when #may_summon contains eyebro}}
 
