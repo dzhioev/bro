@@ -156,7 +156,9 @@ an iteration stays small enough for the next runs to test, and the definition co
 
 Present the findings and the edits together, per finding:
 the step, rule, or capability, what the run did with it, what in the definition caused it, the surface, the edit.
-Whether the turn ends on the proposals before delivery is decided by the session's hold, not by this spell.
+Then end the turn:
+what is wrong and what to change are the user's to confirm, as in [[fix]].
+Deliver only the proposals they confirm.
 Delivery is per proposal:
 fix it in place when this session can edit the surface
 — apply the edit, verify it like any other change, and land it per [[run pr]];
