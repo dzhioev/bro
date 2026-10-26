@@ -10,6 +10,7 @@ from bro.pdf import TYPE
 from bro.pdf.attachments import TEXT_BYTES
 from bro.pdf.page_text import HIDDEN_EXCERPT_CHARACTERS, HIDDEN_NOTES
 from bro.pdf.pdf_test_helper import (
+  UNAVAILABLE_ENTRIES_PDF,
   attachments_view_cases,
   fields_view_cases,
   links_view_cases,
@@ -274,3 +275,20 @@ async def test_field_options_cap_selection_and_following_call_through_worker(tmp
   with closing(Operations()) as state:
     result = await state.view(str(path), 'fields', pages='3,1,1')
     assert [field['name'] for field in result.content['fields']] == ['first']
+
+
+@pytest.mark.asyncio
+async def test_unavailable_entries_through_worker_and_following_call(tmp_path):
+  path = tmp_path / 'document'
+  path.write_bytes(UNAVAILABLE_ENTRIES_PDF)
+  with closing(Operations()) as state:
+    details = (await state.info(str(path))).details
+    assert details['attachment_count'] == 3
+    assert details['attachments'] == ['valid.xml']
+    attachments = (await state.view(str(path), 'attachments')).content
+    assert attachments['attachment_count'] == 3
+    assert [entry['name'] for entry in attachments['attachments']] == ['valid.xml']
+    fields = (await state.view(str(path), 'fields')).content['fields']
+    assert [(entry['name'], entry['value']) for entry in fields] == [('invoice', '42')]
+    path.write_bytes(make_pdf(['following call']))
+    assert (await state.view(str(path), 'text')).content['pages'][0]['text'] == 'following call'

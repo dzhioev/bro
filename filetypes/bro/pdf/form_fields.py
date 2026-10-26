@@ -109,7 +109,7 @@ def page_fields(page: TextPage, environment: int, number: int) -> Iterator[FormF
   characters: list[Character] | None = None
   for index in range(count):
     with page.annotation(index) as annotation:
-      if engine.annotation_subtype(annotation) != raw.FPDF_ANNOT_WIDGET:
+      if annotation is None or engine.annotation_subtype(annotation) != raw.FPDF_ANNOT_WIDGET:
         continue
       if characters is None:
         characters = page.classified_characters()

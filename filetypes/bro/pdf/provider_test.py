@@ -17,6 +17,7 @@ from bro.pdf.page_text import (
   text_and_notes,
 )
 from bro.pdf.pdf_test_helper import (
+  UNAVAILABLE_ENTRIES_PDF,
   attachments_view_cases,
   decoy_font,
   fields_view_cases,
@@ -773,3 +774,14 @@ def test_form_handles_close_in_order_after_a_view_cap(monkeypatch):
     'close_forms',
     'close_document',
   ]
+
+
+def test_unavailable_entries_leave_valid_neighbours_readable():
+  details = inspect(UNAVAILABLE_ENTRIES_PDF)
+  assert details['attachment_count'] == 3
+  assert details['attachments'] == ['valid.xml']
+  attachments = provider.view(UNAVAILABLE_ENTRIES_PDF, 'attachments', None, TYPE.limits)
+  assert attachments['attachment_count'] == 3
+  assert [entry['name'] for entry in attachments['attachments']] == ['valid.xml']
+  fields = provider.view(UNAVAILABLE_ENTRIES_PDF, 'fields', None, TYPE.limits)['fields']
+  assert [(entry['name'], entry['value']) for entry in fields] == [('invoice', '42')]

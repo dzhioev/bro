@@ -6,6 +6,10 @@ import sys
 from bro.base.args import run_cli
 
 
+def bro_local_file_bench():
+  return run_cli('bro.local.file_bench', sys.argv)
+
+
 def bro_local_run_tests():
   return run_cli('bro.local.run_tests', sys.argv)
 

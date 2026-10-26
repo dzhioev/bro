@@ -72,7 +72,7 @@ def attachments(document: Document, limits: Limits) -> dict[str, Any]:
   for index in range(min(count, ATTACHMENT_NAMES)):
     handle = engine.attachment(document.handle, index)
     if not handle:
-      raise RuntimeError('PDFium failed to load an attachment')
+      continue
     name = engine.wide_string(engine.attachment_name, handle)
     media_type = engine.wide_string(engine.attachment_subtype, handle) or None
     entry = read_attachment(document, handle, name, media_type).model_dump()

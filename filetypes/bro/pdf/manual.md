@@ -25,6 +25,7 @@ When `password_required` is true, every other details field is null.
 A page has text when its assembled text contains any character that is neither whitespace nor stripped invisible text.
 Hidden text still counts as text.
 A successful inspection does not promise a complete reading of a damaged document.
+Unavailable embedded-file entries are omitted from both the info names and the attachments view without reducing `attachment_count`.
 
 ## Views
 
@@ -128,7 +129,7 @@ A stream exhausting the worker's address space fails the whole view, including o
 
 `file::view(path, view="fields", pages=...)` returns `content` with a `fields` list in page then annotation order.
 There is one entry per widget, so a radio group or a field with several widgets repeats its name.
-A document without a form returns an empty list; unreadable pages contribute no widgets.
+A document without a form returns an empty list; unreadable pages and unavailable annotation entries contribute no widgets.
 Values are read through PDFium's form environment without running scripts.
 
 | Field | Meaning |

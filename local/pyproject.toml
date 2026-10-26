@@ -10,19 +10,25 @@ requires-python = ">=3.12"
 dependencies = [
   "bro",
   "bro-dev",
+  "bro-filetypes",
+  "requests>=2.34.2",
   "rich",
+  "tiktoken>=0.14.0",
 ]
 
 [project.scripts]
 # bro
+"bro.local.file-bench" = "bro.local._entrypoints:bro_local_file_bench"
 "bro.local.run-tests" = "bro.local._entrypoints:bro_local_run_tests"
 "bro.local.syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
+"file-bench" = "bro.local._entrypoints:bro_local_file_bench"
 "run-tests" = "bro.local._entrypoints:bro_local_run_tests"
 "syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
 
 [tool.uv.sources]
 bro = { workspace = true }
 bro-dev = { workspace = true }
+bro-filetypes = { workspace = true }
 
 [project.entry-points.bro]
 bro-dev = "bros.bro_dev:BroDev"
@@ -33,6 +39,7 @@ bro-file-probe = "bros.bro_file_probe:BroFileProbe"
 [tool.deptry.package_module_name_map]
 bro = ["bro", "bros"]
 bro-dev = ["bro", "bros"]
+bro-filetypes = ["bro"]
 
 [tool.uv.build-backend]
 module-root = ""
