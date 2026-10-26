@@ -68,19 +68,38 @@ ecr_login() {
     | docker login --username AWS --password-stdin "$registry"
 }
 
+_stage_workspace_wheels() {
+  local checkout="$1" declaration="$2" output_directory="$3" packages package
+  packages="$(python3 - "$checkout" "$declaration" <<'PYTHON'
+import sys
+from pathlib import Path
+
+from bro.oops.wheel_staging import wheel_packages
+
+print('\n'.join(wheel_packages(Path(sys.argv[1]), Path(sys.argv[2]))))
+PYTHON
+)" || return
+  while read -r package; do
+    uv build --project "$checkout" --package "$package" --wheel --out-dir "$output_directory" \
+      --no-build-logs --no-create-gitignore || return
+  done <<<"$packages"
+}
+
 stage_bro_wheel() {
-  local repository_root output_directory checkout source_data url revision description
-  local -a source_parts wheel_files
+  if [ "$#" -ne 1 ]; then
+    echo "usage: stage_bro_wheel <entries-json>" >&2
+    return 2
+  fi
+  local repository_root output_directory declaration checkout source_data url revision description
+  local -a source_parts
+  declaration="$(realpath "$1")"
   repository_root="$(git rev-parse --show-toplevel)"
   output_directory="${repository_root}/${_BRO_WHEEL_CONTEXT_DIRECTORY}"
   mkdir -p "$output_directory"
+  find "$output_directory" -maxdepth 1 -type f -name '*.whl' -delete
 
   if _framework_checkout "$repository_root"; then
-    (
-      cd "$repository_root" || exit 1
-      uv build --package bro --wheel --out-dir "$output_directory" --clear --no-build-logs \
-        --no-create-gitignore
-    )
+    _stage_workspace_wheels "$repository_root" "$declaration" "$output_directory" || return
     description="the framework working tree"
   else
     source_data="$(_locked_bro_source "$repository_root")" || return
@@ -90,21 +109,13 @@ stage_bro_wheel() {
     checkout="$(mktemp -d)"
     (
       trap 'rm -rf "$checkout"' EXIT
-      git clone --quiet --filter=blob:none "$url" "$checkout"
-      git -C "$checkout" checkout --quiet --detach "$revision"
-      cd "$checkout" || exit 1
-      uv build --package bro --wheel --out-dir "$output_directory" --clear --no-build-logs \
-        --no-create-gitignore
-    )
+      git clone --quiet --filter=blob:none "$url" "$checkout" || exit
+      git -C "$checkout" checkout --quiet --detach "$revision" || exit
+      _stage_workspace_wheels "$checkout" "$declaration" "$output_directory"
+    ) || return
     description="${url}@${revision}"
   fi
-
-  mapfile -t wheel_files < <(find "$output_directory" -maxdepth 1 -type f -name 'bro-*.whl')
-  if [ "${#wheel_files[@]}" -ne 1 ]; then
-    echo "error: expected one bro wheel in $output_directory, found ${#wheel_files[@]}" >&2
-    return 1
-  fi
-  echo "staged ${wheel_files[0]} from ${description}"
+  echo "staged wheels in ${output_directory} from ${description}"
 }
 
 ensure_server_base() {
@@ -128,7 +139,7 @@ prepare_image_build() {
   fi
   local dockerfile="$1"
   shift
-  stage_bro_wheel
+  stage_bro_wheel "$(dirname "$dockerfile")/entries.json"
   ensure_server_base "$dockerfile" "$@"
 }
 

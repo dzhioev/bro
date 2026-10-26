@@ -1,0 +1,147 @@
+[
+  {
+    "name": "native",
+    "blaze": {
+      "bro": "image-probe",
+      "version": "image-probe",
+      "interactive": false,
+      "surface": "ask",
+      "hold": "unattended",
+      "harness": "bro",
+      "native": {
+        "llm": {}
+      },
+      "body": {
+        "records": [
+          {
+            "kind": "user_input",
+            "body": "fixture input"
+          }
+        ]
+      }
+    },
+    "records": [
+      {
+        "kind": "llm_call",
+        "body": {
+          "request": {
+            "tools": []
+          },
+          "response": {
+            "model": "fixture-model",
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 3
+            },
+            "status": "completed",
+            "output": [
+              {
+                "type": "message",
+                "content": [
+                  {
+                    "type": "output_text",
+                    "text": "native reply"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "expected_types": [
+      "user_input",
+      "llm_call",
+      "assistant"
+    ],
+    "reply": "native reply"
+  },
+  {
+    "name": "claude",
+    "blaze": {
+      "bro": "image-probe",
+      "version": "image-probe",
+      "interactive": false,
+      "surface": "ask",
+      "hold": "unattended",
+      "harness": "claude",
+      "native": {
+        "llm": {},
+        "segment": "image-probe-claude",
+        "ride_command": "image-probe",
+        "harness_version": "fixture"
+      },
+      "body": {
+        "records": [
+          "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": \"fixture input\"}}"
+        ]
+      }
+    },
+    "records": [
+      "{\"type\": \"assistant\", \"message\": {\"model\": \"fixture-model\", \"usage\": {\"input_tokens\": 10, \"output_tokens\": 3}, \"id\": \"fixture-message\", \"stop_reason\": \"end_turn\", \"content\": [{\"type\": \"text\", \"text\": \"claude reply\"}]}}"
+    ],
+    "expected_types": [
+      "user_input",
+      "llm_call",
+      "assistant"
+    ],
+    "reply": "claude reply"
+  },
+  {
+    "name": "chat",
+    "blaze": {
+      "bro": "image-probe",
+      "version": "image-probe",
+      "interactive": false,
+      "surface": "ask",
+      "hold": "unattended",
+      "harness": "bro",
+      "native": {
+        "llm": {}
+      },
+      "body": {
+        "records": [
+          {
+            "kind": "user_input",
+            "body": "fixture input"
+          }
+        ]
+      }
+    },
+    "records": [
+      {
+        "kind": "llm_call",
+        "body": {
+          "request": {
+            "tools": []
+          },
+          "response": {
+            "model": "fixture-model",
+            "usage": {
+              "prompt_tokens": 10,
+              "completion_tokens": 3
+            },
+            "choices": [
+              {
+                "finish_reason": "stop",
+                "message": {
+                  "role": "assistant",
+                  "reasoning_content": "chat reasoning",
+                  "content": "chat reply"
+                }
+              }
+            ]
+          }
+        },
+        "wire": "chat"
+      }
+    ],
+    "expected_types": [
+      "user_input",
+      "llm_call",
+      "reasoning",
+      "assistant"
+    ],
+    "reply": "chat reply"
+  }
+]

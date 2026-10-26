@@ -747,6 +747,8 @@ def project_stage(project: Project) -> None:
 
 
 def docker_stage() -> None:
+  step('the trails-server image')
+  run(str(DIR / 'oops' / 'trails' / 'server' / 'verify_image.sh'))
   step('the container entrypoint smoke')
   run(str(DIR / 'ride' / 'ride' / 'setup' / 'container' / 'test_smoke.sh'))
   step('pytest against the host docker daemon')

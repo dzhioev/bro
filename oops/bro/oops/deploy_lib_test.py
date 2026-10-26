@@ -1,14 +1,17 @@
+import json
 import os
 import re
 import shlex
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from bro.base.spawn import console_script
 from bro.oops.assets import asset_directory
 from bro.oops.targets import PLAN_UNSAFE_EXIT_CODE
+from bro.oops.wheel_staging import wheel_packages
 from bro.shell import shell_dir
 
 _INFRA_DIRECTORY = Path(__file__).parent / 'infra'
@@ -167,9 +170,48 @@ def test_ensure_server_base_passes_the_packaged_uv_pin(tmp_path):
   ]
 
 
-def test_stage_bro_wheel_builds_the_framework_working_tree(tmp_path):
-  (tmp_path / 'pyproject.toml').write_text('[project]\nname = "bro"\n')
-  (tmp_path / 'bro').mkdir()
+def _staging_workspace(root: Path) -> Path:
+  (root / 'bro').mkdir()
+  (root / 'pyproject.toml').write_text(
+    '[project]\nname = "bro"\n[tool.uv.workspace]\nmembers = ["plugins/*"]\n'
+  )
+  entries = []
+  for name, group in [('format-a', 'bro.trail_formats'), ('wire-a', 'bro.llm.wires')]:
+    directory = root / 'plugins' / name
+    directory.mkdir(parents=True)
+    (directory / 'pyproject.toml').write_text(
+      f'[project]\nname = "bro-{name}"\n'
+      f'[project.entry-points."{group}"]\n{name} = "example:ENTRY"\n'
+    )
+    entries.append({'group': group, 'name': name})
+  declaration = root / 'entries.json'
+  declaration.write_text(json.dumps(entries))
+  return declaration
+
+
+def _wheel_builder(arguments: Path) -> str:
+  return f"""
+    uv() {{
+      echo "$*" >> {shlex.quote(str(arguments))}
+      local previous="" package="" output=""
+      for argument in "$@"; do
+        case "$previous" in
+          --package) package="$argument" ;;
+          --out-dir) output="$argument" ;;
+        esac
+        previous="$argument"
+      done
+      [[ " $* " != *" --clear "* ]] || return 89
+      touch "$output/${{package//-/_}}-0.1.0-py3-none-any.whl"
+    }}
+    """
+
+
+def test_stage_bro_wheel_builds_all_declared_providers_from_the_working_tree(tmp_path):
+  declaration = _staging_workspace(tmp_path)
+  output = tmp_path / 'build' / 'bro-wheel'
+  output.mkdir(parents=True)
+  (output / 'stale-0.0.0-py3-none-any.whl').touch()
   arguments = tmp_path / 'arguments'
   result = _run_bash(
     f"""
@@ -177,28 +219,28 @@ def test_stage_bro_wheel_builds_the_framework_working_tree(tmp_path):
       [ "$*" = "rev-parse --show-toplevel" ] || return 88
       echo {shlex.quote(str(tmp_path))}
     }}
-    uv() {{
-      echo "$*" > {shlex.quote(str(arguments))}
-      local previous=""
-      for argument in "$@"; do
-        if [ "$previous" = "--out-dir" ]; then
-          mkdir -p "$argument"
-          touch "$argument/bro-0.1.0-py3-none-any.whl"
-        fi
-        previous="$argument"
-      done
-    }}
-    stage_bro_wheel
+    {_wheel_builder(arguments)}
+    stage_bro_wheel {shlex.quote(str(declaration))}
     """
   )
   assert result.returncode == 0, result.stderr
-  assert '--package bro' in arguments.read_text()
+  assert len(arguments.read_text().splitlines()) == 3
+  assert {path.name for path in output.glob('*.whl')} == {
+    'bro-0.1.0-py3-none-any.whl',
+    'bro_format_a-0.1.0-py3-none-any.whl',
+    'bro_wire_a-0.1.0-py3-none-any.whl',
+  }
   assert result.stdout.endswith('from the framework working tree\n')
 
 
-def test_stage_bro_wheel_builds_the_revision_in_a_consumer_lock(tmp_path):
-  (tmp_path / 'pyproject.toml').write_text('[project]\nname = "consumer"\n')
-  (tmp_path / 'uv.lock').write_text(
+def test_stage_bro_wheel_discovers_providers_at_the_revision_in_a_consumer_lock(tmp_path):
+  pinned = tmp_path / 'pinned'
+  pinned.mkdir()
+  declaration = _staging_workspace(pinned)
+  consumer = tmp_path / 'consumer'
+  consumer.mkdir()
+  (consumer / 'pyproject.toml').write_text('[project]\nname = "consumer"\n')
+  (consumer / 'uv.lock').write_text(
     f"""\
 version = 1
 
@@ -212,32 +254,40 @@ source = {{ git = "https://example.invalid/bro?branch=main#{_LOCKED_COMMIT}" }}
     f"""
     git() {{
       if [ "$*" = "rev-parse --show-toplevel" ]; then
-        echo {shlex.quote(str(tmp_path))}
+        echo {shlex.quote(str(consumer))}
       elif [ "$1" = "clone" ]; then
-        mkdir -p "${{@: -1}}"
+        cp -a {shlex.quote(str(pinned))}/. "${{@: -1}}"
       elif [ "$1" = "-C" ] && [ "$3" = "checkout" ]; then
         echo "$*" >> {shlex.quote(str(arguments))}
       else
         return 88
       fi
     }}
-    uv() {{
-      echo "$*" >> {shlex.quote(str(arguments))}
-      local previous=""
-      for argument in "$@"; do
-        if [ "$previous" = "--out-dir" ]; then
-          mkdir -p "$argument"
-          touch "$argument/bro-0.1.0-py3-none-any.whl"
-        fi
-        previous="$argument"
-      done
-    }}
-    stage_bro_wheel
+    {_wheel_builder(arguments)}
+    stage_bro_wheel {shlex.quote(str(declaration))}
     """
   )
   assert result.returncode == 0, result.stderr
   assert f'checkout --quiet --detach {_LOCKED_COMMIT}' in arguments.read_text()
+  assert len(list((consumer / 'build' / 'bro-wheel').glob('*.whl'))) == 3
   assert result.stdout.endswith(f'from https://example.invalid/bro@{_LOCKED_COMMIT}\n')
+
+
+def test_wheel_staging_refuses_an_entry_with_no_workspace_provider(tmp_path):
+  declaration = _staging_workspace(tmp_path)
+  (tmp_path / 'plugins' / 'wire-a' / 'pyproject.toml').write_text('[project]\nname = "unrelated"\n')
+  with pytest.raises(ValueError, match='bro.llm.wires:wire-a'):
+    wheel_packages(tmp_path, declaration)
+
+
+def test_wheel_staging_refuses_duplicate_workspace_entries(tmp_path):
+  declaration = _staging_workspace(tmp_path)
+  (tmp_path / 'pyproject.toml').write_text(
+    (tmp_path / 'pyproject.toml').read_text()
+    + '[project.entry-points."bro.llm.wires"]\nwire-a = "duplicate:ENTRY"\n'
+  )
+  with pytest.raises(ValueError, match='duplicate workspace entry bro.llm.wires:wire-a'):
+    wheel_packages(tmp_path, declaration)
 
 
 def test_cdk_diff_passes_a_change_with_no_destructive_impact():

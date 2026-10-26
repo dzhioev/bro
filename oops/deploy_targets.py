@@ -16,7 +16,7 @@ def _targets() -> dict[str, DeployTarget]:
         service=config.trails.service_name,
       ),
       probe=HTTPProbe(f'https://trails.{config.delegated_subdomain}/health'),
-      paths=('bro/trails/', 'oops/'),
+      paths=('bro/trails/', 'wires/', 'harnesses/', 'oops/'),
       notes='the deploy command rolls the configured trails image and service stacks',
     )
   }

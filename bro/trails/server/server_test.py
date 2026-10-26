@@ -1,11 +1,13 @@
 import importlib.metadata
 import json
 import threading
+from types import SimpleNamespace
 from typing import Any, Optional, cast
 
 import pytest
 from aiohttp import web
 
+from bro.llm import wires
 from bro.trails import backends, model
 from bro.trails.local import LocalStore
 from bro.trails.model import (
@@ -24,6 +26,7 @@ from bro.trails.server.auth import (
   resolve_auth,
 )
 from bro.trails.server.dynamo import DynamoStore
+from bro.trails.server.entries import read_entries, resolve_entries
 from bro.trails.server.server import ADMIN_KEY, HEALTH_PATH, STORE_KEY, create_app, main
 
 TOKEN = 'secret-test-token'
@@ -564,7 +567,7 @@ def test_a_malformed_token_table_is_refused(config, message):
     TokenTable.from_config(config)
 
 
-def test_main_resolves_the_hosted_store_from_credentials(monkeypatch, store):
+def test_main_resolves_the_hosted_store_from_credentials(monkeypatch, store, tmp_path):
   launched = {}
   monkeypatch.setattr('bro.trails.server.server.configured_store', lambda: store)
   monkeypatch.setattr(
@@ -572,8 +575,85 @@ def test_main_resolves_the_hosted_store_from_credentials(monkeypatch, store):
     lambda app, *, host, port: launched.update(app=app, host=host, port=port),
   )
 
-  main(['trails-server', '--host', '127.0.0.1', '--port', '9000', '--trails-allow-no-auth'])
+  declaration = tmp_path / 'entries.json'
+  declaration.write_text(
+    json.dumps(
+      [
+        {'group': backends.ENTRY_POINT_GROUP, 'name': 'bro'},
+        {'group': wires.ENTRY_POINT_GROUP, 'name': 'responses'},
+      ]
+    )
+  )
+  main(
+    [
+      'trails-server',
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '9000',
+      '--trails-allow-no-auth',
+      '--entries',
+      str(declaration),
+    ]
+  )
 
   assert launched['host'] == '127.0.0.1'
   assert launched['port'] == 9000
   assert launched['app'][STORE_KEY] is store
+
+
+@pytest.mark.parametrize('group', [backends.ENTRY_POINT_GROUP, wires.ENTRY_POINT_GROUP])
+@pytest.mark.parametrize('broken', [False, True], ids=['missing', 'broken-import'])
+def test_startup_refuses_an_unavailable_declared_entry_before_listening(
+  monkeypatch, tmp_path, group, broken
+):
+  declaration = tmp_path / 'entries.json'
+  declaration.write_text(json.dumps([{'group': group, 'name': 'unavailable'}]))
+  entries = (
+    (importlib.metadata.EntryPoint('unavailable', 'absent_plugin:ENTRY', group),) if broken else ()
+  )
+  module = backends if group == backends.ENTRY_POINT_GROUP else wires
+  monkeypatch.setattr(module, '_entry_points', lambda: entries)
+  monkeypatch.setattr(web, 'run_app', lambda *args, **kwargs: pytest.fail('server listened'))
+
+  with pytest.raises(RuntimeError, match=f'{group}:unavailable'):
+    main(['trails-server', '--entries', str(declaration)])
+
+
+@pytest.mark.parametrize('claimants', [0, 2])
+def test_startup_requires_exactly_one_declared_legacy_wire(monkeypatch, tmp_path, claimants):
+  declaration = tmp_path / 'entries.json'
+  declaration.write_text(
+    json.dumps([{'group': wires.ENTRY_POINT_GROUP, 'name': name} for name in ('wire-a', 'wire-b')])
+  )
+  monkeypatch.setattr(
+    wires.WireRegistry,
+    'get',
+    lambda self, name: SimpleNamespace(LEGACY=claimants == 2),
+  )
+  with pytest.raises(ValueError, match='exactly one declared wire must claim untagged records'):
+    main(['trails-server', '--entries', str(declaration)])
+
+
+def test_only_declared_wires_can_satisfy_the_legacy_requirement(tmp_path):
+  declaration = tmp_path / 'entries.json'
+  declaration.write_text(json.dumps([{'group': wires.ENTRY_POINT_GROUP, 'name': 'chat'}]))
+  with pytest.raises(ValueError, match=r'claimants: \(none\)'):
+    resolve_entries(read_entries(declaration))
+
+
+@pytest.mark.parametrize(
+  'payload',
+  [
+    [],
+    [{'group': 'unsupported', 'name': 'bro'}],
+    [{'group': backends.ENTRY_POINT_GROUP, 'name': 'Invalid'}],
+    [{'group': backends.ENTRY_POINT_GROUP, 'name': 'bro', 'typo': True}],
+    [{'group': backends.ENTRY_POINT_GROUP, 'name': 'bro'}] * 2,
+  ],
+)
+def test_malformed_served_entries_are_refused(tmp_path, payload):
+  declaration = tmp_path / 'entries.json'
+  declaration.write_text(json.dumps(payload))
+  with pytest.raises(ValueError):
+    read_entries(declaration)
