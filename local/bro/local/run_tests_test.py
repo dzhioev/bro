@@ -630,3 +630,8 @@ def test_github_expands_two_native_sandbox_runners_not_an_augmented_axis_row():
     (entry['arch'], entry['runner']) for entry in matrix['include'] if entry['stage'] == 'sandbox'
   ]
   assert sorted(runners) == [('arm64', 'ubuntu-24.04-arm'), ('x86_64', 'ubuntu-latest')]
+
+
+def test_the_host_docker_stage_verifies_the_trails_server_image(invocations):
+  run_tests.docker_stage()
+  assert (str(run_tests.DIR / 'oops' / 'trails' / 'server' / 'verify_image.sh'),) in invocations
