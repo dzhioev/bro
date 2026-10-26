@@ -113,7 +113,7 @@ class SessionSpec:
   """the harness-neutral recipe recorded for one managed session."""
 
   name: str
-  harness: str
+  harness: str | None
   workspace_pinned: bool
   isolation: Isolation
   drop: bool
@@ -132,7 +132,7 @@ class SessionSpec:
   subject: Optional[str]
   repo: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
-  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
+  summon_harness: str | None = None
   tree: Optional[str] = None
   runtime_bundle: Optional[str] = None
   env: dict[str, str] = field(default_factory=dict)
@@ -161,8 +161,16 @@ class SessionSpec:
       raise ValueError('runtime bundle reference must not be empty')
     if type(self.summon_depth) is not int or self.summon_depth <= 0:
       raise ValueError('summon depth must be a positive integer')
-    harness_name(self.harness)
-    harness_name(self.summon_harness)
+    if self.harness is not None:
+      harness_name(self.harness)
+    if self.summon_harness is not None:
+      harness_name(self.summon_harness)
+
+  @property
+  def resolved_harness(self) -> str:
+    if self.harness is None:
+      raise ValueError('session has no resolved harness')
+    return self.harness
 
   @property
   def llm_spec(self) -> LLMSpec:
@@ -193,7 +201,7 @@ class SessionSpec:
     if self.llm is not None:
       parts.extend(['--llm', self.llm])
     if self.harness_set:
-      parts.extend(['--harness', self.harness])
+      parts.extend(['--harness', self.resolved_harness])
     for name, value in self.recipe_options.items():
       parts.extend(['--' + name] if name == 'fast' else ['--' + name, str(value)])
     if self.workspace_pinned:
@@ -278,7 +286,7 @@ def load_resume_spec(workspace: Workspace) -> Optional[SessionSpec]:
     return None
   try:
     spec = SessionSpec.load(data)
-    get_harness(spec.harness)
+    get_harness(spec.resolved_harness)
     return spec
   except (TypeError, ValueError) as error:
     log.warning('ignoring unreadable resume spec for %s: %s', workspace.name, error)
@@ -301,11 +309,11 @@ def recorded_runtime_reference(name: str) -> Optional[str]:
 
 def harness_for_workspace(workspace: Workspace) -> SessionHarness | None:
   spec = load_resume_spec(workspace)
-  return None if spec is None else get_harness(spec.harness)
+  return None if spec is None else get_harness(spec.resolved_harness)
 
 
 def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
-  if not sys.stdout.isatty() or not get_harness(spec.harness).session_exists(workspace):
+  if not sys.stdout.isatty() or not get_harness(spec.resolved_harness).session_exists(workspace):
     return
   print('Resume this session with:')
   print(f'  ride resume {workspace.name}')
@@ -445,7 +453,7 @@ def boxed_member_launch(
   member-scoped session env around the harness's member extras, with the
   surface's own `env` on top."""
   scoped = launch_scope.scoped
-  harness = get_harness(spec.harness)
+  harness = get_harness(spec.resolved_harness)
   container_id = find_container_id(workspace.tree)
   if container_id is None:
     raise RuntimeError(f'party {workspace.name!r} has no running container to join')
@@ -507,7 +515,7 @@ def prepared_unboxed_session_launch(
   """Describe a session process in an already-prepared unboxed workspace tree:
   the neutral session env around the harness's extras, with the surface's own
   `env` on top."""
-  harness = get_harness(spec.harness)
+  harness = get_harness(spec.resolved_harness)
   tree = workspace.tree
   session_command = do_ride_command(spec)
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
@@ -559,7 +567,7 @@ def started_party_launch(
   install_directory: Path,
 ) -> Launch | ProcessLaunch:
   """Prepare one started party and describe its first session for supervision."""
-  harness = get_harness(spec.harness)
+  harness = get_harness(spec.resolved_harness)
   if workspace.isolation is Isolation.BOXED:
     if find_container_id(workspace.tree) is not None:
       raise RuntimeError(
@@ -630,7 +638,7 @@ def _launch_session(
   summoned: Optional[PendingBro] = None,
   commit_id: str | None = None,
 ) -> int:
-  harness = get_harness(spec.harness)
+  harness = get_harness(spec.resolved_harness)
   if workspace.isolation is Isolation.BOXED and find_container_id(workspace.tree) is not None:
     log.error(
       'session already active in the container for workspace %r; refusing to start a second',
@@ -813,6 +821,9 @@ def _prepare_session(
       reading = Reading.take(repository)
       if spec.authority_request:
         requested = load_request(spec.authority_request, reading.syntax)
+        requested = replace(
+          requested, values={**requested.values, 'harness': spec.resolved_harness}
+        )
         if spec.cred or spec.grant or spec.revoke or spec.limit:
           from ride.authority_launch import resume_request
 
@@ -831,9 +842,7 @@ def _prepare_session(
 
         fields = {
           'target': spec.bro,
-          'harness': spec.harness
-          if spec.harness_set
-          else reading.project.get('harness', configs.DEFAULT_HARNESS),
+          'harness': reading.resolve_harness(spec.harness if spec.harness_set else None),
           'hold': spec.hold,
           'placement': spec.isolation.value,
           'timeout': None,
@@ -910,7 +919,7 @@ def _prepare_session(
         operator_values=committed['operator_values'],
         runtime_bundle=None,
       )
-    harness = get_harness(spec.harness)
+    harness = get_harness(spec.resolved_harness)
     with launch_scope_errors():
       auth_error = harness.preflight_auth(spec, scoped)
     if auth_error is not None:

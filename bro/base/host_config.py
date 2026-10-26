@@ -68,6 +68,9 @@ one, with its layer: a more specific list replaces a less specific one whole.
 
 The file is optional.
 `llm` remains the host-wide table of `--llm` preset names.
+`harness` and `summon-harness` supply launch and summon harness names beneath
+the corresponding `[tool.bro]` keys and the launch's own selection.
+Absent all three, the launch is refused; a selected harness must be installed.
 `summon-depth` overrides the repository's summon depth for every launch.
 """
 
@@ -84,6 +87,7 @@ from bro.authority.syntax import Layer, parse_layer
 from bro.base import configs, credentials
 from bro.base.args import CLIError
 from bro.base.git_url import canonical_github_url, is_git_url, normalize_git_url
+from bro.harness import harness_name
 
 # Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
@@ -200,6 +204,8 @@ class Configuration:
   llm: dict[str, str]
   summon_depth: Optional[int]
   operator: Layer
+  harness: Optional[str] = None
+  summon_harness: Optional[str] = None
 
 
 def _read() -> Configuration:
@@ -227,7 +233,16 @@ def parse(value: object, *, source: str = '~/.bro.json') -> Configuration:
     raise ValueError(f'{path} must hold a json object')
   unknown = sorted(
     set(data)
-    - {_DEFAULTS_KEY, _USER_KEY, _PROJECTS_KEY, _LLM_KEY, _SUMMON_DEPTH_KEY, _OPERATOR_KEY}
+    - {
+      _DEFAULTS_KEY,
+      _USER_KEY,
+      _PROJECTS_KEY,
+      _LLM_KEY,
+      _SUMMON_DEPTH_KEY,
+      _OPERATOR_KEY,
+      'harness',
+      'summon-harness',
+    }
   )
   if _TOOLS_KEY in unknown:
     raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
@@ -243,7 +258,14 @@ def parse(value: object, *, source: str = '~/.bro.json') -> Configuration:
     else None
   )
   return Configuration(
-    defaults, user, projects, llm, summon_depth, _operator(path, data.get(_OPERATOR_KEY, {}))
+    defaults,
+    user,
+    projects,
+    llm,
+    summon_depth,
+    _operator(path, data.get(_OPERATOR_KEY, {})),
+    harness_name(data['harness']) if 'harness' in data else None,
+    harness_name(data['summon-harness']) if 'summon-harness' in data else None,
   )
 
 

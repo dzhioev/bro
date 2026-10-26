@@ -29,16 +29,6 @@ class HydrationBro(Bro):
 
 @pytest.fixture(autouse=True)
 def project(monkeypatch):
-  monkeypatch.setattr(
-    ride_cli,
-    'project_config',
-    lambda _repo=None: SimpleNamespace(
-      default_bro='bro-dev',
-      harness='claude',
-      summon_harness=configs.DEFAULT_SUMMON_HARNESS,
-      summon_depth=configs.DEFAULT_SUMMON_DEPTH,
-    ),
-  )
   monkeypatch.setattr(ride_cli, 'fresh_workspace_name', lambda base: f'{base}-12345678')
   monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda _runtime, _argv: None)
 
@@ -50,7 +40,7 @@ def _session_command(spec) -> list[str]:
 class TestSolo:
   def test_builds_an_unattended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'solo', 'dev', 'do it']) == 0
+      assert ride_cli.main(['ride', 'solo', '--harness', 'claude', 'dev', 'do it']) == 0
     spec = start.call_args.args[0]
     assert spec.harness == 'claude'
     assert spec.name == 'ride-dev-12345678'
@@ -147,7 +137,7 @@ class TestAttachment:
       assert ride_cli.main(['ride', 'along', 'dev']) == 0
     spec = start.call_args.args[0]
     assert spec.repo is None
-    assert spec.harness == 'claude'
+    assert spec.harness is None
 
   def test_detached_launch_defers_policy_to_the_runtime_start(self, monkeypatch):
     monkeypatch.setattr(
@@ -157,10 +147,10 @@ class TestAttachment:
       assert ride_cli.main(['ride', 'along', 'dev']) == 0
     assert start.call_args.args[0].repo is None
 
-  def test_detached_launch_summons_under_the_default_harness(self):
+  def test_detached_launch_leaves_the_summon_harness_unset(self):
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', 'dev']) == 0
-    assert start.call_args.args[0].summon_harness == configs.DEFAULT_SUMMON_HARNESS
+    assert start.call_args.args[0].summon_harness is None
 
   def test_repo_resolves_any_directory_inside_the_checkout(self, monkeypatch):
     monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
@@ -176,7 +166,7 @@ class TestAttachment:
       project_config=lambda: SimpleNamespace(
         default_bro='bro-dev',
         harness='claude',
-        summon_harness=configs.DEFAULT_SUMMON_HARNESS,
+        summon_harness=None,
         summon_depth=configs.DEFAULT_SUMMON_DEPTH,
         sections={},
       ),
@@ -342,18 +332,17 @@ class TestCredentialHydrationRoutes:
 
     monkeypatch.setattr('ride.session._launch_session', capture_launch)
 
-    def launch(*scope_flags: str) -> int:
+    def launch(*scope_flags: str, harness: str | None = 'bro', mode: str = 'solo') -> int:
       result = ride_cli.main(
         [
           'ride',
-          'solo',
+          mode,
           '--unboxed',
           '--workspace',
           'hydration-route',
           '--repo',
           str(repository),
-          '--harness',
-          'bro',
+          *(['--harness', harness] if harness is not None else []),
           *scope_flags,
           'hydration-test',
           'work',
@@ -362,7 +351,9 @@ class TestCredentialHydrationRoutes:
       assert result is not None
       return result
 
-    return SimpleNamespace(material=material, captures=captures, launch=launch)
+    return SimpleNamespace(
+      material=material, captures=captures, launch=launch, repository=repository, config=config
+    )
 
   def test_root_launch_folds_every_layer_and_hydrates_by_selected_name(self, route):
     assert (
@@ -542,11 +533,93 @@ class TestCredentialHydrationRoutes:
     assert route.captures[-1][1].mission is not None
     assert 'creds/github+absent.cred' not in route.captures[-1][1].store
 
+  @pytest.mark.parametrize('mode', ['solo', 'along'])
+  @pytest.mark.parametrize(
+    ('selected', 'project', 'host'),
+    [
+      ('bro', 'not-installed', 'not-installed'),
+      (None, 'bro', 'not-installed'),
+      (None, None, 'bro'),
+    ],
+    ids=['launch', 'project', 'host'],
+  )
+  def test_harness_precedence_reaches_the_started_session(
+    self, route, mode, selected, project, host
+  ):
+    configuration = json.loads(route.config.read_text())
+    configuration['harness'] = host
+    route.config.write_text(json.dumps(configuration))
+    if project is not None:
+      with (route.repository / 'pyproject.toml').open('a') as output:
+        output.write(f'harness = "{project}"\n')
+    assert route.launch('--cred', 'harbor+launch', harness=selected, mode=mode) == 0
+    spec, scope = route.captures[-1]
+    assert spec.harness == 'bro'
+    assert scope.mission.descriptor.values['harness'] == spec.harness
+
+  @pytest.mark.parametrize('mode', ['solo', 'along'])
+  def test_missing_harness_refuses_before_a_workspace(self, route, mode, caplog):
+    assert route.launch(harness=None, mode=mode) == 1
+    assert route.captures == []
+    assert not (workspace_dir('hydration-route') / 'workspace.json').exists()
+    assert (
+      'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
+      in caplog.text
+    )
+
+  @pytest.mark.parametrize('layer', ['launch', 'project', 'host'])
+  def test_uninstalled_harness_is_refused_without_falling_back(self, route, layer, caplog):
+    configuration = json.loads(route.config.read_text())
+    configuration['harness'] = 'not-installed' if layer == 'host' else 'bro'
+    route.config.write_text(json.dumps(configuration))
+    if layer == 'project':
+      with (route.repository / 'pyproject.toml').open('a') as output:
+        output.write('harness = "not-installed"\n')
+    assert route.launch(harness='not-installed' if layer == 'launch' else None) == 1
+    assert route.captures == []
+    assert "harness 'not-installed' is not installed" in caplog.text
+
+  def test_resume_keeps_the_harness_after_project_and_host_changes(self, route):
+    assert route.launch('--cred', 'harbor+launch') == 0
+    configuration = json.loads(route.config.read_text())
+    configuration['harness'] = 'not-installed'
+    configuration['summon-harness'] = 'not-installed'
+    route.config.write_text(json.dumps(configuration))
+    with (route.repository / 'pyproject.toml').open('a') as output:
+      output.write('harness = "not-installed"\nsummon-harness = "not-installed"\n')
+    assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
+    assert route.captures[-1][0].harness == 'bro'
+
+  @pytest.mark.parametrize('layer', ['launch', 'project', 'host', 'absent'])
+  def test_scope_resolves_the_same_harness_layers(self, route, layer, capsys):
+    if layer == 'project':
+      with (route.repository / 'pyproject.toml').open('a') as output:
+        output.write('harness = "bro"\n')
+    configuration = json.loads(route.config.read_text())
+    if layer in ('project', 'host'):
+      configuration['harness'] = 'bro' if layer == 'host' else 'not-installed'
+    route.config.write_text(json.dumps(configuration))
+    flags = ['--harness', 'bro'] if layer == 'launch' else []
+    result = ride_cli.main(
+      ['ride', 'scope', '--repo', str(route.repository), '--bro', 'hydration-test', *flags]
+    )
+    output = capsys.readouterr().out
+    if layer == 'absent':
+      assert result == 1
+      assert (
+        'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
+        in output
+      )
+    else:
+      assert result == 0
+      descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
+      assert descriptor['harness'] == 'bro'
+
 
 class TestAlong:
   def test_builds_an_attended_claude_session(self):
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', 'dev', 'do it']) == 0
+      assert ride_cli.main(['ride', 'along', '--harness', 'claude', 'dev', 'do it']) == 0
     spec = start.call_args.args[0]
     assert spec.harness == 'claude'
     assert spec.name == 'ride-dev-12345678'
@@ -605,7 +678,7 @@ class TestAlong:
   def test_attached_launch_defers_project_defaults_to_the_runtime_start(self, monkeypatch):
     monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
     monkeypatch.setattr(
-      ride_cli, 'project_config', lambda *args: pytest.fail('pre-runtime project read')
+      'bro.workspace.project.project_config', lambda *args: pytest.fail('pre-runtime project read')
     )
     monkeypatch.setattr('bro.base.host_config._read', lambda: pytest.fail('pre-runtime host read'))
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -681,18 +754,14 @@ class TestLifecycle:
       assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude']) == 0
     assert report.call_args.kwargs == {'repo': None, 'bro': 'dev', 'harness': 'claude'}
 
-  def test_scope_reports_a_malformed_project_config_as_a_cli_error(self, monkeypatch, capsys):
-    repository = SimpleNamespace(is_url=False, git_dir=Path('/repo'))
-    monkeypatch.setattr(ride_cli, '_resolve_repository_argument', lambda _value: repository)
+  def test_scope_reports_a_malformed_project_config(self, tmp_path, capsys):
+    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = 5\n')
+    with patch.object(ride_cli, '_resolve_repository_argument') as resolve:
+      from ride.repository import Repository
 
-    with (
-      patch.object(
-        ride_cli, 'project_config', side_effect=ValueError('malformed project configuration')
-      ),
-      pytest.raises(SystemExit),
-    ):
-      ride_cli.main(['ride', 'scope', '--repo', '/repo', '--bro', 'dev'])
-    assert 'malformed project configuration' in capsys.readouterr().err
+      resolve.return_value = Repository(str(tmp_path), tmp_path)
+      assert ride_cli.main(['ride', 'scope', '--repo', str(tmp_path), '--bro', 'dev']) == 1
+    assert 'harness' in capsys.readouterr().out
 
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
     monkeypatch.setenv('XDG_DATA_HOME', 'share')

@@ -134,7 +134,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `trails/` — the recording pipeline;
   see `trails/AGENTS.md`
 - `workspace/` — the dependency-light workspace contracts core services read;
-  see `workspace/AGENTS.md`
+  see `workspace/AGENTS.md` and `reference/ride.md`, "Per-project defaults", for project and host harness selections
 - `bros/bro/` — the core distribution's sole concrete persona, inside the shared PEP 420 `bros` namespace.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.
   Bros normally inherit from this `Bro`, so they pick up the shared defaults via the MRO walk;

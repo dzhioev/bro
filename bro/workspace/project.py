@@ -41,8 +41,8 @@ class ProjectConfig:
 
   default_bro: str
   image_repository: str
-  harness: str = configs.DEFAULT_HARNESS
-  summon_harness: str = configs.DEFAULT_SUMMON_HARNESS
+  harness: Optional[str] = None
+  summon_harness: Optional[str] = None
   build_context_command: Optional[str] = None
   summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   grant: tuple[str, ...] = ()
@@ -58,8 +58,10 @@ def _optional_string(table: dict, source: str, key: str) -> Optional[str]:
   return value
 
 
-def _harness(table: dict, source: str, key: str, default: str) -> str:
-  value = _optional_string(table, source, key) or default
+def _harness(table: dict, source: str, key: str) -> Optional[str]:
+  value = _optional_string(table, source, key)
+  if value is None:
+    return None
   try:
     return harness_name(value)
   except ValueError as error:
@@ -125,8 +127,8 @@ def project_config_from_text(content: str, source: str) -> ProjectConfig:
   return ProjectConfig(
     default_bro=default_bro,
     image_repository=override if override is not None else _default_image_repository(default_bro),
-    harness=_harness(table, source, 'harness', configs.DEFAULT_HARNESS),
-    summon_harness=_harness(table, source, 'summon-harness', configs.DEFAULT_SUMMON_HARNESS),
+    harness=_harness(table, source, 'harness'),
+    summon_harness=_harness(table, source, 'summon-harness'),
     build_context_command=_optional_string(table, source, 'build-context-command'),
     summon_depth=_positive_integer(
       table.get('summon-depth', configs.DEFAULT_SUMMON_DEPTH), source, 'summon-depth'

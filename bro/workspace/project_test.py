@@ -53,9 +53,9 @@ class TestProjectConfig:
     )
     assert project_config().sections['whoever'] == {'anything': 5}
 
-  def test_harness_defaults_to_claude(self, project_dir):
+  def test_harness_is_optional(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
-    assert project_config().harness == configs.DEFAULT_HARNESS
+    assert project_config().harness is None
 
   def test_harness_parses(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\nharness = "bro"\n')
@@ -71,9 +71,9 @@ class TestProjectConfig:
     with pytest.raises(ValueError, match=r'\[tool.bro\] harness'):
       project_config()
 
-  def test_summon_harness_defaults_to_the_native_loop(self, project_dir):
+  def test_summon_harness_is_optional(self, project_dir):
     (project_dir / 'pyproject.toml').write_text('[tool.bro]\ndefault = "foo"\n')
-    assert project_config().summon_harness == configs.DEFAULT_SUMMON_HARNESS
+    assert project_config().summon_harness is None
 
   def test_summon_harness_parses(self, project_dir):
     (project_dir / 'pyproject.toml').write_text(

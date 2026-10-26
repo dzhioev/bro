@@ -12,7 +12,7 @@ from bro.artifact import is_ref
 from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_authority, dump_request, dump_values
 from bro.authority.rules import Admission, Mission, Prepared
-from bro.base import configs, credentials, log
+from bro.base import credentials, log
 from bro.base.lulid import lulid
 from bro.broker.brotocol import TALK_RIGHTS, Talk
 from bro.worker_types import (
@@ -306,7 +306,7 @@ class LaunchControl:
       if not isinstance(message.args['fields'], Mapping):
         raise ValueError('commit check: fields: expected an object')
       fields = dict(message.args['fields'])
-      fields.setdefault('harness', self.reading.project.get('harness', configs.DEFAULT_HARNESS))
+      fields['harness'] = self.reading.resolve_harness(fields.get('harness'))
       mapped, _ = authority_request(
         type(self._types[prepared.request.type]),
         fields,

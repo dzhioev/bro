@@ -75,7 +75,7 @@ def command(spec: 'SessionSpec') -> list[str]:
     '--workspace',
     spec.name,
     '--harness',
-    spec.harness,
+    spec.resolved_harness,
     *(['--resume'] if spec.resume else []),
   ]
   if spec.repo is not None:

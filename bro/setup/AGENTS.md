@@ -214,6 +214,8 @@ When `BRO_STORE` is set, the resolver does not consult the host config at all:
 a session or service store is already the product of a selection.
 
 The `llm` table remains the host-wide recipe presets layered over project defaults.
+`harness` and `summon-harness` are optional host-wide selections beneath project and launch values ([harness selection](../reference/ride.md#harness-selection));
+a launch is refused when no layer supplies a harness.
 `summon-depth` is a host-wide positive integer overriding the attached repository's `[tool.bro] summon-depth` value.
 When both omit it, launches use the framework default;
 detached launches have no project value and therefore use the host value or that default.
