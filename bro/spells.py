@@ -85,6 +85,14 @@ class SpellFile:
     return self.path.stem
 
 
+@dataclass(frozen=True)
+class SpellDeclaration:
+  """one class's `spells` declaration: the class that wrote it and its entries."""
+
+  owner: str
+  entries: tuple[Entry[SpellFile], ...]
+
+
 def _validate_requires(spell: SpellFile) -> None:
   for item in _items(spell.requires):
     if not isinstance(item, str):
@@ -118,18 +126,20 @@ def declared_files(owner: str, entries: Iterable[Entry[SpellFile]]) -> list[Spel
 
 
 def select_spells(
-  declarations: Iterable[tuple[str, Iterable[Entry[SpellFile]]]], variables: Variables
+  declarations: Iterable[SpellDeclaration], variables: Variables
 ) -> dict[str, SpellFile]:
   """the spells the declarations offer under `variables`, by name:
   `declarations` run base class first and a derived class's file replaces a
   parent's of the same name. a spell whose resolved requirement is not
   offered fails."""
   offered: dict[str, SpellFile] = {}
-  for owner, entries in declarations:
+  for declaration in declarations:
     declared: dict[str, SpellFile] = {}
-    for spell in select(entries, variables):
+    for spell in select(declaration.entries, variables):
       if spell.name in declared:
-        raise ValueError(f'{owner}.spells: {spell.path.name!r} repeats spell {spell.name!r}')
+        raise ValueError(
+          f'{declaration.owner}.spells: {spell.path.name!r} repeats spell {spell.name!r}'
+        )
       declared[spell.name] = spell
     offered.update(declared)
   for spell in offered.values():
