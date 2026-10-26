@@ -20,7 +20,7 @@ load explicitly by name (top-level `*.prompt` / `*.prompt.template`).
 
 Prompt content may carry `bro.base.template` directives over the surface facts (`#creds`, the harness's own facts, `#hold`, and session-fragment `#talk`; grammar and semantics: `bro/reference/template.md`):
 every rendering surface renders its text once with its registered `Harness` object via `bro.mcp.render_text`
-— `BaseBro.composed_prompt(harness, hold=…)` for an explicitly selected harness, `ride/ride/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
+— `BaseBro.composed_prompt(harness, hold=…)` for an explicitly selected harness, `harnesses/claude/harness/bro/claude/system_prompt.py:session_append_prompt` for managed Claude sessions
 — so a directive works in `shared/` and bro class prompts alike.
 `FileSource`-served docs are the exception:
 one rendering is read by every harness, so their bodies must be surface-neutral
@@ -44,7 +44,8 @@ a name that resolves outside it (`..` traversal, absolute path) raises.
 
 ## Auto-injected `shared/` directory
 
-`bro/prompts/shared/*.md` is appended to the system prompt of every Bro (see `bro/bro.py:_load_shared_prompts`) AND injected into every `ride solo|along` Claude Code session via `ride/ride/claude/system_prompt.py:_load_base_prompts`.
+`bro/prompts/shared/*.md` is appended to the system prompt of every Bro (see `bro/bro.py:_load_shared_prompts`)
+and injected into every `ride solo|along` Claude Code session via `harnesses/claude/harness/bro/claude/system_prompt.py:_load_base_prompts`.
 Conventions that must hold across both surfaces and at every hold (e.g. word choices) belong here.
 Files are sorted alphabetically at load time, so prefix with `00-`, `10-`, etc. if order matters.
 
@@ -52,7 +53,7 @@ Files are sorted alphabetically at load time, so prefix with `00-`, `10-`, etc. 
 
 A markdown reference doc in `bro/prompts/` (loader names are `/`-relative) reaches sessions one of two ways:
 
-- **injected** — listed in `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES`, appended to every `ride solo|along` session's `--append-system-prompt`.
+- **injected** — listed in `harnesses/claude/harness/bro/claude/system_prompt.py:_BASE_PROMPT_FILES`, appended to every `ride solo|along` session's `--append-system-prompt`.
   For content every managed Claude session must carry unconditionally.
 - **tool-served** — declared as a `FileSource` in `bro/datasources/references.py`, then declared in a bro's `tools` either on its own as `source(<doc>)` (a `read` tool of its own namespace) or as `man(<doc>)`, joining that bro's manual:
   on every harness the bro serves, and the framework lists whichever it mounts in the bro system prompt's `## Data sources` block.
@@ -74,7 +75,7 @@ Current reference docs:
 ## Session fragments
 
 `bro.prompts.session_fragment(hold, …facts)` renders the text a launch surface appends after the composed prompt, and every injection site calls it
-(`ride/ride/claude/system_prompt.py:session_append_prompt`, `bro/bro.py:BaseBro.system_prompt_for`).
+(`harnesses/claude/harness/bro/claude/system_prompt.py:session_append_prompt`, `bro/bro.py:BaseBro.system_prompt_for`).
 Those callers pass `bro.summon.talk()` as the `#talk` fact for the summoned contract;
 unset stays unpublished and empty means the run's quest is mute.
 It is the joined-party warning when the run is a member, the summoner’s watch when the run may summon, the summoned-delivery contract when another session is waiting on it, their one shared turn-end contract, then the hold fragment
@@ -146,5 +147,6 @@ A passage of a persona prompt or a spell that applies at some levels only condit
   — e.g. `task_tracker.md`, included by every persona that mounts task-tracker tools rather than injected everywhere
   — or only at some holds, e.g. `interaction.md`, included by the interactive level files
 - **Reference doc**:
-  drop a `*.md` under this package, then either add its relative name to `ride/ride/claude/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `ride solo|along` session) or declare a `FileSource` for it in `bro/datasources/references.py`
+  drop a `*.md` under this package, then either add its relative name to `harnesses/claude/harness/bro/claude/system_prompt.py:_BASE_PROMPT_FILES` (injected into every `ride solo|along` session)
+  or declare a `FileSource` for it in `bro/datasources/references.py`
   — listed on a bro directly or as `man(<doc>)` (tool-served on demand, every harness — e.g. `environment.md`)

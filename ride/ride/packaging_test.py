@@ -8,12 +8,9 @@ _PROJECT = Path(__file__).resolve().parents[1]
 _SHIPPED_SETUP_FILES = {
   'ride/setup/container/Dockerfile',
   'ride/setup/container/project.Dockerfile',
-  'ride/claude/image/claude-code-version',
-  'ride/claude/image/Dockerfile',
   'ride/setup/container/entrypoint.sh',
 }
 _NOT_SHIPPED = {
-  'ride/claude/image/bump-claude-code.sh',
   'ride/setup/container/test_smoke.sh',
 }
 
@@ -36,3 +33,8 @@ def test_container_assets_ship_in_bro_ride(wheel_files):
 
 def test_checkout_only_container_scripts_do_not_ship(wheel_files):
   assert _NOT_SHIPPED.isdisjoint(wheel_files)
+
+
+def test_ride_wheel_contains_no_harness(wheel_files):
+  assert all(path.startswith(('ride/', 'bro_ride-')) for path in wheel_files)
+  assert not any(path.startswith('ride/claude/') for path in wheel_files)

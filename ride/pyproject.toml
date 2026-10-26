@@ -9,17 +9,14 @@ description = "managed-workspace runtime for bro harnesses"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "bro-wire-messages",
   "bro",
   "certifi==2026.7.22",
   "humanize==4.16.0",
   "mcp==2.3.0",
-  "pyyaml==6.0.3",
   "rich==15.0.0",
   "tree-sitter==0.26.0",
   "tree-sitter-bash==0.25.1",
   "textual==8.2.8",
-  "watchfiles==1.3.0",
 ]
 
 [project.scripts]
@@ -31,12 +28,6 @@ dependencies = [
 "ride" = "ride._entrypoints:ride_cli"
 "ride.ask" = "ride._entrypoints:ride_ask"
 "ride.call" = "ride._entrypoints:ride_call"
-"ride.claude.command-gate" = "ride._entrypoints:ride_claude_command_gate"
-"ride.claude.read-gate" = "ride._entrypoints:ride_claude_read_gate"
-"ride.claude.session-end" = "ride._entrypoints:ride_claude_session_end"
-"ride.claude.statusline" = "ride._entrypoints:ride_claude_statusline"
-"ride.claude.trail-recorder" = "ride._entrypoints:ride_claude_trail_recorder"
-"ride.claude.watch-waiter" = "ride._entrypoints:ride_claude_watch_waiter"
 "ride.cli" = "ride._entrypoints:ride_cli"
 "ride.dive-in" = "ride._entrypoints:ride_dive_in"
 "ride.do-ride" = "ride._entrypoints:ride_do_ride"
@@ -46,21 +37,13 @@ dependencies = [
 "do-ride" = "ride._entrypoints:ride_do_ride"
 "ride" = "ride._entrypoints:ride_cli"
 
-[project.entry-points."bro.harnesses"]
-claude = "ride.claude.harness:CLAUDE"
-
 [project.entry-points."bro.worker_types"]
 bro = "ride.bro_worker:BroType"
 
-[project.entry-points."bro.mcp.targets"]
-persona = "ride.claude.assembly:resolve_persona_target"
-
 [tool.uv.sources]
-bro-wire-messages = { workspace = true }
 bro = { workspace = true }
 
 [tool.deptry.package_module_name_map]
-bro-wire-messages = ["bro"]
 bro = ["bro", "bros"]
 
 [tool.deptry.per_rule_ignores]
@@ -77,6 +60,5 @@ wheel-exclude = [
   "**/*.test.ts",
   "**/AGENTS.md",
   "**/*.egg-info",
-  "ride/claude/image/bump-claude-code.sh",
   "ride/setup/container/test_smoke.sh",
 ]

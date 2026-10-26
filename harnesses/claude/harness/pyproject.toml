@@ -1,0 +1,62 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-claude"
+version = "0.1.0"
+description = "Claude Code harness for bro"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "bro",
+  "bro-ride",
+  "bro-claude-trails",
+  "bro-wire-messages",
+  "pyyaml==6.0.3",
+  "watchfiles==1.3.0",
+]
+
+[project.scripts]
+# bro
+"bro.claude.command-gate" = "bro.claude._entrypoints:bro_claude_command_gate"
+"bro.claude.read-gate" = "bro.claude._entrypoints:bro_claude_read_gate"
+"bro.claude.session-end" = "bro.claude._entrypoints:bro_claude_session_end"
+"bro.claude.statusline" = "bro.claude._entrypoints:bro_claude_statusline"
+"bro.claude.trail-recorder" = "bro.claude._entrypoints:bro_claude_trail_recorder"
+"bro.claude.watch-waiter" = "bro.claude._entrypoints:bro_claude_watch_waiter"
+
+[project.entry-points."bro.harnesses"]
+claude = "bro.claude.harness:CLAUDE"
+
+[project.entry-points."bro.mcp.targets"]
+persona = "bro.claude.assembly:resolve_persona_target"
+
+[project.entry-points."bro.credentials"]
+claude_code = "bro.claude.credentials:KIND"
+
+[tool.uv.sources]
+bro = { workspace = true }
+bro-ride = { workspace = true }
+bro-claude-trails = { workspace = true }
+bro-wire-messages = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro", "bros"]
+bro-ride = ["ride"]
+bro-claude-trails = ["bro"]
+bro-wire-messages = ["bro"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro"]
+namespace = true
+wheel-exclude = [
+  "**/*_test.py",
+  "**/*_test_helper.py",
+  "**/conftest.py",
+  "**/*.test.ts",
+  "**/AGENTS.md",
+  "**/*.egg-info",
+  "bro/claude/image/bump-claude-code.sh",
+]

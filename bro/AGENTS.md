@@ -221,7 +221,7 @@ Later transitions arrive through the runtime-owned session watch.
 
 `bro.needed_secrets(harness)` is the bro's component credential manifest:
 the union of `needed_secrets` over the components that harness mounts for the bro,
-which are the servers it serves the bro's tool groups with and the bro's own declared servers and data sources (matching what `ride.claude.assembly.persona_servers()` mounts for `claude`);
+which are the servers it serves the bro's tool groups with and the bro's own declared servers and data sources (matching what `bro.claude.assembly.persona_servers()` mounts for `claude`);
 the MRO-collected `extra_secrets`;
 and the credentials of its pinned-on features.
 It excludes the LLM key (`llm_spec.needed_secrets()`):

@@ -14,30 +14,6 @@ def ride_call():
   return run_cli('ride.call', sys.argv)
 
 
-def ride_claude_command_gate():
-  return run_cli('ride.claude.command_gate', sys.argv)
-
-
-def ride_claude_read_gate():
-  return run_cli('ride.claude.read_gate', sys.argv)
-
-
-def ride_claude_session_end():
-  return run_cli('ride.claude.session_end', sys.argv)
-
-
-def ride_claude_statusline():
-  return run_cli('ride.claude.statusline', sys.argv)
-
-
-def ride_claude_trail_recorder():
-  return run_cli('ride.claude.trail_recorder', sys.argv)
-
-
-def ride_claude_watch_waiter():
-  return run_cli('ride.claude.watch_waiter', sys.argv)
-
-
 def ride_cli():
   return run_cli('ride.cli', sys.argv)
 

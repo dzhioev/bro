@@ -117,8 +117,8 @@ def test_clean_dispatches_to_each_installed_harness(monkeypatch, names, dry_run)
 def test_importing_clean_loads_no_harness():
   probe = (
     'import sys; import ride.clean; '
-    'assert "ride.claude.claude_release" not in sys.modules; '
-    'assert "ride.claude.harness" not in sys.modules; '
+    'assert "bro.claude.claude_release" not in sys.modules; '
+    'assert "bro.claude.harness" not in sys.modules; '
     'assert "bro.native.harness" not in sys.modules'
   )
   subprocess.run([sys.executable, '-c', probe], check=True, capture_output=True, text=True)

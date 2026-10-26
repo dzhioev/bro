@@ -1,0 +1,562 @@
+"""ending a claude process so its last turn reaches the transcript.
+
+Claude Code persists an assistant message only once every tool call it carries
+resolves. A session a service tool ended (`answer`, `raise`) signals its stop
+while that call is in flight, and `bro.claude.session_end` stops the turn right
+after the call resolves, so its stop waits for the stopped turn to land rather
+than cutting it short. Any other stop interrupts claude, which then writes the
+assistant `tool_use` blocks with a rejected `tool_result` for each unresolved
+call, and stops working. A TUI killed instead takes the whole turn down with it
+— the calls in flight and the sibling calls batched beside them.
+
+Reaching that interrupt from outside the session takes a different mechanism per
+flavor. Print-mode claude runs on pipes, its reply parsed off stdout, takes SIGINT
+as the interrupt and exits on it. A TUI claude reads its terminal in raw mode, where
+Ctrl-C is a keypress rather than a signal, and treats SIGINT as quit-now instead
+— so its interrupt has to arrive as that keypress, which is why an interactive
+run gives claude a pty of its own and proxies the session's terminal through it.
+"""
+
+import contextlib
+import fcntl
+import json
+import os
+import pty
+import selectors
+import signal
+import subprocess
+import termios
+import threading
+import time
+import tty
+from collections.abc import Callable, Generator, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import IO
+
+from bro import turn_end, watches
+from bro.base import log
+from bro.claude.claude_config import latest_jsonl
+from bro.claude.session_end_state import StoppedCallMark
+from bro.claude.transcripts import read_lines_after
+from bro.claude.waiter_state import REWAKE_STATUS, WAITER_EVENTS, WAITER_MARK, WaiterState
+from bro.workspace.session import requested_exit_status
+from ride.do_ride import stopped_on_sigterm
+
+# the bytes a terminal delivers for Ctrl-C and Ctrl-D
+_INTERRUPT_KEY = b'\x03'
+_EOF_KEY = b'\x04'
+
+# the session's own terminal, addressed as descriptors: the proxy moves bytes
+# rather than going through python's buffered wrappers
+_SESSION_STDIN = 0
+_SESSION_STDOUT = 1
+
+_PROXY_CHUNK = 65536
+# the proxy's wake-up cadence, which bounds how long its shutdown waits
+_PROXY_POLL_SECONDS = 0.2
+
+_POLL_SECONDS = 0.05
+# claude's own latency between taking the interrupt and its first write
+_FLUSH_GRACE_SECONDS = 0.5
+# a transcript untouched for this long has the interrupted turn fully written
+_FLUSH_SETTLE_SECONDS = 0.5
+_FLUSH_TIMEOUT_SECONDS = 15.0
+# how long claude is given to go on its own before the stop turns into a kill
+_EXIT_TIMEOUT_SECONDS = 10.0
+# how long a session that ended itself is given to finish its stopped turn —
+# every call batched beside the ending one resolves first — before it is
+# interrupted instead
+_STOPPED_TURN_TIMEOUT_SECONDS = 15.0
+
+
+@dataclass(frozen=True)
+class Run:
+  """a finished claude run: its exit code, and whether a stop request rather
+  than the agent's own completion ended it."""
+
+  code: int
+  stopped: bool
+
+
+@dataclass(frozen=True)
+class StreamedRun(Run):
+  """a finished stream-json claude run: the text of every turn's `result`, in order."""
+
+  results: tuple[str, ...]
+
+
+def run_streaming(
+  argv: list[str],
+  env: Mapping[str, str],
+  prompt: str,
+  *,
+  store: watches.Store,
+  waiters: WaiterState,
+  on_result: Callable[[str], None] | None = None,
+) -> StreamedRun:
+  """run print-mode claude over stream-json with its stdin held open.
+
+  `prompt` goes in as the first user message. Claude then keeps the session
+  alive as long as stdin is open, and a finished background task or a watch
+  waiter's rewake wakes it for a turn of its own. Each turn end before a stop is
+  settled through `bro.turn_end` over `store`; an end, or the first turn end
+  after a stop, closes stdin, which ends the session. `on_result` sees each
+  turn's reply as it lands.
+  """
+  process = subprocess.Popen(
+    argv,
+    env=dict(env),
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    text=True,
+    bufsize=1,
+  )
+  assert process.stdin is not None and process.stdout is not None
+  results: list[str] = []
+  with (
+    stopped_on_sigterm(lambda: _stop_printing(process, waiters)) as stopped,
+    _ended(process),
+  ):
+    with contextlib.closing(process.stdin) as stdin:
+      with _StreamSession(stdin, store, waiters, on_timer_failure=process.terminate) as session:
+        session.send(prompt)
+        for line in process.stdout:
+          event = _stream_event(line)
+          if event is None:
+            continue
+          session.observe(event)
+          if event.get('type') == 'result':
+            text = event.get('result')
+            reply = text if isinstance(text, str) else ''
+            results.append(reply)
+            if on_result is not None:
+              on_result(reply)
+            if stopped.is_set():
+              session.end()
+            else:
+              session.settle()
+        session.raise_timer_failure()
+  return StreamedRun(process.returncode, stopped.is_set(), tuple(results))
+
+
+# how often an idle session re-reads the watches' beats, which a stream event does not announce
+_BEAT_POLL_SECONDS = 5.0
+
+
+class _StreamSession:
+  """the `bro.turn_end.TurnEnd` port of a stream-json claude: its live
+  background tasks and its waiters' rewakes, read off the event stream, and
+  its stdin, which carries a notice and whose close is the end."""
+
+  def __init__(
+    self,
+    stdin: IO[str],
+    store: watches.Store,
+    waiters: WaiterState,
+    *,
+    on_timer_failure: Callable[[], None],
+  ) -> None:
+    self._stdin = stdin
+    self._on_timer_failure = on_timer_failure
+    self._timer_error: BaseException | None = None
+    self._store = store
+    self._waiters = waiters
+    self._work: tuple[turn_end.BackgroundWork, ...] = ()
+    self._first_seen: dict[str, float] = {}
+    self._rewakes_seen = 0
+    self._silence_clock = turn_end.SilenceClock()
+    self._write_lock = threading.Lock()
+    self._awaiting_input = threading.Event()
+    self._changed = threading.Event()
+    self._finished = threading.Event()
+    self._timer = threading.Thread(target=self._send_silence_notices)
+
+  def __enter__(self) -> '_StreamSession':
+    self._timer.start()
+    return self
+
+  def __exit__(self, *_: object) -> None:
+    self._finished.set()
+    self._changed.set()
+    self._timer.join()
+
+  @property
+  def silence_clock(self) -> turn_end.SilenceClock:
+    return self._silence_clock
+
+  @property
+  def watch_store(self) -> watches.Store:
+    return self._store
+
+  def send(self, text: str) -> None:
+    # a claude gone already reports through its exit code
+    with self._write_lock, contextlib.suppress(BrokenPipeError):
+      if self._stdin.closed:
+        return
+      self._stdin.write(json.dumps(_user_message(text)) + '\n')
+      self._stdin.flush()
+
+  def observe(self, event: dict) -> None:
+    if event.get('type') in ('assistant', 'user'):
+      self._awaiting_input.clear()
+    if event.get('type') != 'system':
+      return
+    if event.get('subtype') == 'background_tasks_changed':
+      self._track_tasks(_task_list(event))
+    elif event.get('subtype') == 'hook_response' and _from_waiter(event):
+      status = event.get('exit_code')
+      if status == REWAKE_STATUS:
+        self._rewakes_seen += 1
+      elif status != 0 and not self._waiters.stood_down():
+        raise RuntimeError(f'the watch waiter failed with {status}: {event.get("stderr")}')
+
+  def settle(self) -> None:
+    """settle a turn end, unless the session already ended or a waiter's
+    rewake, begun but not yet in claude's queue, will start another turn; the
+    turn of a session that ended itself is its last."""
+    if self._stdin.closed:
+      return
+    if requested_exit_status() is not None:
+      self.end()
+      return
+    with self._waiters.locked():
+      if self._waiters.rewakes() > self._rewakes_seen:
+        return
+      turn_end.settle(self)
+    if not self._stdin.closed:
+      self._awaiting_input.set()
+      self._changed.set()
+
+  def _track_tasks(self, tasks: tuple[dict, ...]) -> None:
+    # claude's stream names no task's output activity, so a task is as silent as it is old
+    now = time.monotonic()
+    live = [task for task in tasks if task.get('ambient') is not True]
+    self._first_seen = {
+      task['task_id']: self._first_seen.get(task['task_id'], now) for task in live
+    }
+    self._work = tuple(
+      turn_end.BackgroundWork(
+        task['task_id'],
+        f'{task["task_id"]} {task["task_type"]} `{task["description"].replace("`", "\\`")}`',
+        self._first_seen[task['task_id']],
+      )
+      for task in live
+    )
+    self._changed.set()
+
+  def background_work(self) -> tuple[turn_end.BackgroundWork, ...]:
+    return self._work
+
+  def raise_timer_failure(self) -> None:
+    if self._timer_error is not None:
+      raise RuntimeError('the silence timer failed') from self._timer_error
+
+  def _send_silence_notices(self) -> None:
+    try:
+      self._watch_for_silence()
+    except BaseException as error:
+      self._timer_error = error
+      # ends the stream read the run is blocked in
+      self._on_timer_failure()
+
+  def _watch_for_silence(self) -> None:
+    while not self._finished.is_set():
+      timeout = _BEAT_POLL_SECONDS
+      stall_due = None
+      if self._awaiting_input.is_set():
+        stall_due = turn_end.next_liveness_expiry(self)
+        expiries = [
+          expiry for expiry in (turn_end.next_silence_expiry(self), stall_due) if expiry is not None
+        ]
+        if len(expiries) > 0:
+          timeout = min(timeout, max(0.0, min(expiries) - time.monotonic()))
+      self._changed.wait(timeout)
+      self._changed.clear()
+      if self._awaiting_input.is_set() and not self._stdin.closed:
+        notices = [turn_end.silence_notice(self, time.monotonic())]
+        if stall_due is not None and time.monotonic() >= stall_due:
+          notices.append(turn_end.failure_notice(self))
+        for notice in notices:
+          if notice is not None:
+            self.send(notice)
+
+  def notify(self, text: str) -> None:
+    self.send(text)
+
+  def end(self) -> None:
+    self._waiters.stand_down()
+    with self._write_lock:
+      self._stdin.close()
+    self._changed.set()
+
+
+@contextlib.contextmanager
+def _ended(process: subprocess.Popen) -> Generator[None]:
+  """wait for `process` on the way out, terminating it first when the block failed."""
+  try:
+    yield
+  except BaseException:
+    process.terminate()
+    raise
+  finally:
+    process.wait()
+
+
+def _user_message(text: str) -> dict:
+  return {'type': 'user', 'message': {'role': 'user', 'content': text}}
+
+
+def _stream_event(line: str) -> dict | None:
+  """one stream-json line as its event, None for a blank line."""
+  if line.strip() == '':
+    return None
+  try:
+    event = json.loads(line)
+  except json.JSONDecodeError as error:
+    raise RuntimeError(f'claude wrote a line that is not stream-json: {line!r}') from error
+  if not isinstance(event, dict):
+    raise RuntimeError(f'claude wrote a stream-json line that is not an event: {line!r}')
+  return event
+
+
+def _task_list(event: dict) -> tuple[dict, ...]:
+  tasks = event.get('tasks')
+  if not isinstance(tasks, list) or not all(_is_task(task) for task in tasks):
+    raise RuntimeError(f'a background_tasks_changed event carries a malformed task list: {tasks!r}')
+  return tuple(tasks)
+
+
+def _from_waiter(response: dict) -> bool:
+  stdout = response.get('stdout')
+  return (
+    response.get('hook_event') in WAITER_EVENTS
+    and isinstance(stdout, str)
+    and stdout.splitlines()[:1] == [WAITER_MARK]
+  )
+
+
+def _is_task(task: object) -> bool:
+  return (
+    isinstance(task, dict)
+    and all(isinstance(task.get(field), str) for field in ('task_id', 'task_type', 'description'))
+    and isinstance(task.get('ambient', False), bool)
+  )
+
+
+def run_interactive(
+  argv: list[str],
+  env: Mapping[str, str],
+  transcripts: Path,
+  *,
+  waiters: WaiterState,
+  stopped_calls: StoppedCallMark,
+) -> Run:
+  """run claude's TUI on a pty proxying the session's terminal.
+
+  `transcripts` is the projects dir the interrupted turn lands in."""
+  with _terminal_run(argv, env) as run:
+    with stopped_on_sigterm(
+      lambda: _stop_interactive(run, transcripts, waiters, stopped_calls)
+    ) as stopped:
+      code = run.process.wait()
+  return Run(code, stopped.is_set())
+
+
+def _stop_printing(process: subprocess.Popen, waiters: WaiterState) -> None:
+  # claude kills a pending waiter on the interrupt, which reads as the waiter
+  # failing unless it was stood down first
+  waiters.stand_down()
+  # the stream session ends a session that ended itself at its stopped turn's `result`
+  if requested_exit_status() is not None:
+    if _exited_within(process, _STOPPED_TURN_TIMEOUT_SECONDS):
+      return
+    log.warning(
+      'claude did not end its stopped turn within %.0fs; interrupting',
+      _STOPPED_TURN_TIMEOUT_SECONDS,
+    )
+  process.send_signal(signal.SIGINT)
+  _await_exit(process)
+
+
+def _stop_interactive(
+  run: '_TerminalRun', transcripts: Path, waiters: WaiterState, stopped_calls: StoppedCallMark
+) -> None:
+  waiters.stand_down()
+  try:
+    if requested_exit_status() is None or not _await_stopped_turn(stopped_calls):
+      run.type(_INTERRUPT_KEY)
+      _await_flush(transcripts)
+  finally:
+    # the TUI's own quit, taken once its last turn is on disk
+    run.process.send_signal(signal.SIGINT)
+    _await_exit(run.process)
+
+
+def _await_stopped_turn(stopped_calls: StoppedCallMark) -> bool:
+  """wait for the turn `bro.claude.session_end` stopped to reach its
+  transcript; False when it did not within the bound."""
+  deadline = time.monotonic() + _STOPPED_TURN_TIMEOUT_SECONDS
+  offset = 0
+  while time.monotonic() < deadline:
+    call = stopped_calls.read()
+    if call is not None:
+      lines, offset = read_lines_after(call.transcript, offset)
+      if any(_stops(line, call.call_id) for line in lines):
+        return True
+    time.sleep(_POLL_SECONDS)
+  log.warning(
+    'claude did not write its stopped turn within %.0fs; interrupting',
+    _STOPPED_TURN_TIMEOUT_SECONDS,
+  )
+  return False
+
+
+def _stops(line: str, call_id: str) -> bool:
+  """whether the transcript line is claude's record of the turn stopped after `call_id`."""
+  if call_id not in line:
+    return False
+  attachment = json.loads(line).get('attachment')
+  return (
+    isinstance(attachment, dict)
+    and attachment.get('type') == 'hook_stopped_continuation'
+    and attachment.get('toolUseID') == call_id
+  )
+
+
+def _await_flush(transcripts: Path) -> None:
+  """wait for the interrupted turn to reach the session transcript."""
+  time.sleep(_FLUSH_GRACE_SECONDS)
+  deadline = time.monotonic() + _FLUSH_TIMEOUT_SECONDS
+  while time.monotonic() < deadline:
+    transcript = latest_jsonl(transcripts)
+    if transcript is None or time.time() - transcript.stat().st_mtime >= _FLUSH_SETTLE_SECONDS:
+      return
+    time.sleep(_POLL_SECONDS)
+  log.warning('the interrupted turn is still being written after %.0fs', _FLUSH_TIMEOUT_SECONDS)
+
+
+def _await_exit(process: subprocess.Popen) -> None:
+  """give claude the grace to go on its own, then take it down."""
+  if _exited_within(process, _EXIT_TIMEOUT_SECONDS):
+    return
+  log.warning('claude did not exit %.0fs after the interrupt; terminating', _EXIT_TIMEOUT_SECONDS)
+  process.terminate()
+
+
+def _exited_within(process: subprocess.Popen, seconds: float) -> bool:
+  deadline = time.monotonic() + seconds
+  while time.monotonic() < deadline:
+    if process.poll() is not None:
+      return True
+    time.sleep(_POLL_SECONDS)
+  return False
+
+
+class _TerminalRun:
+  """claude running on a pty that stands in for the session's own terminal."""
+
+  def __init__(self, process: subprocess.Popen, terminal: int) -> None:
+    self.process = process
+    self._terminal = terminal
+
+  def type(self, keys: bytes) -> None:
+    """deliver `keys` to claude the way its terminal would."""
+    _write_all(self._terminal, keys)
+
+
+@contextlib.contextmanager
+def _terminal_run(argv: list[str], env: Mapping[str, str]) -> Generator[_TerminalRun]:
+  """run `argv` on a pty proxying this process's terminal for the block's
+  duration."""
+  terminal, child_end = pty.openpty()
+  with contextlib.ExitStack() as teardown:
+    teardown.callback(os.close, terminal)
+    if os.isatty(_SESSION_STDIN):
+      teardown.enter_context(_raw_mode(_SESSION_STDIN))
+      teardown.enter_context(_window_size_followed(_SESSION_STDIN, terminal))
+    process = subprocess.Popen(
+      argv, env=dict(env), stdin=child_end, stdout=child_end, stderr=child_end
+    )
+    # the child holds the only handle on its end now, so the proxy reads EOF
+    # from the pty when it exits
+    os.close(child_end)
+    teardown.enter_context(_proxied(terminal))
+    yield _TerminalRun(process, terminal)
+
+
+@contextlib.contextmanager
+def _raw_mode(terminal: int) -> Generator[None]:
+  """put the terminal in raw mode for the block's duration, so every keypress —
+  the interrupt among them — reaches the proxied pty as a byte."""
+  saved = termios.tcgetattr(terminal)
+  tty.setraw(terminal)
+  try:
+    yield
+  finally:
+    termios.tcsetattr(terminal, termios.TCSADRAIN, saved)
+
+
+@contextlib.contextmanager
+def _window_size_followed(source: int, target: int) -> Generator[None]:
+  """size `target` like `source` for the block's duration, resizes included."""
+
+  def _follow(signum, frame):
+    del signum, frame
+    _copy_window_size(source, target)
+
+  _copy_window_size(source, target)
+  previous = signal.signal(signal.SIGWINCH, _follow)
+  try:
+    yield
+  finally:
+    signal.signal(signal.SIGWINCH, previous)
+
+
+def _copy_window_size(source: int, target: int) -> None:
+  size = fcntl.ioctl(source, termios.TIOCGWINSZ, bytes(8))
+  fcntl.ioctl(target, termios.TIOCSWINSZ, size)
+
+
+@contextlib.contextmanager
+def _proxied(terminal: int) -> Generator[None]:
+  """copy this process's terminal into the pty and back for the block's duration."""
+  stop = threading.Event()
+  thread = threading.Thread(target=_proxy, args=(terminal, stop), daemon=True)
+  thread.start()
+  try:
+    yield
+  finally:
+    stop.set()
+    thread.join()
+
+
+def _proxy(terminal: int, stop: threading.Event) -> None:
+  # select over epoll: epoll refuses a regular file, which a session's stdin can
+  # be, while select reports one always-ready — the right answer for it
+  with selectors.SelectSelector() as selector:
+    selector.register(terminal, selectors.EVENT_READ)
+    selector.register(_SESSION_STDIN, selectors.EVENT_READ)
+    while not stop.is_set():
+      for ready, _ in selector.select(timeout=_PROXY_POLL_SECONDS):
+        if ready.fd == terminal:
+          try:
+            output = os.read(terminal, _PROXY_CHUNK)
+          except OSError:
+            return  # EIO: the child's end of the pty is gone, so the session is over
+          if len(output) == 0:
+            return
+          _write_all(_SESSION_STDOUT, output)
+          continue
+        keys = os.read(_SESSION_STDIN, _PROXY_CHUNK)
+        if len(keys) == 0:
+          # a pty carries no end of its own, so a closed session terminal
+          # reaches claude as the key its terminal would have sent
+          selector.unregister(_SESSION_STDIN)
+          keys = _EOF_KEY
+        _write_all(terminal, keys)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+  while len(data) > 0:
+    data = data[os.write(fd, data) :]

@@ -13,6 +13,8 @@ members = [
     "bro",
     "bro-bench",
     "bro-browser",
+    "bro-claude",
+    "bro-claude-trails",
     "bro-dev",
     "bro-filetypes",
     "bro-local",
@@ -386,6 +388,44 @@ requires-dist = [
 ]
 
 [[package]]
+name = "bro-claude"
+version = "0.1.0"
+source = { editable = "harnesses/claude/harness" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-claude-trails" },
+    { name = "bro-ride" },
+    { name = "bro-wire-messages" },
+    { name = "pyyaml" },
+    { name = "watchfiles" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-claude-trails", editable = "harnesses/claude/trails" },
+    { name = "bro-ride", editable = "ride" },
+    { name = "bro-wire-messages", editable = "wires/messages" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "watchfiles", specifier = "==1.3.0" },
+]
+
+[[package]]
+name = "bro-claude-trails"
+version = "0.1.0"
+source = { editable = "harnesses/claude/trails" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-messages" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-wire-messages", editable = "wires/messages" },
+]
+
+[[package]]
 name = "bro-dev"
 version = "0.1.0"
 source = { editable = "dev" }
@@ -511,31 +551,25 @@ version = "0.1.0"
 source = { editable = "ride" }
 dependencies = [
     { name = "bro" },
-    { name = "bro-wire-messages" },
     { name = "certifi" },
     { name = "humanize" },
     { name = "mcp" },
-    { name = "pyyaml" },
     { name = "rich" },
     { name = "textual" },
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
-    { name = "watchfiles" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
-    { name = "bro-wire-messages", editable = "wires/messages" },
     { name = "certifi", specifier = "==2026.7.22" },
     { name = "humanize", specifier = "==4.16.0" },
     { name = "mcp", specifier = "==2.3.0" },
-    { name = "pyyaml", specifier = "==6.0.3" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "textual", specifier = "==8.2.8" },
     { name = "tree-sitter", specifier = "==0.26.0" },
     { name = "tree-sitter-bash", specifier = "==0.25.1" },
-    { name = "watchfiles", specifier = "==1.3.0" },
 ]
 
 [[package]]
