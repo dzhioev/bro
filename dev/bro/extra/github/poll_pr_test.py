@@ -12,6 +12,7 @@ from typing import Any, ClassVar, Optional
 
 import pytest
 
+from bro import watches
 from bro.base import credentials, retry
 from bro.extra.github import poll_pr
 
@@ -698,6 +699,17 @@ class TestTextOutput:
     monkeypatch.setattr(poll_pr, '_timestamp', lambda: '2026-10-22T03:41:07Z')
     poll_pr._emit({'event': 'conflicts', 'pr': 9})
     assert capsys.readouterr().out == 'conflicts:\n  at: 2026-10-22T03:41:07Z\n'
+
+  def test_a_watch_producer_marks_every_line_after_the_first_as_a_continuation(
+    self, monkeypatch, capsys
+  ):
+    monkeypatch.setattr(poll_pr, '_emit', _RENDERED_EMIT)
+    monkeypatch.setattr(poll_pr, '_timestamp', lambda: '2026-10-22T03:41:07Z')
+    monkeypatch.setattr(watches, 'diagnostics_path', lambda: Path('/diagnostics'))
+    poll_pr._emit({'event': 'conflicts', 'pr': 9})
+    assert capsys.readouterr().out == (
+      f'conflicts:\n{watches.continued("  at: 2026-10-22T03:41:07Z")}\n'
+    )
 
   def test_the_timestamp_is_utc_to_the_second(self):
     assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', poll_pr._timestamp())

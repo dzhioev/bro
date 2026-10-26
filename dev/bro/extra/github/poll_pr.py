@@ -88,7 +88,11 @@ def _timestamp() -> str:
 
 def _emit(event: dict[str, Any]) -> None:
   stamped = {'event': event['event'], 'at': _timestamp(), **event}
-  print(render(stamped), flush=True)
+  text = render(stamped)
+  if watches.diagnostics_path() is not None:
+    head, *rest = text.split('\n')
+    text = '\n'.join([head, *map(watches.continued, rest)])
+  print(text, flush=True)
 
 
 def _fetch_check_runs(owner: str, repo: str, sha: str, token: str) -> list[dict[str, Any]]:

@@ -49,7 +49,7 @@ Claude Code's own harness themed with the session's bro.
   it renders recording and every owned mission's state into an atomic file while its pid file is live, exits when its runner parent disappears, and holds a session-state lock that serializes resume;
   a runner-side monitor reaps it and clears only the live files that pid still owns, while Claude's refresh command only checks the pid and cats the projection.
 - `claude_plugin.py` and `plugin/` — ride's own Claude Code plugin and the copy of it an interactive session loads;
-  the plugin draws each line of a watch rewake's batch into the transcript.
+  the plugin draws each event of a watch rewake's batch into the transcript.
   `claude_plugin_llm_test.py` holds it to the pinned release's validator, its own `*.test.ts`, and a live rewake.
 - `command_gate.py`, `read_gate.py`, `watch_waiter.py`, and `session_end.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`spawn.module_argv('ride.claude.<module>')`);

@@ -99,6 +99,34 @@ class TestArrivals:
       watches.BatchLine('producer', 'next', wakes=False, arrived=2.0),
     )
 
+  def test_a_continuation_line_follows_the_wake_of_the_line_it_continues(self, owner):
+    _seed(
+      owner.store,
+      'producer',
+      f'{watches.quiet("held")}\n{watches.continued("  more")}\nwoke\n{watches.continued("  tail")}\n',
+    )
+
+    batch = owner.store.take()
+
+    assert batch is not None
+    assert [(line.content, line.wakes, line.continued) for line in batch.lines] == [
+      ('held', False, False),
+      ('  more', False, True),
+      ('woke', True, False),
+      ('  tail', True, True),
+    ]
+
+  def test_a_continuation_line_does_not_wake_the_session_after_a_quiet_line(self, owner):
+    _seed(owner.store, 'producer', f'{watches.quiet("held")}\n{watches.continued("  more")}\n')
+
+    assert owner.store.take() is None
+
+  def test_a_continuation_is_never_quiet_or_continued_twice(self):
+    with pytest.raises(ValueError):
+      watches.continued(watches.quiet('line'))
+    with pytest.raises(ValueError):
+      watches.continued(watches.continued('line'))
+
   def test_a_quiet_line_wakes_the_session_only_where_its_watch_wakes_on_quiet(self, owner):
     _seed(owner.store, 'quiet', f'{watches.quiet("held")}\n')
     _seed(owner.store, 'loud', f'{watches.quiet("woke")}\n')
