@@ -45,7 +45,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   it probes the protections in a child, reports `skipped` with the reason when unavailable locally, and fails instead when `GITHUB_ACTIONS` is set),
   `benchmark` and `cdk` (one per project outside the workspace, `benchmark/` and `oops/cdk/`: each syncs the project's own `.venv` and runs pyright and pytest inside it, since the workspace venv cannot import the project at all),
   the opt-in `llm` and `conformance` (live-LLM probes, each run only when `--only` names the stage, since they spend real tokens),
-  and the host-only `docker` (the container entrypoint's postconditions and the launch path from a cold image tag),
+  and the host-only `docker` (the trails-server image's recording and startup checks, the container entrypoint's postconditions, and the launch path from a cold image tag),
   `broker_e2e` (the live broker-supervised container launch seam, `ride/ride/e2e_test.py`),
   and `webview_e2e` (the real browser worker route, `browser/bro/webview/e2e_test.py`),
   all skipped when the gate itself runs inside a container.
