@@ -3,7 +3,7 @@
 `bro/` and `bros/bro/` are the `bro` distribution:
 the persona declaration and what composes and runs one, the declaration vocabulary, the shared low-level utilities, and the minimal `bro` persona with the spells every bro inherits.
 Core imports no other workspace member;
-the engine that runs a declaration is `native/`, and the managed-workspace runtime is `ride/`.
+the engine that runs a declaration is `harnesses/native/harness/`, and the managed-workspace runtime is `ride/`.
 Paths in this file are relative to `bro/`, except the top-level `bros/bro/`;
 native-owned paths are spelled from the repository root and keep their public `bro.*` import names.
 A subpackage with a map of its own is pointed at, not described here.
@@ -12,7 +12,7 @@ A subpackage with a map of its own is pointed at, not described here.
 
 - `bro.py` — `BaseBro` ABC (the framework) and the framework helpers (`BroRaised`).
   The class is the persona *declaration* and its composition;
-  the engine that runs one is `native/bro/native/runner.py`.
+  the engine that runs one is `harnesses/native/harness/bro/native/runner.py`.
   How to declare one: `bro/reference/extending.md`;
   what a run renders, mounts, and counts: "Running a declaration" below.
 - `mcp.py` — declaration vocabulary for persona tool reach and toolset modules:
@@ -70,7 +70,7 @@ A subpackage with a map of its own is pointed at, not described here.
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `job_supervisor.py` — the shared process-group supervisor behind core's `watch-run` and bro-native's jobs:
   it remains the live group leader until every command descendant exits, and exits when the owner-liveness handle closes.
-  The native job registry, spool, and inbox keep their public `bro.jobs` and `bro.inbox` paths under `native/`.
+  The native job registry, spool, and inbox keep their public `bro.jobs` and `bro.inbox` paths under `harnesses/native/harness/`.
 - `brash_policy.py` — a session's brash policy file, written from a reach's finite command list and files level, and the argv a line starts as:
   brash under a policy, bash under `brash(ANY)`.
   A harness that runs lines in another process names the file there in `BRO_BRASH_POLICY`.
@@ -115,7 +115,7 @@ A subpackage with a map of its own is pointed at, not described here.
   the server specs the harness mounts for the reach's tool groups, and the groups it leaves unserved, which `bro show` marks.
   The tools a harness serves a group with on its own, Claude's natives or the bro harness's job tools, are its own code, built from the same reach.
   `watches.py` separately decides whether `do-ride` arms the runtime-owned session watch, which reaches the model through the harness's delivery port rather than a tool it can call
-- `launch/` + `native/bro/launch/` — core owns cross-harness launch primitives;
+- `launch/` + `harnesses/native/harness/bro/launch/` — core owns cross-harness launch primitives;
   `bro-native` owns the in-process `run` / `chat` launchers, chat UIs, and fork-resume flow.
   The directories are portions of the shared `bro.launch` namespace;
   see `launch/AGENTS.md`

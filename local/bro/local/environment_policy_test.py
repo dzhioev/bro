@@ -35,7 +35,7 @@ _SOURCES = (
   'dev',
   'filetypes',
   'local',
-  'native',
+  'harnesses',
   'ride',
   'wires',
 )

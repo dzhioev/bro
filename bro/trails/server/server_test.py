@@ -176,7 +176,7 @@ async def test_server_refuses_an_uninstalled_format_then_serves_it_when_installe
   assert "trail format 'bro' is not installed" in (await refused.json())['error']
 
   entry = importlib.metadata.EntryPoint(
-    'bro', 'bro.trails.bro_format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
+    'bro', 'bro.native_trails.format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
   )
   monkeypatch.setattr(backends, '_entry_points', lambda: (entry,))
   served = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())

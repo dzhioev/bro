@@ -9,14 +9,15 @@ from pathlib import Path
 
 import pytest
 
-_ROOT = Path(__file__).resolve().parents[3]
+_ROOT = Path(__file__).resolve().parents[5]
 _PROJECTS = {
   'bro': _ROOT,
   'bro-bench': _ROOT / 'bench',
   'bro-benchmark': _ROOT / 'benchmark',
   'bro-dev': _ROOT / 'dev',
   'bro-filetypes': _ROOT / 'filetypes',
-  'bro-native': _ROOT / 'native',
+  'bro-native': _ROOT / 'harnesses' / 'native' / 'harness',
+  'bro-native-trails': _ROOT / 'harnesses' / 'native' / 'trails',
   'bro-oops': _ROOT / 'oops',
   'bro-oops-cdk': _ROOT / 'oops' / 'cdk',
   'bro-ride': _ROOT / 'ride',
@@ -62,6 +63,7 @@ _NAMESPACE_MODULES = {
   'bro.launch.hold': 'bro/launch/hold.py',
   'bro.oops.cdk.app': 'bro/oops/cdk/app.py',
   'bro.oops.config': 'bro/oops/config.py',
+  'bro.native_trails.format': 'bro/native_trails/format.py',
   'bro.trails.record.bro': 'bro/trails/record/bro.py',
   'bro.trails.record.spine': 'bro/trails/record/spine.py',
 }
@@ -167,11 +169,22 @@ def test_harnesses_register_from_their_own_distributions(wheels):
   )
 
 
-def test_core_registers_the_builtin_trail_formats(wheels):
+def test_trail_formats_register_from_their_own_distributions(wheels):
   assert dict(_entry_points(wheels['bro'])['bro.trail_formats']) == {
-    'bro': 'bro.trails.bro_format:BRO_FORMAT',
     'claude': 'bro.trails.claude_format:CLAUDE_FORMAT',
   }
+
+  assert dict(_entry_points(wheels['bro-native-trails'])['bro.trail_formats']) == {
+    'bro': 'bro.native_trails.format:BRO_FORMAT',
+  }
+
+
+def test_native_format_ships_only_its_own_package(wheel_files):
+  assert wheel_files['bro-native-trails'] == {
+    'bro/native_trails/__init__.py',
+    'bro/native_trails/format.py',
+  }
+  assert not any(path.startswith('bro/native_trails/') for path in wheel_files['bro'])
 
 
 def test_core_registers_file_toolset(wheels):
@@ -187,6 +200,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'aiohttp',
     'bro',
     'bro-ride',
+    'bro-native-trails',
     'bro-wire-responses',
     'humanize',
     'mcp',
@@ -197,6 +211,10 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'tree-sitter',
     'tree-sitter-bash',
   }
+  assert {
+    _requirement_name(requirement)
+    for requirement in (_metadata(wheels['bro-native-trails']).get_all('Requires-Dist') or [])
+  } == {'bro'}
   assert _project_dependencies(_ROOT / 'ride' / 'pyproject.toml') == {
     'bro',
     'bro-wire-messages',
@@ -230,6 +248,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro',
     'bro-bench',
     'bro-ride',
+    'bro-native-trails',
   }
   root = tomllib.loads((_ROOT / 'pyproject.toml').read_text())
   assert {'agent', 'ride'}.isdisjoint(root['project'].get('optional-dependencies', {}))
@@ -239,7 +258,15 @@ def test_shared_namespaces_resolve_from_editable_source_roots():
   _assert_namespace_modules(
     os.pathsep.join(
       str(_ROOT / directory)
-      for directory in ('.', 'dev', 'native', 'oops', 'oops/cdk', 'filetypes')
+      for directory in (
+        '.',
+        'dev',
+        'harnesses/native/harness',
+        'harnesses/native/trails',
+        'oops',
+        'oops/cdk',
+        'filetypes',
+      )
     )
   )
 
@@ -311,6 +338,7 @@ def test_bundled_ride_checks_native_without_the_runtime_on_path(wheels, tmp_path
       str(wheels['bro-ride']),
       str(wheels['bro-wire-messages']),
       str(wheels['bro-native']),
+      str(wheels['bro-native-trails']),
       str(wheels['bro-wire-responses']),
     ],
     check=True,
@@ -374,6 +402,38 @@ for name, response in (
   assert wires.decode(name, response).reply == 'reply'
 assert from_wire_counts('responses', {'input_tokens': 5, 'output_tokens': 2})['input'] == 5
 assert wires.registry.legacy_name() == 'responses'
+assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.native', 'ride'))
+"""
+  subprocess.run(
+    [sys.executable, '-S', '-c', probe],
+    cwd='/tmp',
+    env={**os.environ, 'PYTHONPATH': str(tmp_path)},
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+
+
+def test_native_trail_format_wheel_projects_without_a_harness_or_sdk(wheels, tmp_path):
+  for distribution in ('bro', 'bro-native-trails', 'bro-wire-responses'):
+    with zipfile.ZipFile(wheels[distribution]) as archive:
+      archive.extractall(tmp_path)
+  probe = """
+import importlib.metadata
+import sys
+from bro.trails.backends import get_format
+entry = next(entry for entry in importlib.metadata.entry_points(group='bro.trail_formats') if entry.name == 'bro')
+assert entry.dist.name == 'bro-native-trails'
+events = get_format('bro').project({
+  'step_id': 3,
+  'kind': 'llm_call',
+  'body': {'response': {'model': 'model', 'status': 'completed', 'output': [
+    {'type': 'message', 'content': [{'type': 'output_text', 'text': 'recorded reply'}]},
+  ]}},
+})
+assert [event['type'] for event in events] == ['llm_call', 'assistant']
+assert events[1]['content'] == 'recorded reply'
+assert events[1]['terminal'] is True
 assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.native', 'ride'))
 """
   subprocess.run(
