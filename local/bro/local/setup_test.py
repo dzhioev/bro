@@ -10,7 +10,8 @@ MANIFESTS = (
   'uv.lock',
   'dev/pyproject.toml',
   'local/pyproject.toml',
-  'native/pyproject.toml',
+  'harnesses/native/harness/pyproject.toml',
+  'harnesses/native/trails/pyproject.toml',
   'ride/pyproject.toml',
 )
 

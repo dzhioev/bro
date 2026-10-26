@@ -14,6 +14,7 @@ dependencies = [
   "bro",
   "bro-bench",
   "bro-ride",
+  "bro-native-trails",
   "bro-wire-responses",
   "bro-wire-messages",
   "bro-wire-chat",
@@ -37,6 +38,7 @@ dev = [
 "bro.benchmark.job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 
 [tool.uv.sources]
+bro-native-trails = { path = "../harnesses/native/trails", editable = true }
 bro-wire-responses = { path = "../wires/responses", editable = true }
 bro-wire-messages = { path = "../wires/messages", editable = true }
 bro-wire-chat = { path = "../wires/chat", editable = true }
@@ -45,6 +47,7 @@ bro-bench = { path = "../bench", editable = true }
 bro-ride = { path = "../ride", editable = true }
 
 [tool.deptry.package_module_name_map]
+bro-native-trails = ["bro"]
 bro-wire-responses = ["bro"]
 bro-wire-messages = ["bro"]
 bro-wire-chat = ["bro"]

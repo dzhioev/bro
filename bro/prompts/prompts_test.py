@@ -141,7 +141,7 @@ class TestSessionFragment:
       assert '{{' not in fragment
 
   def test_the_hold_fragment_stays_the_suffix(self, monkeypatch):
-    # the resumed-hold swap in `native/bro/fork.py` replaces it there
+    # the resumed-hold swap in `harnesses/native/harness/bro/fork.py` replaces it there
     monkeypatch.setenv(SUMMONED_ENV, '1')
     fragment = session_fragment('guided', harness=get_harness('claude'), talk=('worker.say',))
     assert fragment.endswith(hold_fragment('guided', harness=get_harness('claude')))
