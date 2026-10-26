@@ -28,6 +28,7 @@ llm = [
   "openai==3.33.0",
 ]
 runtime = [
+  "anyio==4.15.1",
   "jsonschema==4.26.0",
   "mcp==2.3.0",
   "starlette==1.8.0",

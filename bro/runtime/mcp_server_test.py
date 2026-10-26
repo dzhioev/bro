@@ -1,3 +1,4 @@
+import asyncio
 import importlib.metadata
 import json
 from typing import Any, ClassVar, Optional
@@ -504,3 +505,69 @@ class TestServerLifetime:
 
     assert events == ['served', 'streams closed']
     assert served.close_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('body_parts', [[], [b'first'], [b'first', b'last']])
+async def test_disconnect_cancels_request_before_during_or_after_its_body(body_parts):
+  messages = asyncio.Queue()
+  consumed = asyncio.Event()
+  cancelled = asyncio.Event()
+  received = []
+
+  async def app(scope, receive, send):
+    try:
+      for _ in body_parts:
+        received.append(await receive())
+      consumed.set()
+      await asyncio.Future()
+    except asyncio.CancelledError:
+      cancelled.set()
+      raise
+
+  async def send(message):
+    raise AssertionError('disconnected request must not send a response')
+
+  async with asyncio.timeout(2), asyncio.TaskGroup() as tasks:
+    task = tasks.create_task(mcp_server._CancelOnDisconnect(app)({}, messages.get, send))
+    frames = [
+      {'type': 'http.request', 'body': part, 'more_body': index == 0}
+      for index, part in enumerate(body_parts)
+    ]
+    for frame in frames:
+      await messages.put(frame)
+    await consumed.wait()
+    await messages.put({'type': 'http.disconnect'})
+    await task
+  assert received == frames
+  assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_completed_response_does_not_cancel_handler_cleanup():
+  response_sent = asyncio.Event()
+  disconnect_received = asyncio.Event()
+  finish = asyncio.Event()
+  finished = asyncio.Event()
+
+  async def receive():
+    await response_sent.wait()
+    disconnect_received.set()
+    return {'type': 'http.disconnect'}
+
+  async def send(message):
+    if message['type'] == 'http.response.body':
+      response_sent.set()
+
+  async def app(scope, receive, send):
+    await send({'type': 'http.response.start', 'status': 200, 'headers': []})
+    await send({'type': 'http.response.body', 'body': b'ok'})
+    await finish.wait()
+    finished.set()
+
+  async with asyncio.timeout(2), asyncio.TaskGroup() as tasks:
+    task = tasks.create_task(mcp_server._CancelOnDisconnect(app)({}, receive, send))
+    await disconnect_received.wait()
+    finish.set()
+    await task
+  assert finished.is_set()

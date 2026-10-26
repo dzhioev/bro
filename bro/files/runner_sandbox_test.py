@@ -213,7 +213,9 @@ async def test_real_worker_cannot_escape_confinement(tmp_path, action):
     await SubprocessRunner().run(job(tmp_path, 'probe', probe={'action': action, 'family': 2}))
 
 
-@pytest.mark.parametrize('mode', ['parent_death', 'cancel_group', 'exit_with_open_pipes'])
+@pytest.mark.parametrize(
+  'mode', ['parent_death', 'cancel_group', 'exit_with_open_pipes', 'http_disconnect']
+)
 def test_process_lifecycle_uses_exit_and_kills_orphans_and_groups(mode):
   import subprocess
   import sys
