@@ -16,11 +16,11 @@ _PERMISSION_REFERENCE_PATHS = (
   'bro/reference/permissions.md',
   'bro/reference/permissions_cheatsheet.md',
 )
-_RIDE_CLAUDE_PLUGIN_PATHS = (
-  'ride/claude/plugin/.claude-plugin/plugin.json',
-  'ride/claude/plugin/hooks/hooks.json',
-  'ride/claude/plugin/hooks/register.ts',
-  'ride/claude/plugin/types/index.d.ts',
+_CLAUDE_PLUGIN_PATHS = (
+  'bro/claude/plugin/.claude-plugin/plugin.json',
+  'bro/claude/plugin/hooks/hooks.json',
+  'bro/claude/plugin/hooks/register.ts',
+  'bro/claude/plugin/types/index.d.ts',
 )
 
 
@@ -32,7 +32,7 @@ def test_repository_packaging_policy():
       _REBUILD_MODULE_PATH,
       'bro/pdf/manual.md',
       *_WEBVIEW_MODULE_PATHS,
-      *_RIDE_CLAUDE_PLUGIN_PATHS,
+      *_CLAUDE_PLUGIN_PATHS,
       *_PERMISSION_REFERENCE_PATHS,
     ),
   )

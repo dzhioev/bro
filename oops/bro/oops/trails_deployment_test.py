@@ -176,11 +176,12 @@ def test_image_declares_every_workspace_format_and_non_diagnostic_wire():
   assert set(read_entries(_SERVER / 'entries.json')) == registered
 
 
-def test_image_stages_the_native_format_without_its_harness():
+@pytest.mark.parametrize('harness', ['native', 'claude'])
+def test_image_stages_each_format_without_its_harness(harness):
   packages = wheel_packages(_PROJECT.parent, _SERVER / 'entries.json')
 
-  assert 'bro-native-trails' in packages
-  assert 'bro-native' not in packages
+  assert f'bro-{harness}-trails' in packages
+  assert f'bro-{harness}' not in packages
 
 
 @pytest.mark.asyncio

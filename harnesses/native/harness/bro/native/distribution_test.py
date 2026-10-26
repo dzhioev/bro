@@ -16,6 +16,8 @@ _PROJECTS = {
   'bro-benchmark': _ROOT / 'benchmark',
   'bro-dev': _ROOT / 'dev',
   'bro-filetypes': _ROOT / 'filetypes',
+  'bro-claude': _ROOT / 'harnesses' / 'claude' / 'harness',
+  'bro-claude-trails': _ROOT / 'harnesses' / 'claude' / 'trails',
   'bro-native': _ROOT / 'harnesses' / 'native' / 'harness',
   'bro-native-trails': _ROOT / 'harnesses' / 'native' / 'trails',
   'bro-oops': _ROOT / 'oops',
@@ -63,6 +65,8 @@ _NAMESPACE_MODULES = {
   'bro.launch.hold': 'bro/launch/hold.py',
   'bro.oops.cdk.app': 'bro/oops/cdk/app.py',
   'bro.oops.config': 'bro/oops/config.py',
+  'bro.claude.harness': 'bro/claude/harness.py',
+  'bro.claude_trails.format': 'bro/claude_trails/format.py',
   'bro.native_trails.format': 'bro/native_trails/format.py',
   'bro.trails.record.bro': 'bro/trails/record/bro.py',
   'bro.trails.record.spine': 'bro/trails/record/spine.py',
@@ -164,14 +168,15 @@ def test_native_distribution_owns_its_console_scripts(wheels):
 
 def test_harnesses_register_from_their_own_distributions(wheels):
   assert _entry_points(wheels['bro-native'])['bro.harnesses']['bro'] == ('bro.native.harness:BRO')
-  assert _entry_points(wheels['bro-ride'])['bro.harnesses']['claude'] == (
-    'ride.claude.harness:CLAUDE'
+  assert _entry_points(wheels['bro-claude'])['bro.harnesses']['claude'] == (
+    'bro.claude.harness:CLAUDE'
   )
 
 
 def test_trail_formats_register_from_their_own_distributions(wheels):
-  assert dict(_entry_points(wheels['bro'])['bro.trail_formats']) == {
-    'claude': 'bro.trails.claude_format:CLAUDE_FORMAT',
+  assert not _entry_points(wheels['bro']).has_section('bro.trail_formats')
+  assert dict(_entry_points(wheels['bro-claude-trails'])['bro.trail_formats']) == {
+    'claude': 'bro.claude_trails.format:CLAUDE_FORMAT',
   }
 
   assert dict(_entry_points(wheels['bro-native-trails'])['bro.trail_formats']) == {
@@ -217,16 +222,13 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   } == {'bro'}
   assert _project_dependencies(_ROOT / 'ride' / 'pyproject.toml') == {
     'bro',
-    'bro-wire-messages',
     'certifi',
     'humanize',
     'mcp',
-    'pyyaml',
     'rich',
     'textual',
     'tree-sitter',
     'tree-sitter-bash',
-    'watchfiles',
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',
@@ -249,6 +251,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro-bench',
     'bro-ride',
     'bro-native-trails',
+    'bro-claude-trails',
   }
   root = tomllib.loads((_ROOT / 'pyproject.toml').read_text())
   assert {'agent', 'ride'}.isdisjoint(root['project'].get('optional-dependencies', {}))
@@ -263,63 +266,14 @@ def test_shared_namespaces_resolve_from_editable_source_roots():
         'dev',
         'harnesses/native/harness',
         'harnesses/native/trails',
+        'harnesses/claude/harness',
+        'harnesses/claude/trails',
         'oops',
         'oops/cdk',
         'filetypes',
       )
     )
   )
-
-
-def test_core_and_ride_wheels_compose_a_claude_session_without_native(wheels, tmp_path):
-  venv = tmp_path / 'claude-only'
-  subprocess.run(
-    ['uv', 'venv', '--python', sys.executable, str(venv)], check=True, capture_output=True
-  )
-  subprocess.run(
-    [
-      'uv',
-      'pip',
-      'install',
-      '--python',
-      str(venv / 'bin' / 'python'),
-      str(wheels['bro']),
-      str(wheels['bro-ride']),
-      str(wheels['bro-wire-messages']),
-    ],
-    check=True,
-    capture_output=True,
-  )
-  probe = (
-    'import asyncio, importlib.util, sys; '
-    'from bro.harness import installed_harness_names; '
-    'from bro.registry import create_bro; '
-    'from ride.claude.assembly import persona_servers; '
-    'from ride.claude.system_prompt import session_append_prompt; '
-    'assert installed_harness_names() == ("claude",); '
-    'assert "# Persona: bro" in session_append_prompt("unattended", "bro"); '
-    'servers = persona_servers(create_bro("bro"), "attended"); '
-    'names = {tool.name for server in servers for tool in asyncio.run(server.list_tools())}; '
-    'assert names.isdisjoint({"job", "poll", "kill", "jobs", "skill"}); '
-    'assert importlib.util.find_spec("bro.jobs") is None; '
-    'assert "bro.native.harness" not in sys.modules'
-  )
-  subprocess.run([str(venv / 'bin' / 'python'), '-c', probe], check=True, capture_output=True)
-  data_home = tmp_path / 'data'
-  release = data_home / 'ride' / 'claude-code' / 'verification-cache'
-  release.mkdir(parents=True)
-  env = {**os.environ, 'XDG_DATA_HOME': str(data_home)}
-  dry_run = subprocess.run(
-    [str(venv / 'bin' / 'ride'), 'clean', '--dry-run'],
-    env=env,
-    check=True,
-    capture_output=True,
-    text=True,
-  )
-  assert 'would clean 1 Claude Code release(s)' in dry_run.stdout + dry_run.stderr
-  assert release.is_dir()
-  subprocess.run([str(venv / 'bin' / 'ride'), 'clean'], env=env, check=True, capture_output=True)
-  assert not release.exists()
 
 
 def test_bundled_ride_checks_native_without_the_runtime_on_path(wheels, tmp_path):
@@ -435,6 +389,94 @@ assert [event['type'] for event in events] == ['llm_call', 'assistant']
 assert events[1]['content'] == 'recorded reply'
 assert events[1]['terminal'] is True
 assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.native', 'ride'))
+"""
+  subprocess.run(
+    [sys.executable, '-S', '-c', probe],
+    cwd='/tmp',
+    env={**os.environ, 'PYTHONPATH': str(tmp_path)},
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+
+
+def test_claude_harness_wheel_contains_only_its_package_and_assets(wheel_files):
+  files = wheel_files['bro-claude']
+  assert all(path.startswith('bro/claude/') for path in files)
+  assert {
+    'bro/claude/harness.py',
+    'bro/claude/credentials.py',
+    'bro/claude/image/claude-code-version',
+    'bro/claude/image/Dockerfile',
+    'bro/claude/plugin/.claude-plugin/plugin.json',
+  } <= files
+  assert 'bro/claude/image/bump-claude-code.sh' not in files
+  assert not any(path.endswith('.test.ts') for path in files)
+
+
+def test_claude_format_wheel_contains_only_its_own_package(wheel_files):
+  assert wheel_files['bro-claude-trails'] == {
+    'bro/claude_trails/__init__.py',
+    'bro/claude_trails/format.py',
+    'bro/claude_trails/lineage.py',
+  }
+
+
+def test_claude_distribution_owns_its_console_scripts_and_registrations(wheels):
+  entries = _entry_points(wheels['bro-claude'])
+  assert dict(entries['console_scripts']) == {
+    f'bro.claude.{name.replace("_", "-")}': f'bro.claude._entrypoints:bro_claude_{name}'
+    for name in (
+      'command_gate',
+      'read_gate',
+      'session_end',
+      'statusline',
+      'trail_recorder',
+      'watch_waiter',
+    )
+  }
+  assert dict(entries['bro.mcp.targets']) == {
+    'persona': 'bro.claude.assembly:resolve_persona_target',
+  }
+  assert dict(entries['bro.credentials']) == {'claude_code': 'bro.claude.credentials:KIND'}
+  ride = _entry_points(wheels['bro-ride'])
+  assert not any(name.startswith('ride.claude.') for name in ride['console_scripts'])
+  assert not ride.has_section('bro.harnesses')
+  assert not ride.has_section('bro.mcp.targets')
+
+
+def test_claude_dependency_edges_follow_the_distribution_boundaries(wheels):
+  assert {
+    _requirement_name(requirement)
+    for requirement in (_metadata(wheels['bro-claude-trails']).get_all('Requires-Dist') or [])
+  } == {'bro', 'bro-wire-messages'}
+  assert {
+    _requirement_name(requirement)
+    for requirement in (_metadata(wheels['bro-claude']).get_all('Requires-Dist') or [])
+  } == {'bro', 'bro-ride', 'bro-claude-trails', 'bro-wire-messages', 'pyyaml', 'watchfiles'}
+
+
+def test_claude_trail_format_wheel_projects_without_a_harness_or_sdk(wheels, tmp_path):
+  for distribution in ('bro', 'bro-claude-trails', 'bro-wire-messages'):
+    with zipfile.ZipFile(wheels[distribution]) as archive:
+      archive.extractall(tmp_path)
+  probe = """
+import importlib.metadata
+import json
+import sys
+from bro.trails.backends import get_format
+entry = next(entry for entry in importlib.metadata.entry_points(group='bro.trail_formats') if entry.name == 'claude')
+assert entry.dist.name == 'bro-claude-trails'
+record = {'type': 'assistant', 'message': {'model': 'model', 'content': [
+  {'type': 'text', 'text': 'recorded reply'},
+], 'usage': {'input_tokens': 5, 'output_tokens': 2}}}
+events = get_format('claude').project({
+  'step_id': 3, 'kind': 'assistant', 'body': json.dumps(record), 'usage': record['message']['usage'],
+})
+assert [event['type'] for event in events] == ['llm_call', 'assistant']
+assert events[1]['content'] == 'recorded reply'
+assert events[1]['terminal'] is True
+assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.native', 'bro.claude', 'ride'))
 """
   subprocess.run(
     [sys.executable, '-S', '-c', probe],

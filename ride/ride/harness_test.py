@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import ride.claude.harness as claude_harness
+import bro.claude.harness as claude_harness
 import ride.harness as ride_harness
 from bro.harness import Harness
 
