@@ -1,11 +1,20 @@
+import asyncio
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from bro.base import credentials
 from bro.base.spawn import console_script
+from bro.oops.wheel_staging import entry_providers
+from bro.trails.local import LocalStore
+from bro.trails.server.auth import TokenTable
+from bro.trails.server.entries import read_entries, resolve_entries
+from bro.trails.server.server import create_app
+from oops.trails.server.verify_routes import verify
 
 _PROJECT = Path(__file__).resolve().parents[2]
 _SERVER = _PROJECT / 'trails' / 'server'
@@ -33,7 +42,9 @@ def test_trails_image_uses_the_shared_base_framework_wheel_and_store():
 
   assert 'FROM bro-server-base\n' in dockerfile
   assert 'COPY build/bro-wheel/*.whl' in dockerfile
-  assert '"$1[trails-server]"' in dockerfile
+  assert '"bro[trails-server]" "$@"' in dockerfile
+  assert 'COPY oops/trails/server/entries.json /app/entries.json' in dockerfile
+  assert '"--entries", "/app/entries.json"' in dockerfile
   assert 'ENV BRO_STORE=/app/.configs\n' in dockerfile
   assert 'COPY oops/trails/server/creds.json ${BRO_STORE}/creds.json' in dockerfile
 
@@ -157,3 +168,22 @@ def test_repository_cdk_app_runs_in_the_environment_of_the_project_shipping_the_
   assert command[:2] == ['uv', 'run']
   assert (project / 'uv.lock').is_file()
   assert (project / 'bro' / 'oops' / 'cdk' / 'app.py').is_file()
+
+
+def test_image_declares_every_workspace_format_and_non_diagnostic_wire():
+  workspace = _PROJECT.parent
+  registered = {entry for entry in entry_providers(workspace) if entry.name != 'echo'}
+  assert set(read_entries(_SERVER / 'entries.json')) == registered
+
+
+@pytest.mark.asyncio
+async def test_image_fixtures_record_and_project_through_the_server(aiohttp_server, tmp_path):
+  resolve_entries(read_entries(_SERVER / 'entries.json'))
+  tokens = TokenTable.from_config(
+    {'tokens': {'probe': {'token': 'fixture-token', 'permissions': ['read', 'write']}}}
+  )
+  with LocalStore(tmp_path) as store:
+    server = await aiohttp_server(create_app(store, tokens))
+    await asyncio.to_thread(
+      verify, str(server.make_url('/')).rstrip('/'), 'fixture-token', _SERVER / 'image_cases.json'
+    )

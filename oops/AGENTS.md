@@ -11,11 +11,15 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
 - `bro/oops/mcp.py` — `infra` MCP operations over the repository's registered targets
 - `bros/devoops/` — the operations persona and its target-driven deploy spell
 - `bro/oops/config.py` — resolves the `infra` credential into typed deployment configuration and neutral defaults
+- `bro/oops/wheel_staging.py` — finds the workspace distributions providing an image's declared format and wire entries
 - `bro/oops/infra/deploy_lib.sh` — sourceable image-build, ECR, CodeBuild, wheel-staging, and CDK helpers
 - `bro/oops/infra/monitor_ecs.sh` — ECS deployment-state monitor
 - `bro/oops/infra/buildspec.yml` — consumer-configured CodeBuild image-build pattern
 - `bro/oops/infra/server_base/` — local-only base image for Python services
 - `trails/server/` — trails image, self-contained credential store with typed SSM annotations under `creds.json` `sources`, deployment, plan, bootstrap, local-run, and verification scripts
+  `entries.json` declares the formats and wire decode sides served by the image; staging builds their providers from this workspace, or from the framework revision in a consumer's lock.
+  The image checks every entry before listening, and `verify_image.sh` exercises recording and projection from `image_cases.json`, plus startup with a declared distribution removed.
+  Run the image check on the host, through the `docker` gate stage.
 - `image_build.sh` — the trails target used by the shared CodeBuild buildspec
 - `deploy_targets.py` — this repository's trails-server operations declaration
 - `cdk/` — the `bro-oops-cdk` project: the CDK stacks and this repository's CDK app, in an environment of their own (`cdk/AGENTS.md`)

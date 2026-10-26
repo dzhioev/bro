@@ -1,0 +1,7 @@
+[
+  {"group": "bro.trail_formats", "name": "bro"},
+  {"group": "bro.trail_formats", "name": "claude"},
+  {"group": "bro.llm.wires", "name": "responses"},
+  {"group": "bro.llm.wires", "name": "messages"},
+  {"group": "bro.llm.wires", "name": "chat"}
+]

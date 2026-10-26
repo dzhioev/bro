@@ -74,6 +74,8 @@ bro · claude recorders                     readers
   every synchronous store call runs through `asyncio.to_thread`.
   The process resolves its hosted store with `configured_store()`, whose credential is required
   — a server states the backend it serves.
+  `--entries <json>` requires the declared format and wire entries to load before listening, with exactly one declared wire claiming untagged records.
+  The hosted image supplies its declaration from `oops/trails/server/entries.json`; `/health` remains an unconditional liveness response.
   `/v1/admin/*` is mounted on every server;
   the repairs answer 501 where the hosted store has no administration surface, while `DELETE /v1/admin/trails/{id}` reaches the contract method every backend implements.
   The unreported-trail sweep starts only for a `DynamoStore`.
@@ -90,7 +92,7 @@ bro · claude recorders                     readers
   Dynamo's `body_s3` fields are resolved back to inline `body` values before a row leaves the store, and every spilled row must carry `body_encoding`.
 - `backends.py` owns the `TrailFormat` contract and the `bro.trail_formats` entry-point registry.
   A format supplies `parse`, `classify`, `project`, `open`, `validate_create`, ownership and native-header display fields, whether its trails require a bro, and optionally `resolve_lineage`, plus its declared emitted message types.
-  `bro_format.py` and `claude_format.py` hold the two core formats and core registers both, since the trails server installs only the core wheel.
+  `bro_format.py` and `claude_format.py` hold the two formats registered by core.
   Reads are format-neutral:
   `blaze` is the one store method taking format-specific data, in its own `native`, `body`, and `lineage` arguments.
   A server refuses blaze and import requests naming an uninstalled format.

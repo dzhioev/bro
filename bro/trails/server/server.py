@@ -7,6 +7,7 @@ import functools
 import json
 import sys
 from collections.abc import Awaitable, Callable, Coroutine
+from pathlib import Path
 from typing import Any, Optional
 
 from aiohttp import web
@@ -31,6 +32,7 @@ from bro.trails.server.auth import (
   resolve_auth,
 )
 from bro.trails.server.dynamo import BodyTooLarge, DynamoStore
+from bro.trails.server.entries import read_entries, resolve_entries
 from bro.trails.store import (
   AppendConflict,
   ToolNotFound,
@@ -624,7 +626,10 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--host', default='0.0.0.0')
   parser.add_argument('--port', type=int, default=DEFAULT_PORT)
   parser.add_argument('--trails-allow-no-auth', action='store_true')
+  parser.add_argument('--entries', type=Path, help='JSON declaration of required formats and wires')
   args = parser.parse(argv)
+  if args['entries'] is not None:
+    resolve_entries(read_entries(args['entries']))
   tokens = resolve_auth(
     credentials.default_store(),
     allow_no_auth=args['trails_allow_no_auth'],
