@@ -247,6 +247,8 @@ Ask before local Docker image writes, show the image tag and temporary paths, re
    A preserved default requires `--bro <developer-name>` on default-dependent `ride scope` and `dive-in` commands.
 3. Explain the two harness keys from the pinned per-project defaults:
    `harness` drives every attached launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness.
+   There is no framework harness default: each key must be declared in `[tool.bro]`, supplied as a top-level key of the same name in `~/.bro.json`, or selected for the launch.
+   A project key overrides the host's value.
    Claude Code runs on the `claude_code` setup token, which section 5 always wires;
    the native loop runs the developer's `llm_spec` recipe on its provider key, the `openai` credential.
 4. Ask whether the user has an OpenAI API key and wants section 5 to wire it.

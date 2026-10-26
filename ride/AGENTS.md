@@ -115,6 +115,7 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   A process holds a shared tag lock from before ensure until exit, missing-tag builds serialize on a separate lock, and pruning keeps a non-blocking exclusive tag lock across removal.
   A foreground worker run resolves and holds the invoking installation's runtime and worker images through those locks but prunes none;
   it mounts only the runtime volume, publishes declared ports on loopback, pipes stdin and stdout, and removes its container on exit.
+- Harness selection follows `bro/reference/ride.md`, "Harness selection"; it remains unset until a launch needs it.
 - A root takes its reading after runtime re-exec and attachment resolution.
   Every child and manual commit uses that reading; a resume takes a new one.
   Hydration uses the admitted descriptor's exact picks, while instance material and minting sources stay live.

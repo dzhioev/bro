@@ -73,7 +73,7 @@ def _run(**overrides) -> SessionRun:
   return SessionRun(
     name=spec.name,
     repo=spec.repo,
-    harness=spec.harness,
+    harness=spec.resolved_harness,
     hold=spec.hold,
     llm=spec.llm,
     resolved_llm=spec.resolved_llm,

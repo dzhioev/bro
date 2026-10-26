@@ -843,3 +843,43 @@ def test_later_starts_under_a_reading_do_no_per_target_work(installation, monkey
   )
   source.rules.start(start, Authority.top(), source)
   assert len(calls) <= len(installation.credential_kinds)
+
+
+@pytest.mark.parametrize(
+  ('selected', 'project', 'host', 'expected'),
+  [
+    ('auth', 'native', 'native', 'auth'),
+    (None, 'auth', 'native', 'auth'),
+    (None, None, 'native', 'native'),
+  ],
+  ids=['launch', 'project', 'host'],
+)
+def test_summon_harness_precedence(installation, selected, project, host, expected):
+  source = Reading(
+    Configuration.parse({'summon-harness': host}),
+    {},
+    installation,
+    project={'summon-harness': project} if project is not None else {},
+  )
+  descriptor = normalized(source, **({'harness': selected} if selected is not None else {}))
+  assert descriptor.values['harness'] == expected
+
+
+def test_unset_harness_does_not_prevent_reading_or_explicit_summons(installation):
+  source = Reading(Configuration.parse({}), {}, installation)
+  assert source.harness is None and source.summon_harness is None
+  assert normalized(source, harness='native').values['harness'] == 'native'
+  with pytest.raises(ValueError) as failure:
+    normalized(source)
+  assert (
+    str(failure.value)
+    == 'no harness: pass --harness, set [tool.bro] summon-harness, or set "summon-harness" in ~/.bro.json'
+  )
+
+
+def test_summon_does_not_use_the_root_harness_key(installation):
+  source = Reading(
+    Configuration.parse({'harness': 'native'}), {}, installation, project={'harness': 'auth'}
+  )
+  with pytest.raises(ValueError, match='summon-harness'):
+    normalized(source)

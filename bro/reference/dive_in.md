@@ -66,6 +66,7 @@ It forwards `--boxed`,
 `--harness`,
 and the LLM-selection flags.
 
+`dive-in` resolves its harness using [ride's harness selection](ride.md#harness-selection), including the refusal when no layer supplies one.
 Task prefetch reads brog through the selected harness's prospective scope and the same credential picks and grant/revoke values that the session receives.
 A missing backend or invalid scope override fails before a workspace is launched.
 
