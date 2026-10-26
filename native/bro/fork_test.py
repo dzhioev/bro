@@ -1040,3 +1040,55 @@ class TestForkClientSideReplay:
     # user message — the replayed prefix never re-injects
     assert captured[1].get('previous_response_id') == 'resp_a'
     assert captured[1]['input'] == [{'role': 'user', 'content': 'msg two'}]
+
+
+@pytest.mark.parametrize('wire', ['chat', 'messages'])
+def test_fork_point_tracks_calls_decoded_from_other_wires(wire):
+  if wire == 'chat':
+    response = {
+      'choices': [
+        {
+          'finish_reason': 'tool_calls',
+          'message': {
+            'tool_calls': [
+              {'id': 'c1', 'type': 'function', 'function': {'name': 'read', 'arguments': '{}'}}
+            ]
+          },
+        }
+      ]
+    }
+  else:
+    response = {'content': [{'type': 'tool_use', 'id': 'c1', 'name': 'read', 'input': {}}]}
+  trail = RecordedTrail(
+    header=_trail_header(),
+    steps=[
+      _step('user_input', 'go', step_id=0),
+      _step('llm_call', {'response': response}, step_id=1, wire=wire),
+    ],
+  )
+  assert latest_fork_point(trail) == 0
+  trail.steps.append(_step('tool_result', 'done', step_id=2, call_id='c1'))
+  assert latest_fork_point(trail) == 2
+
+
+def test_fork_point_skips_refused_steps_but_not_accepted_incomplete_history():
+  body = _llm_call_body(_output_message('partial'))
+  body['response']['status'] = 'incomplete'
+  body['response']['incomplete_details'] = {'reason': 'max_output_tokens'}
+  trail = RecordedTrail(
+    header=_trail_header(),
+    steps=[_step('user_input', 'go', step_id=0), _step('llm_call', body, step_id=1)],
+  )
+  assert latest_fork_point(trail) == 1
+  trail.steps[-1] = _step('llm_call', body, step_id=1, stopped='truncated')
+  assert latest_fork_point(trail) == 0
+
+
+def test_fork_point_refuses_a_call_whose_result_cannot_be_matched():
+  body = _llm_call_body({'type': 'function_call', 'name': 'read', 'arguments': '{}'})
+  trail = RecordedTrail(
+    header=_trail_header(),
+    steps=[_step('user_input', 'go', step_id=0), _step('llm_call', body, step_id=1)],
+  )
+  with pytest.raises(ValueError, match='tool call without an id'):
+    latest_fork_point(trail)

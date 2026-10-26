@@ -101,7 +101,10 @@ def _row(trail_id: str, step_id: int, kind: str, body: Any, **extras: Any) -> di
 
 
 def _llm_call_body(*output_items: dict) -> dict:
-  return {'request': {}, 'response': {'id': 'resp', 'output': list(output_items)}}
+  return {
+    'request': {},
+    'response': {'id': 'resp', 'status': 'completed', 'output': list(output_items)},
+  }
 
 
 def _output_message(text: str) -> dict:

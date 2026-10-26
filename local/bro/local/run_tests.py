@@ -77,6 +77,7 @@ DISTRIBUTIONS = [
       '^ride/',
       '^browser/',
       '^filetypes/',
+      '^wires/',
       f'^{BENCHMARK}/',
       '.venv/',
       '.claude/',
@@ -131,6 +132,21 @@ DISTRIBUTIONS = [
     deptry_known_first_party=('bro',),
   ),
   Distribution(
+    directory='wires/responses',
+    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_known_first_party=('bro',),
+  ),
+  Distribution(
+    directory='wires/messages',
+    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_known_first_party=('bro',),
+  ),
+  Distribution(
+    directory='wires/chat',
+    deptry_exclude=(TEST_MODULE_PATTERN,),
+    deptry_known_first_party=('bro',),
+  ),
+  Distribution(
     directory=BENCHMARK,
     deptry_exclude=(TEST_MODULE_PATTERN, '.venv/'),
     deptry_known_first_party=('bro',),
@@ -138,6 +154,9 @@ DISTRIBUTIONS = [
 ]
 
 PYTEST_FILES = [
+  'wires/chat/bro/wire_chat/decode_test.py',
+  'wires/messages/bro/wire_messages/decode_test.py',
+  'wires/responses/bro/wire_responses/decode_test.py',
   'filetypes/bro/pdf/provider_test.py',
   'bro/authority/values_test.py',
   'bro/authority/patterns_test.py',
@@ -225,6 +244,7 @@ PYTEST_FILES = [
   'bro/trails/contract_test.py',
   'bro/trails/cost_test.py',
   'bro/trails/model_test.py',
+  'bro/trails/wire_projection_test.py',
   'bro/trails/store_test.py',
   'bro/trails/local_test.py',
   'bro/trails/display/config_test.py',
@@ -369,6 +389,8 @@ PYTEST_FILES = [
   'bro/setup/install_awscli_test.py',
   'bro/setup/prelude_test.py',
   'bro/llm/usage_test.py',
+  'bro/llm/records_test.py',
+  'bro/llm/wires_test.py',
   'bench/bro/bench/credentials_test.py',
   'bench/bro/bench/job_test.py',
   'bench/bro/bench/presets_test.py',

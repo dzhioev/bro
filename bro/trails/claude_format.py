@@ -2,12 +2,14 @@
 
 from typing import Any, Optional
 
+from bro.llm import wires
 from bro.trails import claude_lineage
 from bro.trails.backends import (
   Classification,
   OpenedBody,
   ParsedRecord,
   TrailFormat,
+  decoded_part_events,
   parse_json_object,
   projected_event,
   validate_server_derived,
@@ -111,38 +113,17 @@ def _claude_validate_create(native: dict) -> None:
 def _claude_assistant_messages(record: dict, native: dict, message: dict) -> list[dict]:
   if native.get('isApiErrorMessage') is True:
     return [projected_event(record, 'error', content=message.get('content'))]
-  model = str(message.get('model', 'unknown'))
-  raw_usage = message.get('usage')
-  if not isinstance(raw_usage, dict) or model == '<synthetic>':
+  decoded = wires.decode('messages', message)
+  if not isinstance(message.get('usage'), dict) or decoded.model == '<synthetic>':
     return [projected_event(record, 'harness_event', raw=native)]
   events: list[dict] = []
   contributed_usage = record.get('usage')
   if isinstance(contributed_usage, dict):
-    events.append(projected_event(record, 'llm_call', model=model, usage=contributed_usage))
-  content = message.get('content')
-  if not isinstance(content, list):
-    return [*events, projected_event(record, 'harness_event', 1, raw=native)]
-  for index, block in enumerate(content, start=1):
-    if not isinstance(block, dict):
-      events.append(projected_event(record, 'harness_event', index, raw=block))
-    elif block.get('type') == 'thinking':
-      events.append(projected_event(record, 'reasoning', index, content=block.get('thinking')))
-    elif block.get('type') == 'text':
-      events.append(projected_event(record, 'assistant', index, content=block.get('text')))
-    elif block.get('type') == 'tool_use':
-      events.append(
-        projected_event(
-          record,
-          'tool_call',
-          index,
-          tool_name=block.get('name'),
-          call_id=block.get('id'),
-          arguments=block.get('input'),
-        )
-      )
-    else:
-      events.append(projected_event(record, 'harness_event', index, raw=block))
-  return events
+    fields: dict[str, Any] = {'model': decoded.model, 'usage': contributed_usage}
+    if decoded.stop != 'completed':
+      fields['stop'] = decoded.stop
+    events.append(projected_event(record, 'llm_call', **fields))
+  return [*events, *decoded_part_events(record, decoded)]
 
 
 def _claude_user_messages(record: dict, native: dict, message: dict) -> list[dict]:
