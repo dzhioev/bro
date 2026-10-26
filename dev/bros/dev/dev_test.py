@@ -55,9 +55,9 @@ def test_claude_surface_selects_tracker_and_reference_tools(monkeypatch):
 
 def test_tracker_dev_inherits_shared_and_dev_spells():
   bro = _TrackerDev()
-  # one spell per contributing package proves the MRO merge: reflect ships with
+  # one spell per contributing package proves the MRO merge: ask ships with
   # the shared bros/bro layer, fix with bros/dev
-  assert 'reflect' in bro.spell_paths
+  assert 'ask' in bro.spell_paths
   assert 'fix' in bro.spell_paths
   assert '## Spells' in bro.composed_prompt('bro', hold='unattended')
   assert '## Available skills' not in bro.composed_prompt('bro', hold='unattended')

@@ -76,13 +76,14 @@ _PIPELINE = "tail -n +1 -f /var/log/app/server.log | grep --line-buffered -E 'ER
 _TRAIL = '01m4a9nghq-h8f4dqje-bgapr756'
 
 
-def _core_spells():
-  return [load_spell(name, path) for name, path in create_bro('bro').spell_paths.items()]
+def _spells(bro_name: str):
+  return [load_spell(name, path) for name, path in create_bro(bro_name).spell_paths.items()]
 
 
-async def _resolutions(command: str) -> list:
+async def _resolutions(command: str, bro_name: str = 'bro') -> list:
+  spells = _spells(bro_name)
   with host_credential_store():
-    return await asyncio.gather(*(interpret(command, _core_spells()) for _ in range(_ATTEMPTS)))
+    return await asyncio.gather(*(interpret(command, spells) for _ in range(_ATTEMPTS)))
 
 
 @pytest.mark.asyncio
@@ -126,7 +127,7 @@ async def test_a_command_resolves_without_the_words_that_selected_its_spell(comm
 @pytest.mark.asyncio
 async def test_free_text_material_keeps_what_it_names_without_the_spell_word():
   resolved = await _resolutions(
-    f'reflect on trail {_TRAIL} — focus on how it waited on its eyebro summon'
+    f'reflect on trail {_TRAIL} — focus on how it waited on its eyebro summon', 'dev'
   )
 
   materials = [

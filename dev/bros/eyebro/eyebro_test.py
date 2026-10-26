@@ -8,8 +8,6 @@ def test_reviewer_carries_review_spells_but_no_author_procedures():
   bro = Eyebro()
   assert 'review-diff' in bro.spell_paths
   assert 'review-pr' in bro.spell_paths
-  # reflect ships with the shared bros/bro layer, proving the MRO merge
-  assert 'reflect' in bro.spell_paths
   # a reviewer must not carry the author-side procedures; Eyebro derives from
   # Bro rather than Dev precisely to keep them out
   assert 'fix' not in bro.spell_paths

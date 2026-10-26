@@ -72,6 +72,7 @@ class Dev(Bro):
     when(feature('brog'), dev.spells.fix),
     dev.spells.land,
     when(feature('brog'), dev.spells.open_task),
+    dev.spells.reflect,
     dev.spells.resume_pr,
     dev.spells.run_pr,
   )
