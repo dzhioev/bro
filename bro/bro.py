@@ -1039,7 +1039,7 @@ class BaseBro(ABC):
     may_summon_names: list[str] = []
     may_launch_types: list[str] = []
     provision_steps: list[ProvisionStep] = []
-    spell_declarations: list[tuple[str, tuple[Entry[spell_store.SpellFile], ...]]] = []
+    spell_declarations: list[spell_store.SpellDeclaration] = []
     feature_gates: dict[str, Condition | bool] = {}
     feature_credentials: dict[str, str] = {}
     for cls in reversed(type(self).__mro__):
@@ -1077,7 +1077,7 @@ class BaseBro(ABC):
       if raw_spells is not None:
         for spell_file in spell_store.declared_files(cls.__name__, raw_spells):
           spell_store.load_spell(spell_file.name, spell_file.path)
-        spell_declarations.append((cls.__name__, tuple(raw_spells)))
+        spell_declarations.append(spell_store.SpellDeclaration(cls.__name__, tuple(raw_spells)))
       raw_features = cls.__dict__.get('features')
       if raw_features is not None:
         for feature_name, gate in raw_features.items():
@@ -1294,8 +1294,8 @@ class BaseBro(ABC):
     gates: set[str] = set(self._feature_credentials.values())
     for _, entries in self._tool_declarations:
       gates.update(_entry_credential_gates(entries))
-    for _, spell_entries in self._spell_declarations:
-      gates.update(_spell_credential_gates(spell_entries))
+    for declaration in self._spell_declarations:
+      gates.update(_spell_credential_gates(declaration.entries))
     ordered = sorted(gates)
     result: set[str] = set()
     for outcome in product((False, True), repeat=len(ordered)):
