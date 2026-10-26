@@ -173,6 +173,11 @@ A quiet line never wakes the session on its own:
 `take()` returns nothing while only quiet lines wait, and a batch that a waking line brings carries them in order, so both harnesses deliver them beside the next waking line.
 Only waking lines hold a one-shot turn end open, and a run that ends drops the quiet lines still waiting.
 A watch set to wake on quiet lines treats its every line as waking.
+A producer marks the lines after the first of a multi-line event as continuations of the line before them with the ASCII synchronous idle byte (0x16), which `take()` strips;
+`watches.continued` marks one and refuses a line already marked.
+A continuation wakes the session exactly when the line it continues does, so it carries no quiet mark of its own,
+and one with no line before it in its watch's batch wakes.
+A harness that draws a batch for its human may show an event as one row.
 
 Where a persona declares shell reach, both harnesses mount `bro::watch(command, wake_on_quiet)` and `bro::unwatch(command)`.
 Under a finite command list a watch runs its line in brash under the session's brash policy, as the bro harness's jobs do, and under `brash(ANY)` in bash;
@@ -217,8 +222,9 @@ On a batch it exits 2 with the lines on stderr,
 which Claude hands the model under the hook's `rewakeSummary` and `rewakeMessage`, after the next tool result of a running turn or as a turn of its own.
 It also records the batch in the session's Claude state dir, where ride's own Claude Code plugin reads it.
 An interactive session loads that plugin from a copy laid in its state dir at launch,
-and the plugin draws a dim transcript row for each line of the batch as Claude delivers it:
-the line's arrival time on the session's Claude clock, its watch's command shortened and marked `*` when the line woke the session, then the line.
+and the plugin draws a dim transcript row for each event of the batch as Claude delivers it:
+the first line's arrival time on the session's Claude clock, its watch's command shortened and marked `*` when the line woke the session, then the line,
+with the lines its watch marked as continuing it joined on by ` · ` and their empty lines dropped.
 A waiter exits 0 once a later waiter supersedes it, the runner stands it down, or `do-ride` is gone;
 shortly before its hook timeout it wakes the session with a line saying no watch line arrived and that ending the turn keeps waiting.
 

@@ -41,6 +41,7 @@ SESSION_WATCH_COMMAND = 'mission watch'
 BEAT_MISSES_ALLOWED = 3
 RESTART_INTERVAL_SECONDS = 1.0
 _QUIET_MARK = b'\x1f'
+_CONTINUATION_MARK = b'\x16'
 _COMMAND_SUFFIX = '.command'
 _LOG_SUFFIX = '.log'
 _TIMES_SUFFIX = '.times'
@@ -101,6 +102,19 @@ def quiet(line: str) -> str:
   """Mark one output line quiet: it never wakes a session on its own and is
   delivered, unmarked, in the first batch a waking line brings."""
   return f'{_QUIET_MARK.decode()}{line}'
+
+
+def continued(line: str) -> str:
+  """Mark one output line a continuation of the line before it: the two are one
+  event. A continuation wakes the session exactly when the line it continues
+  does, so a line already marked quiet or continued is refused."""
+  if line.encode().startswith((_QUIET_MARK, _CONTINUATION_MARK)):
+    raise ValueError('a continuation line is marked once, and never quiet')
+  return f'{_CONTINUATION_MARK.decode()}{line}'
+
+
+def _unmarked(data: bytes) -> bytes:
+  return data[1:] if data.startswith((_QUIET_MARK, _CONTINUATION_MARK)) else data
 
 
 def _signal_journal_change(path: Path) -> None:
@@ -216,13 +230,14 @@ class Cursor:
 class BatchLine:
   """One line of a batch: the command of the watch that produced it, with its
   line breaks escaped, None for a line no watch produced; what the line says;
-  whether it wakes the session; and when its first byte arrived, in epoch
-  seconds."""
+  whether it wakes the session; when its first byte arrived, in epoch
+  seconds; and whether it continues the line before it into one event."""
 
   command: Optional[str]
   content: str
   wakes: bool
   arrived: float
+  continued: bool = False
 
   @property
   def text(self) -> str:
@@ -408,7 +423,7 @@ class Watch:
     _previous, separator, line = data.rpartition(b'\n')
     if start > 0 and len(separator) == 0:
       return None
-    return line.removeprefix(_QUIET_MARK).decode(errors='replace')
+    return _unmarked(line).decode(errors='replace')
 
   def arrivals(self, starts: list[int]) -> list[float]:
     """When the log lines starting at `starts`, ascending, began to arrive, in epoch seconds."""
@@ -817,6 +832,7 @@ class Store:
       with watch.log.open('rb') as log_file:
         log_file.seek(offset)
         line_quiet: Optional[bool] = None
+        previous_quiet = False
         while True:
           chunk = log_file.read(_READ_CHUNK_BYTES)
           if len(chunk) == 0:
@@ -824,12 +840,16 @@ class Store:
           position = 0
           while position < len(chunk):
             if line_quiet is None:
-              line_quiet = chunk.startswith(_QUIET_MARK, position)
+              if chunk.startswith(_CONTINUATION_MARK, position):
+                line_quiet = previous_quiet
+              else:
+                line_quiet = chunk.startswith(_QUIET_MARK, position)
             newline = chunk.find(b'\n', position)
             if newline < 0:
               break
             if not (waking_only and line_quiet):
               return True
+            previous_quiet = line_quiet
             line_quiet = None
             position = newline + 1
     except FileNotFoundError:
@@ -855,10 +875,13 @@ class Store:
           continue
         arrivals = watch.arrivals([start for start, _ in found])
         command = _visible(watch.command)
+        wakes = True
         for (_start, data), arrived in zip(found, arrivals, strict=True):
-          quiet = data.startswith(_QUIET_MARK)
-          content = _visible(data.removeprefix(_QUIET_MARK).decode(errors='replace'))
-          lines.append(BatchLine(command, content, not quiet or watch.wakes_on_quiet(), arrived))
+          is_continuation = data.startswith(_CONTINUATION_MARK)
+          if not is_continuation:
+            wakes = not data.startswith(_QUIET_MARK) or watch.wakes_on_quiet()
+          content = _visible(_unmarked(data).decode(errors='replace'))
+          lines.append(BatchLine(command, content, wakes, arrived, is_continuation))
         Cursor(end).write(watch.offset_file)
     return Batch(tuple(lines))
 

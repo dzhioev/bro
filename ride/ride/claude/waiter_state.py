@@ -87,6 +87,7 @@ class WaiterState:
         'content': line.content,
         'wakes': line.wakes,
         'arrived': line.arrived,
+        'continued': line.continued,
       }
       for line in delivery.shown
     ]

@@ -4,12 +4,13 @@ import type { EngineInterface, Register } from 'claude-code'
 // the rewake record the session's watch waiter keeps
 // (`ride.claude.waiter_state.WaiterState.rewake_record`)
 // `arrived` in epoch seconds
-type RewakeLine = { command: string | null; content: string; wakes: boolean; arrived: number }
+type RewakeLine = { command: string | null; content: string; wakes: boolean; arrived: number; continued: boolean }
 type KeptLines = { command: string; result: string; hidden: number }
 type Rewake = { count: number; lines: RewakeLine[]; kept: KeptLines[] }
 
 const TAG_CHARACTERS = 30
 const CONTENT_CHARACTERS = 200
+const EVENT_SEPARATOR = ' · '
 // an ANSI escape sequence, or any other control character a watched command
 // printed, which would draw on the terminal rather than as text
 const CONTROL = /\u001b\[[0-?]*[ -/]*[@-~]|[\u0000-\u001f\u007f-\u009f]/g
@@ -95,7 +96,9 @@ function isRewakeLine(value: unknown): value is RewakeLine {
     'wakes' in value &&
     typeof value.wakes === 'boolean' &&
     'arrived' in value &&
-    typeof value.arrived === 'number'
+    typeof value.arrived === 'number' &&
+    'continued' in value &&
+    typeof value.continued === 'boolean'
   )
 }
 
@@ -124,19 +127,34 @@ async function clock($: EngineInterface): Promise<(milliseconds: number) => stri
   return milliseconds => `${formatter.format(milliseconds)}${suffix}`
 }
 
-// one row per line: its arrival time, its watch's command shortened and
-// marked `*` when the line wakes the session, then what the line says
+// one row per event: its first line's arrival time, its watch's command
+// shortened and marked `*` when the line wakes the session, then what the line
+// says; the lines its watch marked as continuing it are joined onto the
+// row, and its empty lines dropped, since a row draws on one terminal line
 function rows(rewake: Rewake, time: (milliseconds: number) => string): string[] {
-  const lines = rewake.lines.map(line => {
-    const tag = line.command === null ? '' : `[${clipped(line.command, TAG_CHARACTERS)}]${line.wakes ? '*' : ''} `
-    return `${time(line.arrived * 1000)} ${tag}${clipped(line.content, CONTENT_CHARACTERS)}`
+  const events: RewakeLine[][] = []
+  for (const line of rewake.lines) {
+    const previous = events[events.length - 1]
+    if (previous !== undefined && line.continued && previous[0].command === line.command) {
+      previous.push(line)
+    } else {
+      events.push([line])
+    }
+  }
+  const rendered = events.map(([first, ...continuation]) => {
+    const tag = first.command === null ? '' : `[${clipped(first.command, TAG_CHARACTERS)}]${first.wakes ? '*' : ''} `
+    const text = [
+      clipped(first.content, CONTENT_CHARACTERS),
+      ...continuation.map(line => clipped(line.content, CONTENT_CHARACTERS).trim()).filter(content => content !== ''),
+    ].join(EVENT_SEPARATOR)
+    return `${time(first.arrived * 1000)} ${tag}${text}`
   })
   const blank = ' '.repeat(time(0).length)
   for (const kept of rewake.kept) {
     const tag = `[${clipped(kept.command, TAG_CHARACTERS)}]`
-    lines.push(`${blank} ${tag} … ${kept.hidden} more lines, stored as ${kept.result}`)
+    rendered.push(`${blank} ${tag} … ${kept.hidden} more lines, stored as ${kept.result}`)
   }
-  return lines
+  return rendered
 }
 
 function clipped(text: string, characters: number): string {

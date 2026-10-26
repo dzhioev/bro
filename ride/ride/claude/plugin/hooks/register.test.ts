@@ -50,8 +50,8 @@ function logged(on: On): string[] {
   return lines
 }
 
-function line(command: string | null, content: string, wakes = true, arrived = ARRIVED): object {
-  return { command, content, wakes, arrived }
+function line(command: string | null, content: string, wakes = true, arrived = ARRIVED, continued = false): object {
+  return { command, content, wakes, arrived, continued }
 }
 
 test('a rewake logs its lines once, at the notification that delivers it', async ($, on) => {
@@ -126,4 +126,27 @@ test("the waiter's own notice is drawn without a tag", async ($, on) => {
   await $.session.append(notification)
 
   expect(rows).toEqual(['13:05:07Z No watch line arrived for 24 hours'])
+})
+
+test('the lines a watch marks as continuing join its event into a single row', async ($, on) => {
+  session(on, () => ({
+    count: 1,
+    lines: [
+      line('poll-pr o/r 1', 'review:'),
+      line('poll-pr o/r 1', '  id: 7', false, ARRIVED, true),
+      line('poll-pr o/r 1', '', false, ARRIVED, true),
+      line('poll-pr o/r 1', '  state: APPROVED', false, ARRIVED, true),
+      line('poll-pr o/r 1', '  indented but not continued'),
+      line('other', '  also not', true, ARRIVED, true),
+    ],
+    kept: [],
+  }))
+  const rows = logged(on)
+  await $.session.append(notification)
+
+  expect(rows).toEqual([
+    '13:05:07Z [poll-pr o/r 1]* review: · id: 7 · state: APPROVED',
+    '13:05:07Z [poll-pr o/r 1]*   indented but not continued',
+    '13:05:07Z [other]*   also not',
+  ])
 })
