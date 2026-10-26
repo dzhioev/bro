@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.15.0
+version: 2.16.0
 ---
 
 # orchestrate
@@ -25,7 +25,7 @@ you never design,
 plan,
 or write code.
 You own the root task page, and each phase is a session of its own that does the work,
-writes its artifact to the page,
+writes its artifact to the page, or links it there when it is too large for one,
 and ends.
 
 ## Operating principle — the root does no hard work
@@ -40,7 +40,7 @@ and ends.
   record the outcome,
   review the artifact,
   then launch the next.
-  Everything durable must land on the page;
+  Everything durable must land on the page or be linked from it;
   a phase's answer carries only what you have to act on.
 - **You are the human's interface.** A summoned bro runs isolated with no human channel,
   but each phase is granted `worker.question` so it can consult this coordinator before giving up its live state.
@@ -94,7 +94,7 @@ the phases write them with `brog::append_description` / `brog::edit_description`
 Your own running record lives in the comment stream, not in a section.
 
 - `## Goal` — written at creation.
-- `## Design` — written by the design phase, finalized by the review-and-plan phase.
+- `## Design` — written by the design phase as a short summary linking the pull request and file that hold the specification, which the review-and-plan phase finalizes there.
 - `## Implementation plan` — written by the review-and-plan phase:
   the landings in order, each with its integration branch and its ordered stages linking their stage tasks, and a `### Rollout` when the work needs one to go live.
 - `## Design changelog` — appended by a stage when a design decision changes mid-build, so later stages and the history see it.
@@ -172,7 +172,7 @@ ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
   — design only reads the codebase,
   and review-and-plan resets the integration branch to `origin/master` itself.{{when #may_summon contains eyebro}}
 - The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the prepared request fixes a manual child's gift and cap;
-  the design phase opens no pull request.{{end}}
+  the design phase opens its pull request without it.{{end}}
 - No talk beyond the default:
   the user is in the session, so its questions go to them rather than to you.
 - **The answer reaches you.** A manual child delivers through `answer` like any summoned one, so the prompt closes by answering with what you have to act on.
@@ -206,9 +206,12 @@ the session brings each pivotal decision to them as it comes up.
 > Before writing, present the complete proposed design and obtain the user's explicit approval.
 > If the discussion changed a requirement, update `## Goal` before publishing `## Design`.
 > Do not publish or close while an agent-originated decision remains open to later veto.
-> Write the result to that task under `## Design` (`brog::append_description`).
+> Keep the specification as a markdown file `design/<root-task-id>-<short-slug>.md` on a branch of that name, pushed to origin.
+> Open a pull request against master whose title and body say it is a design only, never to be merged.
+> Then write `## Design` on the task (`brog::append_description`) as a short summary linking that pull request and file,
+> never the specification itself, since an issue body is capped at 65,536 characters.
 > Do NOT implement code,
-> open a PR,
+> open any other PR,
 > or change the task status.
 > Answer with a summary of the design,
 > every question left unsettled,
@@ -217,7 +220,7 @@ the session brings each pivotal decision to them as it comes up.
 > a step that needs the host.
 
 Outcome:
-`## Design` on the page, and an answer carrying what the coordinator has to act on.
+the design file on its pull request, `## Design` on the page linking it, and an answer carrying what the coordinator has to act on.
 
 ### 2 — review and plan
 
@@ -225,13 +228,13 @@ Outcome:
 
 A fresh session supplies independent eyes.
 Attended hold lets it bring material objections and open design decisions to the user before finalizing the design.{{when #may_summon contains eyebro}}
-The eyebro reviews the design as a document on a throwaway pull request:
+The eyebro reviews the design as a document on the design's pull request:
 a line-addressable surface, and approvals on record.{{end}}
 Reviewing and planning are one phase:
 the reviewer ends up holding the deepest understanding of the design, which is what splitting it into stages needs.
 
 > Design-review and planning phase of multi-phase work coordinated by another session.
-> Read the whole task at `<root-task-url>`, then its `## Design` with fresh eyes:
+> Read the whole task at `<root-task-url>`, then the design file its `## Design` links, with fresh eyes:
 > find the problems and the improvements,
 > and verify the design's assumptions wherever you can reach them
 > — introspect the real schemas,
@@ -239,16 +242,17 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > and call sites instead of leaving them as open questions;
 > for every contract shared with a separately deployed process, state the rollout order and how mixed versions remain operable.
 > Bring material objections and open design decisions to the user before editing the design.
-> Use [[design]] for agreed revisions, without restarting settled decisions.{{when #may_summon contains eyebro}}
-> Then put the design as it stands into a markdown file on a throwaway branch and open a temporary pull request against master whose title and body say it is a design review only, never to be merged.
-> Watch it with `poll-pr` the way [[run pr]] watches the pull requests it opens, armed before the reviewer is summoned.
+> Use [[design]] for agreed revisions, without restarting settled decisions;
+> revise the file on the design branch and push, never copying the specification back to the page.{{when #may_summon contains eyebro}}
+> The design's pull request is the design review:
+> watch it with `poll-pr` the way [[run pr]] watches the pull requests it opens, armed before the reviewer is summoned.
 > [[Ask <the eyebro>]] to review that pull request as a document, not code:
 > gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives, not tests or CI.
 > Fold its findings into the file until it approves, settling with the user in this session whatever needs their opinion;
 > the design is settled when both the eyebro and the user have approved the pull request on GitHub.{{end}}
-> Finalize the design in place (`brog::edit_description` on the `## Design` section, leaving the other sections intact).{{when #may_summon contains eyebro}}
-> Then close the pull request without merging and delete the branch:
-> the page is the single source of truth and the repository copy is throwaway.{{end}}
+> Finalize the design in the file and update the summary under `## Design` (`brog::edit_description`, leaving the other sections intact).
+> Then close the pull request without merging and keep its branch:
+> the file on the branch is the specification that stages and verification read, and the pull request is only its review.
 > Then plan the implementation of the design you just finalized and split it into stages
 > — one stage if the work is small.
 > Group the stages into landings, each a merge to master through an integration branch of its own:
@@ -256,7 +260,7 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > — deploying what accepts both shapes before anything writes the new one, say.
 > For EACH stage call `brog::create_task` to open a stage task whose body carries:
 > the stage's goal and details;
-> "part of the multi-phase work tracked at [`<root-task-name>`](`<root-task-url>`) — read its `## Design` and `## Design changelog` before starting";
+> "part of the multi-phase work tracked at [`<root-task-name>`](`<root-task-url>`) — read its `## Design`, including the design file it links on the kept branch, and `## Design changelog` before starting";
 > "land via [[run pr]] with its base argument set to `<its landing's integration branch>`, so this PRs into the integration branch rather than master";
 > "when the PR merges, mark this task done — do not hold it for a rollout, the coordinator rolls the work out after its landing merges";
 > and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
@@ -274,16 +278,16 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > and names the session that runs it:
 > the bro, its isolation, and the credentials it needs.
 > A step is the user's only where nothing but a human can do it, such as an approving review.
-> Do NOT implement code or open a PR{{when #may_summon contains eyebro}} other than the design review's{{end}},
+> Do NOT implement code or open a PR other than the design's,
 > and do not change any task's status.
-> Answer with what you changed in the design and why,{{when #may_summon contains eyebro}}
-> the closed design-review pull request,{{end}}
+> Answer with what you changed in the design and why,
+> the closed design pull request and its branch,
 > the landings with their integration branches and stages,
 > the rollout steps with the session each names,
 > and any prerequisite implementation or rollout will still need.
 
 Outcome:
-a finalized `## Design`,
+a finalized design file on the kept branch, its closed pull request linked from `## Design`,
 stage tasks created and linked under `## Implementation plan`,
 the first landing's integration branch pushed,
 and an answer carrying what changed and what the coordinator has to act on.
@@ -404,7 +408,7 @@ Once the work is live
 
 > Verification phase of multi-phase work coordinated by another session.
 > The work has shipped.
-> Read `## Goal` and `## Design` on the task at `<root-task-url>`,
+> Read `## Goal` and `## Design` (with the design file it links) on the task at `<root-task-url>`,
 > derive concrete checks from the goal,
 > and exercise the shipped capability end to end against the real system
 > — confirm the behavior, not merely that the services are up.
