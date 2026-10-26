@@ -6,5 +6,4 @@ Its `bro-native-trails` dependency supplies native trail reading and projection.
 It also registers the `bro` session harness through `bro.harnesses`.
 
 Install `bro-native` beside `bro-ride` in any environment that launches the native harness.
-`bro-ride` alone is a Claude-only runtime;
-it discovers only the Claude harness and never imports the native engine.
+`bro-ride` discovers installed harnesses through their entry points and depends on none of them.

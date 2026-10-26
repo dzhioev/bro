@@ -345,7 +345,7 @@ class TestClaudeState:
     config = tmp_path / 'claude'
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
     monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
-    with patch('ride.claude.harness.provision_unboxed_claude_dir') as provision:
+    with patch('bro.claude.harness.provision_unboxed_claude_dir') as provision:
       get_harness('claude').prepare_session(MagicMock(name='w'))
     provision.assert_not_called()
 

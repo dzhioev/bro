@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+import bro.claude.harness as claude_harness
 import ride.bro_worker
-import ride.claude.harness as claude_harness
 import ride.root
 import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
@@ -263,9 +263,9 @@ class _ContainerHarness:
         'ride.session.credentials_for',
         side_effect=_fake_credentials(self.secrets, self.optional_secrets),
       ),
-      patch('ride.claude.harness.CLAUDE.preflight_auth', return_value=None),
+      patch('bro.claude.harness.CLAUDE.preflight_auth', return_value=None),
       patch('ride.scope.credentials.build_scoped_store', return_value=({}, frozenset())),
-      patch('ride.claude.harness.container_claude_state', return_value=([], {})),
+      patch('bro.claude.harness.container_claude_state', return_value=([], {})),
       patch('ride.workspace.model.BoxedWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
       patch('ride.session.Reading.take', side_effect=lambda repository: reading()),
@@ -689,7 +689,7 @@ class TestContainerCommand:
 
   def test_resume_guard_fails_fast_without_a_session(self, tmp_path):
     with _ContainerHarness() as h:
-      with patch('ride.claude.harness.workspace_projects_dir') as projects:
+      with patch('bro.claude.harness.workspace_projects_dir') as projects:
         projects.return_value = tmp_path / 'projects'
         rc = ride_session.start_session(_spec(resume=True))
     assert rc == 1
@@ -700,7 +700,7 @@ class TestContainerCommand:
     projects_dir.mkdir()
     (projects_dir / 'abc.jsonl').write_text('{}')
     with _ContainerHarness() as h:
-      with patch('ride.claude.harness.workspace_projects_dir') as projects:
+      with patch('bro.claude.harness.workspace_projects_dir') as projects:
         projects.return_value = projects_dir
         rc = ride_session.start_session(_spec(resume=True))
     assert rc == 0

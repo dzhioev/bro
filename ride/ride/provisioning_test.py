@@ -20,14 +20,14 @@ import sys
 from pathlib import Path
 
 name, root = sys.argv[1], Path(sys.argv[2])
-blocked = 'ride.claude' if name == 'bro' else 'bro.native'
+blocked = 'bro.claude' if name == 'bro' else 'bro.native'
 class RejectOtherHarness(importlib.abc.MetaPathFinder):
   def find_spec(self, fullname, path=None, target=None):
     if fullname == blocked or fullname.startswith(blocked + '.'):
       raise AssertionError('uninstalled harness imported: ' + fullname)
 sys.meta_path.insert(0, RejectOtherHarness())
 import bro.harness as registry
-module = 'bro.native.harness:BRO' if name == 'bro' else 'ride.claude.harness:CLAUDE'
+module = 'bro.native.harness:BRO' if name == 'bro' else 'bro.claude.harness:CLAUDE'
 registry._entry_points = lambda: (importlib.metadata.EntryPoint(name=name, value=module, group='bro.harnesses'),)
 from ride.harness import get_harness
 from ride import provisioning
@@ -156,7 +156,7 @@ import importlib.abc
 import sys
 class RejectHarness(importlib.abc.MetaPathFinder):
   def find_spec(self, fullname, path=None, target=None):
-    if fullname.startswith(('ride.claude', 'bro.native', 'bro.llm.llms.anthropic')):
+    if fullname.startswith(('bro.claude', 'bro.native', 'bro.llm.llms.anthropic')):
       raise AssertionError('harness implementation imported: ' + fullname)
 sys.meta_path.insert(0, RejectHarness())
 from bro.base.args import Parser

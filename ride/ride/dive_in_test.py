@@ -380,7 +380,7 @@ class TestTaskSystem:
 
   def test_reads_brog_through_the_launch_view(self, monkeypatch):
     import bro.brog.github as brog_github
-    from ride.claude.harness import CLAUDE
+    from bro.claude.harness import CLAUDE
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
@@ -397,7 +397,7 @@ class TestTaskSystem:
     assert isinstance(system, brog_github.System)
 
   def test_an_explicit_bro_wins_over_the_default(self, monkeypatch):
-    from ride.claude.harness import CLAUDE
+    from bro.claude.harness import CLAUDE
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)

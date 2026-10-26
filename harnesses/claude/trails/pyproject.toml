@@ -1,0 +1,31 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-claude-trails"
+version = "0.1.0"
+description = "Claude harness trail envelope, lineage and projection for bro"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["bro", "bro-wire-messages"]
+
+[project.entry-points."bro.trail_formats"]
+claude = "bro.claude_trails.format:CLAUDE_FORMAT"
+
+[tool.uv.sources]
+bro = { workspace = true }
+bro-wire-messages = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+bro-wire-messages = ["bro"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["bro-wire-messages"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.claude_trails"]
+namespace = true
+wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/AGENTS.md", "**/*.egg-info"]

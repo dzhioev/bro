@@ -3,8 +3,8 @@
 `ride/` is the `bro-ride` uv workspace member.
 It publishes the top-level `ride` package, depends on the framework's `bro` distribution, and declares its own runtime/UI dependencies directly;
 `bro` never imports `ride`.
-It does not depend on `bro-native`.
-`bro-native` depends on this distribution and registers the native adapter through `bro.harnesses`, so a Claude-only installation never imports the native engine.
+It depends on no harness or provider.
+Harness distributions depend on this runtime and register their adapters through `bro.harnesses`.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-ride`;
 regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts --project ride`.
@@ -76,8 +76,6 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   see `ride/workspace/AGENTS.md`.
 - `ride/setup/` — packaged runtime/project image and managed-session entrypoint assets;
   see `ride/setup/AGENTS.md`.
-- `ride/claude/` — the Claude Code harness implementation, including the host's verified pinned-release cache;
-  see `ride/claude/AGENTS.md`.
 
 The public authority reference is `bro/reference/permissions.md`; scenario-first setup instructions are in `bro/reference/permissions_cheatsheet.md`.
 
@@ -102,8 +100,7 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   No pointer is published when trail recording is disabled.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
-  managed URL mirrors under `runtime_base()/repos/`;
-  and checksum-recorded Claude Code releases under `runtime_base()/claude-code/`, by pinned version and platform.
+  managed URL mirrors under `runtime_base()/repos/`.
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails use a dedicated fixed absolute mount.
 - Every attached workspace tree is an independent clone on its recorded branch.
@@ -118,8 +115,6 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   A process holds a shared tag lock from before ensure until exit, missing-tag builds serialize on a separate lock, and pruning keeps a non-blocking exclusive tag lock across removal.
   A foreground worker run resolves and holds the invoking installation's runtime and worker images through those locks but prunes none;
   it mounts only the runtime volume, publishes declared ports on loopback, pipes stdin and stdout, and removes its container on exit.
-- An unboxed Claude session holds its pinned release version's shared lock from before cache verification until the process exits.
-  A missing version downloads under a separate lock into unique staging, and `ride clean` keeps an exclusive version lock across removing an unused release.
 - A root takes its reading after runtime re-exec and attachment resolution.
   Every child and manual commit uses that reading; a resume takes a new one.
   Hydration uses the admitted descriptor's exact picks, while instance material and minting sources stay live.

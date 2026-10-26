@@ -37,6 +37,8 @@ WHEEL_PACKAGES = (
   'bro',
   'bro-native',
   'bro-native-trails',
+  'bro-claude',
+  'bro-claude-trails',
   'bro-dev',
   'bro-ride',
   'bro-wire-responses',

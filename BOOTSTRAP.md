@@ -124,19 +124,22 @@ dependencies = [
 [dependency-groups]
 dev = [
   "bro-native",
+  "bro-claude",
   "bro-ride",
 ]
 
 [tool.uv.sources]
 bro = { git = "https://github.com/dzhioev/bro", branch = "master" }
 bro-dev = { git = "https://github.com/dzhioev/bro", subdirectory = "dev", branch = "master" }
+bro-claude = { git = "https://github.com/dzhioev/bro", subdirectory = "harnesses/claude/harness", branch = "master" }
 bro-native = { git = "https://github.com/dzhioev/bro", subdirectory = "harnesses/native/harness", branch = "master" }
 bro-ride = { git = "https://github.com/dzhioev/bro", subdirectory = "ride", branch = "master" }
 ```
 
 Preserve an existing project's narrower setup selection instead of forcing all groups and extras on its ordinary setup command.
-The operator group must still install `bro-ride` and `bro-native`:
+The operator group must still install `bro-ride`, `bro-native`, and `bro-claude`:
 `ride` spawns the native loop as the `bro` command of the environment it froze, so a native launch or summon fails in a workspace whose environment lacks `bro-native`.
+`bro-claude` supplies the Claude Code harness and its credential kind; `bro-ride` itself installs no harness.
 `bro-dev` remains a runtime dependency because the consumer class imports `bros.dev.Dev`.
 A consumer mounting the `file` toolset also installs `bro-filetypes` as a runtime dependency, with a Git source pointing at `subdirectory = "filetypes"`.
 Pin it to the same framework commit as the other distributions.
@@ -165,7 +168,7 @@ For a sidecar:
 
 1. Keep `[tool.bro]` in the repository-root `pyproject.toml`, creating a table-only root file if necessary.
 2. Create `bro_project/pyproject.toml` as a complete Python 3.12 uv-build project named `<project-slug>-bros`.
-3. Give it the same framework runtime dependencies and Git sources, with `bro-native` and `bro-ride` in its `dev` group.
+3. Give it the same framework runtime dependencies and Git sources, with `bro-native`, `bro-claude`, and `bro-ride` in its `dev` group.
 4. Register `my-dev = "<project_slug>_bros.my_dev:MyDev"`.
 5. Set `module-root = "src"` and `module-name = ["<project_slug>_bros"]`.
 6. Create `bro_project/src/<project_slug>_bros/__init__.py` and `my_dev.py`.
@@ -182,11 +185,11 @@ Show the proposed dependency and source changes, then obtain approval before cha
 Run the selected-project equivalent of:
 
 ```console
-uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-native --upgrade-package bro-ride
+uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-native --upgrade-package bro-claude --upgrade-package bro-ride
 ```
 
 Parse the resulting `uv.lock` rather than trusting command output.
-Require `bro`, `bro-dev`, `bro-native`, and `bro-ride` to resolve from `https://github.com/dzhioev/bro` at one identical 40-character commit SHA.
+Require `bro`, `bro-dev`, `bro-native`, `bro-claude`, and `bro-ride` to resolve from `https://github.com/dzhioev/bro` at one identical 40-character commit SHA.
 Reject a retained older revision, mixed revisions, missing Git source, or branch movement during the operation.
 Call that exact value `BRO_SHA` for the remainder of this bootstrap.
 

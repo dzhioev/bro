@@ -4,8 +4,8 @@ from unittest import mock
 
 import pytest
 
-from ride.claude import claude_release
-from ride.claude.provisioning import claude_code_version
+from bro.claude import claude_release
+from bro.claude.provisioning import claude_code_version
 
 
 @pytest.fixture(scope='session')

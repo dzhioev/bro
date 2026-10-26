@@ -67,7 +67,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat"]
+members = ["bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat"]
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
@@ -130,9 +130,6 @@ bro = "bros.bro:Bro"
 [project.entry-points."bro.credential_sources"]
 github_app = "bro.extra.github.app:Source"
 
-[project.entry-points."bro.trail_formats"]
-claude = "bro.trails.claude_format:CLAUDE_FORMAT"
-
 [project.entry-points."bro.toolsets"]
 artifact = "bro.artifact_mcp:toolset"
 brog = "bro.brog.mcp:toolset"
@@ -177,17 +174,17 @@ wheel-exclude = [
 consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat"]
+pythonpath = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "oops", "ride", "browser", "filetypes", "conftest.py", "wires/responses", "wires/messages", "wires/chat"]
+include = ["bro", "bros", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "conftest.py", "wires/responses", "wires/messages", "wires/chat"]
 # `oops/cdk` type-checks in its own environment, the only one holding the CDK
 exclude = ["bro/setup/", ".venv/", "*.egg-info/", "oops/cdk/"]
-extraPaths = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat"]
+extraPaths = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat"]
 venvPath = "."
 venv = ".venv"
 
@@ -195,7 +192,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "oops", "oops/cdk", "ride", "browser", "filetypes", "benchmark", "wires/responses", "wires/messages", "wires/chat"]
+src = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "oops/cdk", "ride", "browser", "filetypes", "benchmark", "wires/responses", "wires/messages", "wires/chat"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]

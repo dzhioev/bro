@@ -63,7 +63,7 @@ def _in(container: str, *command: str) -> str:
 def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
   workspace = workspace_root()
   bundle = build(workspace, tmp_path / 'bundle')
-  from ride.claude.provisioning import claude_code_version
+  from bro.claude.provisioning import claude_code_version
 
   version = claude_code_version()
 

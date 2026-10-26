@@ -13,7 +13,7 @@ Run any script with `--help` for flags.
 The repository is a uv workspace.
 All published members depend on `bro`;
 core imports none of them, and `bro-native` depends on `bro-ride` for the managed-session seam.
-`bro-ride` loads `bro-native` only when the installed `bro.harnesses` entry for the native harness is selected.
+`bro-ride` depends on no harness; it loads the selected one through its installed `bro.harnesses` entry.
 
 | Directory | Distribution | What it is | Map |
 |---|---|---|---|
@@ -21,7 +21,9 @@ core imports none of them, and `bro-native` depends on `bro-ride` for the manage
 | `harnesses/native/harness/` | `bro-native` | the native engine, its registered harness, and the `bro` command | `harnesses/native/harness/AGENTS.md` |
 | `harnesses/native/trails/` | `bro-native-trails` | the native trail envelope and projection | `harnesses/native/trails/AGENTS.md` |
 | `dev/` | `bro-dev` | the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas | `dev/AGENTS.md` |
-| `ride/` | `bro-ride` | top-level `ride`, the managed-workspace runtime, and the Claude harness | `ride/AGENTS.md` |
+| `ride/` | `bro-ride` | top-level `ride` and the managed-workspace runtime | `ride/AGENTS.md` |
+| `harnesses/claude/harness/` | `bro-claude` | the Claude Code harness, its session hooks and recorder | `harnesses/claude/harness/AGENTS.md` |
+| `harnesses/claude/trails/` | `bro-claude-trails` | the Claude transcript envelope, lineage and projection | `harnesses/claude/trails/AGENTS.md` |
 | `oops/` | `bro-oops` | consumer-neutral deployment and operations machinery | `oops/AGENTS.md` |
 | `oops/cdk/` | `bro-oops-cdk` | the AWS CDK stacks `bro-oops` deploys, and this repository's CDK app; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `oops/cdk/AGENTS.md` |
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |
