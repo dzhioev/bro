@@ -1,7 +1,6 @@
 import asyncio
 import errno
 import json
-import logging
 import os
 import signal
 from dataclasses import replace
@@ -56,18 +55,16 @@ async def test_invalid_input_is_a_caller_fault(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_engine_failure_after_confinement_keeps_traceback_in_escaped_log(tmp_path, caplog):
-  with (
-    caplog.at_level(logging.INFO),
-    pytest.raises(RuntimeError, match='file engine failure') as error,
-  ):
+async def test_engine_failure_after_confinement_keeps_traceback_in_escaped_log(tmp_path, capsys):
+  with pytest.raises(RuntimeError, match='file engine failure') as error:
     await SubprocessRunner().run(job(tmp_path, 'engine'))
   assert 'private document' not in str(error.value)
-  assert 'LookupError' in caplog.text and 'private document content' in caplog.text
-  assert '\\n' in caplog.text
-  assert all(
-    field in caplog.text for field in ('operation=info', 'type=sample', 'sha256=', 'duration=')
-  )
+  stderr = capsys.readouterr().err
+  assert 'LookupError' in stderr and 'private document content' in stderr
+  assert '\\n' in stderr
+  assert 'INFO[bro.files.runner]' in stderr
+  assert 'Logging error' not in stderr
+  assert all(field in stderr for field in ('operation=info', 'type=sample', 'sha256=', 'duration='))
 
 
 @pytest.mark.asyncio

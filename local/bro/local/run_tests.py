@@ -196,6 +196,7 @@ PYTEST_FILES = [
   'bro/files/runner_test.py',
   'bro/files/slots_test.py',
   'local/bro/local/syscall_tables_test.py',
+  'local/bro/local/file_bench_test.py',
   'bro/artifact_mcp_test.py',
   'bro/run_lifecycle_test.py',
   'native/bro/fork_test.py',
@@ -473,6 +474,7 @@ CONFORMANCE_PYTEST_FILES = [
 
 SANDBOX_PYTEST_FILES = [
   'local/bro/local/files_sandbox_test.py',
+  'local/bro/local/file_bench_sandbox_test.py',
   'bro/files/confinement_sandbox_test.py',
   'bro/files/runner_sandbox_test.py',
   'bro/files/operations_sandbox_test.py',

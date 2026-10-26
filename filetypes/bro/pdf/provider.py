@@ -63,7 +63,7 @@ class PdfProvider:
       for index in range(min(count, ATTACHMENT_NAMES)):
         attachment = engine.attachment(document.handle, index)
         if not attachment:
-          raise RuntimeError('PDFium failed to load an attachment')
+          continue
         names.append(engine.wide_string(engine.attachment_name, attachment)[:NAME_CHARACTERS])
       without_text = []
       for index in range(document.page_count):

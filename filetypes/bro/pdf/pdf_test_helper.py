@@ -1100,3 +1100,37 @@ def tax_form_fixture() -> tuple[dict[str, Any], list[dict[str, Any]]]:
     fields.append({'page': page, 'name': name, 'value': value, 'rectangle': rectangle})
     expected.append({'page_number': page + 1, 'name': name, 'value': value, 'nearby_text': label})
   return {'pages': [bytes(page) for page in pages], 'fields': fields, 'xfa': True}, expected
+
+
+UNAVAILABLE_ENTRIES_PDF = (
+  b'%PDF-1.7\n'
+  b'%\xe2\xe3\xcf\xd3\n'
+  b'1 0 obj\n'
+  b'<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R] >> /Names << /EmbeddedFiles << /Names [<61> 100 0 R <62> 5 0 R <63> 101 0 R] >> >> >>\n'
+  b'endobj\n'
+  b'2 0 obj\n'
+  b'<< /Type /Pages /Count 1 /Kids [3 0 R] >>\n'
+  b'endobj\n'
+  b'3 0 obj\n'
+  b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Annots [null 4 0 R null] >>\n'
+  b'endobj\n'
+  b'4 0 obj\n'
+  b'<< /Type /Annot /Subtype /Widget /FT /Tx /T <696e766f696365> /V <3432> /Rect [150 700 300 720] /P 3 0 R >>\n'
+  b'endobj\n'
+  b'5 0 obj\n'
+  b'<< /Type /Filespec /F <76616c69642e786d6c> >>\n'
+  b'endobj\n'
+  b'xref\n'
+  b'0 6\n'
+  b'0000000000 65535 f \n'
+  b'0000000015 00000 n \n'
+  b'0000000176 00000 n \n'
+  b'0000000233 00000 n \n'
+  b'0000000330 00000 n \n'
+  b'0000000452 00000 n \n'
+  b'trailer\n'
+  b'<< /Size 6 /Root 1 0 R >>\n'
+  b'startxref\n'
+  b'513\n'
+  b'%%EOF\n'
+)

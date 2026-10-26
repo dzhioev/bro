@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import logging
 import os
 import signal
 import subprocess
@@ -14,6 +13,7 @@ from contextlib import ExitStack, asynccontextmanager
 from dataclasses import asdict, dataclass
 from typing import Protocol, cast
 
+from bro.base import log
 from bro.files.confinement import SandboxLimits, SandboxReport, architecture, validate_report
 from bro.files.models import validate_payload
 from bro.files.protocol import (
@@ -25,8 +25,6 @@ from bro.files.protocol import (
   encode_frame,
 )
 from bro.files.text import validate_strings
-
-logger = logging.getLogger(__name__)
 
 
 class Runner(Protocol):
@@ -236,7 +234,7 @@ class SubprocessRunner:
       outcome = str(error)
       raise
     finally:
-      logger.info(
+      log.info(
         'file operation=%s type=%s sha256=%s engine=%s duration=%.3f outcome=%s stderr=%r',
         job.operation,
         job.file_type.name,

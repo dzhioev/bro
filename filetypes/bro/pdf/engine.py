@@ -270,7 +270,8 @@ class TextPage:
   def annotation(self, index: int):
     handle = self.engine.annotation(self.handle, index)
     if not handle:
-      raise RuntimeError('PDFium failed to load an annotation')
+      yield None
+      return
     try:
       yield handle
     finally:
@@ -283,14 +284,17 @@ class TextPage:
     return count
 
   def characters(self) -> list[Character]:
-    return [
-      Character(
-        self.engine.unicode(self.text_handle, index),
-        bool(self.engine.generated(self.text_handle, index)),
-        bool(self.engine.hyphen(self.text_handle, index)),
+    unicode = self.engine.unicode
+    generated = self.engine.generated
+    hyphen = self.engine.hyphen
+    text = self.text_handle
+    characters = []
+    for index in range(self.count()):
+      code = unicode(text, index)
+      characters.append(
+        Character(code, bool(generated(text, index)), code == 2 and bool(hyphen(text, index)))
       )
-      for index in range(self.count())
-    ]
+    return characters
 
   def classified_characters(self) -> list[Character]:
     engine = self.engine
@@ -299,20 +303,26 @@ class TextPage:
     if not engine.page_box(self.handle, ctypes.byref(bounds)):
       raise RuntimeError('PDFium failed to read a page box')
     left, right, bottom, top = (ctypes.c_double() for _ in range(4))
-    box_pointers = tuple(ctypes.byref(value) for value in (left, right, bottom, top))
+    box_pointers = tuple(ctypes.addressof(value) for value in (left, right, bottom, top))
+    unicode = engine.unicode
+    is_generated = engine.generated
+    is_hyphen = engine.hyphen
+    character_box = engine.character_box
+    text_object = engine.text_object
+    unmapped = engine.unmapped
     styles: dict[int, TextStyle] = {}
     characters = []
     for index in range(self.count()):
-      code = engine.unicode(text, index)
-      generated = bool(engine.generated(text, index))
-      hyphen = bool(engine.hyphen(text, index))
-      if not engine.character_box(text, index, *box_pointers):
+      code = unicode(text, index)
+      generated = bool(is_generated(text, index))
+      hyphen = code == 2 and bool(is_hyphen(text, index))
+      if not character_box(text, index, *box_pointers):
         raise RuntimeError('PDFium failed to read a character box')
       box = (left.value, right.value, bottom.value, top.value)
       if generated:
         characters.append(Character(code, generated, hyphen, box=box))
         continue
-      handle = engine.text_object(text, index)
+      handle = text_object(text, index)
       if not handle:
         raise RuntimeError('PDFium returned no text object for a non-generated character')
       style = styles.get(handle)
@@ -335,9 +345,7 @@ class TextPage:
         reason = 'white'
       elif style.layer:
         reason = 'layer'
-      characters.append(
-        Character(code, False, hyphen, reason, bool(engine.unmapped(text, index)), box)
-      )
+      characters.append(Character(code, False, hyphen, reason, bool(unmapped(text, index)), box))
     return characters
 
   def style(self, handle: int, index: int) -> 'TextStyle':
