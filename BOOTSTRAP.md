@@ -196,7 +196,7 @@ Fetch and read these paths before using their contracts:
 - `AGENTS.md`;
 - `bro/reference/extending.md`, especially **Declaring a bro** and **Registering a bro**;
 - `bro/registry.py`;
-- `dev/bros/dev/__init__.py`;
+- `dev/bros/dev/dev.py`;
 - `local/bros/bro_dev/__init__.py`;
 - `bro/workspace/project.py`;
 - `bro/llm/llms/anthropic.py`;

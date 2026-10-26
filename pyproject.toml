@@ -207,7 +207,7 @@ combine-as-imports = true
 "__init__.py" = ["F401"]
 # a persona declares its components as plain class-level lists and maps,
 # wherever the distribution that ships it keeps them
-"**/bros/*/__init__.py" = ["RUF012"]
+"**/bros/*/*.py" = ["RUF012"]
 
 [tool.ruff.format]
 quote-style = "single"
