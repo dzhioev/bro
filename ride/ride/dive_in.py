@@ -8,15 +8,17 @@ from typing import Optional
 
 import bro.brog.model as brog_model
 import bro.brog.system as brog_system
-from bro.base import configs, log
+from bro.base import log
 from bro.base.args import Parser
 from bro.launch.llm_flags import selection_from_args
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from bro.workspace.project import project_config
+from ride.authority_reading import Reading
 from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv
 from ride.harness import get_harness
+from ride.repository import as_repository
 from ride.scope import (
   LaunchScopeError,
   launch_llm_spec,
@@ -126,7 +128,7 @@ def dive_in(
   grant: Optional[list[str]] = None,
   revoke: Optional[list[str]] = None,
   bro: Optional[str] = None,
-  harness: str = configs.DEFAULT_HARNESS,
+  harness: Optional[str] = None,
   llm: Optional[str] = None,
   repo: Optional[Path] = None,
 ) -> int:
@@ -135,6 +137,12 @@ def dive_in(
   rides the forwarded flags; dive-in adds nothing of its own beyond binding the
   task prefetch to the same scope (`_task_system`)."""
   repo = project_root() if repo is None else repo
+  try:
+    harness = Reading.take(as_repository(repo)).resolve_harness(harness)
+    get_harness(harness)
+  except ValueError as error:
+    log.error('%s', error)
+    return 1
   prompt: Optional[str] = None
   if new:
     base = _slugify(command) if command is not None else ''
@@ -226,19 +234,17 @@ def main(argv: list[str]) -> Optional[int]:
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
   config = project_config(repo)
-  harness_name = args['harness'] or config.harness
   try:
     selection = selection_from_args(args, project=config)
   except ValueError as error:
     parser.error(str(error))
-  scope_args = {key: args[key] for key in ('cred', 'grant', 'revoke', 'bro')}
+  scope_args = {key: args[key] for key in ('cred', 'grant', 'revoke', 'bro', 'harness')}
   scope_args['llm'] = None if selection.is_empty() else selection.format()
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)
   return dive_in(
     repo=repo,
     forwarded=forwarded,
-    harness=harness_name,
     **scope_args,
     **args,
   )

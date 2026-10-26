@@ -1768,9 +1768,7 @@ class TestReadingAdmission:
     assert seen[0].identity == repository.identity
     assert seen[0].tree_ref == ('remote-head' if into is None else 'selected-commit')
 
-  def test_resumed_child_executes_the_harness_default_of_its_new_reading(self, monkeypatch):
-    from bro.native.harness import BRO
-
+  def test_resumed_child_keeps_its_recorded_harness(self, monkeypatch):
     source = reading()
     source = replace(source, project={'summon-harness': 'bro'})
     requested = Request('bro', {'target': 'bro-dev'})
@@ -1779,14 +1777,14 @@ class TestReadingAdmission:
     )
     with _ContainerHarness() as harness:
       harness.take_reading.side_effect = lambda repository: source
-      monkeypatch.setattr(BRO, 'session_exists', lambda workspace: True)
+      monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
       assert ride_session.start_session(spec) == 0
     launched = harness.run_started_party.call_args.args[0]
     command = launched.command
-    assert command[command.index('--harness') + 1] == source.summon_harness
+    assert command[command.index('--harness') + 1] == spec.harness
     assert (
       harness.run_started_party.call_args.kwargs['mission'].descriptor.values['harness']
-      == source.summon_harness
+      == spec.harness
     )
 
 

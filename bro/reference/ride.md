@@ -18,7 +18,7 @@ workspace mechanics, credential scoping, broker supervision, and bro composition
 ### `ride solo <bro> <prompt>`
 
 Runs one prompt without a TTY and writes the harness reply to stdout.
-The default harness is Claude Code and the default hold is `unattended`.
+The default hold is `unattended`.
 Claude runs in print mode over stream-json with its stdin held open, so each turn's reply lands on the session's stdout and its diagnostics on stderr beside the ride's own log lines;
 the bro harness runs `bro run` with the ask display preset.
 Both retain the session record needed by `ride resume` when the workspace is kept.
@@ -30,7 +30,7 @@ A launch without `-w / --workspace` receives a fresh name and removes that works
 ### `ride along <bro> [prompt]`
 
 Starts an interactive session.
-The default harness is Claude Code, the default hold is `attended`, and the workspace is kept after exit.
+The default hold is `attended`, and the workspace is kept after exit.
 `--unboxed` runs the workspace tree directly on the launcher's filesystem and changes the omitted hold to `guided`, because a non-guided unboxed session skips permission prompts without a container boundary.
 
 A launch without `-w / --workspace` receives a fresh name.
@@ -94,9 +94,19 @@ the launcher's own `--log` never reaches the session.
 ## Harness selection
 
 `--harness` selects any name registered by this installation's `bro.harnesses` entry points.
-An attached launch reads `[tool.bro] harness`;
-a detached launch and an attached project that omits the key use the framework's `claude` default.
-Project `harness` and `summon-harness` values may name a well-formed harness another installation carries;
+Without an explicit selection, a launch reads the project's `[tool.bro] harness`, then the host's top-level `"harness"` in `~/.bro.json`.
+A summon naming no `harness` uses `summon-harness` from those same layers.
+The project beats the host; a detached launch reads only the host layer.
+There is no framework default.
+When none supplies a name, the launch is refused:
+
+```text
+no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json
+```
+
+The summon refusal names `summon-harness` instead.
+`ride resume` keeps the recorded harness, regardless of later project or host changes.
+Project and host `harness` and `summon-harness` values may name a well-formed harness another installation carries;
 a launch or summon checks the selected name where it is used and reports the installed roster when it is absent.
 
 LLM flags resolve within the selected harness.
@@ -577,9 +587,8 @@ Detached launches read no project file:
 ```toml
 [tool.bro]
 default = "foo"                      # the bro utilities such as dive-in and scope default to
-harness = "claude"                   # optional ride default; claude when omitted
-summon-harness = "bro"               # optional: the harness a summon naming none runs its
-                                     # child under; bro when omitted
+harness = "claude"                   # launch harness
+summon-harness = "bro"               # summon harness
 summon-depth = 4                      # optional deepest summon generation
 grant = ["github", "@reviewer", "bro.placement=join"]
 revoke = ["bro.placement=boxed"]
@@ -602,9 +611,8 @@ sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it s
 
 `default` is required and names the **project default bro** used by utilities such as `dive-in` and attached `ride scope`;
 the mode verbs still require their bro positional.
-`harness` is optional (`claude` when omitted) and selects `ride`'s default driver.
-`summon-harness` is optional (`bro` when omitted) and selects the harness a summon that names none runs its child under;
-a detached launch reads no project file, so its summons use that default.
+`harness` and `summon-harness` supply the project's selections as described in "Harness selection";
+each may be omitted when the launch or host configuration supplies it.
 `summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
 The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
 `grant`, `revoke`, and `limit` are optional lists in the [permission grammar](permissions.md#string-syntax).

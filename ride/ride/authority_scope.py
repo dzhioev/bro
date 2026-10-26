@@ -54,7 +54,7 @@ def _reading(value: object) -> Reading:
 
 def recipe(values: Mapping[str, Value], reading: Reading) -> LLMSpec | None:
   target = cast(str, values.get('target', ''))
-  name = cast(str, values.get('harness', reading.summon_harness))
+  name = reading.resolve_harness(cast(str | None, values.get('harness')), summon=True)
   installed = reading.installation
   if target not in installed.bros or name not in installed.harnesses:
     return None
@@ -85,7 +85,7 @@ def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
   reading = _reading(source)
   result: dict[str, Value] = {
     'placement': 'boxed',
-    'harness': reading.summon_harness,
+    'harness': reading.resolve_harness(cast(str | None, fixed.values.get('harness')), summon=True),
     'hold': 'unattended',
     'talk': DEFAULT_TALK,
     'timeout': DEFAULT_TIMEOUT,

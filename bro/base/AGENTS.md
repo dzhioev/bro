@@ -49,7 +49,7 @@ run those with `--help` for flags.
   Schemas live in `bro/setup/AGENTS.md`.
 - `credential_apply.py` — staged session-store publication, targeted stable-path hooks, idempotent operation completion, and atomic files.
 - `credential_environment.py` — hook environment serialization and process-start overlays.
-- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth and harness, and the installed bro distribution version shared by credential consumers and trail records.
+- `configs.py` — the exclusive `BRO_STORE` directory (default `~/.bro`), the `~/.bro.json` host config beside it, the default summon depth, and the installed bro distribution version shared by credential consumers and trail records.
 - `source_commit.py` — `installed_commit(distribution)`, the commit an installed distribution runs:
   the record its wheel carries in `.dist-info`, else the commit its version-control installation resolved, else the live checkout its editable installation runs from;
   `checkout_commit(directory)` reads a checkout's `HEAD` and whether its tree under `directory` differs from it.

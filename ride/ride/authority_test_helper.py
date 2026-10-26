@@ -15,7 +15,11 @@ def reading(*, declarations=None, config=None) -> Reading:
   installed = Installation.take()
   if declarations is not None:
     installed = replace(installed, declarations={**installed.declarations, **declarations})
-  return Reading(Configuration.parse(config or {}), {}, installed)
+  return Reading(
+    Configuration.parse({'harness': 'claude', 'summon-harness': 'bro', **(config or {})}),
+    {},
+    installed,
+  )
 
 
 def mission(
