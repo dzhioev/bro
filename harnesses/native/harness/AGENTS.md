@@ -1,12 +1,12 @@
 # bro-native
 
-`native/` is the `bro-native` uv workspace member.
+`harnesses/native/harness/` is the `bro-native` uv workspace member.
 It publishes the framework's native LLM engine, the registered `bro` harness, and the `bro` command.
-It depends on core, `bro-ride` and the Responses wire decode side;
+It depends on core, `bro-ride`, `bro-native-trails` and the Responses wire decode side;
 core never imports it, and ride reaches it only by loading its `bro.harnesses` entry.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-native`;
-regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scripts --project native`.
+regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scripts --project harnesses/native/harness`.
 
 ## Components
 

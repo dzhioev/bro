@@ -12,6 +12,7 @@ dependencies = [
   "bro-wire-responses",
   "bro",
   "bro-ride",
+  "bro-native-trails",
   "aiohttp==3.14.5",
   "humanize==4.16.0",
   "mcp==2.3.0",
@@ -39,15 +40,16 @@ bro = "bro.native.harness:BRO"
 bro-wire-responses = { workspace = true }
 bro = { workspace = true }
 bro-ride = { workspace = true }
+bro-native-trails = { workspace = true }
 
 [tool.deptry.package_module_name_map]
 bro-wire-responses = ["bro"]
 bro = ["bro", "bros"]
 bro-ride = ["ride"]
+bro-native-trails = ["bro"]
 
 [tool.deptry.per_rule_ignores]
-# Runtime dependencies imported by core modules that the native surfaces execute.
-DEP002 = ["aiohttp", "humanize", "mcp", "rich", "trafilatura", "tree-sitter", "tree-sitter-bash"]
+DEP002 = ["bro-native-trails", "aiohttp", "humanize", "mcp", "rich", "trafilatura", "tree-sitter", "tree-sitter-bash"]
 
 [tool.uv.build-backend]
 module-root = ""

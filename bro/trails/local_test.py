@@ -88,7 +88,7 @@ def test_store_loads_only_the_selected_format(tmp_path, monkeypatch):
       'broken', 'missing.trail_format:FORMAT', backends.ENTRY_POINT_GROUP
     ),
     importlib.metadata.EntryPoint(
-      'bro', 'bro.trails.bro_format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
+      'bro', 'bro.native_trails.format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
     ),
   )
   monkeypatch.setattr(backends, '_entry_points', lambda: entries)
@@ -108,7 +108,7 @@ def test_import_refuses_a_missing_format_and_a_bro_format_without_a_bro(tmp_path
     destination.begin_import(header)
 
   entry = importlib.metadata.EntryPoint(
-    'bro', 'bro.trails.bro_format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
+    'bro', 'bro.native_trails.format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
   )
   monkeypatch.setattr(backends, '_entry_points', lambda: (entry,))
   without_bro = dict(header)

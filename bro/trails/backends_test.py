@@ -3,8 +3,10 @@ from dataclasses import replace
 import pytest
 
 from bro.trails import backends
-from bro.trails.bro_format import BRO_FORMAT
-from bro.trails.claude_format import CLAUDE_FORMAT
+from bro.trails.format_test_helper import TEST_FORMAT
+
+BRO_FORMAT = replace(TEST_FORMAT, name='bro')
+CLAUDE_FORMAT = replace(TEST_FORMAT, name='claude')
 
 
 class EntryPoint:

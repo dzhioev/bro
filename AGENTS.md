@@ -18,7 +18,8 @@ core imports none of them, and `bro-native` depends on `bro-ride` for the manage
 | Directory | Distribution | What it is | Map |
 |---|---|---|---|
 | `bro/`, `bros/bro/` | `bro` | the framework core: the persona declaration and what composes and runs one, the declaration vocabulary, file-access seam, and the minimal `bro` persona with the spells every bro inherits | `bro/AGENTS.md` |
-| `native/` | `bro-native` | the native engine, its registered harness, and the `bro` command | `native/AGENTS.md` |
+| `harnesses/native/harness/` | `bro-native` | the native engine, its registered harness, and the `bro` command | `harnesses/native/harness/AGENTS.md` |
+| `harnesses/native/trails/` | `bro-native-trails` | the native trail envelope and projection | `harnesses/native/trails/AGENTS.md` |
 | `dev/` | `bro-dev` | the `bro.dev` and `bro.workflow` packages, `poll-pr` and `pr-state`, and the development personas | `dev/AGENTS.md` |
 | `ride/` | `bro-ride` | top-level `ride`, the managed-workspace runtime, and the Claude harness | `ride/AGENTS.md` |
 | `oops/` | `bro-oops` | consumer-neutral deployment and operations machinery | `oops/AGENTS.md` |

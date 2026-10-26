@@ -13,7 +13,6 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.trails import backends
-from bro.trails.bro_format import BRO_FORMAT
 from bro.trails.display import (
   AssistantText,
   DisplayDataError,
@@ -37,6 +36,7 @@ from bro.trails.display import (
   UserInput,
   preset,
 )
+from bro.trails.format_test_helper import TEST_FORMAT
 from bro.trails.store import TrailsStore
 
 
@@ -312,7 +312,7 @@ class TestCollection:
 class TestStructures:
   def test_owner_and_native_header_fields_come_from_the_trail_format(self, monkeypatch):
     trail_format = replace(
-      BRO_FORMAT,
+      TEST_FORMAT,
       name='synthetic',
       owner=lambda header: f'owner:{header["id"]}',
       native_header_fields=lambda header: [('format field', header['native']['marker'])],

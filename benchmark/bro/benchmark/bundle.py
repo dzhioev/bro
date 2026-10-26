@@ -36,6 +36,7 @@ CPYTHON_VERSION = '3.12.15'
 WHEEL_PACKAGES = (
   'bro',
   'bro-native',
+  'bro-native-trails',
   'bro-dev',
   'bro-ride',
   'bro-wire-responses',

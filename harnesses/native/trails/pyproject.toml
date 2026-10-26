@@ -1,0 +1,26 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-native-trails"
+version = "0.1.0"
+description = "native harness trail envelope and projection for bro"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["bro"]
+
+[project.entry-points."bro.trail_formats"]
+bro = "bro.native_trails.format:BRO_FORMAT"
+
+[tool.uv.sources]
+bro = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.native_trails"]
+namespace = true
+wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/AGENTS.md", "**/*.egg-info"]

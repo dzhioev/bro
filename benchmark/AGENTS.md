@@ -14,10 +14,10 @@ This is not a uv workspace member:
 pins `openai == 3`, so no single lock satisfies both.
 The directory therefore locks and syncs on its own:
 `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside this file.
-It depends through editable path sources on core, ride, and `bro-bench`, whose launcher-side credential and command registrations, and the preset composition the job runner reads, are shared with the root environment.
+It depends through editable path sources on core, ride, `bro-native-trails`, and `bro-bench`, whose launcher-side credential and command registrations, and the preset composition the job runner reads, are shared with the root environment.
 The ride dependency supplies scoped-store materialization without pulling the native engine's other `openai` major;
 the two must never meet in one interpreter.
-The relocatable bundle builds and installs `bro` plus `bro-native`
+The relocatable bundle builds and installs `bro` plus `bro-native` and its trail-format distribution
 from the root workspace instead of adding the engine to this project's environment.
 
 Formatting and linting stay the repository root's, which walks this directory through its

@@ -9,7 +9,7 @@ import pytest
 
 from bro.base import credentials
 from bro.base.spawn import console_script
-from bro.oops.wheel_staging import entry_providers
+from bro.oops.wheel_staging import entry_providers, wheel_packages
 from bro.trails.local import LocalStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.entries import read_entries, resolve_entries
@@ -174,6 +174,13 @@ def test_image_declares_every_workspace_format_and_non_diagnostic_wire():
   workspace = _PROJECT.parent
   registered = {entry for entry in entry_providers(workspace) if entry.name != 'echo'}
   assert set(read_entries(_SERVER / 'entries.json')) == registered
+
+
+def test_image_stages_the_native_format_without_its_harness():
+  packages = wheel_packages(_PROJECT.parent, _SERVER / 'entries.json')
+
+  assert 'bro-native-trails' in packages
+  assert 'bro-native' not in packages
 
 
 @pytest.mark.asyncio
