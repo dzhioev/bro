@@ -65,6 +65,7 @@ class LLMSpec(ABC):
 
   # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
+  WIRE: ClassVar[str]
   selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
   deferred_fields: ClassVar[frozenset[str]] = frozenset()
   effort_values: ClassVar[frozenset[str]] = frozenset()

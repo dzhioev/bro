@@ -301,6 +301,7 @@ def _bro_call(
       'request': {},
       'response': {
         'model': model,
+        'status': 'completed',
         'usage': {'input_tokens': input_tokens, 'output_tokens': 3},
         'output': output,
         **({} if service_tier is None else {'service_tier': service_tier}),

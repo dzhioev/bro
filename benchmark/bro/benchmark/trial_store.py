@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-from bro.llm import usage
+from bro.llm import providers, usage
 from bro.llm.usage import Counts
 from bro.trails.local import LocalStore
 
@@ -30,9 +30,10 @@ def token_totals(store_root: Path) -> Optional[Counts]:
   totals = usage.zero()
   with LocalStore(store_root) as store:
     for header in store.iter_trails():
+      wire = providers.default_spec(header['native']['llm']['type']).WIRE
       for message in store.iter_messages(header['id'], types={'llm_call'}):
         raw_usage = message.get('usage')
         if not isinstance(raw_usage, dict):
           raise ValueError('llm_call usage must be an object')
-        totals = usage.add(totals, usage.from_vendor_counts(raw_usage))
+        totals = usage.add(totals, usage.from_wire_counts(wire, raw_usage))
   return totals

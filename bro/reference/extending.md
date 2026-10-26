@@ -23,6 +23,8 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
 - `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
   each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
+- `bro.llm.wires` — SDK-free wire decode modules, `<name> = "<module>"`;
+  a module exports matching `NAME`, `CHAINING`, `decode(response)` and `counts(usage)`, and may claim untagged records with `LEGACY = True`
 - `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
   each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 

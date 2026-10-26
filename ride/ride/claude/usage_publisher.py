@@ -21,7 +21,7 @@ from bro.llm.usage import (
   Counts,
   Usage,
   add,
-  from_vendor_counts,
+  from_wire_counts,
   holding_publisher_lock,
   write_usage_failure,
   write_usage_file,
@@ -90,7 +90,7 @@ class SessionUsage:
       self._billed.add(billing_key)
     model = classification.usage_model
     self._per_model[model] = add(
-      self._per_model.get(model, zero()), from_vendor_counts(classification.usage)
+      self._per_model.get(model, zero()), from_wire_counts('messages', classification.usage)
     )
 
 

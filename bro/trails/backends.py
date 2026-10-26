@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Optional, cast
 
+from bro.llm.records import Call, DecodedCall, Message, Reasoning, Unknown
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import BlazeRequest
 
@@ -196,6 +197,37 @@ def add_numeric_maps(left: dict, right: dict) -> dict:
     elif isinstance(value, int) and not isinstance(value, bool):
       result[key] = int(current) + value if isinstance(current, int) else value
   return result
+
+
+def decoded_part_events(record: dict, decoded: DecodedCall) -> list[dict]:
+  events: list[dict] = []
+  for part in decoded.parts:
+    if isinstance(part, Reasoning):
+      events.append(projected_event(record, 'reasoning', part.index, content=part.text))
+    elif isinstance(part, Message):
+      events.append(
+        projected_event(
+          record,
+          'assistant',
+          part.index,
+          content=part.text,
+          terminal=decoded.terminal and not part.commentary,
+        )
+      )
+    elif isinstance(part, Call):
+      events.append(
+        projected_event(
+          record,
+          'tool_call',
+          part.index,
+          tool_name=part.name,
+          call_id=part.call_id,
+          arguments=part.arguments,
+        )
+      )
+    elif isinstance(part, Unknown):
+      events.append(projected_event(record, 'harness_event', part.index, raw=part.raw))
+  return events
 
 
 def projected_source(record: dict, index: int = 0) -> dict:

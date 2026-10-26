@@ -311,6 +311,9 @@ dependencies = [
     { name = "bro" },
     { name = "bro-bench" },
     { name = "bro-ride" },
+    { name = "bro-wire-chat" },
+    { name = "bro-wire-messages" },
+    { name = "bro-wire-responses" },
     { name = "duckdb" },
     { name = "harbor" },
 ]
@@ -329,6 +332,9 @@ requires-dist = [
     { name = "bro", editable = "../" },
     { name = "bro-bench", editable = "../bench" },
     { name = "bro-ride", editable = "../ride" },
+    { name = "bro-wire-chat", editable = "../wires/chat" },
+    { name = "bro-wire-messages", editable = "../wires/messages" },
+    { name = "bro-wire-responses", editable = "../wires/responses" },
     { name = "duckdb", specifier = "==1.5.6" },
     { name = "harbor", specifier = "==0.24.0" },
 ]
@@ -346,6 +352,7 @@ version = "0.1.0"
 source = { editable = "../ride" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-wire-messages" },
     { name = "certifi" },
     { name = "humanize" },
     { name = "mcp" },
@@ -360,6 +367,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "../" },
+    { name = "bro-wire-messages", editable = "../wires/messages" },
     { name = "certifi", specifier = "==2026.7.22" },
     { name = "humanize", specifier = "==4.16.0" },
     { name = "mcp", specifier = "==2.3.0" },
@@ -370,6 +378,39 @@ requires-dist = [
     { name = "tree-sitter-bash", specifier = "==0.25.1" },
     { name = "watchfiles", specifier = "==1.3.0" },
 ]
+
+[[package]]
+name = "bro-wire-chat"
+version = "0.1.0"
+source = { editable = "../wires/chat" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bro", editable = "../" }]
+
+[[package]]
+name = "bro-wire-messages"
+version = "0.1.0"
+source = { editable = "../wires/messages" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bro", editable = "../" }]
+
+[[package]]
+name = "bro-wire-responses"
+version = "0.1.0"
+source = { editable = "../wires/responses" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bro", editable = "../" }]
 
 [[package]]
 name = "certifi"

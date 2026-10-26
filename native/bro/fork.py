@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Optional, cast
 
 import bro.native.llms.openai as native_openai
+from bro.llm import wires
 from bro.llm.llm import LLMSpec, NativeLLMSpec
 from bro.llm.mcp import encode_tool_result
 from bro.llm.tracker import NullTracker, Tracker
@@ -156,11 +157,17 @@ def latest_fork_point(trail: RecordedTrail) -> int:
       if len(pending) == 0:
         last_good = step.step_id
     elif step.kind == 'llm_call':
-      pending = {
-        item['call_id']
-        for item in _response_output_items(step.body)
-        if item.get('type') == 'function_call' and 'call_id' in item
-      }
+      if 'stopped' in step.extras:
+        continue
+      response = step.body.get('response') if isinstance(step.body, dict) else None
+      if not isinstance(response, dict):
+        raise ValueError(f'llm_call step {step.step_id} has no response object')
+      decoded = wires.decode(step.extras.get('wire'), response)
+      pending = set()
+      for call in decoded.calls:
+        if not call.call_id:
+          raise ValueError(f'llm_call step {step.step_id} has a tool call without an id')
+        pending.add(call.call_id)
       if len(pending) == 0:
         last_good = step.step_id
     elif step.kind == 'tool_result':

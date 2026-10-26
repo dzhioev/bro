@@ -2,7 +2,7 @@
 
 `native/` is the `bro-native` uv workspace member.
 It publishes the framework's native LLM engine, the registered `bro` harness, and the `bro` command.
-It depends on core and `bro-ride`;
+It depends on core, `bro-ride` and the Responses wire decode side;
 core never imports it, and ride reaches it only by loading its `bro.harnesses` entry.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-native`;
@@ -41,7 +41,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 - `bro/launch/{run,call,call_tui,resume}.py` — native one-shot and interactive launch surfaces
 - `bro/fork.py` — fork of a recorded trail.
   `replay_messages` rebuilds the provider input through the selected fork point and follows `forked_from` ancestors when needed;
-  `latest_fork_point` chooses the newest consistent point.
+  `latest_fork_point` chooses the newest consistent point using the recorded wire’s decoded calls, skipping steps marked `stopped`.
   `fork(..., surface=<caller>)` requires the driving program's surface, returns a `Runner` preseeded with the replayed prefix, and opens the child trail with `ForkedFrom(trail_id, step_id)`;
   it replays bro-native records, so a trail from another harness is refused up front rather than partway into a header that never carried what replay needs.
   A fork runs under the hold it is given, guided when omitted, and recomposes the prompt under it when the recorded hold differs.
@@ -73,6 +73,7 @@ the file carries the agent identity itself because an in-process run's `RIDE_BRO
 
 Each `Runner.run()` or first `.send()` opens a trail through a `bro.llm.tracker.Tracker` and emits the opening `system_prompt` step;
 the same tracker is plumbed into the LLM so provider implementations record the replayable native stream,
+with each `llm_call` tagged by its wire,
 each step through the base `LLM._track_step`, which also touches the activity file a managed session hands the `bro` command (`--activity-file`).
 The runner's context-managed lifetime ends that trail once with clean → `ok`, `BroRaised` → `raised`, and other exceptions → `error`;
 `run()` supplies its own lifetime, while interactive owners keep one around the conversation.

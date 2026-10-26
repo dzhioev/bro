@@ -22,7 +22,7 @@ def C(input=0, cache_write=0, cache_read=0, output=0):
   return {'input': input, 'cache_write': cache_write, 'cache_read': cache_read, 'output': output}
 
 
-class TestFromProviderCounts:
+class TestFromWireCounts:
   def test_anthropic_fields_are_already_disjoint(self):
     raw = {
       'input_tokens': 2,
@@ -30,10 +30,12 @@ class TestFromProviderCounts:
       'cache_read_input_tokens': 5_000,
       'output_tokens': 80,
     }
-    assert usage.from_vendor_counts(raw) == C(input=2, cache_write=300, cache_read=5_000, output=80)
+    assert usage.from_wire_counts('messages', raw) == C(
+      input=2, cache_write=300, cache_read=5_000, output=80
+    )
 
   def test_absent_anthropic_fields_read_as_zero(self):
-    assert usage.from_vendor_counts({'input_tokens': 11, 'output_tokens': 7}) == C(
+    assert usage.from_wire_counts('messages', {'input_tokens': 11, 'output_tokens': 7}) == C(
       input=11, output=7
     )
 
@@ -44,7 +46,9 @@ class TestFromProviderCounts:
       'output_tokens': 40,
       'total_tokens': 1_040,
     }
-    assert usage.from_vendor_counts(raw) == C(input=300, cache_write=100, cache_read=600, output=40)
+    assert usage.from_wire_counts('responses', raw) == C(
+      input=300, cache_write=100, cache_read=600, output=40
+    )
 
   def test_openai_classes_stay_disjoint(self):
     raw = {
@@ -52,12 +56,22 @@ class TestFromProviderCounts:
       'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 8_684},
       'output_tokens': 190,
     }
-    counts = usage.from_vendor_counts(raw)
+    counts = usage.from_wire_counts('responses', raw)
     assert counts['input'] + counts['cache_write'] + counts['cache_read'] == 8_687
 
   def test_openai_shape_without_input_tokens_raises(self):
     with pytest.raises(KeyError):
-      usage.from_vendor_counts({'input_tokens_details': {'cached_tokens': 1}})
+      usage.from_wire_counts('responses', {'input_tokens_details': {'cached_tokens': 1}})
+
+  def test_wire_selects_the_vocabulary_not_the_presence_of_a_detail_block(self):
+    raw = {
+      'input_tokens': 100,
+      'input_tokens_details': {'cached_tokens': 30},
+      'cache_read_input_tokens': 20,
+      'output_tokens': 5,
+    }
+    assert usage.from_wire_counts('messages', raw) == C(input=100, cache_read=20, output=5)
+    assert usage.from_wire_counts('responses', raw) == C(input=70, cache_read=30, output=5)
 
 
 class TestFormatInt:
@@ -67,29 +81,6 @@ class TestFormatInt:
     assert usage.format_int(45_231) == "45'231"
     assert usage.format_int(168_892) == "168'892"
     assert usage.format_int(1_275_432) == "1'275'432"
-
-
-class TestVendorOf:
-  @pytest.mark.parametrize(
-    ('slug', 'vendor'),
-    [
-      ('claude-opus-5', 'anthropic'),
-      ('claude-fable-5', 'anthropic'),
-      ('claude-haiku-4-5-20251001', 'anthropic'),
-      ('gpt-6.1-sol', 'openai'),
-      ('gpt-5-2025-08-07', 'openai'),
-      ('o3-mini', 'openai'),
-    ],
-  )
-  def test_known_vendors(self, slug, vendor):
-    assert usage.vendor_of(slug) == vendor
-
-  def test_a_claude_slug_bills_anthropic_whichever_surface_ran_it(self):
-    assert usage.vendor_of('claude-opus-5') == 'anthropic'
-
-  def test_an_unclaimed_slug_raises(self):
-    with pytest.raises(ValueError, match='no vendor known'):
-      usage.vendor_of('llama-4')
 
 
 class TestModelFamily:

@@ -24,7 +24,7 @@ from harbor.models.trajectories import (
 from bro.benchmark.harbor_agent import reported_agent_name
 from bro.benchmark.trial_store import TRAILS_DIRECTORY, recorded_a_trail
 from bro.llm import providers
-from bro.llm.usage import from_vendor_counts
+from bro.llm.usage import from_wire_counts
 from bro.trails.local import LocalStore
 
 TRAJECTORY_FILENAME = 'trajectory.json'
@@ -83,7 +83,7 @@ def _metrics(
 ) -> tuple[Metrics, Decimal | None]:
   if not isinstance(raw, dict):
     raise ValueError('llm_call usage must be an object')
-  counts = from_vendor_counts(raw)
+  counts = from_wire_counts(providers.default_spec(provider).WIRE, raw)
   table = price_tables.get(provider)
   cost = None if table is None else providers.price(provider, model, raw, service_tier, table)
   return (

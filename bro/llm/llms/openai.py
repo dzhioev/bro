@@ -809,6 +809,7 @@ class LLMSpec(llm_llm.NativeLLMSpec):
   """
 
   TYPE: ClassVar[str] = 'openai'
+  WIRE: ClassVar[str] = 'responses'
   selection_fields = MappingProxyType({'model': 'model', 'effort': 'reasoning_effort'})
   deferred_fields = frozenset({'effort'})
   effort_values = _VALID_REASONING_EFFORTS
