@@ -8,6 +8,6 @@ Fronts that compose lower-level packages into runnable services.
   Plain names resolve `bro.toolsets` entries targeting a `Toolset`;
   `<prefix>:<value>` resolves the matching `bro.mcp.targets` entry, whose callable returns an assembled list of live servers.
   Tool results carry text from `bro.llm.mcp.encode_tool_result` and, for an object, its unchanged structured content.
-  HTTP exposes one endpoint per namespace.
+  HTTP exposes one endpoint per namespace; disconnecting cancels that request's in-flight handlers.
   The HTTP lifespan closes every resolved server after its session managers, and stdio closes its server after the streams end;
   eager tool-listing or endpoint-construction failures close them before propagating.

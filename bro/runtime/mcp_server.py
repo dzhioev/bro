@@ -221,6 +221,42 @@ class _BearerAuth:
     await self._app(scope, receive, send)
 
 
+class _CancelOnDisconnect:
+  def __init__(self, app: 'ASGIApp'):
+    self._app = app
+
+  async def __call__(self, scope: 'Scope', receive: 'Receive', send: 'Send') -> None:
+    import anyio
+    from starlette.types import Message
+
+    response_complete = False
+
+    async def send_response(message: Message) -> None:
+      nonlocal response_complete
+      if message['type'] == 'http.response.body' and not message.get('more_body', False):
+        response_complete = True
+      await send(message)
+
+    sender, receiver = anyio.create_memory_object_stream[Message](0)
+    async with sender, receiver, anyio.create_task_group() as tasks:
+
+      async def forward_requests() -> None:
+        while True:
+          message = await receive()
+          if message['type'] == 'http.disconnect':
+            # ASGI also reports disconnect after a completed response.
+            if not response_complete:
+              tasks.cancel_scope.cancel()
+            return
+          await sender.send(message)
+
+      tasks.start_soon(forward_requests)
+      # The SDK's JSON response path stops receiving after the request body.
+      # Cancelling its stateless request terminates the transport and its handlers.
+      await self._app(scope, receiver.receive, send_response)
+      tasks.cancel_scope.cancel()
+
+
 def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAuth:
   """Starlette app serving each namespace's tools at `/<namespace>` over streamable HTTP.
 
@@ -258,7 +294,7 @@ def create_http_app(servers: list['MCPServer'], bearer_token: str) -> _BearerAut
         app=_lowlevel_server(namespace, entries), stateless=True, json_response=True
       )
       managers.append(manager)
-      routes.append(Route(f'/{namespace}', StreamableHTTPASGIApp(manager)))
+      routes.append(Route(f'/{namespace}', _CancelOnDisconnect(StreamableHTTPASGIApp(manager))))
 
     async def health(request: Request) -> Response:
       return JSONResponse({'status': 'ok', 'namespaces': sorted(by_namespace)})

@@ -118,6 +118,7 @@ dependencies = [
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'http'", specifier = "==3.14.5" },
     { name = "aiohttp", marker = "extra == 'trails-server'", specifier = "==3.14.5" },
+    { name = "anyio", marker = "extra == 'runtime'", specifier = "==4.15.1" },
     { name = "boto3", marker = "extra == 'aws'", specifier = "==1.43.114" },
     { name = "boto3", marker = "extra == 'trails-server'", specifier = "==1.43.114" },
     { name = "jsonschema", marker = "extra == 'runtime'", specifier = "==4.26.0" },

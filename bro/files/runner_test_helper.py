@@ -230,6 +230,146 @@ def lifecycle_probe(mode: str) -> None:
     print(json.dumps(asyncio.run(run(directory))), flush=True)
 
 
+def http_disconnect_probe() -> None:
+  import asyncio
+  import socket
+  import tempfile
+  from contextlib import asynccontextmanager, closing
+  from pathlib import Path
+  from unittest.mock import patch
+
+  import pytest
+  import uvicorn
+  from pydantic import BaseModel
+
+  from bro.files import mcp, operations
+  from bro.files.confinement import linux
+  from bro.files.runner import SubprocessRunner
+  from bro.files.slots import WorkerSlots
+  from bro.files.types_test_helper import make_type
+  from bro.llm.mcp import InProcessMCPServer
+  from bro.runtime.mcp_server import create_http_app
+
+  linux.prctl(36, 1, 'test subreaper')
+
+  class Payload(BaseModel):
+    value: Any
+
+  class ObservedRunner(SubprocessRunner):
+    def __init__(self):
+      super().__init__()
+      self.ready = asyncio.Event()
+      self.process = None
+      self.descendant = None
+
+    async def _exchange(self, worker, job, stdout, stderr):
+      self.process = worker.process
+      await super()._exchange(worker, job, stdout, stderr)
+
+    def _read(self, descriptor, output, maximum, label):
+      result = super()._read(descriptor, output, maximum, label)
+      if label == 'stderr':
+        for line in output.splitlines():
+          if line.startswith(b'descendant '):
+            self.descendant = int(line.split()[1])
+        if b'worker ready\n' in output:
+          self.ready.set()
+      return result
+
+  @asynccontextmanager
+  async def serving(app):
+    ready = asyncio.Event()
+
+    class Server(uvicorn.Server):
+      async def startup(self, sockets=None):
+        await super().startup(sockets)
+        assert self.started
+        ready.set()
+
+    server = Server(uvicorn.Config(app, log_level='warning', lifespan='on'))
+    with socket.create_server(('127.0.0.1', 0)) as listener:
+      async with asyncio.TaskGroup() as tasks:
+        tasks.create_task(server.serve(sockets=[listener]))
+        try:
+          await ready.wait()
+          yield listener.getsockname()[1]
+        finally:
+          server.should_exit = True
+
+  @asynccontextmanager
+  async def request(port, path):
+    reader, writer = await asyncio.open_connection('127.0.0.1', port)
+    try:
+      body = json.dumps(
+        {
+          'jsonrpc': '2.0',
+          'id': 1,
+          'method': 'tools/call',
+          'params': {'name': 'info', 'arguments': {'path': str(path), 'type': 'sample'}},
+        }
+      ).encode()
+      writer.write(
+        b'POST /file HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-token\r\n'
+        b'Accept: application/json, text/event-stream\r\nContent-Type: application/json\r\n'
+        b'Connection: close\r\nContent-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body
+      )
+      await writer.drain()
+      yield reader
+    finally:
+      writer.close()
+      await writer.wait_closed()
+
+  async def check(app, slots, runner, path):
+    async with serving(app) as port:
+      with closing(runner):
+        async with asyncio.timeout(10), request(port, path):
+          await runner.ready.wait()
+          assert runner.process is not None and runner.descendant is not None
+          assert os.getpgid(runner.descendant) == runner.process.pid
+        process = runner.process
+        async with asyncio.timeout(2):
+          with await slots.acquire():
+            assert process.returncode == -signal.SIGKILL
+            _, status = await asyncio.to_thread(os.waitpid, runner.descendant, 0)
+            assert os.waitstatus_to_exitcode(status) == -signal.SIGKILL
+            with pytest.raises(ChildProcessError):
+              os.waitpid(runner.process.pid, os.WNOHANG)
+            try:
+              os.killpg(runner.process.pid, 0)
+            except ProcessLookupError:
+              pass
+            else:
+              raise AssertionError('worker process group survived disconnect')
+          path.write_bytes(b'{"action":"success"}')
+          async with request(port, path) as reader:
+            response = await reader.read()
+          headers, _, body = response.partition(b'\r\n\r\n')
+          assert headers.startswith(b'HTTP/1.1 200 '), response
+          result = json.loads(body)['result']
+          assert not result.get('isError', False), result
+          assert result['structuredContent']['details']['value'] == 'Здравствуйте'
+          _, status = await asyncio.to_thread(os.waitpid, runner.descendant, 0)
+          assert os.waitstatus_to_exitcode(status) == -signal.SIGKILL
+    return {'returncode': process.returncode}
+
+  with tempfile.TemporaryDirectory() as directory:
+    path = Path(directory) / 'document'
+    path.write_bytes(b'{"action":"hold"}')
+    runner = ObservedRunner()
+    slots = WorkerSlots(budget_bytes=runner.limits.address_space_bytes)
+    file_type = make_type(
+      Path(directory), details=Payload, provider='bro.files.runner_test_helper:group_provider'
+    )
+    with (
+      closing(operations.Operations(runner, slots=slots)) as state,
+      patch.object(operations.registry, 'get', return_value=file_type),
+    ):
+      server = InProcessMCPServer('file', mcp.toolset.tools(state), close=state.close)
+      with closing(create_http_app([server], 'test-token')) as app:
+        result = asyncio.run(check(app, slots, runner, path))
+    print(json.dumps(result), flush=True)
+
+
 class MissingProtection(TestProvider):
   def prepare(self) -> str:
     from bro.files.confinement import linux
@@ -255,5 +395,7 @@ missing_protection = MissingProtection()
 if __name__ == '__main__':
   if sys.argv[1] == 'launcher':
     parent_death_launcher()
+  elif sys.argv[1] == 'http_disconnect':
+    http_disconnect_probe()
   else:
     lifecycle_probe(sys.argv[1])
