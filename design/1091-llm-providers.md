@@ -1,12 +1,10 @@
-# Design review: a second model provider, and providers, wires and harnesses as plug-ins
+# Design: a second model provider, and providers, wires and harnesses as plug-ins
 
-This file is a design review only and is never merged.
-It carries the design of [#1091](https://github.com/dzhioev/bro/issues/1091) so that reviewers can comment on it in line.
-When the review ends, this pull request closes without merging.
+This file is the specification of [#1091](https://github.com/dzhioev/bro/issues/1091).
+It lives on the branch `design/1091-llm-providers`, which is never merged: the pull request that carries it is a design review only, and when the review ends it closes without merging and the branch stays, for the stages and the verification to read.
 
-Review it as a document: gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives; not as code, tests or CI.
 The specification comes first.
-The review record after it lists what changed against the version approved on 2026-10-26 and is not part of the specification.
+The review record after it lists what changed against the version first approved on 2026-10-26 and is not part of the specification.
 
 ## Design
 
@@ -40,8 +38,7 @@ Settled with the user, in the order the discussion reached them:
 12. A provider's capacity stop is retried by one driver shared by the loop and the one-shot calls, the loop recording every attempt: a first wait of 10 s, doubling to 300 s, six retries, and then the run or the call ends (U6).
 13. Installations are replaced, not mixed: an older installation, frozen runtime or client configuration may break when a newer one replaces it.
 
-Settled: every decision of §12 is `ratified` (ruled on by the user),
-`approved` (proposed by the design and approved with it by the user on 2026-10-26) or `proposed` (raised by the review of this pull request and settled when it is approved), except D35, which is `open`.
+Settled: every decision of §12 is `ratified` (ruled on by the user), `approved` (proposed by the design and approved with it by the user on 2026-10-26) or `proposed` (raised by the review of this pull request and settled when it is approved).
 
 Out of scope: changing the safety behavior of the existing providers;
 retrying #1086 on a provider known to block it;
@@ -53,6 +50,7 @@ streaming, if single calls outlive their timeout (X4);
 client-side context compaction, if a context nears the provider's window (X5);
 a header `format` key separate from `harness`, when a harness writes an envelope another harness already writes (a session driven by `pi`, say);
 the uniform `filetypes/<type>` layout, as a later cleanup;
+the `mu` content classes for images and documents, when the files roadmap's page images or reader (#1047, #1048) first call them;
 a shared entry-point registry helper, since the pattern already exists in about a dozen near-identical copies and the rosters of §4.7 add three more.
 
 Constraints: core (`bro`) imports no other workspace member, and declaration and decode modules import no provider SDK at module level (`bro/llm/AGENTS.md`);
@@ -509,8 +507,9 @@ The top-level pair is the default.
 and `mu.aio` with the same arguments, read the kind's material, take `roles[role]` when the caller names a role the material defines and the default pair otherwise,
 resolve `llm` through the provider roster, open the wire client with the recipe and the credential, and call `structured` (W9).
 The call takes no model or effort: the material decides.
-`contents` are the neutral `Content` classes (`Text`, `JSON`, `JSONList`, `Image`, `ImageFile`, `PngImage`, `PDFFile`) without the OpenAI-shaped `dump()` they carry today;
-each reduces to text, image or file parts that the wire encodes (W2).
+`contents` are the neutral `Content` classes `Text` and `JSON`, without the OpenAI-shaped `dump()` they carry today;
+each reduces to text parts that the wire encodes (W2).
+The other classes of today's `mu` have no caller and are deleted.
 
 **A4 Consumers.** The spell interpreter (role `dispatch`), the source summary (`summary`) and the page reader (`reader`) declare `mu` as an optional credential, as they declare an LLM key today,
 and read their gates from `credentials.available('mu')`;
@@ -526,7 +525,7 @@ A stop other than `completed` raises `LLMStopped`, which replaces `IncompleteRes
 **A6 Instances.** Which `mu` instance a session holds is the operator's pick, per project or per bro (`creds: ["mu+cheap"]`).
 Code never names an instance, and `credential_policy_test` confines named-instance reads to the resolver; a role is how a caller chooses within the one held material.
 
-**A7 Content.** A content part a wire cannot carry raises `UnsupportedContent` rather than being dropped.
+**A7 Content.** A content part a wire cannot carry, such as an image in a user message for a model without vision, raises `UnsupportedContent` rather than being dropped.
 
 **A8 References.** A reference in `mu` material that names only a kind (`{"$cred": "openai"}`) resolves against the instance the hydrating store selects for the kinds the session holds,
 so a session that does not hold `openai` does not follow the operator's `creds` pick for it.
@@ -817,13 +816,13 @@ Between them the hosted trails server is redeployed, so that it serves the chat 
 | S1 | decode sides: `bro/llm/records.py` and the wire roster in core; `wires/responses`, `wires/messages` and `wires/chat` as decode-side members; the `wire` tag stamped by the current client; projection and `latest_fork_point` through `decode`; `from_wire_counts`; `vendor_of` deleted; no behavior change | 1 | none |
 | S2 | harness distributions: `harnesses/native/harness` moved, `harnesses/claude/harness` split from `bro-ride` with its scripts renamed, the format distributions split from core, the `claude_code` kind to `bro-claude`, the default harness removed (Q5–Q7), the trails-server image (HP4), the Claude-only test retired, docs | 1 | S1 |
 | S3 | loop and port: the port and `wires.open` in core, `Loop`, the Responses client in its wire, `echo` as a wire, the recipe's wire-facing members, the `LLM` seams, fork per wire, `retry_llm` with the capacity retry, neutral names and docs; L6, L8 and L9 as their own commits | 2 | S2 |
-| S4 | `mu`: the kind, material and roles (§4.8), neutral contents, its callers, the benchmark presets and docs; `structured` for the Responses wire | 2 | S3 |
+| S4 | `mu`: the kind, material and roles (§4.8), the neutral `Text` and `JSON` contents, its callers, the benchmark presets and docs; `structured` for the Responses wire | 2 | S3 |
 | S5 | providers and rosters: `llms/openai`, `llms/anthropic` with `model_family`, the `echo` provider, `bro.llm.providers` by entry point with tolerant reads (P3), recipe presence (Q1–Q4, Q8) including the authority reading, `bro show` and `ride scope --llm`, `--provider` required, `provider_policy_test`, docs | 2 | S3, S4 |
 | S6 | DeepSeek: the client side of `wires/chat`, `llms/deepseek`, `structured` for chat, an in-test HTTP server speaking the documented shapes, a permissions cheat-sheet scenario ("run a child on another provider"), the live probe file, docs | 2 | S5 |
 | S7 | the reference page (§10) | 2 | S6 |
 | V | the end-to-end proof (§8) | after Landing 2 | S6, a fresh root |
 
-A stage that must change a rule here appends the change to this task under `## Design changelog`.
+A stage that must change a rule here appends the change to the task page of #1091 under `## Design changelog`.
 Until S6 the port is validated by one real wire and `echo`; S6 may amend it, recording the amendment.
 The implementation plan splits these stages into pull-request-sized units and fixes their order inside a landing.
 Between S2 and S5 the Claude harness imports the Anthropic recipe from core, because `bro-anthropic` does not exist yet; S5 repoints it.
@@ -920,7 +919,7 @@ Status `ratified` means the user ruled on it, in the discussion or in the review
 | D32 server guard | the trails-server image declares the formats and wires it serves, the build stages their distributions, and the server exits at startup unless each declared entry loads and one wire claims untagged records (HP4) | proposed | `/health` passes a server missing a format, which then refuses every write, and recording is mandatory; checking the declared entries, not the distributions, is what catches an omission |
 | D33 tolerant rosters | every read of the provider roster skips a broken declaration; `LLMSpec.from_dict` resolves by `type`; `Harness.llm_providers` is computed; `NativeLLMSpec` is retired; a plug-in's package `__init__` and credential module run no declaration code, and the installation reading keeps a persona or declaration that fails to load as unavailable (P3, P5) | proposed | a broken plug-in must break its own recipes only: the credential registry loads every kind in every process and the installation reading loads every persona, so neither may reach a broken declaration, and `load_all` over a closed table is the last place that names every provider |
 | D34 preset rule | a one-word `--llm` value naming no installed provider is a preset (Q8) | proposed | grammar-only parsing makes every bare word a provider slot, which silently retires the preset fallback that rode on the roster check |
-| D35 `mu` roles and contents | role `reader` replaces `vision`, because the page reader sends page text; contents: all seven classes ported as A3 lists them, or `Text` and `JSON` only, the five without callers (`JSONList`, `Image`, `ImageFile`, `PngImage`, `PDFFile`) returning with their first caller | role: proposed; contents: open | `Text` and `JSON` are the only classes with callers today; the image and PDF classes are what the files roadmap (#1047, #1048) will want |
+| D35 `mu` roles and contents | role `reader` replaces `vision`, because the page reader sends page text; contents are `Text` and `JSON`, and the five classes without callers (`JSONList`, `Image`, `ImageFile`, `PngImage`, `PDFFile`) are deleted and return with their first caller | ratified | `Text` and `JSON` are the only classes with callers today; the image and PDF classes are what the files roadmap (#1047, #1048) will want, and they return with it |
 | D36 benchmark and `mu` | a benchmark preset whose trials mount `cast` holds a `mu` instance (A4) | proposed | the trial store holds `openai` today, which mounts `cast`; with `mu` as the gate the trials would lose it |
 | D37 references in `mu` material | material names the instance it references (A8) | proposed | a kind-only reference resolves against what the session holds, not against the operator's pick |
 | D38 restore sources | a wire restores from the steps' own records, never from recorded requests (W6) | proposed | it is what the Responses replay does today; stating it fixes what a new wire may rely on |
@@ -933,7 +932,7 @@ This part is not part of the specification.
 
 ### Changes against the version approved on 2026-10-26
 
-Ruled by the owner in this review: the layout of a harness and its trail format (D28), two landings with the hosted trails server redeployed between them (D29), the capacity retry and its schedule (D31),
+Ruled by the owner in this review: the layout of a harness and its trail format (D28), two landings with the hosted trails server redeployed between them (D29), the capacity retry and its schedule (D31), the contents of `mu` (D35),
 and that old installations may break (§1, item 13).
 The review verified the repository and the vendor's pages (§2) and made the changes below; each is open to objection.
 
@@ -947,7 +946,7 @@ The review verified the repository and the vendor's pages (§2) and made the cha
 - §4.7: every read of the roster tolerates a broken declaration, `from_dict` resolves by `type`, `Harness.llm_providers` is computed and `NativeLLMSpec` is retired (P3; D33);
   the trails server declares the entries it serves and resolves each at startup (HP4; D32);
   a provider's package is inert, its credential module a literal, and the installation reading survives one broken persona or declaration (P1, P3, P5; D33).
-- §4.8: the role `reader` (D35), a benchmark preset holds a `mu` instance (A4; D36), references name their instance (A8; D37).
+- §4.8: the role `reader` and the contents `Text` and `JSON` (A3, A7; D35), a benchmark preset holds a `mu` instance (A4; D36), references name their instance (A8; D37).
 - §4.10: the host recipe list is `projects.<repo>.bros.<bro>.llm` and applies to managed launches only (Q2, Q3; D39);
   a one-word `--llm` value that names no provider is a preset (Q8; D34).
 - §5 and §11: S1 creates the `chat` decode side and S6 adds its client (D30).
@@ -956,5 +955,3 @@ The review verified the repository and the vendor's pages (§2) and made the cha
   §9 drops the script-rename risk, because Claude's settings are rebuilt at every launch.
 - §11 is rewritten: stages and landings (11.1), the contracts that meet across versions (11.2) and the rollout order (11.3).
 - §12 gains D28 to D40, and D17 follows D28.
-
-Open for the owner: the contents choice of D35.
