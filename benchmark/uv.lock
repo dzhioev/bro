@@ -310,6 +310,7 @@ dependencies = [
     { name = "botocore" },
     { name = "bro" },
     { name = "bro-bench" },
+    { name = "bro-native-trails" },
     { name = "bro-ride" },
     { name = "bro-wire-chat" },
     { name = "bro-wire-messages" },
@@ -331,6 +332,7 @@ requires-dist = [
     { name = "botocore", specifier = "==1.43.114" },
     { name = "bro", editable = "../" },
     { name = "bro-bench", editable = "../bench" },
+    { name = "bro-native-trails", editable = "../harnesses/native/trails" },
     { name = "bro-ride", editable = "../ride" },
     { name = "bro-wire-chat", editable = "../wires/chat" },
     { name = "bro-wire-messages", editable = "../wires/messages" },
@@ -345,6 +347,17 @@ dev = [
     { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-asyncio", specifier = "==1.4.0" },
 ]
+
+[[package]]
+name = "bro-native-trails"
+version = "0.1.0"
+source = { editable = "../harnesses/native/trails" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "bro", editable = "../" }]
 
 [[package]]
 name = "bro-ride"

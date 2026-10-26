@@ -130,7 +130,7 @@ dev = [
 [tool.uv.sources]
 bro = { git = "https://github.com/dzhioev/bro", branch = "master" }
 bro-dev = { git = "https://github.com/dzhioev/bro", subdirectory = "dev", branch = "master" }
-bro-native = { git = "https://github.com/dzhioev/bro", subdirectory = "native", branch = "master" }
+bro-native = { git = "https://github.com/dzhioev/bro", subdirectory = "harnesses/native/harness", branch = "master" }
 bro-ride = { git = "https://github.com/dzhioev/bro", subdirectory = "ride", branch = "master" }
 ```
 
@@ -207,7 +207,7 @@ Fetch and read these paths before using their contracts:
 - `bro/reference/dive_in.md`;
 - `ride/ride/dive_in.py`;
 - `bro/harness/__init__.py` and `ride/ride/harness.py`;
-- `native/bro/native/harness.py` when the project installs `bro-native`;
+- `harnesses/native/harness/bro/native/harness.py` when the project installs `bro-native`;
 - `bro/setup/AGENTS.md`;
 - `bro/base/host_config.py`;
 - `bro/brog/system.py`;

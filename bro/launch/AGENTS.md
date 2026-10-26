@@ -3,7 +3,7 @@
 The shared `bro.launch` namespace spans core and `bro-native`.
 Core owns the launch vocabulary every harness uses
 — the LLM flag set, session hold, and host-session broxy.
-`bro-native` owns the public in-process `bro run` / `bro chat` surfaces under `native/bro/launch/`;
+`bro-native` owns the public in-process `bro run` / `bro chat` surfaces under `harnesses/native/harness/bro/launch/`;
 they execute the selected bro in the calling process with ambient credentials.
 Managed workspaces belong to `bro-ride`.
 Core imports no other workspace member.
@@ -60,7 +60,7 @@ The admitted recipe reaches the inner session through its resolved environment.
 Native in-process surfaces canonicalize their selection before launching.
 
 Each harness resolves the selection through `bro.harness.Harness.resolve_recipe`, among the providers it declares in `llm_providers`;
-`native/bro/native/harness.py:resolve_native` is that resolution over the bro's declared `llm_spec`.
+`harnesses/native/harness/bro/native/harness.py:resolve_native` is that resolution over the bro's declared `llm_spec`.
 A recipe for a provider the harness does not serve is refused, naming the installed harnesses that serve it.
 Harness flags choose a recipe within the selected harness and never silently switch execution shape.
 
