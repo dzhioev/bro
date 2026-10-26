@@ -37,7 +37,7 @@ Settled with the user, in the order the discussion reached them:
 9. The reference page is `bro/reference/llm_providers.md`.
 10. There is no early canary: DeepSeek is added regardless of a pre-check, and its capability for #1086 is checked at V (§8), after implementation.
 11. Work lands in two landings, layout and decode first and behavior after, with the hosted trails server redeployed between them (§11).
-12. A provider's capacity stop is retried by the loop, every attempt recorded: a first wait of 10 s, doubling to 300 s, six retries, and then the run ends (L11).
+12. A provider's capacity stop is retried by one driver shared by the loop and the one-shot calls, the loop recording every attempt: a first wait of 10 s, doubling to 300 s, six retries, and then the run or the call ends (U6).
 13. Installations are replaced, not mixed: an older installation, frozen runtime or client configuration may break when a newer one replaces it.
 
 Settled: every decision of §12 is `ratified` (ruled on by the user),
@@ -136,7 +136,7 @@ X10 how often the capacity stop occurs and whether its response carries partial 
 | leg | The neutral result of an exchange, one request and its response: the record to persist, usage counts, ordered parts, the stop. A conversation turn (counted by `turn_index`) holds one or more legs. |
 | part | One item of a response, in order: `Reasoning`, `Message`, `Call` or `Unknown`. |
 | stop | Why a response ended, in the neutral vocabulary `completed`, `truncated`, `filtered`, `capacity` and `failed` (U4); a wire's `decode` maps its provider's own words onto it. |
-| capacity stop | A response whose stop is `capacity`: the provider interrupted it for lack of resources and the request is not at fault, so the loop sends the exchange again (L11). |
+| capacity stop | A response whose stop is `capacity`: the provider interrupted it for lack of resources and the request is not at fault, so the request is sent again (U6). |
 | step | One entry of a trail, the persisted record of a run: `user_input`, `notification`, `llm_call` or `tool_result`, with extras such as `turn_index`. |
 | record | The persisted body of an `llm_call` step, `{request, response}`, tagged with its wire (R1, R2). |
 | loop | `Loop`, the provider-neutral agent loop of the native harness; an `LLM` the runner drives. |
@@ -170,7 +170,7 @@ The new groups are `bro.llm.providers`, `bro.llm.wires` and `bro.llm.wire_client
 | Layer | Owns | Lives in |
 |---|---|---|
 | Runner | trail lifetime, observer, inbox, watches (unchanged) | `harnesses/native/harness` (`bro.native.runner`) |
-| Loop | tool execution and errors, inbox drains and notifications, interrupted-turn bookkeeping, turn and call indices, recorded steps, observer events, cumulative usage, the capacity retry | `harnesses/native/harness` (`bro.native.loop`) |
+| Loop | tool execution and errors, inbox drains and notifications, interrupted-turn bookkeeping, turn and call indices, recorded steps, observer events, cumulative usage | `harnesses/native/harness` (`bro.native.loop`) |
 | Wire client | encoding inputs, request assembly, sending under retry, conversation state, building a leg from a response, restoring state from a trail, the structured one-shot | the wire's distribution, behind the port in core (`bro.llm.wire`) |
 | Wire decode | what a recorded response means: parts, stop, usage vocabulary | the wire's distribution, SDK-free; read by trail formats, fork, usage and cost |
 | Rosters | reading entry points, selecting a plug-in by name, opening a wire client from a recipe | core: `bro.llm.providers`, `bro.llm.wires` |
@@ -253,7 +253,7 @@ sends it with the caller's `request_timeout` under the shared retry (U3), captur
 A content part the recipe's `accepts` refuses (an image for a model without vision) raises `UnsupportedContent` naming the part and the model before anything is sent;
 `UnsupportedContent` and `LLMStopped` (L9) are new exceptions beside `LLMUnavailable` in `bro.llm.llm`.
 It raises `LLMUnavailable` when the retry window runs out, and `RuntimeError` for a completed response it cannot use: no choice or output, neither a call nor reply text, a refusal with no text, a tool call missing its id or name.
-A stop other than `completed` is returned in the leg for the loop to record and refuse (L9, L11).
+A stop other than `completed` is returned in the leg for the loop to record and refuse (L9, U6).
 
 **W3 State.** A server-chained wire's state is the id of the last response received; each request sends the new items and, once state exists, `previous_response_id`.
 A client-chained wire's state is the history, every item it sent and every item it received, in order;
@@ -289,7 +289,8 @@ and a call's index equal to the index the projection gives its `tool_call` event
 **W9 Structured one-shot.** `structured` sends one stateless request, a system prompt and one user message of the encoded `contents`, asks for output matching the pydantic model `result`, validates it and returns the instance.
 `responses` enforces the schema through its JSON-schema output; `chat` asks for JSON mode, states the schema in the prompt and validates with pydantic.
 An empty or invalid reply raises.
-It retries under U3, applies the recipe's `request_options()`, adds nothing to a loop's usage, and raises `LLMStopped` at once for a stop other than `completed`, a `capacity` stop included, since a one-shot has no loop to retry it (L9, L11).
+It retries under U3 and, for a `capacity` stop, under U6 with no callback, so its attempts add nothing to a loop's usage;
+it applies the recipe's `request_options()` and raises `LLMStopped` for a stop other than `completed` (L9), a `capacity` stop only once U6 gives up.
 Contents follow W2's encoding and its `UnsupportedContent`.
 
 #### 4.4 The loop
@@ -309,7 +310,7 @@ A wake sends the notification alone and raises if the inbox has none.
 
 **L4 After an exchange.** The loop records the `llm_call` step with `turn_index`, `call_index`, `wire`, the leg's extras and, when the stop is not `completed`, `stopped`;
 publishes cumulative usage keyed by the leg's model;
-refuses the leg if the stop is not `completed` (L9, L11);
+refuses the leg if the stop is not `completed` (L9);
 then emits observer events in part order (`ReasoningEvent`, `InterimAssistantTextEvent`, `ToolCallEvent`) and remembers each call's source (step id, part index) for its tool step.
 
 **L5 Tools.** Calls run in order, each with its call's source as the tracker's current tool step.
@@ -331,18 +332,10 @@ Pending inputs lead the next exchange (L1) and are never lost between a drain an
 **L9 Stops (new for the Responses wire).** A leg whose stop is not `completed` is refused:
 once its `llm_call` step is recorded with `stopped` and its usage published, and before any event or tool runs, the loop raises `LLMStopped(reason)`, so the trail shows the stop, the cost is counted and the run fails with the reason named.
 The exchange's inputs become pending as in L8, so a session that continues re-sends them first.
-A `filtered` stop reads as the provider's filter ending the response, not as a truncated answer, and a `capacity` leg is retried first (L11).
+A `filtered` stop reads as the provider's filter ending the response, not as a truncated answer, and a `capacity` leg is retried first (U6), the loop recording and counting each refused attempt as it does any refused leg.
 Today an `incomplete` Responses status is ignored, its partial text returned and its tool calls run, so trails recorded before this design hold such legs as accepted history (F4).
 
 **L10 Reply.** With no calls the loop returns the leg's reply; the Responses wire keeps today's reply extraction exactly (refusal handling and the text fallback).
-
-**L11 Capacity retry.** A `capacity` leg is refused like any other stop (recorded with `stopped`, its usage published, no event, no tool), and then the loop waits and sends the exchange again from the same state (W3):
-the first wait is 10 s and each later one twice the previous up to 300 s, so the six waits are 10, 20, 40, 80, 160 and 300 s.
-The sixth refused retry raises `LLMStopped('capacity')` as L9 says.
-Any other response ends the sequence, so every exchange starts again at 10 s.
-The attempts of one exchange share its `call_index`, and each stopped step repeats the exchange's new items (W4), so a stubborn outage records one exchange's request seven times.
-A wait ends as soon as the exchange is cancelled (L8), and each wait is logged.
-For example, a capacity stop answered on the third retry leaves three stopped steps and the answer in the trail and costs 70 s of waiting, and a provider that stays at capacity leaves seven stopped steps, costs 610 s and then ends the run.
 
 Example: a background job exits while the user types "continue".
 The next exchange's inputs are `[Notification('[notification: job 3 exited]'), UserMessage('continue')]`.
@@ -409,6 +402,16 @@ A provider whose slugs need a rule beyond the generic one exports `MODEL_SLUG` (
 core asks the provider whose pattern matches, importing the roster lazily, and labels any other slug by stripping a trailing `-YYYY-MM-DD` date.
 Anthropic's `Opus 4.8` rule moves to `bro-anthropic`.
 `usage.vendor_of` and its pattern list have no caller and are deleted.
+
+**U6 Capacity retry.** A response whose stop is `capacity` is not an answer.
+`retry_llm` sends the request again from the same state (W3) after a wait of 10 s, and each later wait is twice the previous up to 300 s, so the six waits are 10, 20, 40, 80, 160 and 300 s.
+The sixth refused retry ends the sequence and its leg is returned, and any other response ends it earlier, so every request starts again at 10 s.
+A caller may pass a callback that receives each refused leg it is about to retry.
+The loop's callback records the leg as L4 says, with `stopped`, and publishes its usage, so every attempt is counted and none enters the conversation;
+the attempts of one exchange share its `call_index`, and each stopped step repeats the exchange's new items (W4), so a stubborn outage records one exchange's request seven times.
+`structured` (W9) passes no callback, so its attempts add nothing to a loop's usage.
+A wait ends as soon as the caller is cancelled (L8), and each wait is logged.
+For example, a capacity stop answered on the third retry leaves three stopped steps and the answer in the trail and costs 70 s of waiting, and a provider that stays at capacity leaves seven stopped steps, costs 610 s and then ends the run.
 
 
 #### 4.7 Plug-in contracts
@@ -635,7 +638,7 @@ The wire sends no `max_tokens`, so the service defaults apply (64K in thinking m
 The wire never sends `user_id`, `temperature` or `top_p`.
 Reasoning arrives as raw chain of thought, not a summary; the display presets already decide how reasoning blocks render.
 A context over 1M tokens is a 400 and ends the run; nothing is truncated.
-The `insufficient_system_resource` stop is the `capacity` stop (U4, L11).
+The `insufficient_system_resource` stop is the `capacity` stop (U4, U6).
 The service answers 429 above 500 concurrent requests per account for `deepseek-v4-pro` and closes a connection whose request has not started inference after ten minutes;
 both reach the retry as transient errors (U3).
 `pro` and `flash` collide with no other provider's short names today;
@@ -734,7 +737,7 @@ There is no check against the provider before implementation (ruling 10); verifi
 - S3 when the ported client tests pass against `Loop` over the Responses wire, W8 runs with `responses` and `echo` as its members, neither `loop.py` nor `fork.py` names a provider, each of L6,
   L8 and L9 has a test that fails before its commit and passes after,
   a trail whose last `llm_call` carries `stopped` resumes from the point before it while a trail recorded before L9 with an `incomplete` leg and the results of its tool calls replays whole,
-  and the capacity retry (L11) is tested on an injected clock.
+  and the capacity retry (U6) is tested on an injected clock.
 - S4 when `mu` takes its LLM from the credential and a role, no auxiliary call site names a model id, a provider or a credential kind, core no longer depends on the `openai` SDK,
   and the live probes `spells_llm_test` and `reader_llm_test` pass against a `mu` credential.
 - S5 when both rosters resolve every provider by entry point and `known_names()` imports nothing (a test), `provider_policy_test` passes,
@@ -768,7 +771,7 @@ A refusal or `content_filter` stop is evidence for #1091, not a reason to reword
 Weak safeguards make injection a likely hazard (§2): a DeepSeek-run `bro-dev` holds the same credentials as any `bro-dev` (`github`, `brog`, `trails`).
 Mitigate by routing only stages whose inputs are repository-local, keeping untrusted web content out of the prompt, and keeping the normal review.
 A computed cost is an upper bound (U2).
-A provider at capacity costs a run up to ten minutes of waiting before it ends (L11), and a `mu` call fails at once.
+A provider at capacity costs a run, or a `mu` call, up to ten minutes of waiting before it ends (U6).
 The pass-back rule grows every request by all reasoning so far (X5); a context over 1M ends the run.
 DeepSeek's model ids have changed several times this year;
 `MODELS` is a convenience, not a whitelist, and a snapshot string in `response.model` is priced only if its table row exists (U2, X2).
@@ -913,7 +916,7 @@ Status `ratified` means the user ruled on it, in the discussion or in the review
 | D28 harness and format layout | a harness and its trail format are two distributions in `harnesses/<name>/`, at `harness/` and `trails/` | ratified | a uv workspace member cannot sit inside another member's directory (the pinned uv 0.13.1 stops its search for the workspace root at the enclosing project), so the nesting D17 first chose cannot be built |
 | D29 landings | two: layout and decode (S1, S2), then behavior (S3 to S7); the hosted trails server is redeployed between them | ratified | the server must serve every wire before the first record of it is written, and the restructure is proven in use before any behavior changes |
 | D30 chat decode side | created by S1 with the other two decode sides; the client side comes with S6 | proposed | Landing 1's server image must already decode chat |
-| D31 capacity stop | the loop retries `insufficient_system_resource`, as the `capacity` stop, and records every attempt: waits of 10 s doubling to 300 s, six retries, then L9 ends the run (L11) | ratified | the vendor documents it as an interruption by resource limits, of the family of the 500 and 503 that U3 retries; the schedule is the user's |
+| D31 capacity stop | `insufficient_system_resource` is the `capacity` stop, retried by one driver shared by the loop and `structured`, the loop recording every attempt: waits of 10 s doubling to 300 s, six retries, then L9 ends the run or W9 raises (U6) | ratified | the vendor documents it as an interruption by resource limits, of the family of the 500 and 503 that U3 retries, so a one-shot call gets the availability the agent loop gets; the schedule is the user's |
 | D32 server guard | the trails-server image declares the formats and wires it serves, the build stages their distributions, and the server exits at startup unless each declared entry loads and one wire claims untagged records (HP4) | proposed | `/health` passes a server missing a format, which then refuses every write, and recording is mandatory; checking the declared entries, not the distributions, is what catches an omission |
 | D33 tolerant rosters | every read of the provider roster skips a broken declaration; `LLMSpec.from_dict` resolves by `type`; `Harness.llm_providers` is computed; `NativeLLMSpec` is retired; a plug-in's package `__init__` and credential module run no declaration code, and the installation reading keeps a persona or declaration that fails to load as unavailable (P3, P5) | proposed | a broken plug-in must break its own recipes only: the credential registry loads every kind in every process and the installation reading loads every persona, so neither may reach a broken declaration, and `load_all` over a closed table is the last place that names every provider |
 | D34 preset rule | a one-word `--llm` value naming no installed provider is a preset (Q8) | proposed | grammar-only parsing makes every bare word a provider slot, which silently retires the preset fallback that rode on the roster check |
@@ -937,7 +940,7 @@ The review verified the repository and the vendor's pages (§2) and made the cha
 - §2 gains the verified facts, drops X6 (the operator's trails are hosted) and widens X2 and X8; X9 and X10 are new.
 - §3 gains `stop`, `capacity stop` and `landing`; the role `vision` is now `reader`.
 - §4.1 and §5.1: the harness distribution sits in `harnesses/<name>/harness/` (D28).
-- §4.2 to §4.6: the capacity stop, retried by the loop with every attempt recorded (W2, W9, L4, L9, L11, U4; D31);
+- §4.2 to §4.6: the capacity stop, retried by a driver shared by the loop and `structured`, the loop recording every attempt (W2, W9, L4, L9, U4, U6; D31);
   U4 fails on a stop word it does not list;
   a refused leg carries `stopped` and never enters the conversation, while records written before L9 replay as accepted (R1, R3, R4, W3, F3, F4; D40);
   W6 states what a restore reads (D38).
