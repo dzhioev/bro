@@ -20,6 +20,9 @@ _PROJECTS = {
   'bro-oops': _ROOT / 'oops',
   'bro-oops-cdk': _ROOT / 'oops' / 'cdk',
   'bro-ride': _ROOT / 'ride',
+  'bro-wire-responses': _ROOT / 'wires' / 'responses',
+  'bro-wire-messages': _ROOT / 'wires' / 'messages',
+  'bro-wire-chat': _ROOT / 'wires' / 'chat',
 }
 _NATIVE_DOMAIN = {
   'bro/fork.py',
@@ -184,6 +187,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'aiohttp',
     'bro',
     'bro-ride',
+    'bro-wire-responses',
     'humanize',
     'mcp',
     'openai',
@@ -195,6 +199,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   }
   assert _project_dependencies(_ROOT / 'ride' / 'pyproject.toml') == {
     'bro',
+    'bro-wire-messages',
     'certifi',
     'humanize',
     'mcp',
@@ -253,6 +258,7 @@ def test_core_and_ride_wheels_compose_a_claude_session_without_native(wheels, tm
       str(venv / 'bin' / 'python'),
       str(wheels['bro']),
       str(wheels['bro-ride']),
+      str(wheels['bro-wire-messages']),
     ],
     check=True,
     capture_output=True,
@@ -303,7 +309,9 @@ def test_bundled_ride_checks_native_without_the_runtime_on_path(wheels, tmp_path
       str(venv / 'bin' / 'python'),
       str(wheels['bro']),
       str(wheels['bro-ride']),
+      str(wheels['bro-wire-messages']),
       str(wheels['bro-native']),
+      str(wheels['bro-wire-responses']),
     ],
     check=True,
     capture_output=True,
@@ -336,3 +344,43 @@ def test_pdf_type_registers_from_its_own_wheel(wheels, wheel_files):
   requirements = _metadata(wheels['bro-filetypes']).get_all('Requires-Dist')
   assert requirements is not None
   assert 'pypdfium2==5.14.0' in requirements
+
+
+@pytest.mark.parametrize('name', ['chat', 'messages', 'responses'])
+def test_wire_wheels_supply_only_their_decode_side(wheels, wheel_files, name):
+  distribution = f'bro-wire-{name}'
+  assert dict(_entry_points(wheels[distribution])['bro.llm.wires']) == {
+    name: f'bro.wire_{name}.decode'
+  }
+  assert wheel_files[distribution] == {f'bro/wire_{name}/__init__.py', f'bro/wire_{name}/decode.py'}
+  requirements = _metadata(wheels[distribution]).get_all('Requires-Dist')
+  assert requirements is not None
+  assert {_requirement_name(requirement) for requirement in requirements} == {'bro'}
+
+
+def test_wire_decode_wheels_work_without_sdks_or_harnesses(wheels, tmp_path):
+  for distribution in ('bro', 'bro-wire-chat', 'bro-wire-messages', 'bro-wire-responses'):
+    with zipfile.ZipFile(wheels[distribution]) as archive:
+      archive.extractall(tmp_path)
+  probe = """
+import sys
+from bro.llm import wires
+from bro.llm.usage import from_wire_counts
+for name, response in (
+  ('responses', {'status': 'completed', 'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'reply'}]}]}),
+  ('messages', {'content': [{'type': 'text', 'text': 'reply'}]}),
+  ('chat', {'choices': [{'finish_reason': 'stop', 'message': {'content': 'reply'}}]}),
+):
+  assert wires.decode(name, response).reply == 'reply'
+assert from_wire_counts('responses', {'input_tokens': 5, 'output_tokens': 2})['input'] == 5
+assert wires.registry.legacy_name() == 'responses'
+assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.native', 'ride'))
+"""
+  subprocess.run(
+    [sys.executable, '-S', '-c', probe],
+    cwd='/tmp',
+    env={**os.environ, 'PYTHONPATH': str(tmp_path)},
+    capture_output=True,
+    text=True,
+    check=True,
+  )

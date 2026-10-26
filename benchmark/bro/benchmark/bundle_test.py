@@ -5,6 +5,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -454,3 +455,17 @@ def test_regular_harness_assets_survive_bundle_relocation(tmp_path):
 
   assert built(moved).identity == original_identity
   assert (moved / 'engine' / 'binary').read_bytes() == b''
+
+
+def test_bundle_builds_the_workspace_dependencies_its_export_omits():
+  lock = tomllib.loads((Path(__file__).resolve().parents[3] / 'uv.lock').read_text())
+  workspace_members = set(lock['manifest']['members'])
+  selected = set(WHEEL_PACKAGES)
+  missing = {
+    dependency['name']
+    for package in lock['package']
+    if package['name'] in selected
+    for dependency in package.get('dependencies', [])
+    if dependency['name'] in workspace_members - selected
+  }
+  assert missing == set(), f'workspace dependencies omitted from bundle wheels: {sorted(missing)}'
