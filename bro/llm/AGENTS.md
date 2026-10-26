@@ -9,7 +9,7 @@ The bro-native engine and provider clients live in `bro.native`.
 ## Design
 
 - **Empty package hub.** `__init__.py` re-exports nothing, and consumers import submodules directly (`from bro.llm.llm import LLMSpec`).
-  `usage.py` reaches no further than `bro.base`, which lets an environment without an engine read a usage record;
+  Records and wire decode sides stay SDK-free, so an environment without an engine can read recorded responses and usage;
   a hub re-export would put unrelated live dependencies on every import of this package.
 - **Recipe boundary.** `llm.py`, `providers.py`, and `llms/` are declaration-side.
   Importing them may resolve and inspect every built-in recipe, but must not import `bro.native`, the OpenAI SDK, or the live MCP layer.
@@ -24,6 +24,7 @@ The bro-native engine and provider clients live in `bro.native`.
 - `llm.py` — the `LLMSpec` ABC:
   a frozen recipe (model + provider knobs) with `needed_secrets`, optional `.fast()` / `.with_effort(level)` transforms (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max vocabulary),
   and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
+  `WIRE` names the recipe’s recorded protocol.
   `selection` and `with_selection` project and reconstruct model/effort choices, with each recipe declaring its concrete effort vocabulary and deferrable fields.
   `NativeLLMSpec` is the marker for recipes the bro-native engine can run, each naming its model;
   a provider only a harness driving its own loop runs (`anthropic`) remains a bare `LLMSpec`.
@@ -65,9 +66,11 @@ The bro-native engine and provider clients live in `bro.native`.
   Providers emit reasoning, interim assistant text, background-job notifications, and call-ID-aware tool events;
   runners emit turn boundaries.
   `NullObserver` is the explicit no-op.
+- `records.py` — SDK-free response meanings: ordered reasoning, messages, calls and unknown parts, with derived reply and terminal status.
+- `wires.py` — the `bro.llm.wires` metadata roster, lazy decode-side loading, decoding and usage-count dispatch.
+  A wire declaring `LEGACY` claims untagged records; several claimants are an error.
 - `usage.py` — shared per-model usage accounting, the env-pointed usage file every harness publishes its cumulative usage through, footer formatting/parsing, and the `usage` CLI.
-  This module speaks of **vendors**, not providers:
-  `vendor_of(slug)` answers who billed a model, while `providers.py` answers which launch recipe runs it.
+  `from_wire_counts(wire, raw)` normalizes raw usage through the wire roster.
 - `tracker.py` — the dependency-free `Tracker` ABC, durable sibling of `Observer`, plus `NullTracker`.
   Trail records and harness recorders are owned by `bro/trails/`.
 - `pricing.py` — canonical table digests and the once-per-process warning for a table read more than 30 days after its as-of date.

@@ -1,0 +1,73 @@
+import importlib.metadata
+from types import SimpleNamespace
+
+import pytest
+
+from bro.llm import wires
+
+
+def entry(name, target):
+  return importlib.metadata.EntryPoint(name, target, wires.ENTRY_POINT_GROUP)
+
+
+def test_roster_names_read_only_metadata(monkeypatch):
+  monkeypatch.setattr(
+    wires,
+    '_entry_points',
+    lambda: (entry('later', 'missing.module'), entry('first', 'also.missing')),
+  )
+  assert wires.known_names() == ('first', 'later')
+
+
+def test_duplicate_and_invalid_names_fail_before_loading(monkeypatch):
+  monkeypatch.setattr(
+    wires, '_entry_points', lambda: (entry('same', 'missing'), entry('same', 'missing'))
+  )
+  with pytest.raises(ValueError, match='duplicate wire'):
+    wires.known_names()
+  monkeypatch.setattr(wires, '_entry_points', lambda: (entry('Bad', 'missing'),))
+  with pytest.raises(ValueError, match='invalid wire name'):
+    wires.known_names()
+
+
+def test_explicit_wire_does_not_load_an_unrelated_broken_plugin(monkeypatch):
+  monkeypatch.setattr(
+    wires,
+    '_entry_points',
+    lambda: (entry('responses', 'bro.wire_responses.decode'), entry('broken', 'missing.module')),
+  )
+  registry = wires.WireRegistry()
+  assert registry.decode('responses', {'status': 'completed', 'output': []}).stop == 'completed'
+  with pytest.raises(RuntimeError, match='failed to load wire'):
+    registry.get('broken')
+
+
+def test_legacy_is_claimed_not_defaulted(monkeypatch):
+  monkeypatch.setattr(
+    wires, '_entry_points', lambda: (entry('responses', 'bro.wire_responses.decode'),)
+  )
+  registry = wires.WireRegistry()
+  raw = {'status': 'completed', 'output': []}
+  assert registry.decode(None, raw) == registry.decode('responses', raw)
+  assert registry.legacy_name() == 'responses'
+  monkeypatch.setattr(wires, '_entry_points', lambda: ())
+  with pytest.raises(wires.WireUnavailable, match='no installed wire claims'):
+    wires.WireRegistry().decode(None, raw)
+
+
+def test_two_legacy_claimants_are_an_error(monkeypatch):
+  monkeypatch.setattr(
+    wires, '_entry_points', lambda: (entry('one', 'unused'), entry('two', 'unused'))
+  )
+  registry = wires.WireRegistry()
+  monkeypatch.setattr(registry, 'get', lambda name: SimpleNamespace(LEGACY=True))
+  with pytest.raises(ValueError, match='multiple wires claim untagged records'):
+    registry.decode(None, {})
+
+
+def test_entry_name_and_decode_side_name_must_match(monkeypatch):
+  monkeypatch.setattr(
+    wires, '_entry_points', lambda: (entry('different', 'bro.wire_responses.decode'),)
+  )
+  with pytest.raises(ValueError, match='same NAME'):
+    wires.WireRegistry().get('different')

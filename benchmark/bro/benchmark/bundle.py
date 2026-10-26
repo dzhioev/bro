@@ -33,9 +33,14 @@ from ride.provisioning import bundle_asset, bundle_file
 from ride.runtime_bundle import link_session_commands, validate_materialized_runtime
 
 CPYTHON_VERSION = '3.12.15'
-# core, the engine that runs a bro, the distribution every persona but the
-# minimal `bro` one ships from, and the launcher a trial rides under
-WHEEL_PACKAGES = ('bro', 'bro-native', 'bro-dev', 'bro-ride')
+WHEEL_PACKAGES = (
+  'bro',
+  'bro-native',
+  'bro-dev',
+  'bro-ride',
+  'bro-wire-responses',
+  'bro-wire-messages',
+)
 TARGET = ('linux', 'x86_64', 'glibc')
 MANIFEST_FORMAT = 6
 

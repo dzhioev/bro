@@ -1,13 +1,14 @@
 """The bro trail format."""
 
-import json
 from typing import Any
 
+from bro.llm import wires
 from bro.trails.backends import (
   Classification,
   OpenedBody,
   ParsedRecord,
   TrailFormat,
+  decoded_part_events,
   projected_event,
   validate_server_derived,
 )
@@ -101,71 +102,20 @@ def _bro_llm_call_messages(record: dict) -> list[dict]:
   response = body.get('response') if isinstance(body, dict) else None
   if not isinstance(response, dict):
     return [projected_event(record, 'harness_event', raw=record)]
+  try:
+    decoded = wires.decode(record.get('wire'), response)
+  except wires.WireUnavailable:
+    return [projected_event(record, 'harness_event', raw=record)]
   usage = record.get('usage')
-  if not isinstance(usage, dict):
-    raw_usage = response.get('usage')
-    usage = raw_usage if isinstance(raw_usage, dict) else {}
   call_fields: dict[str, Any] = {
-    'model': str(response.get('model', 'unknown')),
-    'usage': usage,
+    'model': decoded.model,
+    'usage': usage if isinstance(usage, dict) else decoded.usage,
   }
-  if 'service_tier' in response:
-    call_fields['service_tier'] = response['service_tier']
-  events = [projected_event(record, 'llm_call', **call_fields)]
-  output = response.get('output')
-  if not isinstance(output, list):
-    return events
-  terminal = not any(
-    isinstance(item, dict) and item.get('type') == 'function_call' for item in output
-  )
-  for index, item in enumerate(output, start=1):
-    if not isinstance(item, dict):
-      events.append(projected_event(record, 'harness_event', index, raw=item))
-      continue
-    item_type = item.get('type')
-    if item_type == 'reasoning':
-      summary = item.get('summary')
-      if not isinstance(summary, list):
-        events.append(projected_event(record, 'harness_event', index, raw=item))
-        continue
-      for part in summary:
-        if isinstance(part, dict) and part.get('type') == 'summary_text':
-          text = part.get('text')
-          if isinstance(text, str) and len(text) > 0:
-            events.append(projected_event(record, 'reasoning', index, content=text))
-    elif item_type == 'message':
-      content = item.get('content')
-      if not isinstance(content, list):
-        events.append(projected_event(record, 'harness_event', index, raw=item))
-        continue
-      text = ''.join(
-        part.get('text', '')
-        for part in content
-        if isinstance(part, dict)
-        and part.get('type') == 'output_text'
-        and isinstance(part.get('text'), str)
-      )
-      if len(text) > 0:
-        events.append(projected_event(record, 'assistant', index, content=text, terminal=terminal))
-    elif item_type == 'function_call':
-      raw_arguments = item.get('arguments')
-      try:
-        arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
-      except json.JSONDecodeError:
-        arguments = {'_raw_arguments': raw_arguments}
-      events.append(
-        projected_event(
-          record,
-          'tool_call',
-          index,
-          tool_name=item.get('name'),
-          call_id=item.get('call_id'),
-          arguments=arguments,
-        )
-      )
-    else:
-      events.append(projected_event(record, 'harness_event', index, raw=item))
-  return events
+  if decoded.service_tier is not None:
+    call_fields['service_tier'] = decoded.service_tier
+  if decoded.stop != 'completed':
+    call_fields['stop'] = decoded.stop
+  return [projected_event(record, 'llm_call', **call_fields), *decoded_part_events(record, decoded)]
 
 
 def _bro_project(record: dict) -> list[dict]:

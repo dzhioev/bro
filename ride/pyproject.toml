@@ -9,6 +9,7 @@ description = "managed-workspace runtime for bro harnesses"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "bro-wire-messages",
   "bro",
   "certifi==2026.7.22",
   "humanize==4.16.0",
@@ -55,9 +56,11 @@ bro = "ride.bro_worker:BroType"
 persona = "ride.claude.assembly:resolve_persona_target"
 
 [tool.uv.sources]
+bro-wire-messages = { workspace = true }
 bro = { workspace = true }
 
 [tool.deptry.package_module_name_map]
+bro-wire-messages = ["bro"]
 bro = ["bro", "bros"]
 
 [tool.deptry.per_rule_ignores]

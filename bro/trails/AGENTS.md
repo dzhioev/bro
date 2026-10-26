@@ -162,16 +162,16 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   A page carries `next`, the cursor of the page after it or null past the last row, and `through`, the last step ordinal it evaluated, which a `/messages` type filter does not shorten.
   Large bodies remain inline over the wire.
 - `GET /v1/tools/{sha256}` serves a tool blob by digest under the read permission, answering `model.tool_not_found_body` when the store holds none.
-- Bro projection derives reasoning, assistant text, tool calls, and terminal assistant status from `llm_call.response.output`, and copies the response's service tier onto the projected call when present.
+- Bro projection decodes each `llm_call` through its recorded wire, deriving reasoning, assistant text, tool calls and terminal status, with service tier and non-completed stop on the call event.
   Its text-bodied native kinds are system prompts, user inputs, and notifications, each projected under its own message type.
-  The decoding reads the OpenAI Responses API shape.
-- Claude projection reads the transcript record a row carries.
+  Untagged records use the wire claiming legacy records; a wire unavailable to the reader leaves the whole record as one `harness_event`.
+- Claude projection reads the transcript record a row carries, decoding assistant content through the `messages` wire.
   What claude puts into the model's input without the model or a person writing it
   — every `attachment` record, its system-prompt snapshot among them, and a task notification whether it opened a turn or was queued into one —
   projects to a `notification` whose `event` names it: the attachment type, or `task-notification`.
   A prompt queued mid-turn from any other origin is a `user_input`, like the `user` record it would have been at a turn's start.
 - Header responses expose provider-raw usage by model.
-  Provider normalization belongs to the provider-aware usage layer, not the trail format.
+  Usage-count normalization belongs to the wire decode side, not the trail format.
 - List queries accept any combination of the selectors `harness`, `bro`, and `forked_from`, matching the trails that satisfy every one given,
   plus the common time range and opaque cursor.
 - `DELETE /v1/admin/trails/{id}` removes a trail's rows and whatever they spilled, after writing a manifest of the header and rows it takes.

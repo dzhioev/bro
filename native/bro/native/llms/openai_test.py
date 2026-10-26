@@ -480,7 +480,12 @@ class TestSendTrackerEmission:
     assert body['request']['model'] == gpt.model
     # request kwargs round-tripped, including the input list passed to the API.
     assert body['request']['input'] == captured[0]['input']
-    assert extras == {'turn_index': 0, 'call_index': 1, 'response_id': 'resp_xyz'}
+    assert extras == {
+      'turn_index': 0,
+      'call_index': 1,
+      'response_id': 'resp_xyz',
+      'wire': 'responses',
+    }
 
   @pytest.mark.asyncio
   async def test_records_only_canonical_response_and_tool_result_rows(self):

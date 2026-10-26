@@ -14,6 +14,9 @@ dependencies = [
   "bro",
   "bro-bench",
   "bro-ride",
+  "bro-wire-responses",
+  "bro-wire-messages",
+  "bro-wire-chat",
   "duckdb==1.5.6",
   "harbor==0.24.0",
 ]
@@ -34,11 +37,17 @@ dev = [
 "bro.benchmark.job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 
 [tool.uv.sources]
+bro-wire-responses = { path = "../wires/responses", editable = true }
+bro-wire-messages = { path = "../wires/messages", editable = true }
+bro-wire-chat = { path = "../wires/chat", editable = true }
 bro = { path = "..", editable = true }
 bro-bench = { path = "../bench", editable = true }
 bro-ride = { path = "../ride", editable = true }
 
 [tool.deptry.package_module_name_map]
+bro-wire-responses = ["bro"]
+bro-wire-messages = ["bro"]
+bro-wire-chat = ["bro"]
 bro = ["bro", "bros"]
 bro-bench = ["bro"]
 bro-ride = ["ride"]

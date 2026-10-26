@@ -382,6 +382,7 @@ class OpenAI(LLM):
       turn_index=turn_index,
       call_index=call_index,
       response_id=response.id,
+      wire='responses',
     )
 
   def _publish_usage(self, response: Response) -> None:
@@ -392,7 +393,8 @@ class OpenAI(LLM):
     if response_usage is None:
       return
     details = response_usage.input_tokens_details
-    counts = usage.from_vendor_counts(
+    counts = usage.from_wire_counts(
+      'responses',
       {
         'input_tokens': response_usage.input_tokens,
         'input_tokens_details': {
@@ -400,7 +402,7 @@ class OpenAI(LLM):
           'cache_write_tokens': details.cache_write_tokens,
         },
         'output_tokens': response_usage.output_tokens,
-      }
+      },
     )
     model = response.model
     self._usage_totals[model] = usage.add(self._usage_totals.get(model, usage.zero()), counts)

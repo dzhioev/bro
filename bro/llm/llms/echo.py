@@ -35,6 +35,7 @@ class LLMSpec(llm_llm.NativeLLMSpec):
   no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'echo'
+  WIRE: ClassVar[str] = 'echo'
 
   model: str = DEFAULT_MODEL
 

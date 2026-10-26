@@ -1,22 +1,9 @@
 #!/usr/bin/env python
 """shared LLM-usage accounting: one usage-reading surface for every environment.
 
-Usage is kept as per-model counts in the four token classes the Anthropic API
-bills separately — they differ in price by up to ~50x, so a single summed number
-would be dominated by `cache_read` and mean nothing as spend. Each class is kept
-distinct:
-
-- input        — fresh, uncached prompt tokens (full price)
-- cache_write  — tokens written to the prompt cache (1.25x)
-- cache_read   — tokens served from the prompt cache (0.1x); in a long agentic
-                 session this dominates by volume but not by cost (re-reads of the
-                 growing prefix)
-- output       — generated tokens (5x)
-
-Providers that bill differently map onto the same four classes: OpenAI reports
-cached input as a subset of input, so cached tokens land in `cache_read`, the
-uncached remainder in `input`, `cache_write` stays 0, and reasoning tokens stay
-inside `output`.
+Usage is kept as per-model counts in four disjoint billed token classes:
+`input` (uncached prompt), `cache_write`, `cache_read`, and `output`.
+`from_wire_counts` delegates raw vocabulary normalization to the named wire.
 
 The cumulative usage of the agent whose work a process carries out is the
 usage file the environment points at (`BRO_USAGE_FILE`), read by
@@ -77,15 +64,7 @@ _THOUSANDS = "'"
 _UP = '↑'
 _DOWN = '↓'
 
-# the four billed token classes, in footer display order, mapped to their
-# Anthropic `usage` field names.
 CLASSES = ('input', 'cache_write', 'cache_read', 'output')
-_FIELD_OF = {
-  'input': 'input_tokens',
-  'cache_write': 'cache_creation_input_tokens',
-  'cache_read': 'cache_read_input_tokens',
-  'output': 'output_tokens',
-}
 
 # a per-model usage record is a plain dict keyed by CLASSES (JSON-friendly for
 # state files and the usage file; arithmetic via the helpers below).
@@ -104,26 +83,10 @@ def subtract(a: Counts, b: Counts) -> Counts:
   return {c: a.get(c, 0) - b.get(c, 0) for c in CLASSES}
 
 
-def from_vendor_counts(raw: dict) -> Counts:
-  """normalize one vendor-raw usage record into the four billed classes.
+def from_wire_counts(wire: str, raw: dict) -> Counts:
+  from bro.llm.wires import counts
 
-  Anthropic reports the four as disjoint fields. OpenAI reports a single
-  `input_tokens` covering the whole prompt and breaks its cached and
-  cache-written parts out under `input_tokens_details`, so both come off that
-  total to leave the uncached remainder — the discriminator between the two
-  shapes is that detail block, which Anthropic never sends.
-  """
-  details = raw.get('input_tokens_details')
-  if details is None:
-    return {c: int(raw.get(_FIELD_OF[c], 0)) for c in CLASSES}
-  cache_read = int(details.get('cached_tokens', 0))
-  cache_write = int(details.get('cache_write_tokens', 0))
-  return {
-    'input': int(raw['input_tokens']) - cache_read - cache_write,
-    'cache_write': cache_write,
-    'cache_read': cache_read,
-    'output': int(raw.get('output_tokens', 0)),
-  }
+  return counts(wire, raw)
 
 
 @dataclass
@@ -250,25 +213,6 @@ def agent_session() -> bool:
 
 def format_int(n: int) -> str:
   return f'{n:,}'.replace(',', _THOUSANDS)
-
-
-# the vendor a resolved model slug bills, by the shape of the slug. Distinct
-# from the launch-time provider of `bro.llm.providers`, which answers which
-# recipe a model *name* launches: a slug bills its vendor whichever harness
-# served it.
-_VENDOR_PATTERNS = (
-  (re.compile(r'^claude-'), 'anthropic'),
-  (re.compile(r'^(gpt|o\d)'), 'openai'),
-)
-
-
-def vendor_of(slug: str) -> str:
-  """the vendor that billed `slug`. Raises for a slug no known vendor claims,
-  rather than folding unattributed spend into a bucket."""
-  for pattern, vendor in _VENDOR_PATTERNS:
-    if pattern.match(slug) is not None:
-      return vendor
-  raise ValueError(f'no vendor known for model {slug!r}')
 
 
 def model_family(slug: str) -> str:
