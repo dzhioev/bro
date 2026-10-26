@@ -80,7 +80,7 @@ The other facts are documented there too.
 Each surface renders its copy once, with its own facts:
 
 - `BaseBro.composed_prompt(harness, hold=…)` — a composed system prompt for the explicitly selected harness
-- `ride/ride/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`)
+- `harnesses/claude/harness/bro/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`)
 - `bro.prompts.session_fragment` — the session fragments, closing on the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`)
 - spell bodies — each `spell::` tool renders for its serving harness and the session's hold;
   the bro-native loop uses the bro branch, while a managed Claude session uses the Claude branch

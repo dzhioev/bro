@@ -14,14 +14,6 @@
   "anthropic": {
     "description": "Anthropic API credentials"
   },
-  "claude_code": {
-    "description": "Claude Code OAuth token",
-    "install": {
-      "env": {
-        "CLAUDE_CODE_OAUTH_TOKEN": {"secret": "{{insert #name}}"}
-      }
-    }
-  },
   "brave": {
     "description": "Brave Search API credentials"
   },

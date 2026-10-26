@@ -1978,7 +1978,7 @@ def test_selected_claude_composition_imports_no_other_harness():
     from bro.harness import get_harness
     from bro.registry import create_bro, register
     from bro.bro import BaseBro
-    from ride.claude.system_prompt import session_append_prompt
+    from bro.claude.system_prompt import session_append_prompt
 
     harness = get_harness('claude')
     assert 'bro.native.harness' not in sys.modules

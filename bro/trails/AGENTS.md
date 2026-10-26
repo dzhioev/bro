@@ -44,18 +44,6 @@ bro · claude recorders                     readers
   a missing tool blob (`model.tool_not_found_body`) and an import collision (`model.trail_collision_body`) are read the same way, and every other 404 surfaces as `HTTPStatusError` carrying what the response said.
   Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
-- `claude_lineage.py` owns the claude evidence contract and resolves lineage from it:
-  the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
-  It verifies that evidence against candidate headers' `lineage_head` and answers with the file ranges the recording trail owns, plus how that trail is reached:
-  the trail this lifetime attaches to, a fork point for a new one, a decline while a history copy is mid-write, or a root.
-  Trail identity follows the segment:
-  a verified same-segment resume attaches, so a linear conversation stays one trail across process restarts and a fork edge marks an actual fork.
-  A trail whose blaze response was lost holds no row to verify, and is attachable on the `cuts` its mint stored instead, which is what makes a blaze idempotent for the segment it names.
-  `LineageIndex` is the store-internal surface it reads through, two lookups each backend implements its own way:
-  the trails recording a set of segments
-  — `DynamoStore` queries the `segment-started_at-index` GSI (partition `segment`, range `started_at`, projecting the whole header) over the top-level `segment` attribute, `LocalStore` filters its header scan
-  — and whether any of them stores one record uuid, the mid-write test and the only row read a resolution can make.
-  Nothing on this path crosses the wire, and continuity across recorder lifetimes comes from the stored rows alone, through the head they folded.
 - An attach reopens the trail it names:
   each store clears `end` and restamps the blaze's own lifetime facts, including `git`, over the header latest-wins, leaving `summoned_by` to the run that opened the trail and the row-folded aggregate to the rows
   — `backends.attached_header` is the one place that decides which fields those are.
@@ -92,8 +80,8 @@ bro · claude recorders                     readers
   Dynamo's `body_s3` fields are resolved back to inline `body` values before a row leaves the store, and every spilled row must carry `body_encoding`.
 - `backends.py` owns the `TrailFormat` contract and the `bro.trail_formats` entry-point registry.
   A format supplies `parse`, `classify`, `project`, `open`, `validate_create`, ownership and native-header display fields, whether its trails require a bro, and optionally `resolve_lineage`, plus its declared emitted message types.
-  `bro-native-trails` supplies the native format;
-  core registers the Claude format from `claude_format.py`.
+  `bro-native-trails` and `bro-claude-trails` supply the native and Claude formats respectively.
+  Each is a sibling distribution of its harness under `harnesses/`.
   Reads are format-neutral:
   `blaze` is the one store method taking format-specific data, in its own `native`, `body`, and `lineage` arguments.
   A server refuses blaze and import requests naming an uninstalled format.
@@ -134,7 +122,7 @@ bro · claude recorders                     readers
   — the header `location` and `git`, plus the launch line under `native.ride_command`, read off the environment the session's launcher published (`bro/reference/ride.md`, "Forwarded env vars"),
   so a trail carries them whichever harness records it and a run outside a managed session carries none.
   Each engine distribution owns its recorder:
-  `bro-native` contributes `bro.trails.record.bro`, while `bro-ride` contributes `ride.claude.trail_recorder`.
+  `bro-native` contributes `bro.trails.record.bro`, while `bro-claude` contributes `bro.claude.trail_recorder`.
   They may import the core store contract, schema, formats, and write spine, never the reverse.
 - Trail formats mint lineage only when blazing a trail, and a trail's step ids are its rows' line ordinals in local storage.
   Writers cannot mutate an edge;
@@ -153,7 +141,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   A step id is an ordinal in rows and lineage pointers.
 - Core `record/spine.py` owns blaze, ordinal extent validation, batched appends, liveness, and ending;
   `bro-native`'s `record/bro.py` adapts `bro.llm.tracker.Tracker`.
-  `ride.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the core lineage verdict it gets back.
+  `bro.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the format's lineage verdict it gets back.
 - `POST /v1/trails` blazes from `body.records`, resolving `lineage` evidence when the request carries it.
   The response names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.
   201 is for a trail that was minted;
@@ -197,8 +185,8 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   Export reads under the read permission and writes a store layout, import and migration reach every backend through the store contract and the administer-permission routes.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`, the import wire and the blob read among it;
   `transfer_test.py` round-trips layouts between local stores;
-  `claude_lineage_test.py` drives the resolver over a real store.
-  `ride/ride/claude/trail_recorder_test.py` drives the adapter-owned recorder over one.
+  `harnesses/claude/trails/bro/claude_trails/lineage_test.py` drives the Claude resolver over a real store.
+  `harnesses/claude/harness/bro/claude/trail_recorder_test.py` drives the adapter-owned recorder over one.
   `network_test.py` owns transport/retry/error mapping;
   `server/dynamo_test.py` owns Dynamo mechanics over moto-emulated DynamoDB and S3.
   `server/dynamo.py` owns the table, key, and index schema consumed by that fixture and by `bro.oops.cdk.trails.TrailsServerStack`.
