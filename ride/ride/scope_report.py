@@ -15,7 +15,7 @@ from ride.bro_worker import BroType
 from ride.repository import Repository, as_repository
 
 
-def report_scope(repo: Repository | Path | None, bro: str | None, harness: str) -> int:
+def report_scope(repo: Repository | Path | None, bro: str | None, harness: str | None) -> int:
   try:
     repository = None if repo is None else as_repository(repo)
     if bro is None:
@@ -27,6 +27,7 @@ def report_scope(repo: Repository | Path | None, bro: str | None, harness: str) 
         else project_config(repository.git_dir).default_bro
       )
     reading = Reading.take(repository)
+    harness = reading.resolve_harness(harness)
     requested, _ = request(
       BroType, {'target': bro, 'harness': harness}, reading, reading.operator(), forward=False
     )

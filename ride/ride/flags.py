@@ -1,4 +1,4 @@
-from bro.base import configs, log
+from bro.base import log
 from bro.base.args import Parser
 from ride.workspace.metadata import Isolation
 
@@ -21,7 +21,7 @@ def add_harness_flags(parser: Parser) -> None:
   parser.add_argument(
     '--harness',
     default=None,
-    help=(f'driving harness (default: project [tool.bro] harness, then {configs.DEFAULT_HARNESS})'),
+    help='driving harness (otherwise project [tool.bro] harness, then host ~/.bro.json harness)',
   )
 
 

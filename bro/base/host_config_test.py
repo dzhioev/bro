@@ -699,3 +699,16 @@ class TestLLMPresets:
 
     with pytest.raises(ValueError, match="preset 'sharp'"):
       host_config.llm_presets()
+
+
+@pytest.mark.parametrize('key', ['harness', 'summon-harness'])
+@pytest.mark.parametrize('value', ['', 'Wrong', None, 5, []])
+def test_host_harness_keys_require_well_formed_names(key, value):
+  with pytest.raises(ValueError, match='harness'):
+    host_config.parse({key: value})
+
+
+def test_host_harness_names_are_carried_without_installation_resolution():
+  configuration = host_config.parse({'harness': 'other', 'summon-harness': 'another'})
+  assert configuration.harness == 'other'
+  assert configuration.summon_harness == 'another'

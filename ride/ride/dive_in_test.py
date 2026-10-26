@@ -48,7 +48,7 @@ def _brog_task(name: str = 'my task'):
 def fake_proj(monkeypatch, tmp_path):
   monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
   monkeypatch.setattr(dive_in, 'project_root', lambda: tmp_path)
-  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\n')
+  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\nharness = "claude"\n')
   monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: FRESH_SHA)
   workspaces = workspace_paths.workspaces_dir()
   workspaces.mkdir(parents=True)
@@ -520,3 +520,44 @@ class TestPrefetchTask:
     # comments embedded as json, datetimes stringified
     assert '"topic": "plan"' in block
     assert '2026-01-01 12:00:00+00:00' in block
+
+
+@pytest.mark.parametrize('layer', ['launch', 'project', 'host', 'absent'])
+def test_harness_resolution_precedes_task_prefetch(fake_proj, monkeypatch, caplog, capsys, layer):
+  from bro.base import host_config
+
+  project = fake_proj / 'pyproject.toml'
+  project.write_text(
+    '[tool.bro]\ndefault = "bro-dev"\n' + ('harness = "bro"\n' if layer == 'project' else '')
+  )
+  host = fake_proj / 'host.json'
+  host.write_text(
+    json.dumps(
+      {'harness': 'bro' if layer == 'host' else 'not-installed'}
+      if layer in ('project', 'host')
+      else {}
+    )
+  )
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(host))
+  seen = []
+  monkeypatch.setattr(dive_in, '_task_system', lambda *args: seen.append(args[5]))
+  monkeypatch.setattr(dive_in, '_prefetch_task', lambda *_: (_brog_task(), 'task block'))
+  flags = ['--harness', 'bro'] if layer == 'launch' else []
+  result = dive_in.main(['dive-in', '-n', '--task', UUID, *flags])
+  if layer == 'absent':
+    assert result == 1
+    assert seen == []
+    assert capsys.readouterr().out == ''
+    assert (
+      'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
+      in caplog.text
+    )
+  else:
+    assert result == 0
+    assert seen == ['bro']
+
+
+def test_an_uninstalled_harness_refuses_dive_in_before_prefetch(fake_proj, monkeypatch, caplog):
+  monkeypatch.setattr(dive_in, '_task_system', lambda *_: pytest.fail('prefetch must not start'))
+  assert dive_in.main(['dive-in', '-n', '--task', UUID, '--harness', 'not-installed']) == 1
+  assert 'not-installed' in caplog.text

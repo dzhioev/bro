@@ -4,11 +4,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from bro.base import configs, log
+from bro.base import log
 from bro.base.args import REMAINDER, Parser
 from bro.workspace.banner import banner
 from bro.workspace.paths import fresh_workspace_name, project_root
-from bro.workspace.project import project_config
 from ride import operator, pending_launch
 from ride.bro_worker import PendingBro, pending_bro
 from ride.clean import clean_workspaces
@@ -255,7 +254,6 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, isolation=isolation)
   selected_harness = args.pop('harness')
-  harness_name = selected_harness or configs.DEFAULT_HARNESS
   recipe_options = {
     name: args.pop(name) for name in ('provider', 'model', 'effort', 'fast') if name in args
   }
@@ -292,7 +290,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   spec = SessionSpec(
     name=name,
     repo=repo,
-    harness=harness_name,
+    harness=selected_harness,
     workspace_pinned=workspace is not None,
     isolation=isolation,
     drop=drop,
@@ -445,18 +443,6 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(str(error))
     if repository is None and args['bro'] is None:
       parser.error('ride scope requires --bro when detached')
-    try:
-      harness_name = args['harness'] or (
-        (
-          repository.project_config()
-          if repository is not None and repository.is_url
-          else project_config(None if repository is None else repository.git_dir)
-        ).harness
-        if repository is not None
-        else configs.DEFAULT_HARNESS
-      )
-    except ValueError as error:
-      parser.error(str(error))
-    return report_scope(repo=repository, bro=args['bro'], harness=harness_name)
+    return report_scope(repo=repository, bro=args['bro'], harness=args['harness'])
   assert command == 'banner'
   return banner(llm=args['llm'])

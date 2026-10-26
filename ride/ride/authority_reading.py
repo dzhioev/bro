@@ -296,8 +296,21 @@ class Reading:
     return Rules(self.installation.declarations)
 
   @property
-  def summon_harness(self) -> str:
-    return self.project.get('summon-harness', configs.DEFAULT_SUMMON_HARNESS)
+  def harness(self) -> str | None:
+    return self.project.get('harness', self.configuration.raw.get('harness'))
+
+  @property
+  def summon_harness(self) -> str | None:
+    return self.project.get('summon-harness', self.configuration.raw.get('summon-harness'))
+
+  def resolve_harness(self, selected: str | None = None, *, summon: bool = False) -> str:
+    name = selected if selected is not None else self.summon_harness if summon else self.harness
+    if name is None:
+      key = 'summon-harness' if summon else 'harness'
+      raise ValueError(
+        f'no harness: pass --harness, set [tool.bro] {key}, or set "{key}" in ~/.bro.json'
+      )
+    return name
 
   @property
   def summon_depth(self) -> int:

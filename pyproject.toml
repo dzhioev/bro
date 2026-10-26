@@ -137,6 +137,8 @@ file = "bro.files.mcp:toolset"
 
 [tool.bro]
 default = "bro-dev"
+harness = "claude"
+summon-harness = "bro"
 
 [tool.bro.devoops]
 target-registry = "oops.deploy_targets:registry"
