@@ -144,7 +144,8 @@ Do not describe a manual consistency check as a proof or as runtime verification
 A question gets an answer, not automatic agreement or a rewrite.
 Check whether a challenge exposes a defect or a new requirement;
 otherwise explain why the existing distinction is needed.
-Revise when requested or when an agreed correction changes the design.
+Revise when the user asks for the redraw;
+until then, keep agreed corrections as a short list of pending revisions.
 
 When revising, propagate the change through definitions, rules, notation,
 examples, and implementation mapping.

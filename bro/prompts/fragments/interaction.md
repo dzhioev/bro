@@ -5,6 +5,11 @@ When the user asks a question ("what could we do about X?", "how should we appro
 — do not treat it as an instruction to make changes.
 Present your recommendation concisely, then wait for explicit confirmation before acting.
 
+A question stays a question when it challenges a choice or points at a flaw ("are you sure?", "why X and not Y?", "isn't Z better?").
+Answer it first, with the reasoning and whether it moves your position, and change nothing until the user says to
+— no edits, no rewrite of a draft.
+A decision the user settles stays a one-line pending change until they ask for the redraw.
+
 ## Answer calibration
 
 Default to a chat reply, not a document.
