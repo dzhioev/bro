@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 from pathlib import Path
 from typing import Optional
 
@@ -135,11 +134,14 @@ class Loop(LLM):
     calls = leg.calls
     for position, item in enumerate(calls):
       assert item.call_id is not None and item.name is not None
-      kwargs = json.loads(item.raw_arguments)
       is_error = False
       try:
         with self._current_tool_step(item.call_id):
-          output = await self.tools.call(item.name, kwargs)
+          if item.arguments_are_object:
+            output = await self.tools.call(item.name, item.arguments)
+          else:
+            output = f'tool {item.name!r} failed: arguments are not a JSON object'
+            is_error = True
       except asyncio.CancelledError:
         results.extend(
           await self._interrupted_outputs(
