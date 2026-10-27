@@ -530,7 +530,7 @@ A credential store has this shape:
 }
 ```
 
-`defaults` uses the `creds` list grammar, selects at most one instance per registered kind, and is the store's own base for kind-addressed reads.
+`defaults` uses the `creds` list grammar, selects at most one instance per kind, and is the store's own base for kind-addressed reads.
 `sources` annotates stored names with typed source configuration;
 annotations for kinds this installation does not register are skipped after their source shape is validated.
 Both keys are optional, and any credential annotation outside `sources` fails with the migration to the current shape.
@@ -538,6 +538,9 @@ A caller's picks layer over the store's `defaults`, then an unpicked kind reads 
 `BRO_STORE` directs a process to that store alone and bypasses `~/.bro.json`.
 
 For host commands, `user.creds` and then `user.tools.<command>.creds` layer over the host store's defaults.
+Store defaults and host-command picks for unregistered kinds are skipped with a verbose diagnostic after syntax validation, so one host configuration can serve installations with different plug-ins.
+A read of an unregistered kind remains unavailable even if its material exists.
+Explicit caller selections still require registered kinds.
 For managed launches, credential selection follows the root reading and the admitted descriptor described in [permissions](permissions.md#bro).
 The hydration step uses those exact picks, not a fresh read of host configuration.
 `ride scope` reports the prospective values and their presence.

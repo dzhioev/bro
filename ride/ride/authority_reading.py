@@ -218,11 +218,16 @@ class Reading:
   derived: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
 
   def __post_init__(self) -> None:
-    object.__setattr__(self, 'store_defaults', MappingProxyType(dict(self.store_defaults)))
+    object.__setattr__(
+      self,
+      'store_defaults',
+      MappingProxyType(
+        credentials.registered_picks(
+          self.store_defaults, self.installation.credential_kinds, where='store defaults'
+        )
+      ),
+    )
     object.__setattr__(self, 'project', _freeze(dict(self.project)))
-    unknown = self.store_defaults.keys() - self.installation.credential_kinds
-    if unknown:
-      raise ValueError(f'store defaults name unknown credential kinds: {sorted(unknown)}')
 
   @classmethod
   def take(

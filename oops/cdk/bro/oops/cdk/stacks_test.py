@@ -4,17 +4,41 @@ import aws_cdk as cdk
 import pytest
 from aws_cdk import assertions, aws_ec2 as ec2
 
+from bro.base import credentials, host_config
 from bro.oops.cdk.app import create_app
 from bro.oops.cdk.ecr import RepositoryStack
 from bro.oops.cdk.image_build import ImageBuildStack
 from bro.oops.cdk.platform import HostedZoneReference, PlatformStack
 from bro.oops.cdk.trails import TrailsServerStack
-from bro.oops.config import from_mapping
+from bro.oops.config import from_mapping, resolve
 
 _ACCOUNT = '111111111111'
 _DOMAIN = 'services.example.com'
 _ZONE_ID = 'Z0123456789'
 _DIGEST = 'sha256:' + '1' * 64
+
+
+@pytest.mark.parametrize('directed', [False, True])
+def test_infra_resolves_with_claude_defaults_without_the_harness(tmp_path, monkeypatch, directed):
+  assert 'claude_code' not in credentials.default_registry()
+  (tmp_path / 'creds').mkdir()
+  (tmp_path / 'creds/infra+host.cred').write_text(json.dumps({'delegated_subdomain': _DOMAIN}))
+  (tmp_path / 'creds/claude_code.cred').write_text('unused')
+  (tmp_path / 'creds.json').write_text(json.dumps({'defaults': ['claude_code+', 'infra+host']}))
+  host = tmp_path / 'host.json'
+  host.write_text(json.dumps({'user': {'creds': ['claude_code+work']}}))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
+  monkeypatch.setattr(credentials, '_default_store', None)
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(host))
+  if directed:
+    monkeypatch.setenv('BRO_STORE', str(tmp_path))
+  else:
+    monkeypatch.delenv('BRO_STORE', raising=False)
+
+  assert resolve().delegated_subdomain == _DOMAIN
+  assert not credentials.available('claude_code')
+  with pytest.raises(credentials.SecretNotFound):
+    credentials.get('claude_code')
 
 
 def _stacks(tmp_path):

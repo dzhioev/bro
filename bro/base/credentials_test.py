@@ -1,7 +1,6 @@
 import importlib.metadata
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -12,7 +11,7 @@ from typing import ClassVar
 
 import pytest
 
-from bro.base import credentials, host_config
+from bro.base import credentials, host_config, log
 from bro.base.args import CLIError, Parser
 from bro.base.spawn import console_script
 
@@ -154,15 +153,39 @@ class TestStore:
     assert _store(tmp_path, 'github').get('github') == 'default'
     assert _store(tmp_path, 'github', selection={'github': 'reviewer'}).get('github') == 'selected'
 
-  def test_store_defaults_require_registered_kinds_and_one_pick_per_kind(self, tmp_path: Path):
-    for defaults, message in (
-      (['consumer+one'], 'unregistered credential kind'),
-      (['github+one', 'github+two'], 'selects kind.*twice'),
-      (['github'], 'names no instance'),
-    ):
-      _write_store_config(tmp_path, {'defaults': defaults})
-      with pytest.raises(ValueError, match=message):
-        _store(tmp_path, 'github')
+  @pytest.mark.parametrize('indexed', [False, True])
+  def test_defaults_of_unregistered_kinds_leave_other_reads_working(
+    self, tmp_path: Path, indexed: bool, capsys
+  ):
+    _write_material(tmp_path, 'github+work', 'token')
+    _write_material(tmp_path, 'consumer+host', 'unavailable')
+    config: dict[str, object] = {'defaults': ['github+work', 'consumer+host']}
+    if indexed:
+      config.update(generation=1, material={'github+work': 'creds/github+work.cred'})
+    _write_store_config(tmp_path, config)
+    log.set_level(log.VERBOSE)
+
+    store = _store(tmp_path, 'github')
+
+    assert store.get('github') == 'token'
+    assert store.defaults == {'github': 'work'}
+    assert store.instance_names() == frozenset({'github+work'})
+    assert store.try_get('consumer') is None
+    with pytest.raises(credentials.SecretNotFound):
+      store.get('consumer')
+    assert "skipping pick for unregistered credential kind 'consumer'" in capsys.readouterr().err
+
+  @pytest.mark.parametrize('kind', ['github', 'consumer'])
+  @pytest.mark.parametrize(
+    'instances, message',
+    [(['+one', '+two'], 'selects kind.*twice'), ([''], 'names no instance'), (['+!'], 'malformed')],
+  )
+  def test_store_defaults_validate_syntax_even_for_unregistered_kinds(
+    self, tmp_path: Path, kind: str, instances: list[str], message: str
+  ):
+    _write_store_config(tmp_path, {'defaults': [kind + instance for instance in instances]})
+    with pytest.raises(ValueError, match=message):
+      _store(tmp_path, 'github')
 
   def test_old_top_level_source_shape_names_the_sources_section(self, tmp_path: Path):
     _write_store_config(tmp_path, {'github': {'type': 'ssm', 'parameter': '/github'}})
@@ -825,27 +848,31 @@ class TestDefaultStore:
     assert credentials.get('openai') == 'directed'
 
   @pytest.mark.parametrize(
-    ('config', 'command', 'layer'),
+    ('config', 'command'),
     [
-      ({'user': {'creds': ['consumer_only+host']}}, None, 'user'),
+      ({'user': {'creds': ['consumer_only+host']}}, None),
       (
         {'user': {'tools': {'bro.trails.rewind': {'creds': ['consumer_only+host']}}}},
         'bro.trails.rewind',
-        'user.tools',
       ),
     ],
   )
-  def test_unknown_configured_kinds_fail_the_ambient_store(
-    self, tmp_path: Path, monkeypatch, config: dict, command: str | None, layer: str
+  def test_unknown_configured_kinds_leave_ambient_reads_working(
+    self, tmp_path: Path, monkeypatch, config: dict, command: str | None, capsys
   ):
-    self._ambient_store(tmp_path, monkeypatch)
+    store = self._ambient_store(tmp_path, monkeypatch)
+    _write_material(store, 'openai+work', 'token')
+    _write_store_config(store, {'defaults': ['openai+work']})
     Path(host_config.HOST_CONFIG_FILE).write_text(json.dumps(config))
     monkeypatch.setattr(credentials, 'canonical_cli_name', lambda: command)
+    log.set_level(log.VERBOSE)
 
-    with pytest.raises(
-      CLIError, match=rf'{re.escape(layer)} names unregistered credential kind\(s\): consumer_only'
-    ):
-      credentials.default_store()
+    assert credentials.get('openai') == 'token'
+    assert not credentials.available('consumer_only')
+    assert (
+      f"{host_config.HOST_CONFIG_FILE}: skipping pick for unregistered credential kind 'consumer_only'"
+      in capsys.readouterr().err
+    )
 
   def test_console_script_layers_user_and_tool_picks_over_store_defaults(self, tmp_path: Path):
     store = tmp_path / '.bro'
