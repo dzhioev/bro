@@ -10,7 +10,7 @@ from bro.files.confinement.classification import CLASSIFICATION, validate_tables
 
 __cli_name__ = 'syscall-tables'
 
-KERNEL_TAG = 'v6.15'
+KERNEL_TAG = 'v6.18'
 SOURCE_PATHS = {
   'x86_64': 'arch/x86/entry/syscalls/syscall_64.tbl',
   'aarch64': 'include/uapi/asm-generic/unistd.h',

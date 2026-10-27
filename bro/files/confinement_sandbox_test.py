@@ -107,11 +107,14 @@ DENIED = sorted(
 
 
 @pytest.mark.parametrize('name', DENIED)
-def test_every_denied_syscall_kills_the_process(abi, name):
+def test_every_denied_syscall_is_blocked(abi, name):
   process = probe('syscall', abi=abi, name=name)
-  # Some kernels exempt uretprobe from seccomp; direct callers then get SIGILL.
-  expected = (-signal.SIGSYS, -signal.SIGILL) if name == 'uretprobe' else (-signal.SIGSYS,)
-  assert process.returncode in expected, (name, process.stdout, process.stderr)
+  # Kernel probe trampolines bypass seccomp but reject direct callers.
+  if name == 'uprobe' and process.returncode == 0:
+    assert result(process) == {'result': -1, 'errno': errno.ENXIO}
+  else:
+    expected = (-signal.SIGSYS, -signal.SIGILL) if name == 'uretprobe' else (-signal.SIGSYS,)
+    assert process.returncode in expected, (name, process.stdout, process.stderr)
 
 
 @pytest.mark.parametrize('family', list(socket.AddressFamily))
