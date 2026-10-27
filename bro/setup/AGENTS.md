@@ -76,7 +76,8 @@ The credential store writer accepts only canonical registered local names, offer
 }
 ```
 
-`defaults` uses the `creds` list grammar and names at most one instance of each registered kind.
+`defaults` uses the `creds` list grammar and names at most one instance of each kind.
+The rules for picks shared across installations are in `bro/reference/ride.md`, "Session permissions and credentials".
 A caller's picks layer over it, and a kind neither layer picks reads its empty instance.
 A name absent from `sources` reads the convention material file as plain text.
 A minting source reads its config from that path and writes its cache beside it as `<name>.cred.minted`;

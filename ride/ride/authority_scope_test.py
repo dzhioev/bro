@@ -321,6 +321,32 @@ def test_reading_snapshots_whole_config_defaults_and_working_tree(tmp_path, inst
     cast(MutableMapping[str, str], source.store_defaults)['cookies'] = 'new'
 
 
+def test_reading_skips_unregistered_store_defaults_but_rejects_used_policy(tmp_path, installation):
+  (tmp_path / 'creds.json').write_text(
+    json.dumps({'defaults': ['cookies+work', 'consumer_only+host']})
+  )
+  source = Reading.take(host=tmp_path / 'absent', store=tmp_path, installation=installation)
+
+  assert source.picks('child') == {'cookies': 'work'}
+  request = Request('bro', {'target': 'child', 'harness': 'native'})
+  source.rules.start(request, Authority.top(), source)
+  configured = replace(
+    source, project_policy=replace(source.project_policy, picks={'consumer_only': 'host'})
+  )
+  with pytest.raises(ValueError, match='unknown credential kind'):
+    configured.rules.start(request, Authority.top(), configured)
+
+
+@pytest.mark.parametrize(
+  'defaults', [['consumer_only'], ['consumer_only+one', 'consumer_only+two']]
+)
+def test_reading_validates_unregistered_default_syntax(tmp_path, installation, defaults):
+  (tmp_path / 'creds.json').write_text(json.dumps({'defaults': defaults}))
+
+  with pytest.raises(ValueError):
+    Reading.take(host=tmp_path / 'absent', store=tmp_path, installation=installation)
+
+
 def test_repository_refuses_instance_entries(tmp_path, installation):
   project = tmp_path / 'project'
   project.mkdir()

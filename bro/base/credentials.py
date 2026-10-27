@@ -38,14 +38,14 @@ import sys
 import tempfile
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, Protocol
 
 from bro.base import configs, log, template
-from bro.base.args import CLIError, Parser, canonical_cli_name, current_cli_name
+from bro.base.args import Parser, canonical_cli_name, current_cli_name
 from bro.base.condition import StringVariable
 
 __cli_name__ = 'credentials'
@@ -521,7 +521,11 @@ class Store:
       self._generation = generation
     elif {'generation', 'operation', 'kinds'} & data.keys():
       raise ValueError(f'{path}: generation requires a material index')
-    defaults = _store_defaults(path, data.get('defaults', []), self.registry)
+    defaults = registered_picks(
+      parse_picks(data.get('defaults', []), where=str(path), field='defaults'),
+      self.registry,
+      where=f'{path}: defaults',
+    )
     if self._material is not None:
       missing = {
         storage_name(kind, instance) for kind, instance in defaults.items()
@@ -905,14 +909,16 @@ def parse_picks(entries: object, *, where: str, field: str) -> dict[str, str]:
   return picks
 
 
-def _store_defaults(
-  path: Path, entries: object, registry: Mapping[str, CredentialKind]
+def registered_picks(
+  picks: Mapping[str, str], kinds: Collection[str], *, where: str
 ) -> dict[str, str]:
-  defaults = parse_picks(entries, where=str(path), field='defaults')
-  for kind in defaults:
-    if kind not in registry:
-      raise ValueError(f'{path}: defaults names unregistered credential kind {kind!r}')
-  return defaults
+  result = {}
+  for kind, instance in picks.items():
+    if kind in kinds:
+      result[kind] = instance
+    else:
+      log.verbose('%s: skipping pick for unregistered credential kind %r', where, kind)
+  return result
 
 
 def _validate_selection(
@@ -990,16 +996,9 @@ def default_store() -> Store:
           configured = host_config.tool_selection(
             canonical_cli_name(), invoked_as=current_cli_name()
           )
-          unknown_by_layer: dict[str, list[str]] = {}
-          for kind in sorted(set(configured.instances) - set(registry)):
-            unknown_by_layer.setdefault(configured.layers[kind], []).append(kind)
-          if unknown_by_layer:
-            details = '; '.join(
-              f'{layer} names unregistered credential kind(s): {", ".join(kinds)}'
-              for layer, kinds in unknown_by_layer.items()
-            )
-            raise CLIError(details)
-          selection = configured.instances
+          selection = registered_picks(
+            configured.instances, registry, where=str(host_config.HOST_CONFIG_FILE)
+          )
         _default_store = Store(registry, STORE_DIR, selection)
   return _default_store
 
