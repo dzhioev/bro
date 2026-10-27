@@ -51,7 +51,7 @@ from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources.references import environment
 from bro.datasources.web_search import WebSearch
-from bro.llm.llms import openai
+from bro.openai import declaration as openai
 from bro.mcp import cli, creds, files, man, mount, source
 from bros.bro import Bro
 from bros.triage import spells
@@ -173,7 +173,7 @@ Read the class line by line and nothing is left to configure elsewhere:
   the card of a bro it is about to hand work to, and the run a report cites.
   How a command becomes a tool is below.
 - `source(WebSearch())` and `man(environment)` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
-- `llm_spec` is the model it runs on by default;
+- `llm_spec` optionally declares its model recipe; a native launch without one must name a provider;
   any launch may name another.
 - `may_summon = ('browser', 'devoops')` is whom it may summon on its own authority:
   the built-in browser, which reproduces a report on the live page, and devoops, which probes the deployed service.
@@ -299,7 +299,7 @@ the whole of `dev` and `eyebro`
 
 ```python
 # bros/fixer/__init__.py
-from bro.llm.llms import openai
+from bro.openai import declaration as openai
 from bros.dev import Dev
 
 
@@ -457,5 +457,5 @@ Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 [^harness]: Today a bro runs under Claude Code or under bro's own loop.
 The harness seam is one class, and more harnesses are coming.
 
-[^llm]: Today bro's own loop runs OpenAI models, and a Claude Code session runs Anthropic's.
+[^llm]: Model providers are installed plug-ins: the native loop runs recipes whose wire has a client; the Claude Code harness runs Anthropic's recipes.
 A provider is a recipe module plus a client, and more are coming.

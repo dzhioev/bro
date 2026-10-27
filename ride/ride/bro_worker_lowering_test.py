@@ -190,8 +190,11 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
 
 @pytest.fixture
 def lowering_harness(monkeypatch, tmp_path, register_test_bros):
+  from bro.openai.declaration import LLMSpec
+
   class Dev(BaseBro):
     name = 'dev'
+    llm_spec = LLMSpec(reasoning_effort='medium')
 
   register_test_bros(Dev)
 

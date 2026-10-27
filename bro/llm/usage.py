@@ -216,24 +216,13 @@ def format_int(n: int) -> str:
 
 
 def model_family(slug: str) -> str:
-  """the model a resolved slug belongs to, with whatever pins one version of it
-  stripped — the key that matches two snapshots of one model to each other.
+  """Label a model slug through its provider, otherwise strip a snapshot date."""
+  from bro.llm import providers
 
-  A vendor pins a version in its own way: OpenAI resolves a request to a dated
-  snapshot (`gpt-5` → `gpt-5-2025-08-07`), Anthropic carries the date in the id
-  (`claude-haiku-4-5-20251001`). Either way the version *of the model itself*
-  survives, because Opus 4.8 and Opus 5 are different models, not two snapshots
-  of one. A slug no scheme matches is its own family.
-  """
-  # minor version is optional: single-number families (claude-fable-5) label as
-  # just the major ("Fable 5")
-  m = re.match(r'^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?', slug)
-  if m is not None:
-    family, major, minor = m.groups()
-    version = major if minor is None else f'{major}.{minor}'
-    return f'{family.title()} {version}'
-  # OpenAI resolves a requested model to a dated snapshot (gpt-5 →
-  # gpt-5-2025-08-07); label it by the family name
+  for _, module in providers.declarations():
+    shape = getattr(module, 'MODEL_SLUG', None)
+    if shape is not None and shape.match(slug) is not None:
+      return module.model_family(slug)
   return re.sub(r'-\d{4}-\d{2}-\d{2}$', '', slug)
 
 

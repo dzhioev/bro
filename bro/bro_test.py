@@ -12,8 +12,8 @@ from unittest.mock import MagicMock
 import pytest
 
 import bro.bro as bro_module
-import bro.llm.llms.echo as llm_llms_echo
 import bro.mcp as mcp
+import bro.native.echo_declaration as llm_llms_echo
 import bro.workspace.banner as workspace_banner
 from bro import brash_policy, results, watches
 from bro.authority_view_test_helper import publish
@@ -933,10 +933,13 @@ class TestNeededSecrets:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    bro = ManifestBro()
+    from bro.openai.declaration import LLMSpec
+
+    bro = ManifestBro.create(LLMSpec())
     # the llm key is NOT in needed_secrets() — surfaces that run the bro add it
     assert bro.needed_secrets('bro') == ('alpha', 'beta', 'delta', 'gamma')
-    assert bro.llm_spec.needed_secrets() == ('openai',)  # default openai
+    assert bro.llm_spec is not None
+    assert bro.llm_spec.needed_secrets() == ('openai',)
 
   def test_extra_secrets_mro_unioned(self):
     class Base(BaseBro):

@@ -29,6 +29,8 @@ core imports none of them, and `bro-native` depends on `bro-ride` for the manage
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |
 | `browser/` | `bro-browser` | the browser persona and page reader, registered webview worker type, owner and profile-setup commands, image, daemon, and capture process | `browser/AGENTS.md` |
 | `filetypes/` | `bro-filetypes` | sandboxed file-type providers, including PDF inspection | `filetypes/AGENTS.md` |
+| `llms/openai/` | `bro-openai` | OpenAI recipes, pricing and credential kind | `llms/openai/AGENTS.md` |
+| `llms/anthropic/` | `bro-anthropic` | Anthropic recipes, pricing, model-family labels and credential kind | `llms/anthropic/AGENTS.md` |
 | `wires/responses/` | `bro-wire-responses` | Responses response decoding, usage counts and wire client | `wires/responses/AGENTS.md` |
 | `wires/messages/` | `bro-wire-messages` | SDK-free Messages response decoding and usage counts | `wires/messages/AGENTS.md` |
 | `wires/chat/` | `bro-wire-chat` | SDK-free Chat Completions response decoding and usage counts | `wires/chat/AGENTS.md` |
@@ -67,6 +69,7 @@ and pass ShellCheck, which reads each file's dialect off its shebang and follows
 markdown prose follows the semantic line breaks of `dev/bro/dev/markdown_policy.py`, enforced repository-wide by `local/bro/local/markdown_policy_test.py` and checked over a reflow by `check-markdown`;
 a test module's sleeps follow `dev/bro/dev/sleep_policy.py` (a yield, a poll interval in a loudly bounded loop, or a marked subject or bound), enforced repository-wide by `local/bro/local/sleep_policy_test.py`;
 and code outside the credential resolver reads a credential by kind, never through the storage-addressed `get_instance` family, enforced repository-wide by `local/bro/local/credential_policy_test.py`.
+Plug-in imports and provider-name literals require a direct dependency on the contributing distribution, enforced by `local/bro/local/provider_policy_test.py`.
 Wheel contents are policy too (`dev/AGENTS.md`, "Wheel contents").
 
 ## Conventions

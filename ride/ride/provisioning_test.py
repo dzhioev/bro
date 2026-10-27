@@ -156,7 +156,7 @@ import importlib.abc
 import sys
 class RejectHarness(importlib.abc.MetaPathFinder):
   def find_spec(self, fullname, path=None, target=None):
-    if fullname.startswith(('bro.claude', 'bro.native', 'bro.llm.llms.anthropic')):
+    if fullname.startswith(('bro.claude', 'bro.native', 'bro.anthropic.declaration')):
       raise AssertionError('harness implementation imported: ' + fullname)
 sys.meta_path.insert(0, RejectHarness())
 from bro.base.args import Parser

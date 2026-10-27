@@ -249,7 +249,7 @@ class Runner:
     system_prompt = self.bro.system_prompt_for(hold=hold, harness=BRO)
     trail_id = self._tracker.start_trail(
       bro=self.bro.name,
-      llm_spec=self.bro.llm_spec.dump(),
+      llm_spec=self._recipe().dump(),
       system_prompt=system_prompt,
       forked_from=None,
       interactive=interactive,
@@ -527,9 +527,14 @@ class Runner:
   def _make_channel(self) -> Optional[RunLifecycle]:
     return RunLifecycle.from_env()
 
+  def _recipe(self):
+    if self.bro.llm_spec is None:
+      raise ValueError(f'{self.bro.name} declares no LLM recipe: pass --llm provider:model')
+    return self.bro.llm_spec
+
   def _create_llm(self, *, hold: str) -> LLM:
     return loop.create(
-      self.bro.llm_spec,
+      self._recipe(),
       self.inbox,
       mcp_servers=self.bro.assemble(harness=BRO, hold=hold, live_run=self),
       observer=self._observer,

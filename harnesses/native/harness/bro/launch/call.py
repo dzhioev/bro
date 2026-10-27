@@ -325,7 +325,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     history: Optional[list[DisplayRecord]] = None
     if args['fork'] is not None or continuing:
       from bro.launch.resume import resume
-      from bro.llm.llm import LLMSpec, NativeLLMSpec
+      from bro.llm import wires
+      from bro.llm.llm import LLMSpec
       from bro.registry import get_class
       from bro.trails.store import default_store
 
@@ -339,7 +340,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
           log.error('invalid recorded LLM recipe: %s', error)
           return 1
-        if not isinstance(continued_spec, NativeLLMSpec):
+        if continued_spec.WIRE not in wires.client_names():
           log.error('recorded recipe %s is not runnable by the bro harness', continued_spec.TYPE)
           return 1
         fork_spec = continued_spec

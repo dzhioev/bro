@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.fork import fork, latest_fork_point
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import LLMSpec
 from bro.native.runner import Runner
 from bro.trails.display import DisplayRecord, RecordedAdapter
 from bro.trails.store import TrailsStore, fetch_recorded_trail
@@ -41,7 +41,7 @@ def resume(
   bro_name: str,
   trail_ref: str,
   *,
-  llm_spec: NativeLLMSpec,
+  llm_spec: LLMSpec,
   at: Optional[int] = None,
   hold: Optional[str] = None,
   activity_file: Optional[Path] = None,

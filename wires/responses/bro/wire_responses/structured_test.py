@@ -7,8 +7,8 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from bro.llm.llm import LLMStopped, UnsupportedContent
-from bro.llm.llms.openai import LLMSpec
 from bro.llm.wire import Prefix
+from bro.openai.declaration import LLMSpec
 from bro.wire_responses import client as client_module
 from bro.wire_responses.client import Responses
 

@@ -30,7 +30,7 @@ def price(
 
 
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.NativeLLMSpec):
+class LLMSpec(llm_llm.LLMSpec):
   """trivial spec for Echo. inherits the raising base `.fast` since echo has
   no fast-mode equivalent."""
 

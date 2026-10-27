@@ -10,8 +10,8 @@ from typing import ClassVar
 
 import pytest
 
-import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.usage as usage
+import bro.openai.declaration as llm_llms_openai
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
 from bro.native.runner import Runner

@@ -15,7 +15,8 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.llm.llm import NativeLLMSpec
+from bro.llm import wires
+from bro.llm.llm import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
 from bro.native import dev_mcp, loop
@@ -31,13 +32,10 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
-def resolve_native(base: NativeLLMSpec, selection: LLMSelection) -> NativeLLMSpec:
+def resolve_native(base: LLMSpec | None, selection: LLMSelection) -> LLMSpec:
   """the recipe a bro-native launcher runs: `selection` over the bro's own spec,
   among the providers the engine has a client for."""
-  spec = BRO.resolve_recipe(base, selection)
-  if not isinstance(spec, NativeLLMSpec):
-    raise TypeError(f'native provider {spec.TYPE!r} declares a recipe the engine cannot run')
-  return spec
+  return BRO.resolve_recipe(base, selection)
 
 
 class _NativeRun(Protocol):
@@ -180,7 +178,7 @@ def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[st
   options.extend(['--hold', spec.hold, '--activity-file', str(spec.activity_file)])
   if resume_trail is not None:
     resolved = spec.llm_spec
-    if not isinstance(resolved, NativeLLMSpec):
+    if resolved is None or resolved.WIRE not in wires.client_names():
       raise ValueError(
         f'bro harness resume requires a native recipe, not {type(resolved).__name__}'
       )
@@ -197,7 +195,10 @@ def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[st
 
 class BroHarness(Harness):
   name = 'bro'
-  llm_providers = loop.known_names()
+
+  @property
+  def llm_providers(self) -> tuple[str, ...]:
+    return loop.known_names()
 
   def facts(self) -> Variables:
     return {
@@ -252,7 +253,7 @@ class BroHarness(Harness):
   def scope_recipe(self) -> ScopeRecipe:
     return _BRO_RUN_RECIPE
 
-  def resolve_llm(self, value: str | None, bro_name: str) -> NativeLLMSpec:
+  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
     from bro.registry import get_class
 
     selection = LLMSelection() if value is None else parse(value)

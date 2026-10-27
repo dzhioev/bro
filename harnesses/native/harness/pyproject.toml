@@ -9,7 +9,6 @@ description = "native LLM engine and command-line interface for bro"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "bro-wire-responses[client]",
   "bro",
   "bro-ride",
   "bro-native-trails",
@@ -29,6 +28,9 @@ dependencies = [
 "bro.native.llm" = "bro.native._entrypoints:bro_native_llm"
 "bro.run" = "bro.native._entrypoints:bro_run"
 
+[project.entry-points."bro.llm.providers"]
+echo = "bro.native.echo_declaration"
+
 [project.entry-points."bro.llm.wires"]
 echo = "bro.native.echo"
 
@@ -42,13 +44,11 @@ bro = "bro.native.harness:BRO"
 "bro" = "bro.native._entrypoints:bro_run"
 
 [tool.uv.sources]
-bro-wire-responses = { workspace = true }
 bro = { workspace = true }
 bro-ride = { workspace = true }
 bro-native-trails = { workspace = true }
 
 [tool.deptry.package_module_name_map]
-bro-wire-responses = ["bro"]
 bro = ["bro", "bros"]
 bro-ride = ["ride"]
 bro-native-trails = ["bro"]

@@ -12,6 +12,7 @@ import pytest
 
 import bro.claude.runner as ride_runner
 from bro import brash_policy, watches
+from bro.anthropic import declaration as anthropic
 from bro.brash import Policy
 from bro.bro import BaseBro
 from bro.claude.claude_argv import ClaudeLaunch
@@ -22,7 +23,6 @@ from bro.claude.mcp import MCPEndpoint
 from bro.claude.shell_prefix import SHELL_PREFIX_ENV
 from bro.claude.waiter_state import WaiterState
 from bro.llm import usage
-from bro.llm.llms import anthropic
 from bro.llm.usage import Usage
 from bro.mcp import ANY, brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
