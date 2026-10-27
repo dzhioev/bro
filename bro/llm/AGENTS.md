@@ -54,6 +54,8 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 - `retry.py` — `retry_llm(request, transient)`, retrying through a provider outage until `RETRY_WINDOW_SECONDS` run out,
   then raising `llm.py`'s provider-neutral `LLMUnavailable`.
   The recipe classifies transient errors.
+  An optional `capacity` predicate also retries refused responses on a bounded doubling schedule; `on_capacity` receives each response about to be retried.
+  The schedule restarts for every call, logs each wait, and cancellation ends a wait without another attempt.
 - `mcp.py` — the live tool layer.
   `Tool` / `MCPServer` ABCs, `FunctionTool`, and `ToolRegistry`, which assembles servers under `namespace__tool` wire names and dispatches calls.
   `encode_tool_result(dict | str)` returns compact JSON with non-ASCII characters unescaped, or the string unchanged.
