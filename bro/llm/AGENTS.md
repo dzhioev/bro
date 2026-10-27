@@ -4,7 +4,7 @@ Provider-neutral declarations and the contracts shared by harness engines.
 A persona names an `LLMSpec`;
 `providers.py` resolves the launch grammar;
 observers, trackers, usage records, and MCP live objects are the common seams engines consume.
-The bro-native engine and provider clients live in `bro.native`.
+The bro-native loop lives in `bro.native`; wire clients implement the core port.
 
 ## Design
 
@@ -14,7 +14,7 @@ The bro-native engine and provider clients live in `bro.native`.
 - **Recipe boundary.** `llm.py`, `providers.py`, and `llms/` are declaration-side.
   Importing them may resolve and inspect every built-in recipe, but must not import `bro.native`, the OpenAI SDK, or the live MCP layer.
   `NativeLLMSpec` marks recipes the bro-native engine accepts;
-  `bro.native.providers` owns mapping those recipes to clients.
+  the native engine opens their wire through `wires.open`.
 - **Tool declaration boundary.** Persona and toolset declarations import `bro.mcp`:
   its metadata, conditions, and factories do not import this package until a live server is built.
   `bro.llm.mcp` owns only the resulting tool/server execution path.
@@ -48,11 +48,11 @@ The bro-native engine and provider clients live in `bro.native`.
   Both take `model` and `reasoning_effort`.
   A reply the model never finished raises `TruncatedResponse` or `IncompleteResponse`.
   `mu` reads the `openai` key itself, so its caller's component must declare that secret for host hydration.
-- `openai_content.py` — OpenAI input-content conversion shared by `mu` and the native OpenAI client.
+- `openai_content.py` — Responses input-content conversion shared by `mu` and the Responses wire client.
   SDK imports stay inside conversion calls, so importing recipes remains SDK-free.
-- `openai_retry.py` — `retry_openai`, retrying one OpenAI call through a provider outage:
-  connection failures, timeouts, and server errors repeat until `RETRY_WINDOW_SECONDS` run out,
-  then raise `llm.py`'s provider-neutral `LLMUnavailable`.
+- `retry.py` — `retry_llm(request, transient)`, retrying through a provider outage until `RETRY_WINDOW_SECONDS` run out,
+  then raising `llm.py`'s provider-neutral `LLMUnavailable`.
+  The recipe classifies transient errors.
 - `mcp.py` — the live tool layer.
   `Tool` / `MCPServer` ABCs, `FunctionTool`, and `ToolRegistry`, which assembles servers under `namespace__tool` wire names and dispatches calls.
   `encode_tool_result(dict | str)` returns compact JSON with non-ASCII characters unescaped, or the string unchanged.
@@ -67,8 +67,12 @@ The bro-native engine and provider clients live in `bro.native`.
   runners emit turn boundaries.
   `NullObserver` is the explicit no-op.
 - `records.py` — SDK-free response meanings: ordered reasoning, messages, calls and unknown parts, with derived reply and terminal status.
-- `wires.py` — the `bro.llm.wires` metadata roster, lazy decode-side loading, decoding and usage-count dispatch.
-  A wire declaring `LEGACY` claims untagged records; several claimants are an error.
+- `wire.py` — the `Wire` client port, `Leg`, replay `Prefix`, and neutral inputs (`SystemPrompt`, `UserMessage`, `Notification`, `ToolOutput`).
+  A leg carries the recorded exchange and its decoded parts, stop, reply and billed counts.
+  `UnusableResponse` retains a received leg when reply extraction fails, so a caller can record and account for it before propagating the failure.
+- `wires.py` — the `bro.llm.wires` decode roster and `bro.llm.wire_clients` client roster.
+  Decode-side loading is lazy; a wire declaring `LEGACY` claims untagged records, and several claimants are an error.
+  `open(recipe, secrets)` constructs the client named by `recipe.WIRE` from provider credential material, refusing request options that overlap the client's `OWNED` fields.
 - `usage.py` — shared per-model usage accounting, the env-pointed usage file every harness publishes its cumulative usage through, footer formatting/parsing, and the `usage` CLI.
   `from_wire_counts(wire, raw)` normalizes raw usage through the wire roster.
 - `tracker.py` — the dependency-free `Tracker` ABC, durable sibling of `Observer`, plus `NullTracker`.
@@ -78,13 +82,14 @@ The bro-native engine and provider clients live in `bro.native`.
   - `openai.py` — the OpenAI `NativeLLMSpec` plus standard, flex, and priority Responses pricing over raw token details and context bands,
     pricing a dated snapshot without a row of its own at its undated model's rates;
     the recipe carries model, reasoning effort, service tier, and compact threshold, with `needed_secrets` → `openai`, `.fast()` → priority tier, and every shared effort level mapped through.
-    The live Responses client is `bro.native.llms.openai`.
+    Its `request_options()` lowers those knobs; `is_transient()` classifies retryable errors.
+    The client is `bro.wire_responses.client:Responses`.
   - `anthropic.py` — the model and knobs a Claude Code session runs under, as a recipe with no in-process client,
     plus Anthropic list pricing over transcript cache-write TTLs, a model's long-context tier, and the fast-mode rates a call's `speed` selects;
     session surfaces read `model` / `effort` / `fast_mode` and lower them onto Claude's own flags, a `model` or `effort` left None to the session's own default.
     `DEFAULT_MODEL` is a concrete id, bumped by hand.
   - `echo.py` — the dependency-free native recipe used by tests and the native LLM diagnostic CLI;
-    its empty table prices no call, and its client is `bro.native.llms.echo`.
+    its empty table prices no call, and its client and decode side are `bro.native.echo`.
 
 ## Conventions
 
@@ -92,8 +97,8 @@ The bro-native engine and provider clients live in `bro.native`.
   Its `TYPE` is the roster name.
   Price tables use the provider's raw billing vocabulary.
   Short names stay unique among the providers one harness serves.
-- A recipe run by bro-native subclasses `NativeLLMSpec` and has a matching client module in `bro.native.llms`, registered in `bro.native.providers`.
-  Recipe modules never construct clients.
+- A recipe run by bro-native subclasses `NativeLLMSpec` and names a wire with a registered client.
+  Recipe modules never construct clients; they expose `ENDPOINT`, `request_options()`, `is_transient()` and `accepts(part_kind)`.
 - Importing a recipe module must stay cheap:
   every bro constructs its `LLMSpec` at class-definition time, so provider SDKs are never imported at module level there.
   OpenAI SDK enums used for validation are mirrored locally with a sync test pinning them to the SDK.

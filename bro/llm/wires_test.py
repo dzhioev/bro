@@ -65,6 +65,40 @@ def test_two_legacy_claimants_are_an_error(monkeypatch):
     registry.decode(None, {})
 
 
+def test_open_refuses_a_wire_without_a_client():
+  from bro.llm.llms.anthropic import LLMSpec
+
+  with pytest.raises(wires.WireUnavailable, match='messages.*no client'):
+    wires.open(LLMSpec(), {})
+
+
+def test_open_refuses_wire_owned_recipe_options():
+  from bro.llm.llms.openai import LLMSpec
+
+  class Collision(LLMSpec):
+    def request_options(self) -> dict:
+      return {'previous_response_id': 'foreign-chain'}
+
+  with pytest.raises(ValueError, match='wire-owned.*previous_response_id'):
+    wires.open(Collision(), {})
+
+
+def test_client_roster_reads_metadata_without_loading(monkeypatch):
+  monkeypatch.setattr(
+    wires.importlib.metadata,
+    'entry_points',
+    lambda **kwargs: (entry('later', 'missing.module'), entry('first', 'also.missing')),
+  )
+  assert wires.client_names() == ('first', 'later')
+  monkeypatch.setattr(
+    wires.importlib.metadata,
+    'entry_points',
+    lambda **kwargs: (entry('same', 'missing'), entry('same', 'missing')),
+  )
+  with pytest.raises(ValueError, match='duplicate wire client'):
+    wires.client_names()
+
+
 def test_entry_name_and_decode_side_name_must_match(monkeypatch):
   monkeypatch.setattr(
     wires, '_entry_points', lambda: (entry('different', 'bro.wire_responses.decode'),)

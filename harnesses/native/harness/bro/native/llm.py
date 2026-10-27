@@ -13,6 +13,7 @@ from bro.llm.llm import NativeLLMSpec
 from bro.llm.mcp import MCPServer, ToolRegistry
 from bro.llm.observer import NullObserver, Observer
 from bro.llm.tracker import NullTracker, StepKind, Tracker
+from bro.llm.wire import Prefix
 
 
 class LLM(ABC):
@@ -38,6 +39,12 @@ class LLM(ABC):
   async def wake(self, *, request_timeout: Optional[float] = None) -> str:
     raise NotImplementedError
 
+  def restore(self, prefix: Prefix) -> None:
+    raise NotImplementedError
+
+  def seed_chain(self, response_id: str) -> None:
+    raise NotImplementedError
+
   async def _track_step(self, kind: StepKind, body: object, **extras: object) -> Optional[int]:
     """record one step of the loop, touching the activity mark when one was given."""
     if self.activity_file is not None:
@@ -53,14 +60,14 @@ class LLM(ABC):
 
 async def llm_main(request: str, provider: str, model: Optional[str], attachments: list[str]):
   from bro.llm import providers as llm_providers
-  from bro.native import providers as native_providers
+  from bro.native import loop
 
   spec = llm_providers.default_spec(provider)
   if not isinstance(spec, NativeLLMSpec):
     raise ValueError(f'provider {provider!r} builds no in-process client')
   if model is not None:
     spec = dataclasses.replace(spec, model=llm_providers.resolve_model(provider, model))
-  instance = native_providers.create(spec, Inbox())
+  instance = loop.create(spec, Inbox())
   content: list[dict] = [{'type': 'text', 'text': request}]
   for path in attachments:
     content.append({'type': 'image_url', 'image_url': {'url': path}})
@@ -77,7 +84,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser = base_args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
   parser.add_argument(
-    '--provider', '-p', choices=llm_providers.known_names(), default='echo', help='LLM provider'
+    '--provider', '-p', choices=llm_providers.known_names(), required=True, help='LLM provider'
   )
   parser.add_argument(
     '--model', '-m', default=None, help='model short name or id within --provider'

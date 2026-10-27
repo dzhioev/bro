@@ -846,6 +846,28 @@ class LLMSpec(llm_llm.NativeLLMSpec):
       )
     return dataclasses.replace(self, reasoning_effort=reasoning_effort)
 
+  def request_options(self) -> dict:
+    options: dict = {}
+    if self.reasoning_effort is not None:
+      options.update(
+        reasoning={'effort': self.reasoning_effort, 'summary': 'auto'},
+        include=['reasoning.encrypted_content'],
+      )
+    if self.service_tier is not None:
+      options['service_tier'] = self.service_tier
+    if self.compact_threshold is not None:
+      options['context_management'] = [
+        {'type': 'compaction', 'compact_threshold': self.compact_threshold}
+      ]
+    return options
+
+  def is_transient(self, error: Exception) -> bool:
+    from openai import APIConnectionError, APIStatusError
+
+    return isinstance(error, APIConnectionError) or (
+      isinstance(error, APIStatusError) and error.status_code >= 500
+    )
+
   def needed_secrets(self) -> tuple[str, ...]:
     return ('openai',)
 

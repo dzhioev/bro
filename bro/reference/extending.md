@@ -25,6 +25,8 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
 - `bro.llm.wires` — SDK-free wire decode modules, `<name> = "<module>"`;
   a module exports matching `NAME`, `CHAINING`, `decode(response)` and `counts(usage)`, and may claim untagged records with `LEGACY = True`
+- `bro.llm.wire_clients` — client classes implementing `bro.llm.wire.Wire`, `<name> = "<module>:<Client>"`;
+  the name matches the class's `NAME` and its decode-side entry, and the wire distribution provides its SDK dependencies in the `client` extra
 - `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
   each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 

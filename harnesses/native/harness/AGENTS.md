@@ -2,7 +2,7 @@
 
 `harnesses/native/harness/` is the `bro-native` uv workspace member.
 It publishes the framework's native LLM engine, the registered `bro` harness, and the `bro` command.
-It depends on core, `bro-ride`, `bro-native-trails` and the Responses wire decode side;
+It depends on core, `bro-ride`, `bro-native-trails` and the Responses wire client extra;
 core never imports it, and ride reaches it only by loading its `bro.harnesses` entry.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-native`;
@@ -11,8 +11,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 ## Components
 
 - `bro/native/` — the bro-native engine, the layer above the framework core:
-  registered session harness, runner, live LLM contract, provider dispatch, and provider clients.
-  `harness.py:BRO` owns native recipe resolution among the providers `providers.py` has clients for, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
+  registered session harness, runner, live LLM contract, loop, and diagnostic echo wire.
+  `harness.py:BRO` owns native recipe resolution among providers whose wires have clients, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
   Its `Harness.facts` contributes native prompt passages, `Harness.prompt_instructions` supplies the skill-loader contract, and `Harness.own_tools` contributes `skill` and the shell-gated job tools.
   Its `Harness.serve` mounts `dev_mcp.py`, the file and search toolset whose shared output rules are `dev_reference.md`, for the `files` group.
   Path-taking dev tools consult `bro.files.access`;
@@ -24,7 +24,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   `bro/jobs.py` and `bro/inbox.py` are native-owned modules under their public namespace paths:
   jobs supervise process groups through core's `bro.job_supervisor`, spool bounded output, and live in a lifetime-scoped registry, while the inbox wakes the model on job news and framework notices and drains their bounded notification slices.
   A job or watch line runs in brash under the policy `Runner` writes from the bro's reach into a directory its lifetime owns, where the command list is finite, and in bash otherwise.
-  OpenAI drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
+  `Loop` drains the inbox's notifications after tool batches or into an idle turn, delivering them as user-role input;
   interactive owners call `wake()` when the inbox reports news.
   In a managed session, `do-ride` owns the shared watch store and arms its `mission watch` producer;
   an in-process `bro run|chat` keeps model-started watches in the temporary store its `Runner` tears down.
@@ -32,21 +32,25 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   At each one-shot turn end, `Runner` applies the shared `bro.turn_end` rule:
   it reports running jobs as harness background work, posts notices through the inbox, ends by returning the last reply, and otherwise idles on the inbox until job or watch news, or a job's silence notice, wakes the next turn.
   `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/reference/ride.md`, "Bro harness").
-  `llm.py` owns the live `LLM` ABC and diagnostic CLI, `providers.py` maps core `NativeLLMSpec` recipes to engine clients, and `llms/{openai,echo}.py` contain those clients.
-  OpenAI sends tool-result text through `bro.llm.mcp.encode_tool_result`; recording keeps the original object or string.
+  `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires `--provider`.
+  `loop.py` opens the recipe's wire through core's roster and owns the provider-neutral loop:
+  tool execution, inbox drains, observer events, recorded steps, interrupted inputs and cumulative usage.
+  Its `restore` and `seed_chain` delegate to the wire.
+  Wire clients encode tool results; recording keeps the original object or string.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;
   `bro list` and `bro show <name> [--system-prompt HOLD]` remain metadata paths (card renderer in core `show.py`);
   `bro --version` prints the `bro` distribution's version and the commit it runs (core `source_commit.py`)
 - `bro/launch/{run,call,call_tui,resume}.py` — native one-shot and interactive launch surfaces
 - `bro/fork.py` — fork of a recorded trail.
-  `replay_messages` rebuilds the provider input through the selected fork point and follows `forked_from` ancestors when needed;
+  `replay_prefix` gathers the steps through the selected fork point and follows `forked_from` ancestors when needed;
   `latest_fork_point` chooses the newest consistent point using the recorded wire’s decoded calls, skipping steps marked `stopped`.
   `fork(..., surface=<caller>)` requires the driving program's surface, returns a `Runner` preseeded with the replayed prefix, and opens the child trail with `ForkedFrom(trail_id, step_id)`;
   it replays bro-native records, so a trail from another harness is refused up front rather than partway into a header that never carried what replay needs.
   A fork runs under the hold it is given, guided when omitted, and recomposes the prompt under it when the recorded hold differs.
-  Same-provider/model forks at an `llm_call` under the recorded prompt use the provider's `previous_response_id`;
-  every other case replays the prefix client-side, encoding structured tool results with `bro.llm.mcp.encode_tool_result` while leaving recorded strings unchanged.
+  Every replayed call must use the target recipe's wire, checked before building the runner.
+  Same-provider/model forks at an `llm_call` under an unchanged prompt seed a chain only on a server-chained wire;
+  every other case asks the wire to restore the prefix from the steps' own records.
   Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
 - `bro/trails/record/bro.py` — native tracker-to-trails recorder
 
