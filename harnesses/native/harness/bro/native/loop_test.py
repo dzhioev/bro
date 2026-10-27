@@ -1234,10 +1234,11 @@ async def test_cancellation_during_recording_keeps_the_conversation_answerable(k
   release = threading.Event()
   event_loop = asyncio.get_running_loop()
   original_step = tracker.step
+  blocked_kind = kind
 
-  def step(recorded_kind, body, **extras):
-    result = original_step(recorded_kind, body, **extras)
-    if recorded_kind == kind and not release.is_set():
+  def step(kind, body, **extras):
+    result = original_step(kind, body, **extras)
+    if kind == blocked_kind and not release.is_set():
       event_loop.call_soon_threadsafe(entered.set)
       assert release.wait(5), 'test did not release recording'
     return result
@@ -1318,3 +1319,78 @@ async def test_stopped_legs_are_recorded_counted_and_refused_before_events(
   assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
   assert 'previous_response_id' not in captured[1]
   assert [item['content'] for item in captured[1]['input']] == ['prompt', 'go', 'continue']
+
+
+@pytest.mark.asyncio
+async def test_cancelled_capacity_wait_keeps_inputs_without_answering_refused_calls(monkeypatch):
+  from dataclasses import replace
+
+  from bro.llm import retry as llm_retry
+
+  loop, tracker, captured = _make_responses_loop_with_tracker()
+  observer = MagicMock(spec=Observer)
+  loop.observer = observer
+  waiting = asyncio.Event()
+
+  async def pause(seconds):
+    waiting.set()
+    await asyncio.Future()
+
+  async def exchange(inputs, tools, request_timeout):
+    return replace(_function_call_response('ping'), stop='capacity', stop_reason='resources')
+
+  original_exchange = loop.wire.exchange
+  monkeypatch.setattr(loop.wire, 'exchange', exchange)
+  monkeypatch.setattr(llm_retry, 'asyncio_sleep', pause)
+  turn = asyncio.create_task(loop.send([{'role': 'user', 'content': 'go'}]))
+  await waiting.wait()
+  turn.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await turn
+  assert [step[0] for step in tracker.steps] == ['user_input', 'llm_call']
+  assert tracker.steps[-1][2]['stopped'] == 'capacity'
+  observer.on_event.assert_not_called()
+  monkeypatch.setattr(loop.wire, 'exchange', original_exchange)
+  _install_responses(loop, [_fake_response(output=[_message_item('continued')])], captured)
+  assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+  assert [item['content'] for item in captured[0]['input']] == ['go', 'continue']
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancellation_cannot_interrupt_answering_the_received_calls(monkeypatch):
+  loop, tracker, captured = _make_responses_loop_with_tracker([_StaticTool('ping')])
+  leg_recording = asyncio.Event()
+  result_recording = asyncio.Event()
+  release_leg = asyncio.Event()
+  release_result = asyncio.Event()
+  original_track = loop._track_step
+
+  async def track(kind, body, **extras):
+    if kind == 'llm_call' and not release_leg.is_set():
+      leg_recording.set()
+      await release_leg.wait()
+    if kind == 'tool_result' and not release_result.is_set():
+      result_recording.set()
+      await release_result.wait()
+    return await original_track(kind, body, **extras)
+
+  monkeypatch.setattr(loop, '_track_step', track)
+  _install_responses(loop, [_tool_calls_response('ping', 'ping')], captured)
+  turn = asyncio.create_task(loop.send([{'role': 'user', 'content': 'go'}]))
+  with ExitStack() as cleanup:
+    cleanup.callback(release_leg.set)
+    cleanup.callback(release_result.set)
+    await leg_recording.wait()
+    turn.cancel()
+    release_leg.set()
+    await result_recording.wait()
+    turn.cancel()
+    release_result.set()
+    with pytest.raises(asyncio.CancelledError):
+      await turn
+  results = [step for step in tracker.steps if step[0] == 'tool_result']
+  assert [step[2]['call_id'] for step in results] == ['call_1', 'call_2']
+  assert [item.call_id for item in cast(list[ToolOutput], loop._pending_input)] == [
+    'call_1',
+    'call_2',
+  ]

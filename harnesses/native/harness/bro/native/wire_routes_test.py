@@ -1,24 +1,30 @@
+import asyncio
 import dataclasses
 import json
 import threading
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import MagicMock
 
 import pytest
 
 from bro.base import credentials
 from bro.fork import fork, latest_fork_point
 from bro.launch.resume import resume
+from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMStopped
 from bro.llm.llms.echo import LLMSpec as EchoSpec
 from bro.llm.llms.openai import LLMSpec as ResponsesSpec
-from bro.native import runner as native_runner
+from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
+from bro.llm.wire import Leg, SystemPrompt, UserMessage, Wire
+from bro.native import loop as native_loop, runner as native_runner
 from bro.native.runner import Runner
-from bro.native.wire_fixtures_test_helper import message, response
+from bro.native.wire_fixtures_test_helper import call, message, response
 from bro.registry import create_bro
 from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder
 from bro.trails.store import fetch_recorded_trail
+from bro.wire_chat.decode import counts, decode
 
 
 @pytest.fixture
@@ -156,4 +162,124 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
   assert [item['content'] for item in server[-1]['input'] if item.get('role') == 'user'] == [
     'original',
     'continue',
+  ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('refusals, expected_wait', [(3, 70), (100, 610)])
+async def test_run_capacity_attempts_are_all_recorded_and_counted(
+  refusals, expected_wait, monkeypatch, tmp_path
+):
+  waits = []
+  requests = []
+  wire = MagicMock(spec=Wire)
+
+  async def pause(seconds):
+    waits.append(seconds)
+
+  async def exchange(inputs, tools, request_timeout):
+    requests.append(list(inputs))
+    stopped = len(requests) <= refusals
+    raw = {
+      'model': 'fixture-model',
+      'choices': [
+        {
+          'finish_reason': 'insufficient_system_resource' if stopped else 'stop',
+          'message': {'content': 'partial' if stopped else 'reply'},
+        }
+      ],
+      'usage': {'prompt_tokens': 10, 'completion_tokens': 2},
+    }
+    items = []
+    for item in inputs:
+      assert isinstance(item, (SystemPrompt, UserMessage))
+      items.append(
+        {
+          'role': 'system' if isinstance(item, SystemPrompt) else 'user',
+          'content': item.text if isinstance(item, SystemPrompt) else item.content,
+        }
+      )
+    decoded = decode(raw)
+    return Leg.from_decoded(
+      {'request': {'messages': items, 'tools': []}, 'response': raw},
+      {},
+      'chat',
+      decoded,
+      counts(decoded.usage),
+    )
+
+  wire.exchange = exchange
+  monkeypatch.setattr(llm_retry, 'asyncio_sleep', pause)
+  store = LocalStore(tmp_path)
+  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
+  monkeypatch.setattr(
+    native_loop, 'create', lambda spec, inbox, **kwargs: native_loop.Loop(wire, inbox, **kwargs)
+  )
+  runner = Runner(create_bro('bro', llm_spec=EchoSpec()))
+  if refusals == 3:
+    assert await runner.run('original', surface='test') == 'reply'
+  else:
+    with pytest.raises(LLMStopped, match='insufficient_system_resource'):
+      await runner.run('original', surface='test')
+  assert runner.trail_id is not None
+  recorded = fetch_recorded_trail(store, runner.trail_id)
+  calls = [step for step in recorded.steps if step.kind == 'llm_call']
+  assert [step.extras.get('stopped') for step in calls] == (
+    ['capacity'] * 3 + [None] if refusals == 3 else ['capacity'] * 7
+  )
+  assert {step.extras['call_index'] for step in calls} == {1}
+  assert {step.extras['turn_index'] for step in calls} == {0}
+  assert all(step.body['request'] == calls[0].body['request'] for step in calls)
+  assert all(request == requests[0] for request in requests)
+  assert sum(waits) == expected_wait
+  assert recorded.header.native['usage']['fixture-model']['completion_tokens'] == len(calls) * 2
+  header = store.get_trail(recorded.header.id)
+  assert header['end']['reason'] == ('ok' if refusals == 3 else 'error')
+
+
+@pytest.mark.asyncio
+async def test_interrupt_received_calls_records_answers_and_continues_the_same_chain(
+  server, replies, monkeypatch, tmp_path
+):
+  entered = asyncio.Event()
+
+  async def ping() -> str:
+    entered.set()
+    await asyncio.Future()
+    raise AssertionError('unreachable')
+
+  original_create = native_loop.create
+
+  def create(*args, **kwargs):
+    loop = original_create(*args, **kwargs)
+    loop.tools = ToolRegistry(
+      [InProcessMCPServer('svc', [FunctionTool(ping, description='blocks')])]
+    )
+    return loop
+
+  monkeypatch.setattr(native_loop, 'create', create)
+  replies.append(response(call('{}'), id='with-calls'))
+  store = LocalStore(tmp_path)
+  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
+  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='fixture-model')))
+  with runner:
+    turn = asyncio.create_task(runner.send('original', surface='test'))
+    await entered.wait()
+    turn.cancel()
+    with pytest.raises(asyncio.CancelledError):
+      await turn
+    assert await runner.send('continue', surface='test') == 'reply'
+  assert runner.trail_id is not None
+  recorded = fetch_recorded_trail(store, runner.trail_id)
+  result = next(step for step in recorded.steps if step.kind == 'tool_result')
+  assert result.body == native_loop.INTERRUPTED_TOOL_OUTPUT
+  assert result.extras['is_error'] is True
+  assert server[-1]['previous_response_id'] == 'with-calls'
+  assert server[-1]['input'] == [
+    {
+      'type': 'function_call_output',
+      'call_id': 'call_1',
+      'output': native_loop.INTERRUPTED_TOOL_OUTPUT,
+    },
+    {'role': 'user', 'content': 'continue'},
   ]
