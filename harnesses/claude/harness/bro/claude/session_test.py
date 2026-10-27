@@ -14,6 +14,7 @@ from bro.llm.llms.anthropic import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, health
 from bro.trails.local import LocalStore
 from bro.trails.store import local_root
+from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV
 from ride.do_ride import SessionRun
 from ride.harness import get_harness
 
@@ -26,9 +27,13 @@ arguments = sys.argv[1:]
 settings = json.loads(arguments[arguments.index("--settings") + 1])
 Path("launch.json").write_text(json.dumps(arguments))
 health = Path(os.environ["RIDE_SESSION_DIR"]) / "session-recorder-health.json"
+log = health.parent / "claude" / "session-recorder.log"
 deadline = time.monotonic() + 20
 while not health.exists():
-  assert time.monotonic() < deadline, "the recorder did not become ready"
+  assert time.monotonic() < deadline, (
+    "the recorder did not become ready: " +
+    (log.read_text() if log.exists() else "no recorder log was written")
+  )
   time.sleep(0.02)
 assert json.loads(health.read_text())["status"] == "ok", health.read_text()
 
@@ -83,10 +88,21 @@ def _session(tmp_path: Path) -> SessionRun:
 
 
 @pytest.mark.parametrize('legacy_workspace', [False, True])
-def test_managed_claude_launch_hooks_recording_and_resume(monkeypatch, tmp_path, legacy_workspace):
+@pytest.mark.parametrize('ambient_attachment', [None, 'branch-only', 'attached'])
+def test_managed_claude_launch_hooks_recording_and_resume(
+  monkeypatch, tmp_path, legacy_workspace, ambient_attachment
+):
   tree = tmp_path / 'tree'
   tree.mkdir()
   monkeypatch.chdir(tree)
+  if ambient_attachment is not None:
+    monkeypatch.setenv(BRANCH_ENV, 'parent-branch')
+    if ambient_attachment == 'attached':
+      monkeypatch.setenv('RIDE_REPO', '/parent/repository')
+      monkeypatch.setenv('RIDE_REPO_URL', 'https://example.test/parent.git')
+      monkeypatch.setenv(BASE_SHA_ENV, 'parent-base')
+  for name in ('RIDE_REPO', 'RIDE_REPO_URL', BRANCH_ENV, BASE_SHA_ENV):
+    monkeypatch.delenv(name, raising=False)
   state = tmp_path / 'session'
   state.mkdir()
   for name, value in {
@@ -152,6 +168,7 @@ def test_managed_claude_launch_hooks_recording_and_resume(monkeypatch, tmp_path,
         assert resumed['id'] == earlier[0]['id']
       assert resumed['end']['reason'] == 'ok'
       assert resumed['native']['llm'] == spec.resolved_llm
+      assert resumed.get('git') is None
       assert [
         message['content'] for message in store.iter_messages(resumed['id'], types={'assistant'})
       ] == [
