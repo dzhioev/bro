@@ -16,6 +16,7 @@ import bro.llm.usage as usage
 import bro.native.loop as loop_module
 from bro.inbox import Inbox
 from bro.jobs import Job, Registry
+from bro.llm.llm import LLMStopped
 from bro.llm.mcp import (
   FunctionTool,
   InProcessMCPServer,
@@ -1270,3 +1271,50 @@ async def test_cancellation_during_recording_keeps_the_conversation_answerable(k
     results = [step for step in tracker.steps if step[0] == 'tool_result']
     assert [step[2]['call_id'] for step in results] == ['call_1', 'call_2']
     assert results[-1][2]['is_error'] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'reason, stop',
+  [('max_output_tokens', 'truncated'), ('content_filter', 'filtered'), ('other', 'failed')],
+)
+@pytest.mark.parametrize('output_kind', ['text', 'calls', 'empty'])
+async def test_stopped_legs_are_recorded_counted_and_refused_before_events(
+  reason, stop, output_kind, monkeypatch
+):
+  loop, tracker, captured = _make_responses_loop_with_tracker(
+    [_StaticTool('ping')], agent='test-agent'
+  )
+  observer = MagicMock(spec=Observer)
+  loop.observer = observer
+  output = {
+    'text': [_message_item('partial')],
+    'calls': [_function_call_item('ping', call_id='c1')],
+    'empty': [],
+  }[output_kind]
+  stopped = _fake_response(
+    output=output,
+    response_id='refused',
+    dump_payload={'status': 'incomplete', 'incomplete_details': {'reason': reason}},
+  )
+  published = []
+  monkeypatch.setattr(
+    usage, 'publish', lambda agent, counts: published.append((agent, counts.copy()))
+  )
+  _install_responses(loop, [stopped, _fake_response(output=[_message_item('continued')])], captured)
+
+  with pytest.raises(LLMStopped, match=reason) as error:
+    await loop.send([{'role': 'system', 'content': 'prompt'}, {'role': 'user', 'content': 'go'}])
+
+  assert error.value.reason == stop
+  assert error.value.stop_reason == reason
+  assert [step[0] for step in tracker.steps] == ['user_input', 'llm_call']
+  assert tracker.steps[-1][2]['stopped'] == stop
+  assert tracker.steps[-1][1]['response'] == stopped.model_dump(mode='json')
+  assert len(published) == 1
+  assert published[0][1]['gpt-5']['output'] == 20
+  observer.on_event.assert_not_called()
+  assert loop.wire._last_response_id is None
+  assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+  assert 'previous_response_id' not in captured[1]
+  assert [item['content'] for item in captured[1]['input']] == ['prompt', 'go', 'continue']
