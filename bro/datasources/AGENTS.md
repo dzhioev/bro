@@ -4,7 +4,7 @@ The `DataSource` ABC and `SourceUnavailable` (`base.py`), and the read-only conn
 The base declares `name`, `summary`, `namespace` (a property, `f'{name}-source'`), `needed_secrets` / `optional_secrets`, and `as_mcp_server()`.
 `SearchableDataSource` (`searchable.py`) is the search/fetch shape:
 bare `search` / `fetch` tools inside the source's `<name>-source` namespace (wire name `<name>-source__search`),
-where the base `fetch` summarises a record for a query through `mu` (one `source_summary` prompt for every source) as long as `SUMMARY_SECRET` (`openai`, a base-level `optional_secret`) resolves.
+where the base `fetch` summarises a record for a query through `mu` (one `source_summary` prompt for every source) as long as `SUMMARY_SECRET` (`mu`, a base-level `optional_secret`) resolves.
 The fetch tool's description advertises which mode is live via a `#features` directive (`bro/AGENTS.md`, "Optional credential tier").
 How to add a source of either shape: `bro/reference/extending.md`, "Adding a data source".
 

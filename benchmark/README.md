@@ -119,8 +119,8 @@ an unboxed root in the task's own directory, on the uploaded bundle as its runti
 — so the `terminal` bro delegates to further `terminal`s as processes beside it in the same tree, with no Docker in the container.
 The launch declares the container a sandbox (`--env IS_SANDBOX=1`):
 its agent phase runs as root, and that declaration is what lets claude skip permission prompts under uid 0.
-The agent preset's `harness` kwarg selects the driving loop, `bro` or `claude`, and `llm_credential` the one credential the container gets:
-the LLM key on the bro harness, the `claude_code` setup token on the claude one.
+The agent preset's `harness` kwarg selects the driving loop, `bro` or `claude`, and `credentials` the list of kinds or named instances the container gets:
+the LLM key on the bro harness, the `claude_code` setup token on the claude one, and `mu` for presets that mount cast.
 The committed agent presets cover both harnesses, and the developer bro as it ships beside the purpose-built one, so their difference is a measured number.
 
 The score lands in the job directory's `result.json`, under
@@ -263,11 +263,12 @@ Following a run as it happens means reading the log where
 it is being written:
 `docker exec <task-container> tail -f /logs/agent/bro.log`.
 
-The trial store is rooted at the one credential the `llm_credential` kwarg names and includes any stored names its preserved `$cred` references reach.
+The trial store is rooted at the `credentials` kwarg's list and includes any stored names its preserved `$cred` references reach.
 The uploaded bundle's own framework reads the host store's default pick and hydrates that store, so the code that writes it is the code inside the bundle that reads it:
-on the bro harness an LLM key
+on the bro harness an LLM key and the `mu+benchmark` auxiliary configuration
 — use a dedicated, budget-capped instance
 — and on the claude harness a `claude_code` setup token, an account credential no budget caps, so a public run uses a dedicated Claude account whose token is revoked after the run.
-The ride hydrates it into a private temporary store outside the collected tree.
+Configure `mu+benchmark` using the material described in `bro/reference/permissions.md`, "Auxiliary LLM credentials", with explicit references to the budget-capped provider instance.
+The ride hydrates the selected credentials into a private temporary store outside the collected tree.
 It sits in a container where an LLM has unrestricted shell and
 internet, and the task instruction is third-party text the bro treats as its request.

@@ -35,7 +35,9 @@ JOB_CONFIG = compose(
 )
 
 # the credentials the trials will actually hydrate — the config names them
-_LLM_CREDENTIALS = sorted({agent['kwargs']['llm_credential'] for agent in JOB_CONFIG['agents']})
+_CREDENTIALS = sorted(
+  {name for agent in JOB_CONFIG['agents'] for name in agent['kwargs']['credentials']}
+)
 
 
 def _available(*command: str) -> bool:
@@ -45,9 +47,9 @@ def _available(*command: str) -> bool:
     return False
 
 
-def _host_holds_the_llm_keys() -> bool:
+def _host_holds_the_credentials() -> bool:
   with host_credential_store():
-    return all(credentials.default_store().resolve(name) is not None for name in _LLM_CREDENTIALS)
+    return all(credentials.default_store().resolve(name) is not None for name in _CREDENTIALS)
 
 
 _HOST_MISMATCH = host_mismatch()
@@ -61,7 +63,7 @@ LIVE_TRIAL = [
     not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
   ),
   pytest.mark.skipif(
-    not _host_holds_the_llm_keys(), reason='an LLM key the job config names does not resolve'
+    not _host_holds_the_credentials(), reason='a credential the job config names does not resolve'
   ),
 ]
 

@@ -133,7 +133,7 @@ class FakeEnvironment:
 
 
 def agent(tmp_path: Path, **kwargs: Any) -> BroAgent:
-  kwargs.setdefault('llm_credential', 'openai')
+  kwargs.setdefault('credentials', ['openai'])
   return BroAgent(logs_dir=tmp_path, **kwargs)
 
 
@@ -196,7 +196,7 @@ def test_a_bad_harness_fails_before_any_trial_runs(tmp_path):
 
 
 def test_a_credential_is_never_implied(tmp_path):
-  with pytest.raises(TypeError, match='llm_credential'):
+  with pytest.raises(TypeError, match='credentials'):
     # kwargs arrive dynamically from a job config, so the runtime refusal is
     # the contract under test
     BroAgent(logs_dir=tmp_path, bro='terminal')  # pyright: ignore[reportCallIssue]
@@ -321,7 +321,7 @@ def test_the_run_environment_points_at_the_store_and_the_record_root(tmp_path):
 
 
 def test_the_bundle_follows_the_host_store_default(bundle_interpreter, store):
-  with scoped_store(CREDENTIAL) as directory:
+  with scoped_store([CREDENTIAL]) as directory:
     config = json.loads((directory / 'creds.json').read_text())
     assert config['defaults'] == [INSTANCE]
     assert config['sources'] == {}
@@ -329,8 +329,22 @@ def test_the_bundle_follows_the_host_store_default(bundle_interpreter, store):
     assert (directory / 'creds' / f'{INSTANCE}.cred').read_text() == KEY
 
 
+def test_the_bundle_hydrates_auxiliary_configuration_beside_the_llm_key(bundle_interpreter, store):
+  material = store / 'creds' / 'mu+benchmark.cred'
+  material.write_text(json.dumps({'llm': 'openai:terra:low', 'credential': {'$cred': INSTANCE}}))
+  with scoped_store([INSTANCE, 'mu+benchmark']) as directory:
+    config = json.loads((directory / 'creds.json').read_text())
+    assert set(config['defaults']) == {INSTANCE, 'mu+benchmark'}
+    auxiliary = json.loads((directory / 'creds' / 'mu+benchmark.cred').read_text())
+    assert auxiliary['credential'] == json.loads(KEY)
+    scoped = credentials.Store(credentials.default_registry(), directory, {})
+    with credentials.as_default_store(scoped):
+      assert credentials.available('mu')
+      assert credentials.get_json('mu') == auxiliary
+
+
 def test_the_store_is_private_while_it_exists_and_gone_after(bundle_interpreter, store):
-  with scoped_store(CREDENTIAL) as directory:
+  with scoped_store([CREDENTIAL]) as directory:
     assert directory.stat().st_mode & 0o777 == 0o700
     assert (directory / 'creds' / f'{INSTANCE}.cred').stat().st_mode & 0o777 == 0o600
     scratch = directory.parent
@@ -342,7 +356,7 @@ def test_a_credential_the_bundle_cannot_resolve_fails_before_the_container(
   bundle_interpreter, store
 ):
   with pytest.raises(RuntimeError, match="secret 'trails' not found"):
-    with scoped_store('trails'):
+    with scoped_store(['trails']):
       pass
 
 
@@ -490,7 +504,7 @@ async def test_the_install_uploads_both_trees_and_proves_the_bro(monkeypatch, tm
   )
   environment = FakeEnvironment()
 
-  await agent(tmp_path, bro='terminal', llm_credential=INSTANCE).install(
+  await agent(tmp_path, bro='terminal', credentials=[INSTANCE]).install(
     environment.as_environment()
   )
 
@@ -515,7 +529,7 @@ async def test_an_incompatible_bundle_fails_before_the_environment_is_touched(
   environment = FakeEnvironment()
 
   with pytest.raises(RuntimeError, match='incompatible store'):
-    await agent(tmp_path, bro='terminal', llm_credential=CREDENTIAL).install(
+    await agent(tmp_path, bro='terminal', credentials=[CREDENTIAL]).install(
       environment.as_environment()
     )
 
@@ -533,7 +547,7 @@ async def test_the_install_checks_the_selected_harness_runtime(monkeypatch, tmp_
   )
   environment = FakeEnvironment()
 
-  await agent(tmp_path, bro='terminal', harness='claude', llm_credential=INSTANCE).install(
+  await agent(tmp_path, bro='terminal', harness='claude', credentials=[INSTANCE]).install(
     environment.as_environment()
   )
 

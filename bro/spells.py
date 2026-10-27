@@ -17,7 +17,7 @@ if TYPE_CHECKING:
   from bro.bro import BaseBro
 
 NAMESPACE = 'spell'
-CAST_SECRET = 'openai'
+CAST_SECRET = 'mu'
 _NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 
@@ -291,8 +291,7 @@ async def interpret(command: str, spells: list[Spell]) -> tuple[Spell, dict[str,
     get_prompt('spell_dispatch.prompt'),
     _Interpretation,
     JSON(request),
-    model='gpt-5.6-terra',
-    reasoning_effort='low',
+    role='dispatch',
   )
   if interpretation.error is not None:
     if len(interpretation.error.strip()) == 0:

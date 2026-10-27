@@ -43,14 +43,12 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   — a launch's flags over a configured default.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.
-- `mu.py` — typed call/content convenience over the OpenAI Responses API.
-  `mu(prompt, result, *contents)` blocks for the roundtrip;
-  `mu.aio(...)` is the awaitable form used on agent loops.
-  Both take `model` and `reasoning_effort`.
-  A reply the model never finished raises `TruncatedResponse` or `IncompleteResponse`.
-  `mu` reads the `openai` key itself, so its caller's component must declare that secret for host hydration.
-- `openai_content.py` — Responses input-content conversion shared by `mu` and the Responses wire client.
-  SDK imports stay inside conversion calls, so importing recipes remains SDK-free.
+- `mu.py` — typed one-shot calls configured by the `mu` credential.
+  `mu(prompt, result, *contents, role=None)` blocks; `mu.aio(...)` is awaitable.
+  The material's default recipe and credential, or the named role's pair, open a wire through `wires.open` and call `structured`.
+  `Text` and `JSON` reduce to neutral text parts; `Markdown` is a convenience result model.
+  Uncompleted replies raise `LLMStopped`.
+  Operator configuration: `bro/reference/permissions.md`, "Auxiliary LLM credentials".
 - `retry.py` — `retry_llm(request, transient)`, retrying through a provider outage until `RETRY_WINDOW_SECONDS` run out,
   then raising `llm.py`'s provider-neutral `LLMUnavailable`.
   The recipe classifies transient errors.

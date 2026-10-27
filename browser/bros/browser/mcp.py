@@ -19,7 +19,7 @@ from bro.llm.llm import LLMUnavailable
 from bro.mcp import Toolset
 
 INLINE_ANSWER_BYTES = 4 * 1024
-_READER_SECRET = 'openai'
+_READER_SECRET = 'mu'
 _SNAPSHOT_FILE = 'browser-look-snapshot.yml'
 _TEXT_FILE = 'browser-look-text.json'
 _PAGE_URL = re.compile(r'(?m)^- Page URL: (\S.*)$')
@@ -168,8 +168,7 @@ def _read_page(prompt: str, content: str) -> _ReaderResult:
     prompt,
     _ReaderResult,
     Text(content),
-    model='gpt-5.6-luna',
-    reasoning_effort='low',
+    role='reader',
   )
 
 
@@ -223,7 +222,7 @@ def look(
     raise ValueError('target is available only with a live webview capture')
   if not credentials.available(_READER_SECRET):
     raise ValueError(
-      '`browser::look` needs the optional `openai` credential; use `browser_find`, a targeted '
+      '`browser::look` needs the optional `mu` credential; use `browser_find`, a targeted '
       'snapshot, or `artifact::read` and `artifact::grep` instead'
     )
 

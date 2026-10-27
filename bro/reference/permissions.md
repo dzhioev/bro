@@ -207,6 +207,37 @@ Every root start, manual commit, override, and resume is checked against O.
 It guards the operator against mistakes; it does not introduce multiple operators or ownership boundaries.
 Configuration schema and project identity matching are in `bro/setup/AGENTS.md`, "Host config".
 
+### Auxiliary LLM credentials
+
+Spell dispatch, query-focused source summaries and the browser page reader use the optional `mu` credential, not an agent's provider key.
+Without it, spells remain available as tools, source fetches require `query` to be omitted, and `browser::look` is unavailable.
+There is no fallback to a provider credential.
+
+Create `~/.bro/creds/mu.cred` with mode 0600.
+Its material contains a default `llm` recipe in the `--llm` grammar and the provider's `credential` material, normally a `$cred` reference.
+An optional `roles` object maps caller roles (`dispatch`, `summary`, `reader`) to complete `{llm, credential}` pairs.
+An undefined role uses the default pair; a malformed entry errors rather than falling back.
+The recipe must name a provider with a client-driven wire supporting structured one-shot calls.
+For example:
+
+```json
+{
+  "llm": "openai:terra:low",
+  "credential": {"$cred": "openai+"},
+  "roles": {
+    "summary": {"llm": "openai:luna5.6:low", "credential": {"$cred": "openai+"}},
+    "reader": {"llm": "openai:luna5.6", "credential": {"$cred": "openai+"}}
+  }
+}
+```
+
+References name instances explicitly (`openai+` for the empty instance, `openai+work` for a named one).
+A kind-only reference resolves against the hydrating store's selection for that kind, not an operator pick the session does not hold.
+Cacheable referenced material is inlined into the session copy of `mu`.
+Holding `mu` therefore exposes the credential material its entries reference.
+Select a named configuration with `creds: ["mu+cheap"]`; callers choose roles, never instances.
+Drop `mu` to disable these auxiliary routes, or select an instance whose entries use the desired provider.
+
 ## Start surfaces
 
 | Surface | Values | Gift and cap |

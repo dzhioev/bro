@@ -61,7 +61,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   `cached(workspace, root)` builds a stale one first and refuses the rest
 - `bro/benchmark/harbor_agent.py` — `BroAgent`, the `BaseInstalledAgent` harbor imports.
   Its Harbor version is the uploaded bundle's identity, and its recorded name carries the bro and, off the default, the harness.
-  `install()` has the uploaded bundle's own framework hydrate a trial store from the host store's defaults, rooted at the LLM credential and including any preserved-reference dependencies, then uploads both and runs
+  `install()` has the uploaded bundle's own framework hydrate a trial store from the host store's defaults, rooted at the preset's `credentials` list and including any preserved-reference dependencies, then uploads both and runs
   `bro show <bro>` through the uploaded bundle
   — the one validation the host cannot make, and a
   smoke test of the bundle in the task's own image

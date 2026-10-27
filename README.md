@@ -251,7 +251,7 @@ $ bro show triage
 - `brave`
 - `brog`
 - `github`
-- `openai` — optional (used if present)
+- `mu` — optional (used if present)
 - `openai` — LLM key
 - _session baselines (`trails`) added per-surface_
 …
