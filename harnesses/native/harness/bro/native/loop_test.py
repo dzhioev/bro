@@ -1,7 +1,7 @@
 import asyncio
 import os
 import threading
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
@@ -1223,3 +1223,50 @@ async def test_argument_errors_are_returned_to_the_model_without_calling_the_too
   assert output == ('ok' if empty else "tool 'svc__ping' failed: arguments are not a JSON object")
   result = next(step for step in tracker.steps if step[0] == 'tool_result')
   assert result[2]['is_error'] is not empty
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['llm_call', 'tool_result', 'user_input'])
+async def test_cancellation_during_recording_keeps_the_conversation_answerable(kind):
+  loop, tracker, captured = _make_responses_loop_with_tracker([_StaticTool('ping')])
+  entered = asyncio.Event()
+  release = threading.Event()
+  event_loop = asyncio.get_running_loop()
+  original_step = tracker.step
+
+  def step(recorded_kind, body, **extras):
+    result = original_step(recorded_kind, body, **extras)
+    if recorded_kind == kind and not release.is_set():
+      event_loop.call_soon_threadsafe(entered.set)
+      assert release.wait(5), 'test did not release recording'
+    return result
+
+  tracker.step = step
+  _install_responses(
+    loop,
+    [_tool_calls_response('ping', 'ping'), _fake_response(output=[_message_item('continued')])],
+    captured,
+  )
+  turn = asyncio.create_task(loop.send([{'role': 'user', 'content': 'go'}]))
+  with ExitStack() as cleanup:
+    cleanup.callback(release.set)
+    await entered.wait()
+    turn.cancel()
+  with pytest.raises(asyncio.CancelledError):
+    await turn
+
+  if kind == 'user_input':
+    _install_responses(loop, [_fake_response(output=[_message_item('continued')])], captured)
+  assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+  if kind == 'user_input':
+    assert [item['content'] for item in captured[0]['input']] == ['go', 'continue']
+  else:
+    outputs = captured[-1]['input'][:-1]
+    assert [item['call_id'] for item in outputs] == ['call_1', 'call_2']
+    assert outputs[0]['output'] == (
+      'ok' if kind == 'tool_result' else loop_module.INTERRUPTED_TOOL_OUTPUT
+    )
+    assert outputs[1]['output'] == loop_module.INTERRUPTED_TOOL_OUTPUT
+    results = [step for step in tracker.steps if step[0] == 'tool_result']
+    assert [step[2]['call_id'] for step in results] == ['call_1', 'call_2']
+    assert results[-1][2]['is_error'] is True

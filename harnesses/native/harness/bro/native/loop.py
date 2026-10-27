@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Optional
 
@@ -132,40 +133,36 @@ class Loop(LLM):
   async def _execute_tool_calls(self, leg: Leg, *, turn_index: int, call_index: int) -> list[Input]:
     results: list[Input] = []
     calls = leg.calls
-    for position, item in enumerate(calls):
-      assert item.call_id is not None and item.name is not None
-      is_error = False
-      try:
-        with self._current_tool_step(item.call_id):
-          if item.arguments_are_object:
-            output = await self.tools.call(item.name, item.arguments)
-          else:
-            output = f'tool {item.name!r} failed: arguments are not a JSON object'
-            is_error = True
-      except asyncio.CancelledError:
-        results.extend(
-          await self._interrupted_outputs(
-            calls[position:], turn_index=turn_index, call_index=call_index
+    try:
+      for item in calls:
+        assert item.call_id is not None and item.name is not None
+        is_error = False
+        try:
+          with self._current_tool_step(item.call_id):
+            if item.arguments_are_object:
+              output = await self.tools.call(item.name, item.arguments)
+            else:
+              output = f'tool {item.name!r} failed: arguments are not a JSON object'
+              is_error = True
+        except ToolControlSignal:
+          raise
+        except Exception as exception:
+          output = f'tool {item.name!r} failed: {type(exception).__name__}: {exception}'
+          is_error = True
+        results.append(ToolOutput(item.call_id, output))
+        await _finish_on_cancel(
+          self._record_tool_result(
+            item, output, is_error=is_error, turn_index=turn_index, call_index=call_index
           )
         )
-        self._pending_input = results
-        raise
-      except ToolControlSignal:
-        raise
-      except Exception as exception:
-        output = f'tool {item.name!r} failed: {type(exception).__name__}: {exception}'
-        is_error = True
-      self.observer.on_event(ToolResultEvent(item.call_id, item.name, output, is_error=is_error))
-      await self._track_step(
-        'tool_result',
-        output,
-        turn_index=turn_index,
-        call_index=call_index,
-        tool_name=item.name,
-        call_id=item.call_id,
-        is_error=is_error,
+    except asyncio.CancelledError:
+      results.extend(
+        await self._interrupted_outputs(
+          calls[len(results) :], turn_index=turn_index, call_index=call_index
+        )
       )
-      results.append(ToolOutput(item.call_id, output))
+      self._pending_input = results
+      raise
     return results
 
   async def _interrupted_outputs(
@@ -174,20 +171,28 @@ class Loop(LLM):
     outputs: list[Input] = []
     for item in calls:
       assert item.call_id is not None and item.name is not None
-      self.observer.on_event(
-        ToolResultEvent(item.call_id, item.name, INTERRUPTED_TOOL_OUTPUT, is_error=True)
-      )
-      await self._track_step(
-        'tool_result',
-        INTERRUPTED_TOOL_OUTPUT,
-        turn_index=turn_index,
-        call_index=call_index,
-        tool_name=item.name,
-        call_id=item.call_id,
-        is_error=True,
-      )
       outputs.append(ToolOutput(item.call_id, INTERRUPTED_TOOL_OUTPUT))
+      await _finish_on_cancel(
+        self._record_tool_result(
+          item, INTERRUPTED_TOOL_OUTPUT, is_error=True, turn_index=turn_index, call_index=call_index
+        )
+      )
     return outputs
+
+  async def _record_tool_result(
+    self, item: Call, output: dict | str, *, is_error: bool, turn_index: int, call_index: int
+  ) -> None:
+    assert item.call_id is not None and item.name is not None
+    self.observer.on_event(ToolResultEvent(item.call_id, item.name, output, is_error=is_error))
+    await self._track_step(
+      'tool_result',
+      output,
+      turn_index=turn_index,
+      call_index=call_index,
+      tool_name=item.name,
+      call_id=item.call_id,
+      is_error=is_error,
+    )
 
   def _publish_usage(self, leg: Leg) -> None:
     if leg.counts is None:
@@ -205,6 +210,7 @@ class Loop(LLM):
     self, inputs: list[Input], tools: list[Tool], *, request_timeout: float | None
   ) -> Leg:
     self._call_index += 1
+    self._pending_input = inputs
     try:
       leg = await self.wire.exchange(inputs, tools, request_timeout)
     except asyncio.CancelledError:
@@ -214,7 +220,14 @@ class Loop(LLM):
       await self._record_leg(error.leg)
       self._pending_input = []
       raise
-    await self._record_leg(leg)
+    self._pending_input = []
+    try:
+      await _finish_on_cancel(self._record_leg(leg))
+    except asyncio.CancelledError:
+      self._pending_input = await self._interrupted_outputs(
+        leg.calls, turn_index=self._turn_index, call_index=self._call_index
+      )
+      raise
     return leg
 
   async def _record_leg(self, leg: Leg) -> None:
@@ -275,7 +288,6 @@ class Loop(LLM):
       incoming = [message for message in messages if message.get('role') != 'system']
       self._restored = False
     api_input.extend(self._pending_input)
-    self._pending_input = []
 
     user_messages = [message for message in incoming if message.get('role') == 'user']
     if notification_turn or (len(user_messages) > 0 and self._has_user_input):
@@ -291,8 +303,11 @@ class Loop(LLM):
     if notification is None:
       api_input.extend(converted_incoming)
 
+    self._pending_input = list(api_input)
     for message in user_messages:
-      await self._track_step('user_input', _extract_text(message), turn_index=self._turn_index)
+      await _finish_on_cancel(
+        self._track_step('user_input', _extract_text(message), turn_index=self._turn_index)
+      )
     if notification_turn or len(user_messages) > 0:
       self._has_user_input = True
 
@@ -304,6 +319,7 @@ class Loop(LLM):
         turn_index=self._turn_index,
         call_index=self._call_index,
       )
+      self._pending_input = tool_results
       await self._drain_notifications(tool_results, call_index=self._call_index)
       response = await self._exchange(tool_results, tools, request_timeout=request_timeout)
       self._pending_input = []
@@ -327,3 +343,13 @@ def _extract_text(msg: dict) -> str:
   if isinstance(content, list):
     return '\n'.join(p.get('text', '') for p in content if p.get('type') == 'text')
   return str(content)
+
+
+async def _finish_on_cancel[T](operation: Awaitable[T]) -> T:
+  # Persist an accepted leg or result before its interruption records can follow it.
+  task = asyncio.ensure_future(operation)
+  try:
+    return await asyncio.shield(task)
+  except asyncio.CancelledError:
+    await task
+    raise

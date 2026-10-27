@@ -35,6 +35,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires `--provider`.
   `loop.py` opens the recipe's wire through core's roster and owns the provider-neutral loop:
   tool execution, inbox drains, observer events, recorded steps, interrupted inputs and cumulative usage.
+  Cancellation after a leg arrives completes its recording and answers every unanswered call with an interrupted error result.
+  Results already obtained and inputs not yet exchanged remain pending ahead of the next turn.
   Its `restore` and `seed_chain` delegate to the wire.
   Wire clients encode tool results; recording keeps the original object or string.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
