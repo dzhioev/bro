@@ -2,7 +2,6 @@ import asyncio
 import os
 import sys
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import ClassVar, Optional
 
@@ -910,19 +909,19 @@ class TestNativeTurnEnd:
     assert events == ['posted', 'stood down']
 
   def test_watch_pump_takes_the_next_batch_without_waiting_for_a_drain(self):
+    delivered = threading.Event()
+
     class Store:
       def __init__(self):
         self.batches = [
           watches.Batch((watches.BatchLine(None, text, wakes=True, arrived=0.0),))
           for text in ('first', 'second')
         ]
-        self.take_calls = 0
 
       def next_beat_deadline(self):
         return None
 
       def take(self):
-        self.take_calls += 1
         return self.batches.pop(0) if len(self.batches) > 0 else None
 
     class PumpRunner(StubRunner):
@@ -934,13 +933,15 @@ class TestNativeTurnEnd:
       def watch_store(self):
         return self.store
 
+      def deliver(self, batch: str) -> None:
+        super().deliver(batch)
+        if batch == 'second':
+          delivered.set()
+
     store = Store()
     runner = PumpRunner(store)
     with runner:
-      deadline = time.monotonic() + 10
-      while store.take_calls < 2:
-        assert time.monotonic() < deadline, 'the pump waited for the model to drain'
-        time.sleep(0.01)
+      assert delivered.wait(10), 'the pump waited for the model to drain'
       drained = runner.inbox.drain()
       assert drained is not None and drained.text == 'first\nsecond'
 
