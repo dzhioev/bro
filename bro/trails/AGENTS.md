@@ -154,6 +154,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   Large bodies remain inline over the wire.
 - `GET /v1/tools/{sha256}` serves a tool blob by digest under the read permission, answering `model.tool_not_found_body` when the store holds none.
 - Bro projection decodes each `llm_call` through its recorded wire, deriving reasoning, assistant text, tool calls and terminal status, with service tier and non-completed stop on the call event.
+  A refused native leg also carries the `stopped` extra on its `llm_call` step; it remains projected and counted although it never entered the conversation.
   Its text-bodied native kinds are system prompts, user inputs, and notifications, each projected under its own message type.
   Untagged records use the wire claiming legacy records; a wire unavailable to the reader leaves the whole record as one `harness_event`.
 - Claude projection reads the transcript record a row carries, decoding assistant content through the `messages` wire.

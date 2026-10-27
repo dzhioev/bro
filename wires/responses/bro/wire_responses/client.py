@@ -152,12 +152,6 @@ class Responses(Wire):
     response = await retry_llm(create, self.recipe.is_transient)
     raw = response.model_dump(mode='json')
     decoded = decode(raw)
-    for call in decoded.calls:
-      if not call.call_id or not call.name:
-        raise RuntimeError('tool call missing its id or name')
-    # Incomplete responses enter the conversation even when their decoded stop is not completed.
-    self._last_response_id = response.id
-    self._input_prefix = []
     leg = Leg.from_decoded(
       {'request': {**request, 'input': new_items}, 'response': raw},
       {'response_id': response.id},
@@ -165,6 +159,13 @@ class Responses(Wire):
       decoded,
       counts(decoded.usage) if raw.get('usage') is not None else None,
     )
+    if leg.stop != 'completed':
+      return leg
+    for call in leg.calls:
+      if not call.call_id or not call.name:
+        raise RuntimeError('tool call missing its id or name')
+    self._last_response_id = response.id
+    self._input_prefix = []
     if not leg.calls:
       try:
         reply = parse_response(raw, decoded)
@@ -181,7 +182,7 @@ class Responses(Wire):
     for step in prefix.steps:
       if step.kind in {'user_input', 'notification'}:
         items.append({'role': 'user', 'content': step.body})
-      elif step.kind == 'llm_call':
+      elif step.kind == 'llm_call' and 'stopped' not in step.extras:
         for item in step.body['response']['output']:
           if item['type'] != 'compaction':
             items.append(_replay_item(item))

@@ -80,5 +80,5 @@ class Echo(Wire):
     for step in prefix.steps:
       if step.kind in {'user_input', 'notification'}:
         self.history.append(self._encode(UserMessage(step.body)))
-      elif step.kind == 'llm_call':
+      elif step.kind == 'llm_call' and 'stopped' not in step.extras:
         self.history.append({'role': 'assistant', 'text': step.body['response']['text']})
