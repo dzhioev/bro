@@ -469,3 +469,48 @@ def test_bundle_builds_the_workspace_dependencies_its_export_omits():
     if dependency['name'] in workspace_members - selected
   }
   assert missing == set(), f'workspace dependencies omitted from bundle wheels: {sorted(missing)}'
+
+
+def test_bundle_export_installs_sdk_only_with_client_extras():
+  command = export_command(workspace_root())
+  with_clients = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+  position = command.index('--extra')
+  del command[position : position + 2]
+  without_clients = subprocess.run(command, capture_output=True, text=True, check=True).stdout
+
+  assert any(line.startswith('openai==') for line in with_clients.splitlines())
+  assert not any(line.startswith('openai==') for line in without_clients.splitlines())
+
+
+def test_bundle_rejects_a_registered_wire_client_that_cannot_import(tmp_path, monkeypatch, capfd):
+  metadata = tmp_path / 'fixture_wire-1.dist-info'
+  metadata.mkdir()
+  (metadata / 'METADATA').write_text('Name: fixture-wire\nVersion: 1\n')
+  (metadata / 'entry_points.txt').write_text(
+    '[bro.llm.wire_clients]\nabsent-sdk = fixture_client:Client\n'
+  )
+  (tmp_path / 'fixture_client.py').write_text('import missing_fixture_sdk\n')
+  monkeypatch.setenv('PYTHONPATH', str(tmp_path))
+  root = tmp_path / 'bundle'
+
+  def install_interpreter(bundle, staging):
+    _fake_bundle(bundle.root)
+    bundle.interpreter.unlink()
+    bundle.interpreter.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    bundle.interpreter.chmod(0o755)
+
+  run = bundle_module._run
+  monkeypatch.setattr(bundle_module, 'host_mismatch', lambda: None)
+  monkeypatch.setattr(bundle_module, '_source_commit', lambda workspace: 'a' * 40)
+  monkeypatch.setattr(bundle_module, '_install_interpreter', install_interpreter)
+  monkeypatch.setattr(bundle_module, '_capture', lambda command: '')
+  monkeypatch.setattr(bundle_module, '_wheels', lambda directory: [])
+  monkeypatch.setattr(
+    bundle_module,
+    '_run',
+    lambda command: run(command) if command[0] == str(Bundle(root).interpreter) else None,
+  )
+
+  with pytest.raises(subprocess.CalledProcessError):
+    build(tmp_path / 'checkout', root)
+  assert 'fixture-wire[client]' in capfd.readouterr().err

@@ -5,15 +5,15 @@ A provider name is the whole vocabulary for one provider — the `--provider`
 value, its spec's `TYPE` discriminator, and (where it reads one) its credential
 kind — so a launch, a stored spec, and a hydrated scope all spell it the same.
 
-Adding a provider is a module under `llms/` exporting `LLMSpec`,
-`DEFAULT_MODEL`, a `MODELS` short-name table, and a `FAILURE_SIGNATURES`
-tuple, plus its row in `_PROVIDER_MODULES`. A provider whose surface also takes
-names that are not model ids exports `MODEL_ID`, the pattern a full id matches.
+Provider declarations are discovered through installation metadata and loaded only
+when selected or searched for their advertised capabilities.
 """
 
 import dataclasses
-import importlib
-from collections.abc import Collection, Mapping
+import functools
+import importlib.metadata
+import re
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from types import ModuleType
@@ -22,11 +22,7 @@ from typing import Any, Optional
 from bro.base import log
 from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
 
-_PROVIDER_MODULES: dict[str, str] = {
-  'openai': 'bro.llm.llms.openai',
-  'anthropic': 'bro.llm.llms.anthropic',
-  'echo': 'bro.llm.llms.echo',
-}
+ENTRY_POINT_GROUP = 'bro.llm.providers'
 
 FAST_SUFFIX = '+fast'
 _SEPARATOR = ':'
@@ -38,46 +34,105 @@ class LLMSelectionError(ValueError):
   or preset, or a malformed `--llm` value. The message is operator-facing."""
 
 
+@functools.cache
+def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
+  return tuple(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
+
+
+def _entries() -> dict[str, importlib.metadata.EntryPoint]:
+  entries: dict[str, importlib.metadata.EntryPoint] = {}
+  for entry in _entry_points():
+    if re.fullmatch(r'[a-z][a-z0-9-]*', entry.name) is None:
+      raise ValueError(f'invalid provider name {entry.name!r}')
+    if entry.name in entries:
+      raise ValueError(f'duplicate provider {entry.name!r}')
+    entries[entry.name] = entry
+  return entries
+
+
 def known_names() -> tuple[str, ...]:
-  return tuple(_PROVIDER_MODULES)
+  return tuple(sorted(_entries()))
 
 
-def _provider_module(provider: str) -> ModuleType:
-  path = _PROVIDER_MODULES.get(provider)
-  if path is None:
+def declaration(provider: str) -> ModuleType:
+  entries = _entries()
+  if provider not in entries:
     raise LLMSelectionError(
-      f'unknown provider {provider!r}; known providers: {", ".join(known_names())}'
+      f'unknown provider {provider!r}; installed providers: {", ".join(entries) or "(none)"}; '
+      'install the plug-in that provides it'
     )
-  return importlib.import_module(path)
+  try:
+    module = entries[provider].load()
+    if not isinstance(module, ModuleType):
+      raise TypeError('entry must load a declaration module')
+    if not issubclass(module.LLMSpec, LLMSpec) or module.LLMSpec.TYPE != provider:
+      raise ValueError('declaration LLMSpec.TYPE must equal the entry name')
+    if not isinstance(module.DEFAULT_MODEL, str) or not isinstance(module.LLMSpec.WIRE, str):
+      raise TypeError('declaration must name a default model and a wire')
+    if not isinstance(module.MODELS, Mapping) or any(
+      not isinstance(name, str) or not isinstance(model, str)
+      for name, model in module.MODELS.items()
+    ):
+      raise TypeError('declaration MODELS must map short names to model ids')
+    if not isinstance(module.FAILURE_SIGNATURES, tuple) or any(
+      not isinstance(signature, FailureSignature) for signature in module.FAILURE_SIGNATURES
+    ):
+      raise TypeError('declaration must export FAILURE_SIGNATURES')
+    if not callable(module.price) or not isinstance(module.PRICE_TABLE_SHA256, str):
+      raise TypeError('declaration must export pricing and its table digest')
+    if not hasattr(module, 'PRICE_TABLE'):
+      raise TypeError('declaration must export PRICE_TABLE')
+    if hasattr(module, 'MODEL_SLUG') and not callable(module.model_family):
+      raise TypeError('declaration MODEL_SLUG requires model_family')
+  except Exception as error:
+    raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
+  return module
 
 
-def load_all() -> None:
-  """import every provider module, for callers that need the classes themselves
-  rather than a named one (`LLMSpec.from_dict`'s subclass dispatch)."""
-  for provider in known_names():
-    _provider_module(provider)
+def declarations(among: Collection[str] | None = None) -> Iterator[tuple[str, ModuleType]]:
+  for name in known_names():
+    if among is not None and name not in among:
+      continue
+    try:
+      module = declaration(name)
+    except LLMSelectionError as error:
+      log.warning('%s', error)
+      continue
+    yield name, module
+
+
+def available_specs() -> Iterator[tuple[str, LLMSpec]]:
+  for name, module in declarations():
+    try:
+      spec = module.LLMSpec()
+    except Exception as error:
+      log.warning('provider %r is unavailable: %s', name, error)
+      continue
+    yield name, spec
 
 
 def models(provider: str) -> dict[str, str]:
   """the provider's short model names, each mapped to the full id it stands for."""
-  return _provider_module(provider).MODELS
+  return declaration(provider).MODELS
 
 
 def default_spec(provider: str) -> LLMSpec:
   """the provider's own default recipe — its default model and no knobs."""
-  return _provider_module(provider).LLMSpec()
+  module = declaration(provider)
+  try:
+    return module.LLMSpec()
+  except Exception as error:
+    raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
 
 
 def effort_values() -> frozenset[str]:
-  return frozenset(
-    value for provider in known_names() for value in default_spec(provider).effort_values
-  )
+  return frozenset(value for _, spec in available_specs() for value in spec.effort_values)
 
 
 def failure_signatures(provider: str) -> tuple[FailureSignature, ...]:
   """the provider's declared failure signatures — how its client's failures
   read in a run's error output, each classified into `FAILURE_CATEGORIES`."""
-  return _provider_module(provider).FAILURE_SIGNATURES
+  return declaration(provider).FAILURE_SIGNATURES
 
 
 def price(
@@ -88,19 +143,19 @@ def price(
   table: Any = None,
 ) -> Optional[Decimal]:
   """Price one call in its provider's raw usage vocabulary."""
-  return _provider_module(provider).price(model, usage, service_tier, table)
+  return declaration(provider).price(model, usage, service_tier, table)
 
 
 def price_table(provider: str) -> Any:
   """The provider's current price table, including its provenance and rates."""
-  return _provider_module(provider).PRICE_TABLE
+  return declaration(provider).PRICE_TABLE
 
 
 def price_table_from_content(
   provider: str, source: str, as_of: str, models: Mapping[str, Any]
 ) -> Any:
   """Reconstruct one provider's price table from persisted vendor-vocabulary rates."""
-  factory = getattr(_provider_module(provider), 'price_table_from_content', None)
+  factory = getattr(declaration(provider), 'price_table_from_content', None)
   if not callable(factory):
     raise ValueError(f'provider {provider!r} has no persisted price-table vocabulary')
   return factory(source, as_of, models)
@@ -115,7 +170,7 @@ def resolve_model(provider: str, model: str) -> str:
   """
   table = models(provider)
   resolved = table.get(model, model)
-  shape = getattr(_provider_module(provider), 'MODEL_ID', None)
+  shape = getattr(declaration(provider), 'MODEL_ID', None)
   if shape is not None and shape.fullmatch(resolved) is None:
     raise LLMSelectionError(
       f'{model!r} names no {provider} model id; name a full id or one of: {", ".join(table)}'
@@ -127,8 +182,8 @@ def carriers(model: str, among: Collection[str]) -> tuple[str, ...]:
   """the providers in `among` whose rosters carry `model`, by short name or full id."""
   return tuple(
     provider
-    for provider in known_names()
-    if provider in among and (model in models(provider) or model in models(provider).values())
+    for provider, module in declarations(among)
+    if model in module.MODELS or model in module.MODELS.values()
   )
 
 
@@ -151,9 +206,7 @@ def provider_of_model(model: str, among: Collection[str]) -> str:
 
 
 def _short_names(among: Collection[str]) -> list[str]:
-  return sorted(
-    name for provider in known_names() if provider in among for name in models(provider)
-  )
+  return sorted(name for _, module in declarations(among) for name in module.MODELS)
 
 
 @dataclass(frozen=True)
@@ -171,9 +224,10 @@ class LLMSelection:
   fast: bool = False
 
   def __post_init__(self):
-    if self.provider is not None and self.provider not in _PROVIDER_MODULES:
+    if self.provider is not None and self.provider not in known_names():
       raise LLMSelectionError(
-        f'unknown provider {self.provider!r}; known providers: {", ".join(known_names())}'
+        f'unknown provider {self.provider!r}; installed providers: {", ".join(known_names())}; '
+        'install the plug-in that provides it'
       )
     if self.effort is not None and self.effort not in EFFORT_LEVELS:
       raise LLMSelectionError(
@@ -254,7 +308,7 @@ def parse(value: str) -> LLMSelection:
   return selection
 
 
-def resolve(base: LLMSpec, selection: LLMSelection, among: Collection[str]) -> LLMSpec:
+def resolve(base: LLMSpec | None, selection: LLMSelection, among: Collection[str]) -> LLMSpec:
   """the recipe a launch runs: `selection` applied over the standing `base`,
   with a model named alone resolved among the providers in `among`.
 
@@ -277,9 +331,11 @@ def resolve(base: LLMSpec, selection: LLMSelection, among: Collection[str]) -> L
     model = resolve_model(provider, selection.model)
     spec = (
       dataclasses.replace(base, model=model)
-      if type(base) is type(default_spec(provider))
+      if base is not None and type(base) is type(default_spec(provider))
       else dataclasses.replace(default_spec(provider), model=model)
     )
+  if spec is None:
+    raise LLMSelectionError('no LLM recipe: pass --llm provider:model')
   if selection.fast:
     try:
       spec = spec.fast()

@@ -581,3 +581,39 @@ async def test_a_reap_that_fails_does_not_replace_the_cancellation(tmp_path):
   run.cancel()
   with pytest.raises(asyncio.CancelledError):
     await run
+
+
+def test_harbor_import_skips_a_broken_provider_but_explicit_selection_fails(tmp_path, monkeypatch):
+  metadata = tmp_path / 'faulty_provider-1.dist-info'
+  metadata.mkdir()
+  (metadata / 'METADATA').write_text('Name: faulty-provider\nVersion: 1\n')
+  (metadata / 'entry_points.txt').write_text(
+    '[bro.llm.providers]\nfaulty = missing_faulty_provider.declaration\n'
+  )
+  monkeypatch.setenv('PYTHONPATH', str(tmp_path))
+  result = subprocess.run(
+    [
+      sys.executable,
+      '-c',
+      """
+from bro.benchmark.harbor_agent import BroAgent, bare_recipe
+from bro.llm import providers
+
+assert 'faulty' in providers.known_names()
+healthy = providers.declaration('openai')
+patterns = {pattern.pattern for pattern in BroAgent.ERROR_PATTERNS}
+assert {signature.pattern for signature in healthy.FAILURE_SIGNATURES} <= patterns
+assert bare_recipe('openai/terra') == 'terra'
+try:
+  providers.default_spec('faulty')
+except providers.LLMSelectionError as error:
+  assert 'faulty' in str(error) and 'unavailable' in str(error)
+else:
+  raise AssertionError('explicit selection accepted a broken provider')
+""",
+    ],
+    capture_output=True,
+    text=True,
+    check=True,
+  )
+  assert 'faulty' in result.stderr

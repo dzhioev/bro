@@ -31,6 +31,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — prospective credential scopes, the harness's `ScopeRecipe`, and credential-store views.
 - `ride/authority_reading.py` — immutable root readings of host and project policy, store defaults, and installation registries.
+  Broken personas and provider declarations are retained as unavailable with their fault; only launches selecting them are refused.
 - `ride/authority_scope.py` — bro option defaults, credential gate-outcome manifests, wire mapping, existence checks, and layered bases.
 - `ride/authority_launch.py` — request/gift/cap mapping, descriptor-based credential hydration, live authority views, and resume-layer replacement.
 - `ride/root.py` — supervision of either neutral started-party launch for roots and manually launched children, behind the broker availability gate.

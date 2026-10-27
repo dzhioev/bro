@@ -9,7 +9,7 @@ from typing import Optional
 import bro.base.args as base_args
 from bro.base.offload import off_loop
 from bro.inbox import Inbox
-from bro.llm.llm import NativeLLMSpec
+from bro.llm import wires
 from bro.llm.mcp import MCPServer, ToolRegistry
 from bro.llm.observer import NullObserver, Observer
 from bro.llm.tracker import NullTracker, StepKind, Tracker
@@ -63,8 +63,8 @@ async def llm_main(request: str, provider: str, model: Optional[str], attachment
   from bro.native import loop
 
   spec = llm_providers.default_spec(provider)
-  if not isinstance(spec, NativeLLMSpec):
-    raise ValueError(f'provider {provider!r} builds no in-process client')
+  if spec.WIRE not in wires.client_names():
+    raise ValueError(f'provider {provider!r} wire {spec.WIRE!r} has no client')
   if model is not None:
     spec = dataclasses.replace(spec, model=llm_providers.resolve_model(provider, model))
   instance = loop.create(spec, Inbox())

@@ -14,12 +14,12 @@ This is not a uv workspace member:
 pins `openai == 3`, so no single lock satisfies both.
 The directory therefore locks and syncs on its own:
 `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside this file.
-It depends through editable path sources on core, ride, the Claude harness, both trail-format distributions, and `bro-bench`,
+It depends through editable path sources on core, ride, the Claude harness, both trail-format distributions, the bare provider plug-ins, and `bro-bench`,
 whose launcher-side credential and command registrations, and the preset composition the job runner reads, are shared with the root environment.
-The ride dependency supplies scoped-store materialization without pulling the native engine's other `openai` major;
-the two must never meet in one interpreter.
+Bare provider plug-ins supply declarations and pricing without pulling wire clients into Harbor's interpreter.
 The relocatable bundle builds and installs `bro` plus both harnesses and their trail-format distributions
 from the root workspace instead of adding the engine to this project's environment.
+Its requirements export requests the `client` extras, and the build validates every registered wire client in the bundled interpreter.
 
 Formatting and linting stay the repository root's, which walks this directory through its
 `[tool.ruff] src`.

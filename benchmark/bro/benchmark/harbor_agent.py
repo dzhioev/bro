@@ -49,7 +49,7 @@ from bro.base import credentials
 from bro.benchmark.bundle import Bundle, built, default_root, workspace_root
 from bro.benchmark.trial_store import TRAILS_DIRECTORY, token_totals
 from bro.llm.llm import FAILURE_CATEGORIES
-from bro.llm.providers import failure_signatures, known_names, parse
+from bro.llm.providers import declarations, known_names, parse
 from ride.workspace.spawn import PROCESS_TERM_GRACE
 
 AGENT_NAME = 'bro'
@@ -107,8 +107,8 @@ def _error_patterns() -> list[ErrorPattern]:
   classifications."""
   return [
     ErrorPattern(signature.pattern, _HARBOR_EXCEPTIONS[signature.category])
-    for provider in known_names()
-    for signature in failure_signatures(provider)
+    for _, module in declarations()
+    for signature in module.FAILURE_SIGNATURES
   ]
 
 

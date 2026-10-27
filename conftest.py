@@ -5,8 +5,8 @@ configured sink — even on a workstation where the production recorder is the
 default via `set_default_tracker_factory`.
 
 The run-start credential gate is pinned open for the same hermeticity (the
-autouse fixture below): test bros mostly keep the default openai spec, and no
-suite resolves its `openai` key — `rebuild_environment` pins the credential
+autouse fixture below): test personas may declare provider recipes, but no
+suite resolves real provider keys — `rebuild_environment` pins the credential
 search path away from every store. Gate tests opt out with
 `@pytest.mark.credential_gate` and control `credentials.available` themselves.
 

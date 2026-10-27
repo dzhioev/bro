@@ -1,5 +1,5 @@
 import bro.brog.mcp as brog_mcp
-import bro.llm.llms.openai as openai
+import bro.openai.declaration as openai
 import bros.devoops as devoops
 from bro.base.condition import when
 from bro.bro import feature

@@ -11,7 +11,7 @@ import ride.cli as ride_cli
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
 from bro.base import configs, credentials, host_config
-from bro.llm.llms.echo import LLMSpec as EchoLLMSpec
+from bro.native.echo_declaration import LLMSpec as EchoLLMSpec
 from bro.workspace.paths import workspace_dir
 from bros.bro import Bro
 from ride import pending_launch

@@ -9,6 +9,7 @@ description = "Claude Code harness for bro"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "bro-anthropic",
   "bro",
   "bro-ride",
   "bro-claude-trails",
@@ -36,12 +37,14 @@ persona = "bro.claude.assembly:resolve_persona_target"
 claude_code = "bro.claude.credentials:KIND"
 
 [tool.uv.sources]
+bro-anthropic = { workspace = true }
 bro = { workspace = true }
 bro-ride = { workspace = true }
 bro-claude-trails = { workspace = true }
 bro-wire-messages = { workspace = true }
 
 [tool.deptry.package_module_name_map]
+bro-anthropic = ["bro"]
 bro = ["bro", "bros"]
 bro-ride = ["ride"]
 bro-claude-trails = ["bro"]

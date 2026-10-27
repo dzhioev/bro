@@ -2691,7 +2691,7 @@ import json
 from contextlib import contextmanager
 
 from bro.bro import BaseBro
-from bro.llm.llms.echo import LLMSpec as EchoSpec
+from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.llm.tracker import NullTracker
 from bro.native.llm import LLM
 from bro.native.runner import Runner
@@ -2821,7 +2821,7 @@ from contextlib import contextmanager
 from typing import Optional, cast
 
 from bro.bro import BaseBro
-from bro.llm.llms.echo import LLMSpec as EchoSpec
+from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.llm.tracker import NullTracker
 from bro.native.llm import LLM
 from bro.native.runner import Runner

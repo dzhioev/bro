@@ -9,6 +9,7 @@ description = "development tooling for repositories built on the bro framework"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "bro-openai",
   "bro",
   "markdown-it-py",
   "pytest",
@@ -50,9 +51,11 @@ lead = "bros.lead:Lead"
 terminal = "bros.terminal:Terminal"
 
 [tool.uv.sources]
+bro-openai = { workspace = true }
 bro = { workspace = true }
 
 [tool.deptry.package_module_name_map]
+bro-openai = ["bro"]
 bro = ["bro", "bros"]
 
 [tool.uv.build-backend]

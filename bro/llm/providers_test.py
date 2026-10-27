@@ -2,9 +2,11 @@ from decimal import Decimal
 
 import pytest
 
+from bro.anthropic import declaration as anthropic
 from bro.llm import providers
-from bro.llm.llm import FAILURE_CATEGORIES, FailureSignature, NativeLLMSpec
-from bro.llm.llms import anthropic, echo, openai as openai_llm
+from bro.llm.llm import FAILURE_CATEGORIES, FailureSignature, LLMSpec
+from bro.native import echo_declaration as echo
+from bro.openai import declaration as openai_llm
 
 ALL = providers.known_names()
 
@@ -14,7 +16,8 @@ def shared_short_name(monkeypatch):
   tables = {name: dict(providers.models(name)) for name in ALL}
   tables['openai']['shared'] = 'gpt-shared'
   tables['anthropic']['shared'] = 'claude-shared'
-  monkeypatch.setattr(providers, 'models', lambda provider: tables[provider])
+  for name, table in tables.items():
+    monkeypatch.setattr(providers.declaration(name), 'MODELS', table)
 
 
 class TestRoster:
@@ -193,11 +196,13 @@ class TestResolve:
 
 class TestNativeSplit:
   def test_anthropic_is_a_recipe_the_native_loop_cannot_run(self):
-    assert not isinstance(anthropic.LLMSpec(), NativeLLMSpec)
+    from bro.llm import wires
+
+    assert anthropic.LLMSpec.WIRE not in wires.client_names()
 
   def test_the_api_providers_build_clients(self):
-    assert isinstance(openai_llm.LLMSpec(), NativeLLMSpec)
-    assert isinstance(echo.LLMSpec(), NativeLLMSpec)
+    assert isinstance(openai_llm.LLMSpec(), LLMSpec)
+    assert isinstance(echo.LLMSpec(), LLMSpec)
 
   def test_every_provider_round_trips_through_from_dict(self):
     for name in providers.known_names():
@@ -236,9 +241,9 @@ class TestPricing:
 
 
 def test_recipe_selection_round_trip_preserves_provider_parameters():
-  from bro.llm.llms.anthropic import LLMSpec as AnthropicSpec
-  from bro.llm.llms.echo import LLMSpec as EchoSpec
-  from bro.llm.llms.openai import LLMSpec as OpenAISpec
+  from bro.anthropic.declaration import LLMSpec as AnthropicSpec
+  from bro.native.echo_declaration import LLMSpec as EchoSpec
+  from bro.openai.declaration import LLMSpec as OpenAISpec
 
   for spec in (
     AnthropicSpec(model=None, effort=None),
@@ -254,3 +259,151 @@ def test_recipe_selection_round_trip_preserves_provider_parameters():
     OpenAISpec().with_selection({'model': None, 'effort': None})
   with pytest.raises(ValueError, match='selection fields'):
     EchoSpec().with_selection({'model': 'echo', 'effort': None})
+
+
+@pytest.fixture
+def broken_plugin(tmp_path, monkeypatch):
+  import importlib.metadata
+
+  package = tmp_path / 'faulty_provider'
+  package.mkdir()
+  (package / '__init__.py').write_text('')
+  (package / 'credentials.py').write_text("KIND = {'description': 'fixture key'}\n")
+  (package / 'declaration.py').write_text("raise RuntimeError('fixture declaration failed')\n")
+  (package / 'persona.py').write_text('from faulty_provider.declaration import LLMSpec\n')
+  monkeypatch.syspath_prepend(str(tmp_path))
+  entries = (
+    *providers._entry_points(),
+    importlib.metadata.EntryPoint(
+      name='faulty',
+      value='faulty_provider.declaration',
+      group=providers.ENTRY_POINT_GROUP,
+    ),
+  )
+  monkeypatch.setattr(providers, '_entry_points', lambda: entries)
+  return package
+
+
+def test_known_names_reads_metadata_without_loading_entries(monkeypatch):
+  import importlib.metadata
+
+  entries = (
+    importlib.metadata.EntryPoint(
+      name='zeta', value='missing_zeta', group=providers.ENTRY_POINT_GROUP
+    ),
+    importlib.metadata.EntryPoint(
+      name='alpha', value='missing_alpha', group=providers.ENTRY_POINT_GROUP
+    ),
+  )
+  monkeypatch.setattr(providers, '_entry_points', lambda: entries)
+  monkeypatch.setattr(
+    importlib.metadata.EntryPoint, 'load', lambda self: pytest.fail('loaded a declaration')
+  )
+  assert providers.known_names() == ('alpha', 'zeta')
+
+
+@pytest.mark.usefixtures('broken_plugin')
+def test_broken_declaration_is_skipped_by_searches_but_refused_by_name():
+  from bro.llm import usage
+  from bro.native.harness import BRO
+
+  assert providers.provider_of_model('terra', providers.known_names()) == openai_llm.LLMSpec.TYPE
+  assert 'faulty' not in dict(providers.available_specs())
+  assert 'faulty' not in BRO.llm_providers
+  assert openai_llm.LLMSpec().effort_values <= providers.effort_values()
+  assert usage.model_family('arbitrary-2026-01-01') == 'arbitrary'
+  assert LLMSpec.from_dict(echo.LLMSpec().dump()) == echo.LLMSpec()
+  with pytest.raises(providers.LLMSelectionError, match='faulty.*fixture declaration failed'):
+    providers.default_spec('faulty')
+  with pytest.raises(providers.LLMSelectionError, match='faulty.*fixture declaration failed'):
+    LLMSpec.from_dict({'type': 'faulty'})
+  with pytest.raises(providers.LLMSelectionError, match='faulty.*fixture declaration failed'):
+    BRO.resolve_recipe(echo.LLMSpec(), providers.parse('faulty'))
+
+
+@pytest.mark.usefixtures('broken_plugin')
+def test_installation_preserves_broken_persona_and_provider_faults(monkeypatch):
+  import importlib.metadata
+
+  from bro import registry
+  from ride.authority_reading import Configuration, Installation, Reading
+  from ride.authority_scope import recipe
+
+  entries = (
+    *registry._entry_points(),
+    importlib.metadata.EntryPoint(
+      name='faulty-persona',
+      value='faulty_provider.persona:Persona',
+      group='bro',
+    ),
+  )
+  monkeypatch.setattr(registry, '_entry_points', lambda: entries)
+  installation = Installation.take()
+  assert 'fixture declaration failed' in installation.unavailable_bros['faulty-persona']
+  assert 'fixture declaration failed' in installation.unavailable_providers['faulty']
+  reading = Reading(Configuration.parse({}), {}, installation)
+  spec = recipe({'target': 'bro-dev', 'harness': 'bro', 'provider': 'echo'}, reading)
+  assert spec == echo.LLMSpec()
+  from bro.authority.rules import Request
+
+  launch = reading.rules.start(
+    Request('bro', {'target': 'bro-dev', 'harness': 'bro', 'provider': 'echo'}),
+    reading.operator(),
+    reading,
+  )
+  assert launch.descriptor.values['provider'] == echo.LLMSpec.TYPE
+  with pytest.raises(ValueError, match='faulty-persona.*unavailable.*fixture declaration failed'):
+    recipe({'target': 'faulty-persona', 'harness': 'bro'}, reading)
+  with pytest.raises(ValueError, match='faulty.*unavailable.*fixture declaration failed'):
+    recipe({'target': 'bro-dev', 'harness': 'bro', 'provider': 'faulty'}, reading)
+
+
+def test_stored_recipe_loads_only_its_named_declaration(monkeypatch):
+  loaded = []
+  original = providers.declaration
+
+  def load(name):
+    loaded.append(name)
+    return original(name)
+
+  monkeypatch.setattr(providers, 'declaration', load)
+  assert LLMSpec.from_dict(echo.LLMSpec().dump()) == echo.LLMSpec()
+  assert loaded == [echo.LLMSpec.TYPE]
+
+
+@pytest.mark.parametrize('names', [('same', 'same'), ('Invalid',)])
+def test_invalid_or_duplicate_entry_names_are_refused(names, monkeypatch):
+  import importlib.metadata
+
+  entries = tuple(
+    importlib.metadata.EntryPoint(name=name, value='missing', group=providers.ENTRY_POINT_GROUP)
+    for name in names
+  )
+  monkeypatch.setattr(providers, '_entry_points', lambda: entries)
+  with pytest.raises(ValueError, match='duplicate|invalid'):
+    providers.known_names()
+
+
+def test_declaration_type_must_match_entry_name(monkeypatch):
+  import importlib.metadata
+
+  entry = importlib.metadata.EntryPoint(
+    name='different', value='bro.native.echo_declaration', group=providers.ENTRY_POINT_GROUP
+  )
+  monkeypatch.setattr(providers, '_entry_points', lambda: (entry,))
+  with pytest.raises(providers.LLMSelectionError, match='different.*TYPE'):
+    providers.default_spec('different')
+
+
+def test_uninstalled_provider_refusal_names_installation_route():
+  with pytest.raises(
+    providers.LLMSelectionError, match='unknown provider.*installed providers:.*install the plug-in'
+  ):
+    LLMSpec.from_dict({'type': 'absent-provider'})
+
+
+def test_native_refusal_identifies_a_decode_only_wire():
+  from bro.native.harness import BRO
+
+  with pytest.raises(providers.LLMSelectionError, match="wire 'messages'"):
+    BRO.resolve_recipe(echo.LLMSpec(), providers.parse('anthropic'))

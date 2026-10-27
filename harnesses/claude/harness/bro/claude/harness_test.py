@@ -110,13 +110,13 @@ def test_claude_resolution_refuses_a_family_alias(recipe):
 
 
 def test_claude_resolution_names_no_model_or_effort_by_default():
-  from bro.llm.llms.anthropic import LLMSpec
+  from bro.anthropic.declaration import LLMSpec
 
   assert claude_harness.CLAUDE.resolve_llm(None, 'bro') == LLMSpec(model=None, effort=None)
 
 
 def test_claude_resolution_keeps_the_picked_model_under_an_effort_alone():
-  from bro.llm.llms.anthropic import MODELS, LLMSpec
+  from bro.anthropic.declaration import MODELS, LLMSpec
 
   assert claude_harness.CLAUDE.resolve_llm(':opus55:low', 'bro') == LLMSpec(
     model=MODELS['opus55'], effort='low'

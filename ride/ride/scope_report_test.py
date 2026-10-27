@@ -4,7 +4,7 @@ import pytest
 
 from bro.base import credentials, host_config
 from bro.bro import BaseBro
-from bro.llm.llms.echo import LLMSpec
+from bro.native.echo_declaration import LLMSpec
 from ride.scope_report import report_scope
 
 
