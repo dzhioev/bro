@@ -1192,3 +1192,34 @@ class TestInterruptedTurn:
     # rather than vanishing from the conversation
     assert [item.content for item in cast(list, gpt._pending_input)] == ['go']
     assert gpt.wire._last_response_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('arguments', ['{broken', '[]', 'null', '1', '"text"', '', '  '])
+async def test_argument_errors_are_returned_to_the_model_without_calling_the_tool(arguments):
+  tool = _StaticTool('ping')
+  invoked = []
+
+  async def invoke(arguments):
+    invoked.append(arguments)
+    return 'ok'
+
+  tool.call = invoke
+  loop, tracker, captured = _make_responses_loop_with_tracker([tool])
+  _install_responses(
+    loop,
+    [
+      _fake_response(output=[_function_call_item('ping', call_id='c1', arguments=arguments)]),
+      _fake_response(output=[_message_item('recovered')]),
+    ],
+    captured,
+  )
+
+  assert await loop.send([{'role': 'user', 'content': 'go'}]) == 'recovered'
+
+  empty = not arguments.strip()
+  assert invoked == ([{}] if empty else [])
+  output = captured[1]['input'][0]['output']
+  assert output == ('ok' if empty else "tool 'svc__ping' failed: arguments are not a JSON object")
+  result = next(step for step in tracker.steps if step[0] == 'tool_result')
+  assert result[2]['is_error'] is not empty
