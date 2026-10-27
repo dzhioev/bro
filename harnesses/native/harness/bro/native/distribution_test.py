@@ -38,9 +38,8 @@ _NATIVE_DOMAIN = {
   'bro/native/dev_mcp.py',
   'bro/native/harness.py',
   'bro/native/llm.py',
-  'bro/native/llms/echo.py',
-  'bro/native/llms/openai.py',
-  'bro/native/providers.py',
+  'bro/native/echo.py',
+  'bro/native/loop.py',
   'bro/native/runner.py',
   'bro/run.py',
   'bro/trails/record/bro.py',
@@ -48,7 +47,6 @@ _NATIVE_DOMAIN = {
 _NATIVE_SUPPORT = {
   'bro/native/__init__.py',
   'bro/native/_entrypoints.py',
-  'bro/native/llms/__init__.py',
 }
 _CORE_DOMAIN = {
   'bro/bro.py',
@@ -209,7 +207,6 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro-wire-responses',
     'humanize',
     'mcp',
-    'openai',
     'rich',
     'textual',
     'trafilatura',
@@ -329,15 +326,23 @@ def test_pdf_type_registers_from_its_own_wheel(wheels, wheel_files):
 
 
 @pytest.mark.parametrize('name', ['chat', 'messages', 'responses'])
-def test_wire_wheels_supply_only_their_decode_side(wheels, wheel_files, name):
+def test_wire_wheels_separate_optional_clients_from_sdk_free_decoders(wheels, wheel_files, name):
   distribution = f'bro-wire-{name}'
   assert dict(_entry_points(wheels[distribution])['bro.llm.wires']) == {
     name: f'bro.wire_{name}.decode'
   }
-  assert wheel_files[distribution] == {f'bro/wire_{name}/__init__.py', f'bro/wire_{name}/decode.py'}
+  expected = {f'bro/wire_{name}/__init__.py', f'bro/wire_{name}/decode.py'}
+  entries = _entry_points(wheels[distribution])
+  if entries.has_section('bro.llm.wire_clients'):
+    expected.add(f'bro/wire_{name}/client.py')
+    assert set(entries['bro.llm.wire_clients']) == {name}
+    assert _metadata(wheels[distribution]).get_all('Provides-Extra') == ['client']
+  assert wheel_files[distribution] == expected
   requirements = _metadata(wheels[distribution]).get_all('Requires-Dist')
   assert requirements is not None
-  assert {_requirement_name(requirement) for requirement in requirements} == {'bro'}
+  assert {
+    _requirement_name(requirement) for requirement in requirements if 'extra ==' not in requirement
+  } == {'bro'}
 
 
 def test_wire_decode_wheels_work_without_sdks_or_harnesses(wheels, tmp_path):

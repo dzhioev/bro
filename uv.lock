@@ -491,10 +491,9 @@ dependencies = [
     { name = "bro" },
     { name = "bro-native-trails" },
     { name = "bro-ride" },
-    { name = "bro-wire-responses" },
+    { name = "bro-wire-responses", extra = ["client"] },
     { name = "humanize" },
     { name = "mcp" },
-    { name = "openai" },
     { name = "rich" },
     { name = "textual" },
     { name = "trafilatura" },
@@ -508,10 +507,9 @@ requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-native-trails", editable = "harnesses/native/trails" },
     { name = "bro-ride", editable = "ride" },
-    { name = "bro-wire-responses", editable = "wires/responses" },
+    { name = "bro-wire-responses", extras = ["client"], editable = "wires/responses" },
     { name = "humanize", specifier = "==4.16.0" },
     { name = "mcp", specifier = "==2.3.0" },
-    { name = "openai", specifier = "==3.33.0" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "textual", specifier = "==8.2.8" },
     { name = "trafilatura", specifier = "==2.3.1" },
@@ -602,8 +600,17 @@ dependencies = [
     { name = "bro" },
 ]
 
+[package.optional-dependencies]
+client = [
+    { name = "openai" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "bro", editable = "." }]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "openai", marker = "extra == 'client'", specifier = "==3.33.0" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "certifi"

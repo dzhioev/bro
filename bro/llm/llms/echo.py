@@ -39,6 +39,9 @@ class LLMSpec(llm_llm.NativeLLMSpec):
 
   model: str = DEFAULT_MODEL
 
+  def accepts(self, part_kind: str) -> bool:
+    return part_kind == 'text'
+
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
 

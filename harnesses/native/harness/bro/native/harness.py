@@ -18,7 +18,7 @@ from bro.jobs import Job, JobStatus, Registry
 from bro.llm.llm import NativeLLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
-from bro.native import dev_mcp, providers as native_providers
+from bro.native import dev_mcp, loop
 from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -197,7 +197,7 @@ def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[st
 
 class BroHarness(Harness):
   name = 'bro'
-  llm_providers = native_providers.known_names()
+  llm_providers = loop.known_names()
 
   def facts(self) -> Variables:
     return {

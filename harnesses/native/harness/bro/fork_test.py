@@ -7,13 +7,21 @@ from unittest.mock import patch
 import pytest
 from openai.types.responses import Response
 
-import bro.native.llms.openai as openai_module
-from bro.fork import fork, latest_fork_point, replay_messages
+from bro.fork import fork, latest_fork_point, replay_prefix
 from bro.llm.llms.openai import LLMSpec as OpenAISpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.native.harness import BRO
+from bro.native.loop_test_helper import ResponsesLoop, make_loop
 from bro.registry import create_bro
 from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
+from bro.wire_responses.client import Responses
+
+
+def replay_messages(trail, step_id, **kwargs):
+  wire = Responses(OpenAISpec(), {'api_key': 'dummy'})
+  wire.restore(replay_prefix(trail, step_id, **kwargs))
+  return wire._input_prefix
+
 
 _SYS_TEXT = 'you are a test bro'
 
@@ -583,7 +591,23 @@ def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload
     usage=_fake_usage(),
     model='gpt-5',
   )
-  payload = dump_payload if dump_payload is not None else {'id': response_id, 'output': []}
+
+  def plain(value):
+    if isinstance(value, SimpleNamespace):
+      return {key: plain(item) for key, item in vars(value).items()}
+    if isinstance(value, list):
+      return [plain(item) for item in value]
+    return value
+
+  payload = {
+    'id': response_id,
+    'model': 'gpt-5',
+    'status': 'completed',
+    'output': plain(output),
+    'usage': plain(namespace.usage),
+  }
+  if dump_payload is not None:
+    payload.update(dump_payload)
   namespace.model_dump = lambda mode='json': payload
   return cast(Response, namespace)
 
@@ -596,25 +620,25 @@ def _message_item(text: str):
   )
 
 
-def _install_responses(gpt: openai_module.OpenAI, sequence: list, captured: list[dict]) -> None:
+def _install_responses(gpt: ResponsesLoop, sequence: list, captured: list[dict]) -> None:
   iterator = iter(sequence)
 
   async def create(**kwargs):
     captured.append(kwargs)
     return next(iterator)
 
-  gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+  gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
 
 def _patch_native_openai_create(stub_responses):
   """patch native provider construction with a controllable OpenAI client."""
   captured_kwargs: list[dict] = []
-  created: list[openai_module.OpenAI] = []
+  created: list[ResponsesLoop] = []
 
   def _create(
     spec, inbox, mcp_servers=None, observer=None, tracker=None, agent=None, activity_file=None
   ):
-    gpt = openai_module.OpenAI(
+    gpt = make_loop(
       api_key='dummy',
       inbox=inbox,
       model=spec.model,
@@ -626,12 +650,12 @@ def _patch_native_openai_create(stub_responses):
       agent=agent,
       activity_file=activity_file,
     )
-    gpt._openai_tools = []
+    gpt._resolved_tools = []
     _install_responses(gpt, stub_responses, captured_kwargs)
     created.append(gpt)
     return gpt
 
-  context = patch('bro.native.providers.create', _create)
+  context = patch('bro.native.loop.create', _create)
   return context, captured_kwargs, created
 
 
@@ -645,6 +669,36 @@ def _simple_trail(**header_overrides: Any) -> RecordedTrail:
       _step('llm_call', _llm_call_body(reply), step_id=2, turn_index=1, response_id='r1'),
     ],
   )
+
+
+@pytest.mark.parametrize('ancestor_mismatch', [False, True])
+def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, ancestor_mismatch):
+  import bro.fork as fork_module
+  from bro.llm.llms.echo import LLMSpec as EchoSpec
+
+  trail = _simple_trail()
+  parent = trail
+  if ancestor_mismatch:
+    trail = RecordedTrail(
+      header=dataclasses.replace(
+        _trail_header(trail_id='child', llm_spec=EchoSpec().dump()),
+        forked_from=ForkedFrom(parent.header.id, 2),
+      ),
+      steps=[_step('system_prompt', 'child prompt', step_id=0)],
+    )
+
+  def unexpected_construction(*args, **kwargs):
+    raise AssertionError('persona constructed before wire validation')
+
+  monkeypatch.setattr(fork_module, 'create_bro', unexpected_construction)
+  with pytest.raises(ValueError, match='responses.*echo.*recorded wire'):
+    fork(
+      trail,
+      0 if ancestor_mismatch else 2,
+      llm_spec=EchoSpec(),
+      surface='test',
+      fetch_forked_from=lambda trail_id: parent,
+    )
 
 
 class TestForkHarnessGuard:
@@ -712,7 +766,7 @@ class TestForkLinkage:
       fork(forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test')
     assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
     # prefix on the new OpenAI's seam carries the override at index 0
-    seeded = created[0]._input_prefix
+    seeded = created[0].wire._input_prefix
     assert seeded is not None
     assert seeded[0] == {'role': 'system', 'content': 'swapped prompt'}
 
@@ -738,7 +792,7 @@ class TestForkLinkage:
     expected_prompt = create_bro('bro').system_prompt_for(hold='attended', harness=BRO)
     assert tracker.headers[0]['system_prompt'] == expected_prompt
     assert tracker.headers[0]['hold'] == 'attended'
-    prefix = created[0]._input_prefix
+    prefix = created[0].wire._input_prefix
     assert prefix is not None
     assert prefix[0] == {'role': 'system', 'content': expected_prompt}
 
@@ -769,7 +823,7 @@ class TestForkSpec:
     )
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert created[0].model == 'gpt-5'
+    assert created[0].wire.recipe.selection()['model'] == 'gpt-5'
     assert tracker.headers[0]['llm_spec'] == {
       'type': 'openai',
       'model': 'gpt-5',
@@ -787,8 +841,8 @@ class TestForkSpec:
     )
     with context:
       fork(forked_from_trail, 2, llm_spec=override, tracker=tracker, surface='test')
-    assert created[0].model == 'gpt-5.4-mini'
-    assert created[0]._reasoning_effort == 'medium'
+    assert created[0].wire.recipe.selection()['model'] == 'gpt-5.4-mini'
+    assert created[0].wire.recipe.request_options()['reasoning']['effort'] == 'medium'
     assert tracker.headers[0]['llm_spec']['model'] == 'gpt-5.4-mini'
     assert tracker.headers[0]['llm_spec']['reasoning_effort'] == 'medium'
 
@@ -970,16 +1024,15 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('continued')])]
     )
     with context:
-      # forcing client-side via a no-op system_prompt override — the path
-      # picker treats any override as "client-side only" since the cached
-      # server-side prefix can't be restated.
-      runner = fork(forked_from_trail, 5, system_prompt=_SYS_TEXT, record=False, surface='test')
+      runner = fork(
+        forked_from_trail, 5, system_prompt='another prompt', record=False, surface='test'
+      )
       await runner.send('next', surface='test')
     api_input = captured[0]['input']
     # prefix preserves: system, user, function_call, function_call_output (with
     # matching call_id), final assistant message — then the new user message
     assert api_input == [
-      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'system', 'content': 'another prompt'},
       {'role': 'user', 'content': 'go'},
       call_item,
       {'type': 'function_call_output', 'call_id': 'c1', 'output': 'tool answer'},
@@ -1033,7 +1086,9 @@ class TestForkClientSideReplay:
       ]
     )
     with context:
-      runner = fork(forked_from_trail, 2, system_prompt=_SYS_TEXT, record=False, surface='test')
+      runner = fork(
+        forked_from_trail, 2, system_prompt='another prompt', record=False, surface='test'
+      )
       await runner.send('msg one', surface='test')
       await runner.send('msg two', surface='test')
     # second call goes through `previous_response_id` and only ships the new
