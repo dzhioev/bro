@@ -25,7 +25,7 @@ def test_browser_declares_its_worker_seed_reader_and_spell() -> None:
   browser = Browser()
 
   assert browser._may_launch == ('webview',)
-  assert 'openai' in browser.optional_secrets('bro')
+  assert 'mu' in browser.optional_secrets('bro')
   assert 'browse' in browser.spell_paths
   assert browser.get_spell_body('browse', harness='bro', hold='unattended').startswith('# browse\n')
 

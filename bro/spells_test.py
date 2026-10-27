@@ -407,6 +407,7 @@ class TestCast:
     package = fake_packages('_cast_mount', {'do-work': _spell()})
     bro_class = package.bro_class()
 
+    monkeypatch.setattr(spell_store.credentials, 'available', lambda name: name == 'openai')
     unavailable_spells = {tool.name for tool in await _spell_server(bro_class()).list_tools()}
     unavailable_services = {tool.name for tool in await _service_server(bro_class()).list_tools()}
     assert unavailable_spells == {'do-work'}
@@ -442,7 +443,8 @@ class TestCast:
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
     captured = {}
 
-    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, role=None):
+      captured['role'] = role
       captured['prompt'] = prompt
       captured['request'] = contents[0].json
       return result_class.model_validate(
@@ -462,6 +464,7 @@ class TestCast:
     assert result == (
       'spell: spell::do-work\n\nprocedure body\n\n# Arguments\n\ntask: T-1\nnotes: keep the merge'
     )
+    assert captured['role'] == 'dispatch'
     assert 'unambiguously applies' in captured['prompt']
     assert captured['request']['command'] == 'work on T-1'
     assert captured['request']['spells'] == [
@@ -490,7 +493,7 @@ class TestCast:
     )
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, role=None):
       return result_class.model_validate(
         {'spell': 'spell::do-work', 'arguments': [], 'error': None}
       )
@@ -512,7 +515,7 @@ class TestCast:
     package = fake_packages('_cast_null_arguments', {'do-work': _spell()})
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, role=None):
       return result_class.model_validate(
         {'spell': 'spell::do-work', 'arguments': None, 'error': None}
       )
@@ -529,7 +532,7 @@ class TestCast:
     package = fake_packages('_cast_error', {'do-work': _spell()})
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, role=None):
       return result_class.model_validate(
         {'spell': None, 'arguments': None, 'error': 'the command matches no spell'}
       )
@@ -581,7 +584,7 @@ class TestCast:
     )
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, role=None):
       return result_class.model_validate({**interpretation, 'error': None})
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
@@ -595,7 +598,7 @@ class TestCast:
     package = fake_packages('_cast_empty_error', {'do-work': _spell()})
     monkeypatch.setattr(spell_store.credentials, 'available', lambda name: True)
 
-    async def fake_mu(prompt, result_class, *contents, model=None, reasoning_effort=None):
+    async def fake_mu(prompt, result_class, *contents, role=None):
       return result_class.model_validate({'spell': None, 'arguments': None, 'error': '   '})
 
     monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))

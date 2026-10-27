@@ -1344,7 +1344,7 @@ the core `mcp-server` discovers the matching resolver without knowing the target
 `bro.claude.assembly` resolves `persona:<name>` through `persona_servers()`
 — `BaseBro.assemble(harness=CLAUDE, ...)`, with the registered object injected by the Claude engine, yielding the bro's declared servers and data sources plus the `spell` and bro service servers;
 Claude serves the tool groups with its own natives, so the harness mounts no server of its own for them.
-`bro::cast` joins the service server when the bro has spells and OpenAI resolves.
+`bro::cast` joins the service server when the bro has spells and `mu` resolves.
 Persona sessions rely on Claude's native third-party skill mechanism instead of mounting `bro::skill` or generated spell adapters.
 The assembly also mounts the `raise` service tool when the session is unattended (`BRO_HOLD=unattended` + `RIDE_RUNNER_PID` in the server's inherited environment — see "Forwarded env vars"),
 in its terminate-the-session flavor (semantics in `bro/AGENTS.md`, "Service tools");
@@ -1366,7 +1366,7 @@ In boxed isolation the server runs inside the container, so the scoped credentia
 ### Bro spells and skills
 
 A bro's spells (the files its `spells` declaration names, `bro/reference/extending.md`, "Declaring a bro") are canonical `spell::<name>` tools;
-`bro::cast` joins the service server when OpenAI resolves, and the Spells contract routes `[[…]]` markers to it where it is mounted and to the spell's own tool otherwise.
+`bro::cast` joins the service server when `mu` resolves, and the Spells contract routes `[[…]]` markers to it where it is mounted and to the spell's own tool otherwise.
 A Claude session gets the Spells contract through its append prompt and keeps Claude's native third-party skill discovery;
 bro spells are not copied into `.claude/skills/` and have no slash-command aliases.
 The bro harness has no native skill loader, so its `Harness.own_tools` contributes `bro::skill`, whose empty result means the requested third-party skill is unavailable.

@@ -203,7 +203,7 @@ the spell tools and `cast` render spell bodies under that hold.
   it validates the answer and passes the result to `end_session`;
   the bro harness raises `AnswerDelivered`, which the runner or chat surface turns into the run's ok result;
   the Claude harness emits that result over the channel then terminates the session, and unlike `raise` an undeliverable answer errors back to the agent.
-- `cast` when the bro has spells and its key resolves (`bro/reference/ride.md`, "Bro spells and skills").
+- `cast` when the bro has spells and its `mu` credential resolves (`bro/reference/ride.md`, "Bro spells and skills").
   The bro harness contributes `skill` through its own tools because its model has no native skill loader.
 - `watch` and `unwatch` with a declared `brash` command list on every harness;
   `watch` starts its line in brash under the live run's policy, or the published one where the process runs none, or in bash under `brash(ANY)`;
@@ -234,6 +234,6 @@ The host hydrates the per-surface set into a scoped store before a session start
 
 `bro.optional_secrets(harness)` is the manifest's best-effort sibling:
 each declared component's `optional_secrets`, the credentials of the bro's gated features, and the cast key when the bro has spells, minus `needed_secrets()` so a hard requirement is never downgraded.
-It holds credentials a capability uses when present and degrades without, such as the LLM key behind a `SearchableDataSource`'s query-focused summary.
+It holds credentials a capability uses when present and degrades without, such as `mu` behind a `SearchableDataSource`'s query-focused summary.
 Hydration skips an optional kind only when no layer picked it and its empty instance is absent;
 a present or explicitly picked name must load, and `bro.base.credentials.available(name)` is the resolution predicate behind runtime gates and feature directives in static text.
