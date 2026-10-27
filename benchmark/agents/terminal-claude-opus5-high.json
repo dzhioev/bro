@@ -6,7 +6,9 @@
       "kwargs": {
         "bro": "terminal",
         "harness": "claude",
-        "llm_credential": "claude_code+benchmark"
+        "credentials": [
+          "claude_code+benchmark"
+        ]
       }
     }
   ]

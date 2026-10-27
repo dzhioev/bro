@@ -83,7 +83,7 @@ def _trial_config(task: str, bro: str = 'dev') -> dict:
     'agent': {
       'import_path': 'bro.benchmark.harbor_agent:BroAgent',
       'model_name': f'openai/{MODEL}:high',
-      'kwargs': {'bro': bro, 'llm_credential': 'openai+benchmark'},
+      'kwargs': {'bro': bro, 'credentials': ['openai+benchmark', 'mu+benchmark']},
     },
   }
 

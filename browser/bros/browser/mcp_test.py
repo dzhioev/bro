@@ -15,7 +15,7 @@ _PAGE_REPLY = '- Page URL: https://example.test/form\n- Page Title: Reader form'
 
 @pytest.fixture(autouse=True)
 def reader_credential(monkeypatch):
-  monkeypatch.setattr(mcp.credentials, 'available', lambda name: name == 'openai')
+  monkeypatch.setattr(mcp.credentials, 'available', lambda name: name == 'mu')
 
 
 def _capture_reply(filename: str) -> dict:
@@ -294,7 +294,7 @@ def test_reader_answer_is_cut_to_the_inline_bound(monkeypatch, tmp_path) -> None
 
 
 def test_missing_reader_key_names_non_llm_fallbacks(monkeypatch) -> None:
-  monkeypatch.setattr(mcp.credentials, 'available', lambda name: False)
+  monkeypatch.setattr(mcp.credentials, 'available', lambda name: name == 'openai')
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda *_arguments: pytest.fail('the missing key must fail before capture'),
@@ -304,7 +304,7 @@ def test_missing_reader_key_names_non_llm_fallbacks(monkeypatch) -> None:
     mcp.look('What is visible?', webview='webview-1')
 
   message = str(error.value)
-  assert 'openai' in message
+  assert 'mu' in message
   assert 'browser_find' in message
   assert 'targeted snapshot' in message
   assert 'artifact::read' in message
@@ -318,3 +318,16 @@ def test_missing_reader_key_names_non_llm_fallbacks(monkeypatch) -> None:
 def test_look_requires_exactly_one_input(webview, ref) -> None:
   with pytest.raises(ValueError, match='exactly one'):
     mcp.look('What is visible?', webview=webview, ref=ref)
+
+
+def test_read_page_chooses_the_reader_role(monkeypatch):
+  import bro.llm.mu as mu_module
+
+  def read(prompt, result, *contents, role=None):
+    assert role == 'reader'
+    assert prompt == 'question'
+    assert contents[0].to_text() == 'page text'
+    return result(answer='answer', elements=[])
+
+  monkeypatch.setattr(mu_module, 'mu', read)
+  assert mcp._read_page('question', 'page text').answer == 'answer'

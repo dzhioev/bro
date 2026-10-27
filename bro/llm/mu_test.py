@@ -1,107 +1,173 @@
-from types import SimpleNamespace
-from typing import Any, Optional
+import json
+from datetime import datetime
 
-import openai
 import pytest
 from pydantic import BaseModel
 
 import bro.llm.mu as mu_module
-from bro.llm.mu import IncompleteResponse, Text, TruncatedResponse, mu
+from bro.base import credentials
+from bro.llm import providers
+from bro.llm.llm import LLMStopped
+from bro.llm.mu import JSON, DateTimeEncoder, Text, mu
+from bro.llm.wire import Wire
 
 
 class _Answer(BaseModel):
   answer: str
 
 
-class _FakeClient:
-  def __init__(self, responses: Any):
-    self.responses = responses
+@pytest.fixture
+def material(monkeypatch):
+  value = {'llm': 'openai:terra:low', 'credential': {'api_key': 'default-key'}}
 
-  async def __aenter__(self) -> '_FakeClient':
-    return self
+  def read(name):
+    assert name == 'mu'
+    return value
 
-  async def __aexit__(self, *exception_info: Any) -> bool:
-    return False
-
-
-def _response(
-  output_text: str, status: str = 'completed', incomplete_reason: Optional[str] = None
-) -> Any:
-  details = SimpleNamespace(reason=incomplete_reason) if incomplete_reason is not None else None
-  return SimpleNamespace(
-    output_text=output_text,
-    status=status,
-    incomplete_details=details,
-    usage=SimpleNamespace(input_tokens=390_000, output_tokens=2_000),
-  )
+  monkeypatch.setattr(credentials, 'get_json', read)
+  return value
 
 
-def _install_fake_client(monkeypatch, response: Any) -> list[dict]:
-  calls: list[dict] = []
+@pytest.fixture
+def calls(monkeypatch):
+  calls = []
 
-  async def create(**arguments: Any) -> Any:
-    calls.append(arguments)
-    return response
+  class _Wire(Wire):
+    def __init__(self, recipe, secrets):
+      self.recipe = recipe
+      self.secrets = secrets
 
-  monkeypatch.setattr(mu_module.credentials, 'get_json', lambda name: {'api_key': 'key'})
-  monkeypatch.setattr(
-    openai, 'AsyncOpenAI', lambda api_key: _FakeClient(SimpleNamespace(create=create))
-  )
+    async def exchange(self, inputs, tools, request_timeout):
+      raise AssertionError('mu must use structured')
+
+    def restore(self, prefix):
+      raise AssertionError('mu must be stateless')
+
+    async def structured(self, prompt, result, contents, request_timeout):
+      calls.append((self.recipe, self.secrets, prompt, contents, request_timeout))
+      return result(answer='42')
+
+  monkeypatch.setattr(mu_module.wires, 'open', _Wire)
   return calls
 
 
-def test_call_returns_parsed_result_without_a_caller_loop(monkeypatch):
-  calls = _install_fake_client(monkeypatch, _response('{"answer": "42"}'))
-
-  assert mu('what is it?', _Answer, Text('the record')).answer == '42'
-  text_format = calls[0]['text']['format']
-  assert text_format['type'] == 'json_schema'
-  assert text_format['strict'] is True
-  assert 'answer' in text_format['schema']['properties']
-
-
-def test_call_defaults_to_the_shared_model(monkeypatch):
-  calls = _install_fake_client(monkeypatch, _response('{"answer": "42"}'))
-
-  mu('what is it?', _Answer)
-
-  assert calls[0]['model'] == mu_module.DEFAULT_MODEL
+def test_call_resolves_the_default_recipe_and_encodes_neutral_text(material, calls):
+  assert mu('what is it?', _Answer, Text('the record'), JSON({'id': 7})).answer == '42'
+  recipe, secrets, prompt, contents, timeout = calls[0]
+  assert recipe.selection()['model'] == providers.models('openai')['terra']
+  assert recipe.request_options()['reasoning']['effort'] == 'low'
+  assert secrets == material['credential']
+  assert prompt == 'what is it?'
+  assert contents == [
+    {'type': 'text', 'text': 'the record'},
+    {'type': 'text', 'text': json.dumps({'id': 7}, indent=4)},
+  ]
+  assert timeout is None
 
 
 @pytest.mark.asyncio
-async def test_explicit_model_overrides_the_default(monkeypatch):
-  calls = _install_fake_client(monkeypatch, _response('{"answer": "42"}'))
-
-  await mu.aio('what is it?', _Answer, model='gpt-5.6-luna', reasoning_effort='low')
-
-  assert calls[0]['model'] == 'gpt-5.6-luna'
-  assert calls[0]['reasoning'] == {'effort': 'low'}
-
-
-@pytest.mark.asyncio
-async def test_aio_returns_parsed_result(monkeypatch):
-  _install_fake_client(monkeypatch, _response('{"answer": "42"}'))
-
-  assert (await mu.aio('what is it?', _Answer)).answer == '42'
+async def test_aio_selects_a_defined_role_and_defaults_for_an_unknown_role(material, calls):
+  material['roles'] = {
+    'reader': {'llm': 'openai:luna5.6:high', 'credential': {'api_key': 'reader-key'}}
+  }
+  assert (await mu.aio('question', _Answer, role='reader')).answer == '42'
+  await mu.aio('question', _Answer, role='dispatch')
+  assert calls[0][0].selection()['model'] == providers.models('openai')['luna5.6']
+  assert calls[0][0].request_options()['reasoning']['effort'] == 'high'
+  assert calls[0][1] == {'api_key': 'reader-key'}
+  assert calls[1][1] == material['credential']
 
 
-def test_response_cut_off_at_the_output_limit_raises_truncated(monkeypatch):
-  _install_fake_client(monkeypatch, _response('{"answer": "4', 'incomplete', 'max_output_tokens'))
+@pytest.mark.parametrize(
+  ('value', 'fault'),
+  [
+    ([], 'dictionary'),
+    ({}, 'llm'),
+    ({'llm': 7, 'credential': {'api_key': 'key'}}, 'llm'),
+    ({'llm': 'unknown:model', 'credential': {'api_key': 'key'}}, 'unknown provider'),
+    ({'llm': 'openai:a:b:c', 'credential': {'api_key': 'key'}}, 'malformed'),
+    ({'llm': '::high', 'credential': {'api_key': 'key'}}, 'must name a provider'),
+    ({'llm': 'openai', 'credential': {}}, 'credential'),
+    ({'llm': 'openai', 'credential': []}, 'credential'),
+    ({'llm': 'openai'}, 'credential'),
+    ({'llm': 'openai', 'credential': {'api_key': 'key'}, 'roles': {'reader': {}}}, 'roles'),
+    ({'llm': 'openai', 'credential': {'api_key': 'key'}, 'roles': []}, 'roles'),
+  ],
+)
+def test_bad_material_names_mu_and_never_reaches_a_wire(monkeypatch, value, fault):
+  monkeypatch.setattr(credentials, 'get_json', lambda name: value)
+  monkeypatch.setattr(mu_module.wires, 'open', lambda *args: pytest.fail('bad material'))
+  with pytest.raises(ValueError, match=f'(?s)mu credential:.*{fault}'):
+    mu('question', _Answer, role='reader')
 
-  with pytest.raises(TruncatedResponse, match='390000 input / 2000 output tokens'):
-    mu('what is it?', _Answer)
+
+@pytest.mark.parametrize(
+  ('recipe', 'secret', 'fault'),
+  [
+    ('anthropic', {'api_key': 'key'}, 'has no client'),
+    ('echo', {'api_key': 'key'}, 'has no structured'),
+    ('openai', {'wrong': 'key'}, 'api_key'),
+  ],
+)
+def test_unusable_wire_or_provider_credential_is_a_mu_error(material, recipe, secret, fault):
+  material.update(llm=recipe, credential=secret)
+  with pytest.raises(ValueError, match=f'(?s)mu credential:.*{fault}'):
+    mu('question', _Answer)
 
 
-def test_response_stopped_for_another_reason_raises_incomplete(monkeypatch):
-  _install_fake_client(monkeypatch, _response('', 'incomplete', 'content_filter'))
+def test_missing_material_names_mu(monkeypatch):
+  def read(name):
+    raise ValueError('not found')
 
-  with pytest.raises(IncompleteResponse, match='content_filter') as error:
-    mu('what is it?', _Answer)
-  assert not isinstance(error.value, TruncatedResponse)
+  monkeypatch.setattr(credentials, 'get_json', read)
+  with pytest.raises(ValueError, match='mu credential:.*not found'):
+    mu('question', _Answer)
 
 
-def test_response_without_output_text_raises(monkeypatch):
-  _install_fake_client(monkeypatch, _response(''))
+def test_a_wire_stop_propagates_unchanged(material, monkeypatch):
+  class _Stopped:
+    async def structured(self, *args, **kwargs):
+      raise LLMStopped('filtered', 'content_filter')
 
-  with pytest.raises(RuntimeError, match='no output text'):
-    mu('what is it?', _Answer)
+  monkeypatch.setattr(mu_module.wires, 'open', lambda *args: _Stopped())
+  with pytest.raises(LLMStopped, match='filtered.*content_filter'):
+    mu('question', _Answer)
+
+
+@pytest.mark.parametrize(
+  ('reference', 'selection', 'expected'),
+  [
+    ('openai+', {'openai': 'work'}, 'empty-key'),
+    ('openai+work', {}, 'work-key'),
+    ('openai', {'openai': 'work'}, 'work-key'),
+    ('openai', {}, 'empty-key'),
+  ],
+)
+def test_references_follow_explicit_instances_or_the_hydrating_selection(
+  tmp_path, calls, reference, selection, expected
+):
+  directory = tmp_path / 'host'
+  (directory / 'creds').mkdir(parents=True)
+  (directory / 'creds' / 'openai.cred').write_text('{"api_key":"empty-key"}')
+  (directory / 'creds' / 'openai+work.cred').write_text('{"api_key":"work-key"}')
+  (directory / 'creds' / 'mu+cheap.cred').write_text(
+    json.dumps({'llm': 'openai:terra', 'credential': {'$cred': reference}})
+  )
+  host = credentials.Store(credentials.default_registry(), directory, {'mu': 'cheap', **selection})
+  files, hydrated = credentials.build_scoped_store(host, ['mu'])
+  assert hydrated == {'mu'}
+  assert json.loads(files['creds/mu+cheap.cred'])['credential'] == {'api_key': expected}
+  session_directory = tmp_path / 'session'
+  for name, content in files.items():
+    path = session_directory / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+  session = credentials.Store(credentials.default_registry(), session_directory, {})
+  with credentials.as_default_store(session):
+    assert mu('question', _Answer).answer == '42'
+  assert calls[0][1] == {'api_key': expected}
+
+
+def test_json_keeps_the_callers_encoder():
+  value = JSON({'date': datetime(2026, 10, 27)}, encoder=DateTimeEncoder)
+  assert json.loads(value.to_text()) == {'date': '2026-10-27T00:00:00'}

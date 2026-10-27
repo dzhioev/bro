@@ -39,7 +39,7 @@ a clarification is a counter-question in that thread, and "done" closes the webv
 
 `browser::look` captures a snapshot or the page's decoded `innerText`, or reads an existing artifact ref, and sends that representation plus one focused question to a disposable reader.
 It returns a bounded answer and only element refs whose role and accessible name match the snapshot it read.
-The optional `openai` credential enables the reader and is the boundary across which page content travels;
+The optional `mu` credential enables the reader through its `reader` role and is the boundary across which page content travels;
 without it the browser uses `browser_find`, targeted snapshots, and `artifact::read` or `artifact::grep`.
 
 ## Owner toolset

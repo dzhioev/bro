@@ -6,5 +6,7 @@ The package hub imports nothing.
 `client.py:Responses` implements the core `Wire` port, server-side chaining, replay sanitization and reply extraction.
 It registers in `bro.llm.wire_clients`; install the `client` extra for its SDK.
 The recipe supplies request options and retry classification.
+`structured` sends a stateless schema-enforced one-shot request and validates the completed reply.
+`content.py` encodes text and image inputs.
 The root repository owns formatting and the test gate.
 Build with `uv build --package bro-wire-responses`.

@@ -64,7 +64,7 @@ def job(tmp_path):
 def tree(tmp_path, monkeypatch):
   """a checkout holding the presets a run composes, outside any session."""
   presets = {
-    (AGENTS, 'one'): {'agents': [{'kwargs': {'bro': 'terminal', 'llm_credential': 'openai'}}]},
+    (AGENTS, 'one'): {'agents': [{'kwargs': {'bro': 'terminal', 'credentials': ['openai', 'mu']}}]},
     (SETTINGS, 'quick'): {'n_attempts': 1},
     (DATASETS, 'pinned'): {
       'name': 'org/dataset',

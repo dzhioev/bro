@@ -3,7 +3,7 @@
 Harbor constructs this class in its own process from the `import_path` a job
 config names, then runs one trial through `setup()` → `run()` → the verifier.
 The bro never runs here: `install()` uploads the relocatable bundle and a
-credential store holding only the LLM credential, and `run()` is a single
+credential store holding the configured credentials, and `run()` is a single
 `ride solo` executed inside the task's container — an unboxed root in the task's
 own directory, on the bundle as its runtime, whose summons join its party — so
 the tools under measurement are the ones the framework ships, on whichever
@@ -194,16 +194,16 @@ from bro.base import credentials
 from ride.workspace.store import materialize_scoped_store
 
 source = credentials.default_store()
-files, _ = credentials.build_scoped_store(source, [sys.argv[1]])
-materialize_scoped_store(files, Path(sys.argv[2]))
+files, _ = credentials.build_scoped_store(source, sys.argv[2:])
+materialize_scoped_store(files, Path(sys.argv[1]))
 """
 
 
 @contextlib.contextmanager
-def scoped_store(name: str) -> Generator[Path]:
+def scoped_store(names: list[str]) -> Generator[Path]:
   """the credential store the container resolves against, on disk for an upload.
 
-  `name` is hydrated strictly by the bundle under test, so an incompatible host
+  `names` are hydrated strictly by the bundle under test, so an incompatible host
   store or an unresolvable credential fails before a graded trial.
   The store carries a live API key, and the upload reads it from a file, so it
   lives in a private directory for no longer than that.
@@ -213,7 +213,7 @@ def scoped_store(name: str) -> Generator[Path]:
     directory = Path(scratch) / 'store'
     environment = {**os.environ, 'BRO_STORE': str(credentials.STORE_DIR)}
     hydrated = subprocess.run(
-      [str(bundle.interpreter), '-c', _HYDRATE_STORE, name, str(directory)],
+      [str(bundle.interpreter), '-c', _HYDRATE_STORE, str(directory), *names],
       capture_output=True,
       text=True,
       env=environment,
@@ -326,9 +326,8 @@ class BroAgent(BaseInstalledAgent):
   Kwargs (`--ak key=value`, or a job config's `agent.kwargs`):
 
   - `bro` — the registered persona to run, e.g. `terminal`
-  - `llm_credential` — the credential hydrated into the container, a kind or a
-    `kind+instance` name selecting a dedicated key: the LLM key on the bro
-    harness, the `claude_code` setup token on the claude one
+  - `credentials` — the kinds or `kind+instance` names hydrated into the
+    container: the LLM key or harness token, and any auxiliary credentials
   - `harness` — the driving loop the bro rides under, `bro` unless named
   - `run_timeout_sec` — an optional in-container ceiling on the run, for an
     operator who pins the agent budget with `agent.override_timeout_sec`
@@ -343,7 +342,7 @@ class BroAgent(BaseInstalledAgent):
   def __init__(
     self,
     bro: str,
-    llm_credential: str,
+    credentials: list[str],
     harness: str = DEFAULT_HARNESS,
     run_timeout_sec: Any = None,
     *args: Any,
@@ -351,7 +350,13 @@ class BroAgent(BaseInstalledAgent):
   ) -> None:
     super().__init__(*args, **kwargs)
     self._bro = bro
-    self._llm_credential = llm_credential
+    if (
+      not isinstance(credentials, list)
+      or not credentials
+      or not all(isinstance(name, str) and name for name in credentials)
+    ):
+      raise ValueError('credentials must be a non-empty list of credential names')
+    self._credentials = credentials
     self._harness = harness_name(harness)
     self._run_timeout_sec = run_timeout(run_timeout_sec)
     self._llm = bare_recipe(self.model_name)
@@ -397,7 +402,7 @@ class BroAgent(BaseInstalledAgent):
     then starts the selected harness's own runtime probe.
     """
     bundle = benchmark_bundle()
-    with scoped_store(self._llm_credential) as directory:
+    with scoped_store(self._credentials) as directory:
       await self.exec_as_root(
         environment, command=f'mkdir -p {BUNDLE.root} {STORE_DIR} && chmod 700 {STORE_DIR}'
       )

@@ -117,7 +117,7 @@ For an integrated root or installed workspace member, merge these roles into the
 ```toml
 [project]
 dependencies = [
-  "bro[github,llm,runtime]",
+  "bro[github,runtime]",
   "bro-dev",
 ]
 
@@ -443,6 +443,9 @@ Verify only existence, nonzero size, mode, and later scope resolution.
 
 For a selected OpenAI key, store a JSON object shaped as `{"api_key":"..."}` in `openai.cred` or the selected named material.
 Use hidden terminal input and stdin-based JSON encoding so the value reaches neither command history nor a process argument.
+
+For auxiliary spell dispatch, source summaries and page reading, configure the optional `mu` credential as described in `bro/reference/permissions.md`, "Auxiliary LLM credentials".
+It needs an installed provider and wire client; core alone installs no provider SDK.
 
 For GitHub development:
 

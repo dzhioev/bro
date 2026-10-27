@@ -170,7 +170,7 @@ a server must read the same served standalone, so it renders at build time again
 
 - `tools` — a `Toolset` build's selected roster;
   universe is the full definition, so a description can test an excluded sibling (`{{when #tools contains read_reference}}…{{end}}`) and a typo'd name fails the build
-- `features` — a data source's capability set (e.g. a searchable source's `summary`, live iff its LLM key resolves);
+- `features` — a data source's capability set (e.g. a searchable source's `summary`, live iff its `mu` credential resolves);
   membership probes lazily at render, universe is the source's declared `feature_names`.
   The source's own name rides along as `source` (for `{{insert #source}}`)
 

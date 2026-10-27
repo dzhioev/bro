@@ -6,7 +6,10 @@
       "kwargs": {
         "bro": "dev",
         "harness": "bro",
-        "llm_credential": "openai+benchmark"
+        "credentials": [
+          "openai+benchmark",
+          "mu+benchmark"
+        ]
       }
     }
   ]

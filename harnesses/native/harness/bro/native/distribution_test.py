@@ -335,6 +335,8 @@ def test_wire_wheels_separate_optional_clients_from_sdk_free_decoders(wheels, wh
   entries = _entry_points(wheels[distribution])
   if entries.has_section('bro.llm.wire_clients'):
     expected.add(f'bro/wire_{name}/client.py')
+    if name == 'responses':
+      expected.add(f'bro/wire_{name}/content.py')
     assert set(entries['bro.llm.wire_clients']) == {name}
     assert _metadata(wheels[distribution]).get_all('Provides-Extra') == ['client']
   assert wheel_files[distribution] == expected

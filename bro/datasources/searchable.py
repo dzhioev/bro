@@ -9,11 +9,7 @@ from bro.base import credentials, template
 from bro.datasources.base import DataSource
 from bro.llm.mcp import InProcessMCPServer, MCPServer, Tool
 
-# every searchable source summarises a fetched record against the caller's query
-# through the one `mu` path, which reads the LLM key. so the query-focused branch
-# of `fetch` uniformly depends on this secret — declared best-effort (the raw
-# record is still returned when no query is passed), not a hard requirement.
-SUMMARY_SECRET = 'openai'
+SUMMARY_SECRET = 'mu'
 
 
 class _Summary(BaseModel):
@@ -29,7 +25,6 @@ class Hit:
 
 class SearchableDataSource(DataSource):
   optional_secrets = (SUMMARY_SECRET,)
-  # `summary` — the query-focused fetch mode, live iff the LLM key resolves
   feature_names = ('summary',)
 
   def has_feature(self, name: str) -> bool:
@@ -47,11 +42,6 @@ class SearchableDataSource(DataSource):
     ...
 
   async def fetch(self, id: str, query: Optional[str] = None) -> str:
-    # omit `query` for the raw record; pass it to focus the record on what the
-    # caller is investigating. summarisation reads the LLM key, so when it is
-    # absent a non-null query errors rather than silently returning raw text —
-    # the agent loop turns the raise into a tool result it can retry without the
-    # query.
     content = await self._fetch_content(id)
     if query is None or len(query) == 0:
       return content
@@ -60,8 +50,6 @@ class SearchableDataSource(DataSource):
         f'the `query` parameter requires the `{SUMMARY_SECRET}` secret, not available '
         'this session; retry with `query` omitted for the raw record'
       )
-    # lazy: keep the openai SDK (via mu) out of every datasource import — only the
-    # query path needs it.
     from bro.llm.mu import Text, mu
     from bro.prompts import get_prompt
 
@@ -72,9 +60,7 @@ class SearchableDataSource(DataSource):
       query=query,
       content=content,
     )
-    summary = await mu.aio(
-      prompt, _Summary, Text(content), model='gpt-5.6-luna', reasoning_effort='low'
-    )
+    summary = await mu.aio(prompt, _Summary, Text(content), role='summary')
     return summary.summary
 
   def as_mcp_server(self) -> MCPServer:
