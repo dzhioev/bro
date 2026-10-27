@@ -4,6 +4,8 @@ from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import ClassVar, Self
 
+from bro.llm.records import Stop
+
 # the neutral reasoning-effort vocabulary `LLMSpec.with_effort` accepts; each
 # provider maps these levels onto its own scale.
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
@@ -42,6 +44,15 @@ class FailureSignature:
 
 class LLMUnavailable(RuntimeError):
   """The LLM provider kept failing transiently through a client's whole retry window."""
+
+
+class LLMStopped(RuntimeError):
+  """A response ended without completing the requested leg."""
+
+  def __init__(self, reason: Stop, stop_reason: str | None = None):
+    self.reason = reason
+    self.stop_reason = stop_reason
+    super().__init__(f'LLM stopped: {reason}' + (f' ({stop_reason})' if stop_reason else ''))
 
 
 class UnsupportedContent(ValueError):

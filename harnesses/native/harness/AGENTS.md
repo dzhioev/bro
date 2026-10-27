@@ -37,6 +37,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   tool execution, inbox drains, observer events, recorded steps, interrupted inputs and cumulative usage.
   Cancellation after a leg arrives completes its recording and answers every unanswered call with an interrupted error result.
   Results already obtained and inputs not yet exchanged remain pending ahead of the next turn.
+  A non-completed leg is recorded with `stopped`, counted in usage, and refused with `LLMStopped` before observer events or tools run; its inputs remain pending.
+  An OpenAI Responses `incomplete` status ends the run, naming `max_output_tokens` or `content_filter`, rather than returning partial text or running its calls.
   Its `restore` and `seed_chain` delegate to the wire.
   Wire clients encode tool results; recording keeps the original object or string.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
@@ -53,6 +55,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   Every replayed call must use the target recipe's wire, checked before building the runner.
   Same-provider/model forks at an `llm_call` under an unchanged prompt seed a chain only on a server-chained wire;
   every other case asks the wire to restore the prefix from the steps' own records.
+  A step marked `stopped` cannot seed a chain and is omitted by restore; unmarked records, including accepted incomplete responses, replay whole.
   Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
 - `bro/trails/record/bro.py` — native tracker-to-trails recorder
 

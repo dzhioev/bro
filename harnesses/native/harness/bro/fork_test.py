@@ -8,6 +8,7 @@ import pytest
 from openai.types.responses import Response
 
 from bro.fork import fork, latest_fork_point, replay_prefix
+from bro.inbox import Inbox
 from bro.llm.llms.openai import LLMSpec as OpenAISpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.native.harness import BRO
@@ -1147,3 +1148,60 @@ def test_fork_point_refuses_a_call_whose_result_cannot_be_matched():
   )
   with pytest.raises(ValueError, match='tool call without an id'):
     latest_fork_point(trail)
+
+
+@pytest.mark.parametrize('refused', [True, False])
+def test_restore_skips_only_explicitly_refused_legs_including_old_tool_history(refused):
+  body = _llm_call_body(_output_function_call('read', call_id='c1'))
+  body['response'].update(status='incomplete', incomplete_details={'reason': 'max_output_tokens'})
+  trail = RecordedTrail(
+    header=_trail_header(),
+    steps=[
+      _step('system_prompt', _SYS_TEXT, step_id=0),
+      _step('user_input', 'go', step_id=1),
+      _step('llm_call', body, step_id=2, **({'stopped': 'truncated'} if refused else {})),
+    ],
+  )
+  if not refused:
+    trail.steps.append(_step('tool_result', 'done', step_id=3, call_id='c1'))
+  point = latest_fork_point(trail)
+  assert point == (1 if refused else 3)
+  restored = replay_messages(trail, trail.steps[-1].step_id)
+  assert restored[:2] == [
+    {'role': 'system', 'content': _SYS_TEXT},
+    {'role': 'user', 'content': 'go'},
+  ]
+  assert restored[2:] == (
+    []
+    if refused
+    else [
+      body['response']['output'][0],
+      {'type': 'function_call_output', 'call_id': 'c1', 'output': 'done'},
+    ]
+  )
+
+
+def test_explicit_fork_at_stopped_call_restores_instead_of_seeding_its_response_id():
+  trail = RecordedTrail(
+    header=_trail_header(),
+    steps=[
+      _step('system_prompt', _SYS_TEXT, step_id=0),
+      _step('user_input', 'go', step_id=1),
+      _step(
+        'llm_call',
+        _llm_call_body(_output_message('partial')),
+        step_id=2,
+        stopped='truncated',
+        response_id='refused',
+      ),
+    ],
+  )
+  loop = make_loop(inbox=Inbox())
+  with patch('bro.native.runner.Runner._create_llm', return_value=loop):
+    runner = fork(trail, 2, record=False, surface='test')
+  with runner:
+    assert loop.wire._last_response_id is None
+    assert loop.wire._input_prefix == [
+      {'role': 'system', 'content': _SYS_TEXT},
+      {'role': 'user', 'content': 'go'},
+    ]

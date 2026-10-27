@@ -214,7 +214,7 @@ def _server_side_eligible(
     return False
   if forked_from_spec.get('model') != new_spec.model:
     return False
-  if fork_step.kind != 'llm_call':
+  if fork_step.kind != 'llm_call' or 'stopped' in fork_step.extras:
     return False
   return fork_step.extras.get('response_id') is not None
 
