@@ -10,7 +10,7 @@ import bro.llm.usage as usage
 from bro.base import credentials
 from bro.inbox import Inbox, NotificationBatch
 from bro.llm import providers, wires
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import LLMStopped, NativeLLMSpec
 from bro.llm.mcp import MCPServer, Tool, ToolControlSignal
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -220,14 +220,18 @@ class Loop(LLM):
       await self._record_leg(error.leg)
       self._pending_input = []
       raise
-    self._pending_input = []
+    if leg.stop == 'completed':
+      self._pending_input = []
     try:
       await _finish_on_cancel(self._record_leg(leg))
     except asyncio.CancelledError:
-      self._pending_input = await self._interrupted_outputs(
-        leg.calls, turn_index=self._turn_index, call_index=self._call_index
-      )
+      if leg.stop == 'completed':
+        self._pending_input = await self._interrupted_outputs(
+          leg.calls, turn_index=self._turn_index, call_index=self._call_index
+        )
       raise
+    if leg.stop != 'completed':
+      raise LLMStopped(leg.stop, leg.stop_reason)
     return leg
 
   async def _record_leg(self, leg: Leg) -> None:
@@ -238,9 +242,11 @@ class Loop(LLM):
       call_index=self._call_index,
       wire=leg.wire,
       **leg.extras,
+      **({'stopped': leg.stop} if leg.stop != 'completed' else {}),
     )
     self._publish_usage(leg)
-    self._emit_response_steps(leg, llm_call_step_id=step_id)
+    if leg.stop == 'completed':
+      self._emit_response_steps(leg, llm_call_step_id=step_id)
 
   async def _drain_notifications(
     self,

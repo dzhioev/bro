@@ -29,6 +29,7 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   `NativeLLMSpec` is the marker for recipes the bro-native engine can run, each naming its model;
   a provider only a harness driving its own loop runs (`anthropic`) remains a bare `LLMSpec`.
   `LLMUnavailable` is the provider-neutral failure a client raises once its provider stays down through the client's retries.
+  `LLMStopped` carries the neutral stop and the provider's own stop reason for an uncompleted leg.
 - `providers.py` — the provider roster.
   `_PROVIDER_MODULES` maps a name to the module declaring its `LLMSpec`, `DEFAULT_MODEL`, `MODELS` short-name table, and `FAILURE_SIGNATURES`, imported per name.
   Model resolution tries the short name, then full id, then verbatim;

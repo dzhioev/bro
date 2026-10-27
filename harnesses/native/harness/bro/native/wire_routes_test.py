@@ -9,6 +9,7 @@ import pytest
 from bro.base import credentials
 from bro.fork import fork, latest_fork_point
 from bro.launch.resume import resume
+from bro.llm.llm import LLMStopped
 from bro.llm.llms.echo import LLMSpec as EchoSpec
 from bro.llm.llms.openai import LLMSpec as ResponsesSpec
 from bro.native import runner as native_runner
@@ -21,7 +22,12 @@ from bro.trails.store import fetch_recorded_trail
 
 
 @pytest.fixture
-def server(monkeypatch):
+def replies():
+  return []
+
+
+@pytest.fixture
+def server(monkeypatch, replies):
   requests: list[dict] = []
 
   class Handler(BaseHTTPRequestHandler):
@@ -29,7 +35,9 @@ def server(monkeypatch):
       assert self.path == '/v1/responses'
       request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
       requests.append(request)
-      raw = response(message('reply'), id=f'response_{len(requests)}')
+      raw = (
+        replies.pop(0) if replies else response(message('reply'), id=f'response_{len(requests)}')
+      )
       payload = json.dumps(raw).encode()
       self.send_response(200)
       self.send_header('Content-Type', 'application/json')
@@ -106,3 +114,46 @@ async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path)
       with continuation:
         assert await continuation.send('reply', surface='test') == 'reply'
       assert ('previous_response_id' in server[-1]) == (prompt is None)
+
+
+@pytest.mark.asyncio
+async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call(
+  server, replies, monkeypatch, tmp_path
+):
+  stopped = response(message('partial'), id='refused')
+  stopped.update(
+    status='incomplete',
+    incomplete_details={'reason': 'max_output_tokens'},
+    usage={'input_tokens': 10, 'output_tokens': 2, 'total_tokens': 12},
+  )
+  replies.append(stopped)
+  store = LocalStore(tmp_path)
+  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
+  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='fixture-model')))
+  with pytest.raises(LLMStopped, match='max_output_tokens'):
+    await runner.run('original', surface='test')
+  assert runner.trail_id is not None
+  recorded = fetch_recorded_trail(store, runner.trail_id)
+  header = store.get_trail(recorded.header.id)
+  assert header['end']['reason'] == 'error'
+  assert 'max_output_tokens' in header['end']['detail']
+  calls = [step for step in recorded.steps if step.kind == 'llm_call']
+  assert calls[0].extras['stopped'] == 'truncated'
+  assert recorded.header.native['usage']
+  projected = list(store.iter_messages(recorded.header.id))
+  assert next(event for event in projected if event['type'] == 'llm_call')['stop'] == 'truncated'
+  resumed = resume(
+    store,
+    'bro',
+    recorded.header.id,
+    llm_spec=ResponsesSpec(model='fixture-model'),
+    hold='unattended',
+  )
+  with resumed.runner:
+    assert await resumed.runner.send('continue', surface='test') == 'reply'
+  assert 'previous_response_id' not in server[-1]
+  assert not any(item.get('role') == 'assistant' for item in server[-1]['input'])
+  assert [item['content'] for item in server[-1]['input'] if item.get('role') == 'user'] == [
+    'original',
+    'continue',
+  ]
