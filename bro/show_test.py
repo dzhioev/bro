@@ -224,9 +224,8 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_secrets_section_lists_optional(self):
-    # the stub source is a SearchableDataSource → openai is its optional summary key
     card = await format_card(_FullBro())
-    assert '- `openai` — optional (used if present)' in card
+    assert '- `mu` — optional (used if present)' in card
 
   @pytest.mark.asyncio
   async def test_secrets_section_lists_llm_key(self):
@@ -284,7 +283,7 @@ class TestFormatCard:
     card = await format_card(package.bro_class(_MinimalBro)())
     assert '## Spells' in card
     assert '- **spell::do-work** — develop the named task' in card
-    assert '- `openai` — optional (used if present)' in card
+    assert '- `mu` — optional (used if present)' in card
 
   @pytest.mark.asyncio
   async def test_spells_section_omitted_when_empty(self):

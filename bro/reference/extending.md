@@ -205,7 +205,7 @@ For the common search/fetch shape, subclass `SearchableDataSource` and implement
 The base provides `fetch(id, query=None)`:
 it returns the raw record when no query is given and otherwise summarises it for the query via `mu`
 — so you don't write summarisation per source.
-That summary path depends on the `openai` key, declared once on the base as an `optional_secret`;
+That summary path uses the `summary` role of the `mu` credential, declared once on the base as an `optional_secret`;
 with the key absent a non-null `query` raises (no raw-text fallback).
 For other shapes (e.g. a singleton fact like `current_time.py`), subclass `DataSource` directly and override `as_mcp_server()` to expose whatever tools fit, stamping `self.namespace` onto the returned server.
 When an upstream HTTP/network failure makes the source temporarily unusable, raise `bro.datasources.base.SourceUnavailable(source, reason)` rather than letting raw transport exceptions escape

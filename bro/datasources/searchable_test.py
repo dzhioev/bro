@@ -34,7 +34,8 @@ async def test_fetch_with_query_summarises_via_mu(monkeypatch):
 
   captured: list[str] = []
 
-  async def fake_mu(prompt, result_cls, *contents, model=None, reasoning_effort=None):
+  async def fake_mu(prompt, result_cls, *contents, role=None):
+    assert role == 'summary'
     captured.append(prompt)
     return result_cls(summary='focused summary')
 
@@ -53,8 +54,8 @@ async def test_fetch_with_query_summarises_via_mu(monkeypatch):
 async def test_fetch_with_query_raises_when_secret_absent(monkeypatch):
   # no raw-text fallback: the agent loop turns the raise into a tool result it
   # can retry with `query` omitted.
-  monkeypatch.setattr(searchable.credentials, 'available', lambda name: False)
-  with pytest.raises(ValueError, match='requires the `openai` secret'):
+  monkeypatch.setattr(searchable.credentials, 'available', lambda name: name == 'openai')
+  with pytest.raises(ValueError, match='requires the `mu` secret'):
     await _FakeSource().fetch('x', query='q')
 
 

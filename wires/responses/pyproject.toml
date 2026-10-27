@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = ["bro"]
 
 [project.optional-dependencies]
-client = ["openai==3.33.0"]
+client = ["openai==3.33.0", "pydantic==2.14.1"]
 
 [project.entry-points."bro.llm.wire_clients"]
 responses = "bro.wire_responses.client:Responses"

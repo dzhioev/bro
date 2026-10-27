@@ -24,9 +24,6 @@ aws = [
 http = [
   "aiohttp==3.14.5",
 ]
-llm = [
-  "openai==3.33.0",
-]
 runtime = [
   "anyio==4.15.1",
   "jsonschema==4.26.0",
@@ -147,8 +144,8 @@ target-registry = "oops.deploy_targets:registry"
 python_ulid = ["ulid"]
 
 [tool.deptry.per_rule_ignores]
-# Optional UI and extraction modules are activated by engine distributions.
-DEP003 = ["humanize", "rich", "textual", "trafilatura"]
+# Optional adapters are activated by client distributions.
+DEP003 = ["humanize", "openai", "rich", "textual", "trafilatura"]
 
 [tool.uv.build-backend]
 module-root = ""

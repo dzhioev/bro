@@ -172,6 +172,7 @@ PYTEST_FILES = [
   'wires/chat/bro/wire_chat/decode_test.py',
   'wires/messages/bro/wire_messages/decode_test.py',
   'wires/responses/bro/wire_responses/decode_test.py',
+  'wires/responses/bro/wire_responses/structured_test.py',
   'filetypes/bro/pdf/provider_test.py',
   'bro/authority/values_test.py',
   'bro/authority/patterns_test.py',

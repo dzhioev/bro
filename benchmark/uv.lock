@@ -259,7 +259,6 @@ requires-dist = [
     { name = "boto3", marker = "extra == 'trails-server'", specifier = "==1.43.114" },
     { name = "jsonschema", marker = "extra == 'runtime'", specifier = "==4.26.0" },
     { name = "mcp", marker = "extra == 'runtime'", specifier = "==2.3.0" },
-    { name = "openai", marker = "extra == 'llm'", specifier = "==3.33.0" },
     { name = "pydantic", specifier = "==2.14.1" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'github'", specifier = "==2.15.1" },
     { name = "python-dateutil", specifier = "==2.9.0.post0" },
@@ -269,7 +268,7 @@ requires-dist = [
     { name = "tree-sitter-bash", marker = "extra == 'runtime'", specifier = "==0.25.1" },
     { name = "uvicorn", marker = "extra == 'runtime'", specifier = "==0.54.0" },
 ]
-provides-extras = ["aws", "http", "llm", "runtime", "trails-server", "github"]
+provides-extras = ["aws", "http", "runtime", "trails-server", "github"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -462,6 +461,7 @@ dependencies = [
 requires-dist = [
     { name = "bro", editable = "../" },
     { name = "openai", marker = "extra == 'client'", specifier = "==3.33.0" },
+    { name = "pydantic", marker = "extra == 'client'", specifier = "==2.14.1" },
 ]
 provides-extras = ["client"]
 

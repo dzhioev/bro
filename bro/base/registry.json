@@ -56,5 +56,8 @@
         }
       }
     }
+  },
+  "mu": {
+    "description": "Auxiliary one-shot LLM configuration"
   }
 }

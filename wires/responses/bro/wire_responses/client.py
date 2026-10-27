@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, pydantic_function_tool
+from pydantic import BaseModel
 
 from bro.base import log
-from bro.llm.llm import LLMSpec, UnsupportedContent
+from bro.llm.llm import LLMSpec, LLMStopped, UnsupportedContent
 from bro.llm.mcp import Tool, encode_tool_result
-from bro.llm.openai_content import image_file_to_content, text_to_content
 from bro.llm.records import Chaining, DecodedCall
 from bro.llm.retry import retry_llm
 from bro.llm.wire import (
@@ -19,8 +19,10 @@ from bro.llm.wire import (
   SystemPrompt,
   ToolOutput,
   UnusableResponse,
+  UserMessage,
   Wire,
 )
+from bro.wire_responses.content import image_file_to_content, text_to_content
 from bro.wire_responses.decode import CHAINING, NAME, counts, decode
 
 if TYPE_CHECKING:
@@ -79,7 +81,7 @@ def convert_content_part(part: dict) -> ResponseInputContentParam:
     if url.startswith('data:'):
       return ResponseInputImageParam(type='input_image', image_url=url, detail='high')
     return image_file_to_content(url)
-  return text_to_content(str(part))
+  raise UnsupportedContent(f'unsupported Responses content part {part.get("type")!r}')
 
 
 def convert_message(msg: dict) -> EasyInputMessageParam:
@@ -176,6 +178,39 @@ class Responses(Wire):
         reply = decoded.reply
       leg = replace(leg, reply=reply)
     return leg
+
+  async def structured[T: BaseModel](
+    self, prompt: str, result: type[T], contents: list, request_timeout: float | None
+  ) -> T:
+    async with self.client:
+      function = pydantic_function_tool(result)['function']
+      schema = function.get('parameters')
+      assert schema is not None
+      request = {
+        **self.recipe.request_options(),
+        'model': self.recipe.selection()['model'],
+        'input': [self._encode(SystemPrompt(prompt)), self._encode(UserMessage(contents))],
+        'text': {
+          'format': {
+            'type': 'json_schema',
+            'name': function['name'],
+            'schema': schema,
+            'strict': True,
+          }
+        },
+      }
+      if request_timeout is not None:
+        request['timeout'] = request_timeout
+      response = await retry_llm(
+        lambda: self.client.responses.create(**request),
+        self.recipe.is_transient,
+        capacity=lambda response: decode(response.model_dump(mode='json')).stop == 'capacity',
+      )
+    raw = response.model_dump(mode='json')
+    decoded = decode(raw)
+    if decoded.stop != 'completed':
+      raise LLMStopped(decoded.stop, decoded.stop_reason)
+    return result.model_validate_json(parse_response(raw, decoded))
 
   def restore(self, prefix: Prefix) -> None:
     items: list[dict] = [{'role': 'system', 'content': prefix.system_prompt}]

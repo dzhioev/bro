@@ -230,7 +230,7 @@ from bro.native.runner import Runner
 from bros.browser import Browser
 from bros.browser import mcp as browser_mcp
 
-browser_mcp.credentials.available = lambda name: name == 'openai'
+browser_mcp.credentials.available = lambda name: name == 'mu'
 
 
 def fake_reader(prompt, content):
@@ -406,7 +406,7 @@ from bro.native.runner import Runner
 from bros.browser import Browser
 from bros.browser import mcp as browser_mcp
 
-browser_mcp.credentials.available = lambda name: name == 'openai'
+browser_mcp.credentials.available = lambda name: name == 'mu'
 
 
 def fake_reader(prompt, content):
