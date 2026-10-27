@@ -1,9 +1,9 @@
 """Responses API records without the SDK."""
 
-from bro.llm.records import Call, DecodedCall, Message, Part, Reasoning, Stop, Unknown
+from bro.llm.records import Call, Chaining, DecodedCall, Message, Part, Reasoning, Stop, Unknown
 
 NAME = 'responses'
-CHAINING = 'server'
+CHAINING: Chaining = 'server'
 LEGACY = True
 
 

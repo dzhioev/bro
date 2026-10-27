@@ -44,6 +44,10 @@ class LLMUnavailable(RuntimeError):
   """The LLM provider kept failing transiently through a client's whole retry window."""
 
 
+class UnsupportedContent(ValueError):
+  """A recipe cannot accept an input content part."""
+
+
 @dataclass(frozen=True)
 class LLMSpec(ABC):
   """recipe for an LLM: model + provider-specific knobs.
@@ -56,7 +60,7 @@ class LLMSpec(ABC):
   A recipe is not by itself something the framework can run: one only a harness
   driving its own loop runs (`bro.llm.llms.anthropic`) is a recipe and nothing
   more, while one accepted by the bro-native engine subclasses `NativeLLMSpec`.
-  The engine maps that recipe to its client.
+  The engine opens the wire named by the recipe.
 
   Frozen so a class-level `llm_spec = SomeSpec(...)` default can be shared
   across instances safely — `.fast()` and friends return a new spec via
@@ -66,9 +70,19 @@ class LLMSpec(ABC):
   # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
   WIRE: ClassVar[str]
+  ENDPOINT: ClassVar[str | None] = None
   selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
   deferred_fields: ClassVar[frozenset[str]] = frozenset()
   effort_values: ClassVar[frozenset[str]] = frozenset()
+
+  def request_options(self) -> dict:
+    return {}
+
+  def is_transient(self, error: Exception) -> bool:
+    return False
+
+  def accepts(self, part_kind: str) -> bool:
+    return part_kind in {'text', 'image'}
 
   def selection(self) -> dict[str, str | None]:
     return {name: getattr(self, field) for name, field in self.selection_fields.items()}

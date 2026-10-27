@@ -28,7 +28,7 @@ from bro.llm.observer import (
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.monitor import session_dir, trail_pointer
-from bro.native import providers as native_providers
+from bro.native import loop
 from bro.native.harness import BRO
 from bro.native.llm import LLM
 from bro.run_lifecycle import RunLifecycle
@@ -528,7 +528,7 @@ class Runner:
     return RunLifecycle.from_env()
 
   def _create_llm(self, *, hold: str) -> LLM:
-    return native_providers.create(
+    return loop.create(
       self.bro.llm_spec,
       self.inbox,
       mcp_servers=self.bro.assemble(harness=BRO, hold=hold, live_run=self),

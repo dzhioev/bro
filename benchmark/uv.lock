@@ -459,7 +459,11 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "bro", editable = "../" }]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "openai", marker = "extra == 'client'", specifier = "==3.33.0" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "certifi"

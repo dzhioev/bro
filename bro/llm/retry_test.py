@@ -5,8 +5,9 @@ import pytest
 from openai import APIConnectionError, APIStatusError, APITimeoutError
 
 from bro.base import retry
-from bro.llm import openai_retry
+from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMUnavailable
+from bro.llm.llms.openai import LLMSpec
 
 _REQUEST = httpx2.Request('POST', 'https://api.example.test/v1/responses')
 
@@ -27,7 +28,7 @@ def clock(monkeypatch) -> _Clock:
   clock = _Clock()
   monkeypatch.setattr(retry, 'monotonic', clock.monotonic)
   monkeypatch.setattr(retry, 'asyncio_sleep', clock.pause)
-  monkeypatch.setattr(openai_retry, 'monotonic', clock.monotonic)
+  monkeypatch.setattr(llm_retry, 'monotonic', clock.monotonic)
   return clock
 
 
@@ -63,7 +64,7 @@ def _request(clock: _Clock, failures: int, error: Exception, attempt_seconds: fl
 def test_transient_failures_are_repeated(clock, error) -> None:
   request, attempts = _request(clock, 2, error)
 
-  assert asyncio.run(openai_retry.retry_openai(request)) == 'reply'
+  assert asyncio.run(llm_retry.retry_llm(request, LLMSpec().is_transient)) == 'reply'
   assert len(attempts) == 3
 
 
@@ -72,7 +73,7 @@ def test_client_errors_and_rate_limits_are_not_repeated(clock, status) -> None:
   request, attempts = _request(clock, 1, _status_error(status))
 
   with pytest.raises(APIStatusError):
-    asyncio.run(openai_retry.retry_openai(request))
+    asyncio.run(llm_retry.retry_llm(request, LLMSpec().is_transient))
   assert len(attempts) == 1
 
 
@@ -80,9 +81,9 @@ def test_an_outage_past_the_window_raises_the_neutral_error(clock) -> None:
   request, attempts = _request(clock, 1000, APIConnectionError(request=_REQUEST))
 
   with pytest.raises(LLMUnavailable) as error:
-    asyncio.run(openai_retry.retry_openai(request))
+    asyncio.run(llm_retry.retry_llm(request, LLMSpec().is_transient))
 
   assert len(attempts) > 1
-  assert attempts[-1] < openai_retry.RETRY_WINDOW_SECONDS
+  assert attempts[-1] < llm_retry.RETRY_WINDOW_SECONDS
   assert isinstance(error.value.__cause__, APIConnectionError)
   assert 'openai' not in str(error.value).lower()

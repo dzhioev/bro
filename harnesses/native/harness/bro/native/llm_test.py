@@ -24,3 +24,10 @@ async def test_a_step_touches_the_activity_file(tmp_path: Path):
   await _OneStepLLM(Inbox(), activity_file=activity_file).send([{'role': 'user', 'content': 'hi'}])
 
   assert activity_file.stat().st_mtime > 1000.0
+
+
+def test_diagnostic_cli_requires_a_provider():
+  from bro.native.llm import main
+
+  with pytest.raises(SystemExit):
+    main(['hello'])
