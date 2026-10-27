@@ -119,6 +119,7 @@ For an integrated root or installed workspace member, merge these roles into the
 dependencies = [
   "bro[github,runtime]",
   "bro-dev",
+  "bro-openai",
 ]
 
 [dependency-groups]
@@ -130,6 +131,7 @@ dev = [
 
 [tool.uv.sources]
 bro = { git = "https://github.com/dzhioev/bro", branch = "master" }
+bro-openai = { git = "https://github.com/dzhioev/bro", subdirectory = "llms/openai", branch = "master" }
 bro-dev = { git = "https://github.com/dzhioev/bro", subdirectory = "dev", branch = "master" }
 bro-claude = { git = "https://github.com/dzhioev/bro", subdirectory = "harnesses/claude/harness", branch = "master" }
 bro-native = { git = "https://github.com/dzhioev/bro", subdirectory = "harnesses/native/harness", branch = "master" }
@@ -141,6 +143,7 @@ The operator group must still install `bro-ride`, `bro-native`, and `bro-claude`
 `ride` spawns the native loop as the `bro` command of the environment it froze, so a native launch or summon fails in a workspace whose environment lacks `bro-native`.
 `bro-claude` supplies the Claude Code harness and its credential kind; `bro-ride` itself installs no harness.
 `bro-dev` remains a runtime dependency because the consumer class imports `bros.dev.Dev`.
+A persona pinning a provider recipe depends directly on that provider distribution (`bro-openai` in this example), pinned to the same framework commit.
 A consumer mounting the `file` toolset also installs `bro-filetypes` as a runtime dependency, with a Git source pointing at `subdirectory = "filetypes"`.
 Pin it to the same framework commit as the other distributions.
 
@@ -185,11 +188,11 @@ Show the proposed dependency and source changes, then obtain approval before cha
 Run the selected-project equivalent of:
 
 ```console
-uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-native --upgrade-package bro-claude --upgrade-package bro-ride
+uv lock --upgrade-package bro --upgrade-package bro-dev --upgrade-package bro-native --upgrade-package bro-claude --upgrade-package bro-ride --upgrade-package bro-openai
 ```
 
 Parse the resulting `uv.lock` rather than trusting command output.
-Require `bro`, `bro-dev`, `bro-native`, `bro-claude`, and `bro-ride` to resolve from `https://github.com/dzhioev/bro` at one identical 40-character commit SHA.
+Require `bro`, `bro-dev`, `bro-native`, `bro-claude`, `bro-ride`, and `bro-openai` to resolve from `https://github.com/dzhioev/bro` at one identical 40-character commit SHA.
 Reject a retained older revision, mixed revisions, missing Git source, or branch movement during the operation.
 Call that exact value `BRO_SHA` for the remainder of this bootstrap.
 
@@ -204,8 +207,8 @@ Fetch and read these paths before using their contracts:
 - `dev/bros/dev/dev.py`;
 - `local/bros/bro_dev/__init__.py`;
 - `bro/workspace/project.py`;
-- `bro/llm/llms/anthropic.py`;
-- `bro/llm/llms/openai.py`;
+- `llms/anthropic/bro/anthropic/declaration.py`;
+- `llms/openai/bro/openai/declaration.py`;
 - `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Session permissions and credentials**;
 - `bro/reference/dive_in.md`;
 - `ride/ride/dive_in.py`;
@@ -327,7 +330,7 @@ Read the pinned generic and framework-project developer declarations before writ
 Create the selected module with this shape, adapting names, project text, and conditional lines:
 
 ```python
-import bro.llm.llms.openai as llm_llms_openai
+import bro.openai.declaration as llm_llms_openai
 from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.mcp import man
 from bros.dev import Dev

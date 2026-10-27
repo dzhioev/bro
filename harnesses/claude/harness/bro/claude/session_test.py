@@ -7,10 +7,10 @@ from unittest.mock import patch
 import pytest
 
 from bro import watches
+from bro.anthropic.declaration import LLMSpec
 from bro.claude import runner
 from bro.claude.claude_config import claude_projects_dir
 from bro.claude.fake_claude_test_helper import write_fake_claude
-from bro.llm.llms.anthropic import LLMSpec
 from bro.monitor import SESSION_DIR_ENV, health
 from bro.trails.local import LocalStore
 from bro.trails.store import local_root

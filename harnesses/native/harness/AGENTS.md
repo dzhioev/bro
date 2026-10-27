@@ -2,7 +2,7 @@
 
 `harnesses/native/harness/` is the `bro-native` uv workspace member.
 It publishes the framework's native LLM engine, the registered `bro` harness, and the `bro` command.
-It depends on core, `bro-ride`, `bro-native-trails` and the Responses wire client extra;
+It depends on core, `bro-ride` and `bro-native-trails`;
 core never imports it, and ride reaches it only by loading its `bro.harnesses` entry.
 The root repository owns formatting, lint, typing, packaging policy, and the test gate.
 Build this member with `uv build --package bro-native`;
@@ -11,7 +11,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 ## Components
 
 - `bro/native/` — the bro-native engine, the layer above the framework core:
-  registered session harness, runner, live LLM contract, loop, and diagnostic echo wire.
+  registered session harness, runner, live LLM contract, loop, and diagnostic echo provider and wire.
   `harness.py:BRO` owns native recipe resolution among providers whose wires have clients, session preparation and runtime checks, and terminal service-tool delivery by raising to the runner.
   Its `Harness.facts` contributes native prompt passages, `Harness.prompt_instructions` supplies the skill-loader contract, and `Harness.own_tools` contributes `skill` and the shell-gated job tools.
   Its `Harness.serve` mounts `dev_mcp.py`, the file and search toolset whose shared output rules are `dev_reference.md`, for the `files` group.
@@ -39,7 +39,6 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   Results already obtained and inputs not yet exchanged remain pending ahead of the next turn.
   Capacity retries record and count every refused attempt with the same exchange indices and inputs, without advancing the wire.
   A non-completed leg is recorded with `stopped`, counted in usage, and refused with `LLMStopped` before observer events or tools run; its inputs remain pending.
-  An OpenAI Responses `incomplete` status ends the run, naming `max_output_tokens` or `content_filter`, rather than returning partial text or running its calls.
   Its `restore` and `seed_chain` delegate to the wire.
   Wire clients encode tool results; recording keeps the original object or string.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:

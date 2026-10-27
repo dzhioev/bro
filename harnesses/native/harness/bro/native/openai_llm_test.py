@@ -10,7 +10,7 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
-from bro.llm.llms.openai import DEFAULT_MODEL
+from bro.openai.declaration import DEFAULT_MODEL
 
 
 def _host_holds_the_openai_key() -> bool:

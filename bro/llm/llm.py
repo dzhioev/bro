@@ -63,15 +63,8 @@ class UnsupportedContent(ValueError):
 class LLMSpec(ABC):
   """recipe for an LLM: model + provider-specific knobs.
 
-  subclasses live alongside their provider (e.g. `bro.llm.llms.openai.LLMSpec`)
-  and carry the typed knobs it accepts. each subclass validates its own field
-  combinations in `__post_init__` and provides a round-trip `dump` / `from_dict`
-  pair keyed by `TYPE` so a stored spec can be reconstructed.
-
-  A recipe is not by itself something the framework can run: one only a harness
-  driving its own loop runs (`bro.llm.llms.anthropic`) is a recipe and nothing
-  more, while one accepted by the bro-native engine subclasses `NativeLLMSpec`.
-  The engine opens the wire named by the recipe.
+  Subclasses carry typed provider knobs and validate their field combinations.
+  The recipe names the wire a compatible harness can drive.
 
   Frozen so a class-level `llm_spec = SomeSpec(...)` default can be shared
   across instances safely — `.fast()` and friends return a new spec via
@@ -127,8 +120,7 @@ class LLMSpec(ABC):
     raise NotImplementedError(f'{self.TYPE} does not support an effort override')
 
   def needed_secrets(self) -> tuple[str, ...]:
-    """credentials this spec's provider resolves through the store (e.g. openai
-    → `openai`). folded into a bro's hydration set on surfaces that run the bro as
+    """credentials this spec's provider resolves through the store. folded into a bro's hydration set on surfaces that run the bro as
     an LLM process (`bro run` / `bro chat`). default empty for providers with no key."""
     return ()
 
@@ -140,45 +132,12 @@ class LLMSpec(ABC):
   @classmethod
   def from_dict(cls, data: dict) -> 'LLMSpec':
     """reconstruct via the discriminator. dispatches across LLMSpec subclasses."""
-    _ensure_providers_loaded()
-    type_name = data['type']
-    for subclass in _walk_subclasses(LLMSpec):
-      if getattr(subclass, 'TYPE', None) == type_name:
-        return subclass._from_dict_impl(data)
-    raise ValueError(f'unknown LLMSpec type: {type_name!r}')
+    from bro.llm import providers
+
+    return providers.declaration(data['type']).LLMSpec._from_dict_impl(data)
 
   @classmethod
   @abstractmethod
   def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
     """build an instance from a dict produced by `dump`. called via `LLMSpec.from_dict`."""
     ...
-
-
-@dataclass(frozen=True)
-class NativeLLMSpec(LLMSpec, ABC):
-  """an `LLMSpec` the bro-native engine can run."""
-
-  model: str
-
-
-def _ensure_providers_loaded() -> None:
-  # `LLMSpec.from_dict` dispatches across `LLMSpec.__subclasses__()`, which only
-  # sees classes Python has already imported, so deserialisation has to pull
-  # every provider in itself.
-  from bro.llm import providers
-
-  providers.load_all()
-
-
-def _walk_subclasses(cls: type) -> list[type]:
-  seen: set[type] = set()
-  result: list[type] = []
-  stack = [cls]
-  while len(stack) > 0:
-    c = stack.pop()
-    for s in c.__subclasses__():
-      if s not in seen:
-        seen.add(s)
-        result.append(s)
-        stack.append(s)
-  return result

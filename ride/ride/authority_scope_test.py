@@ -17,8 +17,8 @@ from bro.base.condition import iff, when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
 from bro.llm.llm import LLMSpec as Recipe
-from bro.llm.llms.echo import LLMSpec
 from bro.mcp import MCPServerSpec, ToolLayer, creds
+from bro.native.echo_declaration import LLMSpec
 from bro.worker_types import installed_types
 from ride.authority_launch import mission_view
 from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
@@ -596,7 +596,7 @@ def test_explicit_presence_never_initializes_ambient_store(installation, monkeyp
 
 
 def test_model_alias_is_mapped_before_use_checks(installation):
-  from bro.llm.llms.openai import LLMSpec as OpenAISpec
+  from bro.openai.declaration import LLMSpec as OpenAISpec
 
   native = Harness('native')
   native.llm_providers = ('openai',)
@@ -648,7 +648,7 @@ def recipe_installation(installation: Installation, harness: str, spec: Recipe) 
 
 
 def test_deferred_recipe_choices_are_checked_then_omitted(installation):
-  from bro.llm.llms.anthropic import LLMSpec as AnthropicSpec
+  from bro.anthropic.declaration import LLMSpec as AnthropicSpec
   from ride.authority_scope import DEFAULT, checked_recipe
 
   spec = AnthropicSpec(model=None, effort=None)
@@ -676,7 +676,7 @@ def test_deferred_recipe_choices_are_checked_then_omitted(installation):
 
 
 def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation):
-  from bro.llm.llms.openai import LLMSpec as OpenAISpec
+  from bro.openai.declaration import LLMSpec as OpenAISpec
   from ride.authority_scope import DEFAULT, checked_recipe
 
   source = reading(recipe_installation(installation, 'native', OpenAISpec()))
@@ -693,7 +693,7 @@ def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation
 @pytest.mark.parametrize('effort', ['none', 'minimal', None])
 def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, effort):
   from bro.authority.syntax import render_values
-  from bro.llm.llms.openai import LLMSpec as OpenAISpec
+  from bro.openai.declaration import LLMSpec as OpenAISpec
   from ride.authority_scope import checked_recipe
 
   standing = OpenAISpec(

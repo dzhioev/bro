@@ -56,9 +56,12 @@ def recipe(values: Mapping[str, Value], reading: Reading) -> LLMSpec | None:
   target = cast(str, values.get('target', ''))
   name = reading.resolve_harness(cast(str | None, values.get('harness')), summon=True)
   installed = reading.installation
+  installed.check_bro(target)
   if target not in installed.bros or name not in installed.harnesses:
     return None
   driver = installed.harnesses[name]
+  if target in driver.unavailable_recipes:
+    raise ValueError(f'bro {target!r} recipe is unavailable: {driver.unavailable_recipes[target]}')
   selections = [
     providers.LLMSelection() if text == 'default' else providers.parse(text)
     for text in reading.recipes(target)
@@ -72,7 +75,16 @@ def recipe(values: Mapping[str, Value], reading: Reading) -> LLMSpec | None:
     effort=cast(str, values['effort']) if values.get('effort') in EFFORT_LEVELS else None,
     fast=values.get('fast') is True,
   )
-  spec = driver.harness.resolve_recipe(driver.recipes[target], requested.over(selection))
+  combined = requested.over(selection)
+  if combined.provider is not None:
+    installed.check_provider(combined.provider)
+  base = driver.recipes[target]
+  if base is None and combined.provider is None:
+    raise ValueError(
+      f'{target} declares no LLM recipe: pass --llm provider:model, '
+      f'or set "llm" under projects.<repo>.bros.{target} in ~/.bro.json'
+    )
+  spec = driver.harness.resolve_recipe(base, combined)
   effective = spec.selection()
   if values.get('model') == DEFAULT:
     effective['model'] = None
@@ -108,6 +120,7 @@ def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
 
 def configured_kinds(target: str, harness: str, provider: str, reading: Reading) -> frozenset[str]:
   installed = reading.installation
+  installed.check_bro(target)
   if target not in installed.bros or harness not in installed.harnesses:
     return frozenset()
   kinds: set[str] = {'trails'}
@@ -118,6 +131,7 @@ def configured_kinds(target: str, harness: str, provider: str, reading: Reading)
   if driver.auth_kind is not None:
     kinds.add(driver.auth_kind)
   if driver.llm_key and provider:
+    installed.check_provider(provider)
     if provider not in installed.provider_needs:
       raise ValueError(f'provider {provider!r} is not installed')
     kinds.update(installed.provider_needs[provider])
@@ -291,6 +305,8 @@ def existence(
   values = descriptor.values
   target, harness = cast(str, values['target']), cast(str, values['harness'])
   installed = reading.installation
+  installed.check_bro(target)
+  installed.check_bro(target)
   if target not in installed.bros:
     raise ValueError(f'target {target!r} is not installed')
   if harness not in installed.harnesses:
@@ -308,7 +324,9 @@ def existence(
   if driver.auth_kind is not None:
     required.add(driver.auth_kind)
   if driver.llm_key:
-    required.update(installed.provider_needs[cast(str, values['provider'])])
+    provider = cast(str, values['provider'])
+    installed.check_provider(provider)
+    required.update(installed.provider_needs[provider])
   configured = set()
   for policy in reading.layers(target):
     resolved = reading.resolve(policy)

@@ -10,10 +10,10 @@ from typing import Optional, get_args
 import pytest
 
 import bro.llm.llm as llm_module
-import bro.llm.llms.openai as openai_llm
+import bro.openai.declaration as openai_llm
 from bro.base.source_root import SOURCE_ROOT
-from bro.llm.llms.openai import LLMSpec
 from bro.llm.pricing import StalePriceTableWarning
+from bro.openai.declaration import LLMSpec
 
 
 class TestLLMSpec:
@@ -94,7 +94,7 @@ class TestLLMSpec:
     assert restored == LLMSpec(model='gpt-5')
 
   def test_from_dict_works_without_pre_importing_provider_module(self):
-    # Run in a fresh interpreter so `bro.llm.llms.openai` is genuinely absent at
+    # Run in a fresh interpreter so `bro.openai.declaration` is genuinely absent at
     # call time — simulates a process (e.g. an ad-hoc decisions_log reader)
     # that imports only `bro.llm.llm` and expects `from_dict` to still dispatch.
     # In-process monkeypatching would leave the dataclass class registered on
@@ -106,7 +106,7 @@ class TestLLMSpec:
 
     script = (
       'import sys; '
-      "assert 'bro.llm.llms.openai' not in sys.modules; "
+      "assert 'bro.openai.declaration' not in sys.modules; "
       'from bro.llm.llm import LLMSpec; '
       "spec = LLMSpec.from_dict({'type': 'openai', 'model': 'gpt-5'}); "
       "assert spec.model == 'gpt-5'; "
@@ -152,8 +152,8 @@ class TestLLMSpec:
 
     script = (
       'import sys; '
-      'import bro.llm.llms.openai; '
-      "bro.llm.llms.openai.LLMSpec(reasoning_effort='medium'); "
+      'import bro.openai.declaration; '
+      "bro.openai.declaration.LLMSpec(reasoning_effort='medium'); "
       "assert 'openai' not in sys.modules"
     )
     result = subprocess.run(

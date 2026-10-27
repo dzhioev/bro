@@ -7,7 +7,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
 
-import bro.llm.llms.openai as llm_llms_openai
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro import brash_policy, results, spells as spell_store, summon, watches
@@ -32,13 +31,11 @@ from bro.datasources.file import FileSource
 from bro.datasources.man import manual
 from bro.harness import Harness, get_harness
 from bro.launch.hold import UNATTENDED
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import LLMSpec
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
 from bro.worker_types import type_name as worker_type_name
-
-DEFAULT_LLM_SPEC: NativeLLMSpec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
 
 ProvisionStep = Callable[[Path], None]
 
@@ -961,7 +958,7 @@ class CredentialManifest:
 class BaseBro(ABC):
   name: str
   description: str
-  llm_spec: NativeLLMSpec = DEFAULT_LLM_SPEC
+  llm_spec: LLMSpec | None = None
   # the bro's tool reach: tool groups, mounts, `cli` tools, data sources, and
   # reference pages, each entry keyed by its kind and a name. entries may be
   # wrapped with `bro.base.condition.when(...)` / grouped with `iff(...)` to gate
@@ -1350,11 +1347,13 @@ class BaseBro(ABC):
     # every required name — the component manifest plus the LLM key, since
     # run()/send() execute the bro as an LLM process — that does not resolve in
     # this process's credential store. the optional tier is never gated.
-    required = set(self.needed_secrets(harness)) | set(self.llm_spec.needed_secrets())
+    required = set(self.needed_secrets(harness))
+    if self.llm_spec is not None:
+      required.update(self.llm_spec.needed_secrets())
     return tuple(sorted(name for name in required if not credentials.available(name)))
 
   @classmethod
-  def create(cls, llm_spec: NativeLLMSpec) -> Self:
+  def create(cls, llm_spec: LLMSpec) -> Self:
     # factory for a construction-time LLMSpec override — applied after the bro's
     # own __init__, so subclass constructors never need to know about it. the
     # spec replaces the class default in full; build a new spec (or call

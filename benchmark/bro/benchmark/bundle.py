@@ -35,6 +35,8 @@ from ride.runtime_bundle import link_session_commands, validate_materialized_run
 CPYTHON_VERSION = '3.12.15'
 WHEEL_PACKAGES = (
   'bro',
+  'bro-openai',
+  'bro-anthropic',
   'bro-native',
   'bro-native-trails',
   'bro-claude',

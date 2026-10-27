@@ -14,7 +14,7 @@ from bro.launch.llm_flags import (
   add_llm_flags,
   selection_from_args,
 )
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import LLMSpec
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.native.harness import resolve_native
@@ -34,10 +34,8 @@ HOLD_HELP = (
 )
 
 
-def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[NativeLLMSpec]:
+def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
   """Resolve an explicit selection over the bro's declared native recipe."""
-  if selection.is_empty():
-    return None
   from bro.registry import get_class
 
   bro_class = get_class(bro_name)

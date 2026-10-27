@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, cast
 from bro.authority.authority import Authority
 from bro.authority.rules import Declaration, Rules
 from bro.authority.syntax import Layer, Syntax, parse_layer
-from bro.base import configs, credentials, host_config
+from bro.base import configs, credentials, host_config, log
 from bro.bro import BaseBro
 from bro.harness import Harness, harness_name
 from bro.llm import providers
@@ -154,12 +154,16 @@ class Configuration:
 @dataclass(frozen=True)
 class HarnessReading:
   harness: Harness
-  recipes: Mapping[str, LLMSpec]
+  recipes: Mapping[str, LLMSpec | None]
   auth_kind: str | None = None
   llm_key: bool = False
+  unavailable_recipes: Mapping[str, str] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
     object.__setattr__(self, 'recipes', MappingProxyType(dict(self.recipes)))
+    object.__setattr__(
+      self, 'unavailable_recipes', MappingProxyType(dict(self.unavailable_recipes))
+    )
 
 
 @dataclass(frozen=True)
@@ -169,9 +173,18 @@ class Installation:
   credential_kinds: frozenset[str]
   provider_needs: Mapping[str, frozenset[str]]
   declarations: Mapping[str, Declaration]
+  unavailable_bros: Mapping[str, str] = field(default_factory=dict)
+  unavailable_providers: Mapping[str, str] = field(default_factory=dict)
 
   def __post_init__(self) -> None:
-    for name in ('bros', 'harnesses', 'provider_needs', 'declarations'):
+    for name in (
+      'bros',
+      'harnesses',
+      'provider_needs',
+      'declarations',
+      'unavailable_bros',
+      'unavailable_providers',
+    ):
       object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
 
   @classmethod
@@ -181,30 +194,57 @@ class Installation:
     from ride.harness import get_harness, installed_harness_names
 
     kinds = frozenset(credentials.default_registry())
-    bros = {
-      name: registry.get_class(name)(credential_presence=kinds, credential_kinds=kinds)
-      for name in registry.known_names()
-    }
+    bros: dict[str, BaseBro] = {}
+    unavailable_bros: dict[str, str] = {}
+    for name in registry.known_names():
+      try:
+        bros[name] = registry.get_class(name)(credential_presence=kinds, credential_kinds=kinds)
+      except Exception as error:
+        unavailable_bros[name] = str(error)
+        log.warning('bro %r is unavailable: %s', name, error)
     harnesses = {}
     for name in installed_harness_names():
       driver = get_harness(name)
       scope = driver.scope_recipe()
+      recipes: dict[str, LLMSpec | None] = {}
+      unavailable_recipes: dict[str, str] = {}
+      for target, bro in bros.items():
+        if scope.llm_key and bro.llm_spec is None:
+          recipes[target] = None
+          continue
+        try:
+          recipes[target] = driver.resolve_llm(None, target)
+        except Exception as error:
+          unavailable_recipes[target] = str(error)
+          log.warning('bro %r recipe on harness %r is unavailable: %s', target, name, error)
       harnesses[name] = HarnessReading(
-        scope.harness,
-        {target: driver.resolve_llm(None, target) for target in bros},
-        scope.auth_secret,
-        scope.llm_key,
+        scope.harness, recipes, scope.auth_secret, scope.llm_key, unavailable_recipes
       )
+    provider_needs = {}
+    unavailable_providers = {}
+    for name in providers.known_names():
+      try:
+        provider_needs[name] = frozenset(providers.default_spec(name).needed_secrets())
+      except Exception as error:
+        unavailable_providers[name] = str(error)
+        log.warning('provider %r is unavailable: %s', name, error)
     return cls(
       bros,
       harnesses,
       kinds,
-      {
-        name: frozenset(providers.default_spec(name).needed_secrets())
-        for name in providers.known_names()
-      },
+      provider_needs,
       {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
+      unavailable_bros,
+      unavailable_providers,
     )
+
+  def check_bro(self, name: str) -> None:
+    if name in self.unavailable_bros:
+      raise ValueError(f'bro {name!r} is unavailable: {self.unavailable_bros[name]}')
+
+  def check_provider(self, name: str) -> None:
+    if name in self.unavailable_providers:
+      raise ValueError(f'provider {name!r} is unavailable: {self.unavailable_providers[name]}')
 
 
 @dataclass(frozen=True)

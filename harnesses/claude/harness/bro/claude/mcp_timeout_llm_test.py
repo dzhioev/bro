@@ -17,13 +17,13 @@ from unittest.mock import MagicMock, patch
 
 import bro.claude.runner as runner
 from bro import watches
+from bro.anthropic.declaration import LLMSpec
 from bro.claude.claude_argv import STREAM_JSON_ARGS, ClaudeLaunch
 from bro.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
   bounded,
   claude_token,
 )
-from bro.llm.llms.anthropic import LLMSpec
 from ride.do_ride import SessionRun
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL

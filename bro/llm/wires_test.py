@@ -66,14 +66,14 @@ def test_two_legacy_claimants_are_an_error(monkeypatch):
 
 
 def test_open_refuses_a_wire_without_a_client():
-  from bro.llm.llms.anthropic import LLMSpec
+  from bro.anthropic.declaration import LLMSpec
 
   with pytest.raises(wires.WireUnavailable, match='messages.*no client'):
     wires.open(LLMSpec(), {})
 
 
 def test_open_refuses_wire_owned_recipe_options():
-  from bro.llm.llms.openai import LLMSpec
+  from bro.openai.declaration import LLMSpec
 
   class Collision(LLMSpec):
     def request_options(self) -> dict:

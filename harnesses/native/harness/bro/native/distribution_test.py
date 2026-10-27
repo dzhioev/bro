@@ -26,6 +26,8 @@ _PROJECTS = {
   'bro-wire-responses': _ROOT / 'wires' / 'responses',
   'bro-wire-messages': _ROOT / 'wires' / 'messages',
   'bro-wire-chat': _ROOT / 'wires' / 'chat',
+  'bro-openai': _ROOT / 'llms' / 'openai',
+  'bro-anthropic': _ROOT / 'llms' / 'anthropic',
 }
 _NATIVE_DOMAIN = {
   'bro/fork.py',
@@ -39,6 +41,7 @@ _NATIVE_DOMAIN = {
   'bro/native/harness.py',
   'bro/native/llm.py',
   'bro/native/echo.py',
+  'bro/native/echo_declaration.py',
   'bro/native/loop.py',
   'bro/native/runner.py',
   'bro/run.py',
@@ -204,7 +207,6 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro',
     'bro-ride',
     'bro-native-trails',
-    'bro-wire-responses',
     'humanize',
     'mcp',
     'rich',
@@ -229,10 +231,15 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',
+    'bro-openai',
     'markdown-it-py',
     'pytest',
   }
-  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {'bro', 'bro-dev'}
+  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {
+    'bro',
+    'bro-dev',
+    'bro-openai',
+  }
   assert _project_dependencies(_ROOT / 'oops' / 'cdk' / 'pyproject.toml') >= {
     'aws-cdk-lib',
     'bro-oops',

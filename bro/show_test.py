@@ -2,8 +2,8 @@ from typing import ClassVar
 
 import pytest
 
-import bro.llm.llms.echo as llm_llms_echo
-import bro.llm.llms.openai as llm_llms_openai
+import bro.native.echo_declaration as llm_llms_echo
+import bro.openai.declaration as llm_llms_openai
 from bro import mcp
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource

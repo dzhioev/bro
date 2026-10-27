@@ -1,6 +1,6 @@
 from bro.bro import BaseBro
 from bro.llm import providers
-from bro.llm.llms import openai
+from bro.openai import declaration as openai
 from bros.bro import Bro
 from bros.terminal import Terminal
 

@@ -1207,7 +1207,7 @@ class TestRunLifecycle:
 
 class TestAgentIdentity:
   def test_create_llm_threads_the_agent_identity(self):
-    from bro.llm.llms.echo import LLMSpec as EchoSpec
+    from bro.native.echo_declaration import LLMSpec as EchoSpec
 
     class PlainBro(Declared):
       llm_spec = EchoSpec()

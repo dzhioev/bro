@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import bro.llm.llms.echo as llm_llms_echo
-import bro.llm.llms.openai as llm_llms_openai
+import bro.native.echo_declaration as llm_llms_echo
+import bro.openai.declaration as llm_llms_openai
 from bro import turn_end
 from bro.bro import AnswerDelivered, BaseBro
 from bro.inbox import Inbox
@@ -23,7 +23,7 @@ from bro.launch.call import (
   call_text,
   chat_main,
 )
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import LLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -358,7 +358,7 @@ async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_wo
 
 
 @dataclass(frozen=True)
-class _FastlessSpec(NativeLLMSpec):
+class _FastlessSpec(LLMSpec):
   """test spec that intentionally has no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'fastless'
@@ -369,7 +369,7 @@ class _FastlessSpec(NativeLLMSpec):
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'NativeLLMSpec':
+  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
     return cls(model=data['model'])
 
 
