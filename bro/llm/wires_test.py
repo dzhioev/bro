@@ -66,14 +66,14 @@ def test_two_legacy_claimants_are_an_error(monkeypatch):
 
 
 def test_open_refuses_a_wire_without_a_client():
-  from bro.llm.llms.anthropic import LLMSpec
+  from bro.anthropic.declaration import LLMSpec
 
   with pytest.raises(wires.WireUnavailable, match='messages.*no client'):
     wires.open(LLMSpec(), {})
 
 
 def test_open_refuses_wire_owned_recipe_options():
-  from bro.llm.llms.openai import LLMSpec
+  from bro.openai.declaration import LLMSpec
 
   class Collision(LLMSpec):
     def request_options(self) -> dict:
@@ -105,3 +105,29 @@ def test_entry_name_and_decode_side_name_must_match(monkeypatch):
   )
   with pytest.raises(ValueError, match='same NAME'):
     wires.WireRegistry().get('different')
+
+
+def test_open_names_the_wire_and_distribution_extra_when_the_sdk_is_missing(tmp_path, monkeypatch):
+  from bro.native.echo_declaration import LLMSpec
+
+  metadata = tmp_path / 'fixture_wire-1.dist-info'
+  metadata.mkdir()
+  (metadata / 'METADATA').write_text('Name: fixture-wire\nVersion: 1\n')
+  (metadata / 'entry_points.txt').write_text(
+    '[bro.llm.wire_clients]\nfixture = fixture_client:Client\n'
+  )
+  (tmp_path / 'fixture_client.py').write_text('import missing_fixture_sdk\n')
+  monkeypatch.syspath_prepend(str(tmp_path))
+  distribution = wires.importlib.metadata.PathDistribution(metadata)
+  monkeypatch.setattr(
+    wires, '_client_entries', lambda: {'fixture': distribution.entry_points['fixture']}
+  )
+
+  class Recipe(LLMSpec):
+    WIRE = 'fixture'
+
+  with pytest.raises(
+    wires.WireUnavailable, match=r"wire 'fixture'.*fixture-wire\[client\]"
+  ) as refused:
+    wires.open(Recipe(), {})
+  assert isinstance(refused.value.__cause__, ModuleNotFoundError)

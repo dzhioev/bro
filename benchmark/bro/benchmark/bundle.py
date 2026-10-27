@@ -35,6 +35,8 @@ from ride.runtime_bundle import link_session_commands, validate_materialized_run
 CPYTHON_VERSION = '3.12.15'
 WHEEL_PACKAGES = (
   'bro',
+  'bro-openai',
+  'bro-anthropic',
   'bro-native',
   'bro-native-trails',
   'bro-claude',
@@ -307,6 +309,8 @@ def export_command(workspace: Path) -> list[str]:
     '--frozen',
     '--no-default-groups',
     '--no-emit-workspace',
+    '--extra',
+    'client',
     *selection,
     '--no-hashes',
     '--no-annotate',
@@ -367,6 +371,11 @@ def _installed_harnesses(bundle: Bundle) -> tuple[str, ...]:
   if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
     raise ValueError('the bundled harness registry returned a malformed roster')
   return tuple(value)
+
+
+def _validate_wire_clients(bundle: Bundle) -> None:
+  script = 'from bro.llm import wires; [wires.load_client(name) for name in wires.client_names()]'
+  _run([str(bundle.interpreter), '-c', script])
 
 
 def _source_commit(workspace: Path) -> str:
@@ -500,6 +509,7 @@ def build(workspace: Path, root: Path) -> Bundle:
     wheels = _wheels(staging / 'wheel')
     log.info('installing the framework into %s', bundle.venv)
     _run(install_command(bundle, requirements, wheels))
+    _validate_wire_clients(bundle)
     _relocate_scripts(bundle)
     link_session_commands(bundle.root)
     harness_files = _provision_harnesses(bundle)

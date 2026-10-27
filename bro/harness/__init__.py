@@ -46,8 +46,11 @@ class Harness:
   """The framework-visible interface of one driving harness."""
 
   name: str
-  # the `bro.llm.providers` names whose recipes this harness runs
-  llm_providers: tuple[str, ...] = ()
+  _llm_providers: tuple[str, ...] = ()
+
+  @property
+  def llm_providers(self) -> tuple[str, ...]:
+    return self._llm_providers
 
   def __init__(self, name: str | None = None):
     if name is not None:
@@ -90,11 +93,12 @@ class Harness:
     looked up among `llm_providers`."""
     return len(selection.providers(self.llm_providers)) > 0
 
-  def resolve_recipe(self, base: 'LLMSpec', selection: 'LLMSelection') -> 'LLMSpec':
+  def resolve_recipe(self, base: 'LLMSpec | None', selection: 'LLMSelection') -> 'LLMSpec':
     """`selection` over the standing `base`, among `llm_providers`; a recipe this
     harness does not run is refused, naming the installed harnesses that do."""
-    from bro.llm.providers import LLMSelectionError, known_names, resolve
+    from bro.llm.providers import LLMSelectionError, default_spec, known_names, resolve
 
+    selected = default_spec(selection.provider) if selection.provider is not None else None
     if not self.runs(selection):
       served = ', '.join(self.llm_providers) or 'no provider'
       elsewhere = '; '.join(
@@ -104,8 +108,14 @@ class Harness:
       raise LLMSelectionError(
         f'the {self.name} harness cannot run recipe {selection.format()!r}: '
         f'it serves {served}; {elsewhere}'
+        + (f'; wire {selected.WIRE!r} is not served' if selected is not None else '')
       )
-    return resolve(base, selection, self.llm_providers)
+    spec = resolve(base, selection, self.llm_providers)
+    if spec.TYPE not in self.llm_providers:
+      raise LLMSelectionError(
+        f'the {self.name} harness cannot run provider {spec.TYPE!r} on wire {spec.WIRE!r}'
+      )
+    return spec
 
 
 def _harnesses_running(provider: str) -> str:

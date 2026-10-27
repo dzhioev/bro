@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 
 from bro.llm.llm import LLMSpec
-from bro.llm.llms.echo import LLMSpec as EchoSpec
-from bro.llm.llms.openai import LLMSpec as ResponsesSpec
 from bro.llm.records import Call, Message, Reasoning
+from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.openai.declaration import LLMSpec as ResponsesSpec
 
 
 @dataclass(frozen=True)

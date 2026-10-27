@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from bro.launch.resume import RESUME_LATEST, conversation_history, find_latest_call_trail, resume
-from bro.llm.llms.openai import LLMSpec
+from bro.openai.declaration import LLMSpec
 from bro.trails.backends import get_format
 from bro.trails.display import AssistantText, InterimAssistantText, ToolCall, UserInput
 from bro.trails.model import spill_descriptor

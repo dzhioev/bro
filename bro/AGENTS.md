@@ -109,7 +109,7 @@ A subpackage with a map of its own is pointed at, not described here.
   Installed names come from metadata without imports, and one selected object loads lazily with its type and name checked.
   Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
   `owned_environment()` names the environment variables carrying its session state.
-  `llm_providers` names the providers whose recipes it runs;
+  `llm_providers` exposes the providers whose recipes it runs, computed from the installed roster for wire-driven harnesses;
   `resolve_recipe` lays an LLM selection over a standing recipe among them and refuses one it does not serve, naming the installed harnesses that do.
   `Harness.serve(reach)` returns a `Service`:
   the server specs the harness mounts for the reach's tool groups, and the groups it leaves unserved, which `bro show` marks.
@@ -224,7 +224,7 @@ the union of `needed_secrets` over the components that harness mounts for the br
 which are the servers it serves the bro's tool groups with and the bro's own declared servers and data sources (matching what `bro.claude.assembly.persona_servers()` mounts for `claude`);
 the MRO-collected `extra_secrets`;
 and the credentials of its pinned-on features.
-It excludes the LLM key (`llm_spec.needed_secrets()`):
+It excludes the LLM key (`llm_spec.needed_secrets()` when a recipe is declared):
 surfaces that run the bro as an LLM process add it, while a claude-code session authenticates on its own.
 `missing_secrets()` is the manifest plus the LLM key, checked against the process's store;
 `Runner.run()` refuses to start on any missing name, raising `BroRaised` with them all listed, and interactive surfaces reply with the report.

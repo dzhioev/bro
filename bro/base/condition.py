@@ -1,7 +1,7 @@
 """first-class conditions over typed variables.
 
 A condition is an immutable predicate tree built at declaration time —
-`var('harness') == 'claude'` for equality, `var('creds').contains('openai')`
+`var('harness') == 'claude'` for equality, `var('creds').contains('service')`
 for membership — and evaluated later against a `Variables` mapping, so a
 class-level declaration stays an import-time constant while its truth is
 decided by whatever surface holds the facts. `bro.base.template` directives lower

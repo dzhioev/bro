@@ -41,7 +41,7 @@ _HOLDS = frozenset(HOLDS)
 _FRAMEWORK_FACT_NAMES = frozenset({'harness', 'creds', 'may_summon', 'talk', 'hold'})
 
 # the credential fact as a ready-made condition variable, so a declaration's
-# gate reads `creds.contains('openai')`.
+# gate reads `creds.contains('service')`.
 creds = var('creds')
 
 

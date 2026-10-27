@@ -540,3 +540,15 @@ class LLMSpec(llm_llm.LLMSpec):
       effort=data.get('effort'),
       fast_mode=data.get('fast_mode', False),
     )
+
+
+MODEL_SLUG = re.compile(r'^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?')
+
+
+def model_family(slug: str) -> str:
+  match = MODEL_SLUG.match(slug)
+  if match is None:
+    raise ValueError(f'not a recognized model slug: {slug!r}')
+  family, major, minor = match.groups()
+  version = major if minor is None else f'{major}.{minor}'
+  return f'{family.title()} {version}'

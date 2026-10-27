@@ -290,6 +290,21 @@ dev = [
 ]
 
 [[package]]
+name = "bro-anthropic"
+version = "0.1.0"
+source = { editable = "../llms/anthropic" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-messages" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "bro-wire-messages", editable = "../wires/messages" },
+]
+
+[[package]]
 name = "bro-bench"
 version = "0.1.0"
 source = { editable = "../bench" }
@@ -308,10 +323,12 @@ dependencies = [
     { name = "boto3" },
     { name = "botocore" },
     { name = "bro" },
+    { name = "bro-anthropic" },
     { name = "bro-bench" },
     { name = "bro-claude" },
     { name = "bro-claude-trails" },
     { name = "bro-native-trails" },
+    { name = "bro-openai" },
     { name = "bro-ride" },
     { name = "bro-wire-chat" },
     { name = "bro-wire-messages" },
@@ -332,10 +349,12 @@ requires-dist = [
     { name = "boto3", specifier = "==1.43.114" },
     { name = "botocore", specifier = "==1.43.114" },
     { name = "bro", editable = "../" },
+    { name = "bro-anthropic", editable = "../llms/anthropic" },
     { name = "bro-bench", editable = "../bench" },
     { name = "bro-claude", editable = "../harnesses/claude/harness" },
     { name = "bro-claude-trails", editable = "../harnesses/claude/trails" },
     { name = "bro-native-trails", editable = "../harnesses/native/trails" },
+    { name = "bro-openai", editable = "../llms/openai" },
     { name = "bro-ride", editable = "../ride" },
     { name = "bro-wire-chat", editable = "../wires/chat" },
     { name = "bro-wire-messages", editable = "../wires/messages" },
@@ -357,6 +376,7 @@ version = "0.1.0"
 source = { editable = "../harnesses/claude/harness" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-anthropic" },
     { name = "bro-claude-trails" },
     { name = "bro-ride" },
     { name = "bro-wire-messages" },
@@ -367,6 +387,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "../" },
+    { name = "bro-anthropic", editable = "../llms/anthropic" },
     { name = "bro-claude-trails", editable = "../harnesses/claude/trails" },
     { name = "bro-ride", editable = "../ride" },
     { name = "bro-wire-messages", editable = "../wires/messages" },
@@ -399,6 +420,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "bro", editable = "../" }]
+
+[[package]]
+name = "bro-openai"
+version = "0.1.0"
+source = { editable = "../llms/openai" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-responses" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "bro-wire-responses", editable = "../wires/responses" },
+    { name = "bro-wire-responses", extras = ["client"], marker = "extra == 'client'", editable = "../wires/responses" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "bro-ride"

@@ -52,6 +52,7 @@ Credentials live in one exclusive store:
 The repository carries only credential kinds and their behavior.
 A resolver reads the code registry assembled from `bro/base/registry.json` and installed `bro.credentials` entry points;
 each entry is `{description, install?, literal?}` and unknown fields fail with the valid storage locations named.
+Provider kinds are contributed by their installed provider distributions, not by the core registry.
 A literal kind returns its material without expanding `$cred` reference nodes, and scoped-store hydration follows none of them.
 Dotfiles cannot add or override kinds.
 

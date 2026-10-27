@@ -12,8 +12,8 @@ from bro.base import credentials, host_config
 from bro.base.condition import when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
-from bro.llm.llms.echo import LLMSpec
 from bro.mcp import MCPServerSpec, ToolLayer, creds
+from bro.native.echo_declaration import LLMSpec
 from bro.worker_types import installed_types
 from ride import scope
 from ride.authority_reading import Configuration, HarnessReading, Installation, Policy, Reading
@@ -59,7 +59,7 @@ def scoped_installation(monkeypatch, tmp_path):
   monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'host.json'))
   harness = Harness('test')
-  harness.llm_providers = ('echo',)
+  harness._llm_providers = ('echo',)
   installation = Installation(
     {
       bro.name: bro(credential_presence=kinds, credential_kinds=kinds)

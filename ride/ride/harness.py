@@ -38,7 +38,9 @@ class SessionHarness(Protocol):
   """The managed-session operations supplied by one driving harness."""
 
   name: str
-  llm_providers: tuple[str, ...]
+
+  @property
+  def llm_providers(self) -> tuple[str, ...]: ...
 
   def runs(self, selection: LLMSelection) -> bool: ...
 

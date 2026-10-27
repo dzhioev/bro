@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 import bro.claude.claude_argv as ride_claude_argv
+from bro.anthropic import declaration as anthropic
 from bro.authority_view_test_helper import publish
 from bro.base.spawn import console_script, module_argv
 from bro.bro import BaseBro
@@ -16,7 +17,6 @@ from bro.claude.assembly import persona_servers
 from bro.claude.mcp import MCPEndpoint
 from bro.claude.session_end_state import ANSWER_TOOL, RAISE_TOOL
 from bro.claude.statusline import statusline_command
-from bro.llm.llms import anthropic
 from bro.mcp import ToolLayer, brash, files
 from ride.session_test import _spec as _session_spec
 

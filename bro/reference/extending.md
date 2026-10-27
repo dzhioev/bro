@@ -23,10 +23,16 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
 - `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
   each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
+- `bro.llm.providers` — provider declaration modules, `<name> = "bro.<name>.declaration"`;
+  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `LLMSpec`, `DEFAULT_MODEL`, `MODELS`, failure signatures and pricing.
+  A provider contributes its credential kind separately through `bro.credentials` from an import-free literal module.
+  Provider package hubs import nothing, and declarations import no SDK at module level and no harness.
+  Explicit selection loads only that declaration; searches warn and skip a broken declaration.
 - `bro.llm.wires` — SDK-free wire decode modules, `<name> = "<module>"`;
   a module exports matching `NAME`, `CHAINING`, `decode(response)` and `counts(usage)`, and may claim untagged records with `LEGACY = True`
 - `bro.llm.wire_clients` — client classes implementing `bro.llm.wire.Wire`, `<name> = "<module>:<Client>"`;
-  the name matches the class's `NAME` and its decode-side entry, and the wire distribution provides its SDK dependencies in the `client` extra
+  the name matches the class's `NAME` and its decode-side entry, and the wire distribution provides its SDK dependencies in the `client` extra.
+  The native harness serves recipes whose `WIRE` has an installed client, and auxiliary calls open the same clients through `bro.llm.wires.open`
 - `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
   each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 
@@ -102,8 +108,9 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   See `bro/reference/conditions.md`.
   Declarations skip the `ClassVar` annotation, since BaseBro's class-level declarations carry the types;
   a ruff configuration selecting RUF012 ignores it for persona modules.
-- `llm_spec = openai.LLMSpec(...)` (or any other bro-native provider's `LLMSpec`) overrides the recipe the bro-native engine runs the bro under;
+- `llm_spec = openai.LLMSpec(...)` (imported from `bro.openai.declaration`, with a dependency on `bro-openai`) declares the recipe the native engine runs the bro under;
   a Claude Code session runs under the recipe its own launch names.
+  A persona may omit it; a native launch then needs an explicit provider recipe.
   Per-instance overrides go through `YourBro.create(spec)`.
 - `extra_secrets = ('github',)` declares credentials no component expresses (a bro's environment needs).
   MRO-walked and unioned;

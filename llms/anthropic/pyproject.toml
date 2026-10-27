@@ -1,0 +1,33 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-anthropic"
+version = "0.1.0"
+description = "Anthropic model recipes, pricing and credentials for bro"
+requires-python = ">=3.12"
+dependencies = ["bro", "bro-wire-messages"]
+
+[project.entry-points."bro.llm.providers"]
+anthropic = "bro.anthropic.declaration"
+
+[project.entry-points."bro.credentials"]
+anthropic = "bro.anthropic.credentials:KIND"
+
+[tool.uv.sources]
+bro = { workspace = true }
+bro-wire-messages = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+bro-wire-messages = ["bro"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["bro-wire-messages"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.anthropic"]
+namespace = true
+wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/AGENTS.md", "**/*.egg-info"]

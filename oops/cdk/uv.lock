@@ -159,6 +159,7 @@ version = "0.1.0"
 source = { editable = "../../dev" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-openai" },
     { name = "markdown-it-py" },
     { name = "pytest" },
 ]
@@ -166,6 +167,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "../../" },
+    { name = "bro-openai", editable = "../../llms/openai" },
     { name = "markdown-it-py" },
     { name = "pytest" },
 ]
@@ -177,12 +179,14 @@ source = { editable = "../" }
 dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
+    { name = "bro-openai" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "../../" },
     { name = "bro-dev", editable = "../../dev" },
+    { name = "bro-openai", editable = "../../llms/openai" },
 ]
 
 [[package]]
@@ -219,6 +223,39 @@ dev = [
     { name = "pyright", specifier = "==1.1.414" },
     { name = "pytest", specifier = "==9.1.1" },
 ]
+
+[[package]]
+name = "bro-openai"
+version = "0.1.0"
+source = { editable = "../../llms/openai" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-responses" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../../" },
+    { name = "bro-wire-responses", editable = "../../wires/responses" },
+    { name = "bro-wire-responses", extras = ["client"], marker = "extra == 'client'", editable = "../../wires/responses" },
+]
+provides-extras = ["client"]
+
+[[package]]
+name = "bro-wire-responses"
+version = "0.1.0"
+source = { editable = "../../wires/responses" }
+dependencies = [
+    { name = "bro" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "../../" },
+    { name = "openai", marker = "extra == 'client'", specifier = "==3.33.0" },
+    { name = "pydantic", marker = "extra == 'client'", specifier = "==2.14.1" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "cattrs"

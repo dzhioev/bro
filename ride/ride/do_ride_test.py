@@ -16,6 +16,14 @@ from ride.workspace.model import Workspace
 
 
 @pytest.fixture(autouse=True)
+def native_persona_recipe(monkeypatch):
+  from bro.openai.declaration import LLMSpec
+  from bros.dev import Dev
+
+  monkeypatch.setattr(Dev, 'llm_spec', LLMSpec(reasoning_effort='medium'))
+
+
+@pytest.fixture(autouse=True)
 def isolated_environ():
   with patch.dict(os.environ, {'RIDE_ISOLATION': 'boxed'}, clear=False):
     yield
@@ -61,7 +69,7 @@ class TestCommand:
     ]  # fmt: skip
 
   def test_recorded_recipe_crosses_the_launcher_boundary(self, monkeypatch):
-    from bro.llm.llms.anthropic import LLMSpec
+    from bro.anthropic.declaration import LLMSpec
 
     recorded = LLMSpec(model='recorded-model').dump()
     spec = dataclasses.replace(_spec(llm=None), resolved_llm=recorded)

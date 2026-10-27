@@ -4,6 +4,7 @@ import sys
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
+from bro.anthropic.declaration import LLMSpec
 from bro.base import credentials, log
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
@@ -20,7 +21,6 @@ from bro.claude.claude_config import (
 )
 from bro.claude.provisioning import claude_code_version
 from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
-from bro.llm.llms.anthropic import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.mcp import Reach
 from bro.run_lifecycle import RunLifecycle
@@ -73,7 +73,12 @@ def _raise_and_terminate(result: str, status: int) -> None:
 
 class ClaudeHarness(Harness):
   name = 'claude'
-  llm_providers = (LLMSpec.TYPE,)
+
+  @property
+  def llm_providers(self) -> tuple[str, ...]:
+    from bro.llm import providers
+
+    return tuple(name for name, spec in providers.available_specs() if isinstance(spec, LLMSpec))
 
   def facts(self) -> Variables:
     return {

@@ -26,6 +26,8 @@ _PROJECTS = {
   'bro-wire-responses': _ROOT / 'wires' / 'responses',
   'bro-wire-messages': _ROOT / 'wires' / 'messages',
   'bro-wire-chat': _ROOT / 'wires' / 'chat',
+  'bro-openai': _ROOT / 'llms' / 'openai',
+  'bro-anthropic': _ROOT / 'llms' / 'anthropic',
 }
 _NATIVE_DOMAIN = {
   'bro/fork.py',
@@ -39,6 +41,7 @@ _NATIVE_DOMAIN = {
   'bro/native/harness.py',
   'bro/native/llm.py',
   'bro/native/echo.py',
+  'bro/native/echo_declaration.py',
   'bro/native/loop.py',
   'bro/native/runner.py',
   'bro/run.py',
@@ -204,7 +207,6 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro',
     'bro-ride',
     'bro-native-trails',
-    'bro-wire-responses',
     'humanize',
     'mcp',
     'rich',
@@ -229,10 +231,15 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',
+    'bro-openai',
     'markdown-it-py',
     'pytest',
   }
-  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {'bro', 'bro-dev'}
+  assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {
+    'bro',
+    'bro-dev',
+    'bro-openai',
+  }
   assert _project_dependencies(_ROOT / 'oops' / 'cdk' / 'pyproject.toml') >= {
     'aws-cdk-lib',
     'bro-oops',
@@ -460,7 +467,15 @@ def test_claude_dependency_edges_follow_the_distribution_boundaries(wheels):
   assert {
     _requirement_name(requirement)
     for requirement in (_metadata(wheels['bro-claude']).get_all('Requires-Dist') or [])
-  } == {'bro', 'bro-ride', 'bro-claude-trails', 'bro-wire-messages', 'pyyaml', 'watchfiles'}
+  } == {
+    'bro',
+    'bro-ride',
+    'bro-claude-trails',
+    'bro-wire-messages',
+    'bro-anthropic',
+    'pyyaml',
+    'watchfiles',
+  }
 
 
 def test_claude_trail_format_wheel_projects_without_a_harness_or_sdk(wheels, tmp_path):
@@ -492,4 +507,50 @@ assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.nati
     capture_output=True,
     text=True,
     check=True,
+  )
+
+
+@pytest.mark.parametrize('provider', ['openai', 'anthropic'])
+def test_provider_wheels_hold_only_their_own_leaf(provider, wheels, wheel_files):
+  distribution = f'bro-{provider}'
+  package = f'bro/{provider}'
+  assert wheel_files[distribution] == {
+    f'{package}/__init__.py',
+    f'{package}/declaration.py',
+    f'{package}/credentials.py',
+  }
+  entries = _entry_points(wheels[distribution])
+  assert entries['bro.llm.providers'][provider] == f'bro.{provider}.declaration'
+  assert entries['bro.credentials'][provider] == f'bro.{provider}.credentials:KIND'
+
+
+def test_credential_registry_loads_without_provider_declarations():
+  subprocess.run(
+    [
+      sys.executable,
+      '-c',
+      """
+import importlib.abc
+import sys
+from bro.llm import providers
+
+modules = {entry.value for entry in providers._entry_points()}
+class BlockDeclarations(importlib.abc.MetaPathFinder):
+  def find_spec(self, fullname, path, target=None):
+    if fullname in modules:
+      raise AssertionError(f'credential registry reached declaration {fullname}')
+sys.meta_path.insert(0, BlockDeclarations())
+from bro.base import credentials
+registry = credentials.default_registry()
+for name in providers.known_names():
+  declaration_entry = next(entry for entry in providers._entry_points() if entry.name == name)
+  if declaration_entry.value.startswith('bro.native.'):
+    continue
+  assert name in registry
+assert not modules.intersection(sys.modules)
+""",
+    ],
+    check=True,
+    capture_output=True,
+    text=True,
   )

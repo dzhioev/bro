@@ -2,11 +2,11 @@ from pathlib import Path
 from typing import Optional
 
 from bro.inbox import Inbox
-from bro.llm.llms.openai import LLMSpec
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import Observer
 from bro.llm.tracker import Tracker
 from bro.native.loop import Loop
+from bro.openai.declaration import LLMSpec
 from bro.wire_responses.client import Responses
 
 
@@ -28,7 +28,7 @@ def make_loop(
   agent: Optional[str] = None,
   activity_file: Optional[Path] = None,
 ) -> ResponsesLoop:
-  from bro.llm.llms.openai import DEFAULT_MODEL
+  from bro.openai.declaration import DEFAULT_MODEL
 
   recipe = LLMSpec(
     model=model if model is not None else DEFAULT_MODEL,

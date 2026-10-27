@@ -1,8 +1,8 @@
 import bros.browser as browser
 from bro import artifact_mcp
 from bro.datasources.current_time import CurrentTime
-from bro.llm.llms import openai
 from bro.mcp import mount, source
+from bro.openai import declaration as openai
 from bro.webview import mcp as webview_mcp
 from bros.bro import Bro
 from bros.browser import mcp

@@ -33,7 +33,7 @@ async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None)
   harnesses = [get_harness(name) for name in installed_harness_names()]
   manifest = {name for harness in harnesses for name in bro.needed_secrets(harness)}
   optional = {name for harness in harnesses for name in bro.optional_secrets(harness)} - manifest
-  llm_secrets = bro.llm_spec.needed_secrets()
+  llm_secrets = bro.llm_spec.needed_secrets() if bro.llm_spec is not None else ()
   if len(manifest) > 0 or len(optional) > 0 or len(llm_secrets) > 0:
     parts.extend(['', '## Secrets', ''])
     for name in sorted(manifest):
@@ -95,7 +95,7 @@ def _identity_lines(bro: BaseBro) -> list[str]:
   # spec carries its own knobs and we don't want this module to know about any
   # one provider. drop the `type` discriminator and any unset (None) field.
   lines = []
-  for key, value in bro.llm_spec.dump().items():
+  for key, value in (bro.llm_spec.dump() if bro.llm_spec is not None else {}).items():
     if key == 'type' or value is None:
       continue
     label = key.replace('_', ' ')
