@@ -10,7 +10,7 @@ The launcher-side `bro-bench` member is mapped by `../bench/AGENTS.md`.
 ## Development
 
 This is not a uv workspace member:
-`harbor` reaches `openai < 3` through litellm while `bro-native`
+`harbor` reaches `openai < 3` through litellm while the native wire client
 pins `openai == 3`, so no single lock satisfies both.
 The directory therefore locks and syncs on its own:
 `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside this file.

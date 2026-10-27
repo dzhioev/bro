@@ -13,7 +13,7 @@ from openai import APIStatusError, APITimeoutError
 from openai.types.responses import Response
 
 import bro.llm.usage as usage
-import bro.native.llms.openai as openai_llm
+import bro.native.loop as loop_module
 from bro.inbox import Inbox
 from bro.jobs import Job, Registry
 from bro.llm.mcp import (
@@ -22,6 +22,7 @@ from bro.llm.mcp import (
   Tool,
   ToolControlSignal,
   ToolRegistry,
+  encode_tool_result,
   wire_name,
 )
 from bro.llm.observer import (
@@ -33,9 +34,11 @@ from bro.llm.observer import (
   ToolResultEvent,
 )
 from bro.llm.tracker import Tracker
-from bro.native.llms.openai import OpenAI, parse_response
+from bro.llm.wire import ToolOutput
+from bro.native.loop_test_helper import ResponsesLoop, make_loop
 from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder
+from bro.wire_responses.client import parse_response
 
 # the registry advertises namespaced wire names, so a tool whose local name is
 # `ping` in this namespace surfaces to the LLM as `svc__ping`. the emit helpers
@@ -67,26 +70,27 @@ class _StaticTool(Tool):
     return 'ok'
 
 
-def _function_call_response(name: str) -> Response:
-  # SimpleNamespace duck-types the few fields _execute_tool_calls reads
-  # (output[*].type / .name / .arguments / .call_id); cast keeps pyright quiet.
-  return cast(
-    Response,
-    SimpleNamespace(
-      output=[
-        SimpleNamespace(
-          type='function_call',
-          name=wire_name(_TEST_NAMESPACE, name),
-          arguments='{}',
-          call_id='call_1',
-        )
-      ]
-    ),
-  )
+def _function_call_response(name: str):
+  from bro.llm.wire import Leg
+  from bro.wire_responses.decode import decode
+
+  raw = {
+    'model': 'test',
+    'status': 'completed',
+    'output': [
+      {
+        'type': 'function_call',
+        'name': wire_name(_TEST_NAMESPACE, name),
+        'arguments': '{}',
+        'call_id': 'call_1',
+      }
+    ],
+  }
+  return Leg.from_decoded({'request': {}, 'response': raw}, {}, 'responses', decode(raw), None)
 
 
-def _make_openai(tools: list[Tool]) -> OpenAI:
-  gpt = OpenAI(api_key='dummy', inbox=Inbox())
+def _make_responses_loop(tools: list[Tool]) -> ResponsesLoop:
+  gpt = make_loop(api_key='dummy', inbox=Inbox())
   gpt.tools = ToolRegistry([InProcessMCPServer(_TEST_NAMESPACE, tools)])
   return gpt
 
@@ -146,16 +150,29 @@ def _fake_usage(
 def _fake_response(
   *, output, response_id='resp_1', usage=None, dump_payload=None, model='gpt-5'
 ) -> Response:
-  # `output` is the list of duck-typed items _emit_response_steps walks.
-  # `dump_payload` becomes the response.model_dump() result captured into
-  # the llm_call body — tests can pass a sentinel dict to verify it lands.
   namespace = SimpleNamespace(
     id=response_id,
     output=output,
     usage=usage if usage is not None else _fake_usage(),
     model=model,
   )
-  payload = dump_payload if dump_payload is not None else {'id': response_id}
+
+  def plain(value):
+    if isinstance(value, SimpleNamespace):
+      return {key: plain(item) for key, item in vars(value).items()}
+    if isinstance(value, list):
+      return [plain(item) for item in value]
+    return value
+
+  payload = {
+    'id': response_id,
+    'status': 'completed',
+    'model': model,
+    'output': plain(output),
+    'usage': plain(namespace.usage),
+  }
+  if dump_payload is not None:
+    payload.update(dump_payload)
   namespace.model_dump = lambda mode='json': payload
   return cast(Response, namespace)
 
@@ -184,19 +201,15 @@ def _function_call_item(name: str, *, call_id: str, arguments='{}'):
   )
 
 
-def _make_openai_with_tracker(
+def _make_responses_loop_with_tracker(
   tools: Optional[list[Tool]] = None,
   *,
   reasoning_effort=None,
   compact_threshold: Optional[int] = None,
   agent: Optional[str] = None,
   inbox: Optional[Inbox] = None,
-) -> tuple[OpenAI, _RecordingTracker, list[dict]]:
-  """build a OpenAI instance with mocked tool registry + tracker + a captured-
-  kwargs sink for responses.create. callers wire `gpt.client.responses.create`
-  to whatever stub sequence they need.
-  """
-  gpt = OpenAI(
+) -> tuple[ResponsesLoop, _RecordingTracker, list[dict]]:
+  gpt = make_loop(
     api_key='dummy',
     inbox=inbox if inbox is not None else Inbox(),
     reasoning_effort=reasoning_effort,
@@ -206,15 +219,14 @@ def _make_openai_with_tracker(
   gpt.tools = ToolRegistry(
     [InProcessMCPServer(_TEST_NAMESPACE, tools)] if tools is not None else []
   )
-  # bypass the real openai schema conversion path — tests don't care about it.
-  gpt._openai_tools = []
+  gpt._resolved_tools = []
   tracker = _RecordingTracker()
   gpt.tracker = tracker
   captured: list[dict] = []
   return gpt, tracker, captured
 
 
-def _install_responses(gpt: OpenAI, sequence: list, captured: list[dict]) -> None:
+def _install_responses(gpt: ResponsesLoop, sequence: list, captured: list[dict]) -> None:
   iterator = iter(sequence)
 
   async def create(**kwargs):
@@ -222,12 +234,12 @@ def _install_responses(gpt: OpenAI, sequence: list, captured: list[dict]) -> Non
     return next(iterator)
 
   # OpenAI client exposes `responses` as a cached_property — write through to
-  # a duck-typed namespace instead by replacing `gpt.client` wholesale. cast
+  # a duck-typed namespace instead by replacing `gpt.wire.client` wholesale. cast
   # keeps pyright quiet since the attribute is typed as the OpenAI class.
-  gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+  gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
 
-def _install_failing_create(gpt: OpenAI, captured: list[dict], error: Exception) -> None:
+def _install_failing_create(gpt: ResponsesLoop, captured: list[dict], error: Exception) -> None:
   """fail the first create with `error`, then answer 'ok'"""
 
   async def create(**kwargs):
@@ -236,7 +248,7 @@ def _install_failing_create(gpt: OpenAI, captured: list[dict], error: Exception)
       raise error
     return _fake_response(output=[_message_item('ok')])
 
-  gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+  gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
 
 async def _no_wait(seconds: float) -> None:
@@ -246,19 +258,19 @@ async def _no_wait(seconds: float) -> None:
 @pytest.mark.asyncio
 async def test_tool_exception_becomes_function_call_output():
   tool = _StaticTool('boom', raise_with=RuntimeError('upstream down'))
-  gpt = _make_openai([tool])
+  gpt = _make_responses_loop([tool])
 
   results = await gpt._execute_tool_calls(
     _function_call_response('boom'), turn_index=0, call_index=1
   )
 
   assert len(results) == 1
-  result = cast(dict, results[0])
-  assert result['type'] == 'function_call_output'
-  assert result['call_id'] == 'call_1'
-  assert "'svc__boom' failed" in result['output']
-  assert 'RuntimeError' in result['output']
-  assert 'upstream down' in result['output']
+  result = results[0]
+  assert isinstance(result, ToolOutput)
+  assert result.call_id == 'call_1'
+  assert "'svc__boom' failed" in result.output
+  assert 'RuntimeError' in result.output
+  assert 'upstream down' in result.output
 
 
 @pytest.mark.asyncio
@@ -267,7 +279,7 @@ async def test_tool_control_signal_propagates_past_loop():
     pass
 
   tool = _StaticTool('halt', raise_with=_Abort('stop the run'))
-  gpt = _make_openai([tool])
+  gpt = _make_responses_loop([tool])
 
   with pytest.raises(_Abort, match='stop the run'):
     await gpt._execute_tool_calls(_function_call_response('halt'), turn_index=0, call_index=1)
@@ -275,14 +287,14 @@ async def test_tool_control_signal_propagates_past_loop():
 
 @pytest.mark.asyncio
 async def test_successful_tool_call_returns_output_unchanged():
-  gpt = _make_openai([_StaticTool('ping')])
+  gpt = _make_responses_loop([_StaticTool('ping')])
 
   results = await gpt._execute_tool_calls(
     _function_call_response('ping'), turn_index=0, call_index=1
   )
 
   assert len(results) == 1
-  assert cast(dict, results[0])['output'] == 'ok'
+  assert cast(ToolOutput, results[0]).output == 'ok'
 
 
 @pytest.mark.asyncio
@@ -291,14 +303,16 @@ async def test_structured_tool_output_is_compact_unicode_but_tracker_keeps_objec
   def document() -> dict[str, list[str]]:
     return {'pages': [text, 'second']}
 
-  gpt, tracker, _ = _make_openai_with_tracker(
+  gpt, tracker, _ = _make_responses_loop_with_tracker(
     [FunctionTool(document, description='read a document')]
   )
   results = await gpt._execute_tool_calls(
     _function_call_response('document'), turn_index=0, call_index=1
   )
 
-  assert cast(dict, results[0])['output'] == '{"pages":["' + text + '","second"]}'
+  assert (
+    encode_tool_result(cast(ToolOutput, results[0]).output) == '{"pages":["' + text + '","second"]}'
+  )
   assert [(kind, body) for kind, body, _ in tracker.steps if kind == 'tool_result'] == [
     ('tool_result', {'pages': [text, 'second']})
   ]
@@ -307,7 +321,7 @@ async def test_structured_tool_output_is_compact_unicode_but_tracker_keeps_objec
 class TestToolResultTrackerEmission:
   @pytest.mark.asyncio
   async def test_emits_tool_result_with_call_id_and_is_error_false(self):
-    gpt, tracker, _ = _make_openai_with_tracker([_StaticTool('ping')])
+    gpt, tracker, _ = _make_responses_loop_with_tracker([_StaticTool('ping')])
     await gpt._execute_tool_calls(_function_call_response('ping'), turn_index=2, call_index=4)
 
     results = [s for s in tracker.steps if s[0] == 'tool_result']
@@ -325,7 +339,7 @@ class TestToolResultTrackerEmission:
   @pytest.mark.asyncio
   async def test_emits_tool_result_with_is_error_true_on_exception(self):
     tool = _StaticTool('boom', raise_with=RuntimeError('upstream down'))
-    gpt, tracker, _ = _make_openai_with_tracker([tool])
+    gpt, tracker, _ = _make_responses_loop_with_tracker([tool])
     await gpt._execute_tool_calls(_function_call_response('boom'), turn_index=3, call_index=5)
 
     results = [s for s in tracker.steps if s[0] == 'tool_result']
@@ -372,7 +386,7 @@ class TestSendTrackerEmission:
         interactive=False,
         surface='test',
       )
-      gpt, _, captured = _make_openai_with_tracker()
+      gpt, _, captured = _make_responses_loop_with_tracker()
       gpt.tracker = tracker
       _install_responses(gpt, [_fake_response(output=[_message_item('done')])], captured)
 
@@ -386,7 +400,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_user_input_emitted_at_turn_zero_skipping_system(self):
-    gpt, tracker, captured = _make_openai_with_tracker()
+    gpt, tracker, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('hi back')])], captured)
 
     await gpt.send(
@@ -404,7 +418,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_user_input_text_extracted_from_multimodal_content(self):
-    gpt, tracker, captured = _make_openai_with_tracker()
+    gpt, tracker, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ack')])], captured)
 
     await gpt.send(
@@ -424,7 +438,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_request_timeout_forwarded_to_responses_create(self):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
 
     await gpt.send([{'role': 'user', 'content': 'hi'}], request_timeout=120.0)
@@ -433,7 +447,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_request_timeout_omitted_leaves_client_default(self):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
 
     await gpt.send([{'role': 'user', 'content': 'hi'}])
@@ -442,7 +456,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_a_transient_failure_is_retried(self, monkeypatch):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     _install_failing_create(gpt, captured, APITimeoutError(request=_REQUEST))
     monkeypatch.setattr('bro.base.retry.asyncio_sleep', _no_wait)
 
@@ -451,7 +465,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_a_client_error_is_not_retried(self, monkeypatch):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     error = APIStatusError('bad', response=httpx2.Response(400, request=_REQUEST), body=None)
     _install_failing_create(gpt, captured, error)
     monkeypatch.setattr('bro.base.retry.asyncio_sleep', _no_wait)
@@ -462,12 +476,12 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_llm_call_records_request_response_and_indexes(self):
-    gpt, tracker, captured = _make_openai_with_tracker()
+    gpt, tracker, captured = _make_responses_loop_with_tracker()
     response = _fake_response(
       output=[_message_item('reply')],
       response_id='resp_xyz',
       usage=_fake_usage(input_tokens=11, output_tokens=22, reasoning_tokens=33, cached_tokens=7),
-      dump_payload={'id': 'resp_xyz', 'output': ['…']},
+      dump_payload={'extra': 'retained'},
     )
     _install_responses(gpt, [response], captured)
 
@@ -476,8 +490,9 @@ class TestSendTrackerEmission:
     llm_calls = [s for s in tracker.steps if s[0] == 'llm_call']
     assert len(llm_calls) == 1
     _, body, extras = llm_calls[0]
-    assert body['response'] == {'id': 'resp_xyz', 'output': ['…']}
-    assert body['request']['model'] == gpt.model
+    assert body['response']['extra'] == 'retained'
+    assert body['response']['output'][0]['content'][0]['text'] == 'reply'
+    assert body['request']['model'] == gpt.wire.recipe.selection()['model']
     # request kwargs round-tripped, including the input list passed to the API.
     assert body['request']['input'] == captured[0]['input']
     assert extras == {
@@ -489,7 +504,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_records_only_canonical_response_and_tool_result_rows(self):
-    gpt, tracker, captured = _make_openai_with_tracker([_StaticTool('ping')])
+    gpt, tracker, captured = _make_responses_loop_with_tracker([_StaticTool('ping')])
     # first response: reasoning + interim assistant + tool_call → tool loop runs;
     # second response: terminal reasoning + terminal assistant.
     first = _fake_response(
@@ -520,7 +535,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_response_items_continue_to_drive_the_observer(self):
-    gpt, _, captured = _make_openai_with_tracker([_StaticTool('ping')])
+    gpt, _, captured = _make_responses_loop_with_tracker([_StaticTool('ping')])
     observer = MagicMock(spec=Observer)
     gpt.observer = observer
     first = _fake_response(
@@ -544,7 +559,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_commentary_in_the_final_response_drives_the_observer(self):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     observer = MagicMock(spec=Observer)
     gpt.observer = observer
     terminal = _fake_response(
@@ -577,7 +592,7 @@ class TestSendTrackerEmission:
         sources.append(gpt.tracker.current_tool_step_id)
         return 'ok'
 
-    gpt, tracker, captured = _make_openai_with_tracker([_SourceTool('ping')])
+    gpt, tracker, captured = _make_responses_loop_with_tracker([_SourceTool('ping')])
     first = _fake_response(
       output=[_reasoning_item('thinking'), _function_call_item('ping', call_id='c1')]
     )
@@ -591,7 +606,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_turn_index_stays_on_the_user_turn_while_call_index_advances(self):
-    gpt, tracker, captured = _make_openai_with_tracker([_StaticTool('ping')])
+    gpt, tracker, captured = _make_responses_loop_with_tracker([_StaticTool('ping')])
     first = _fake_response(output=[_function_call_item('ping', call_id='c1')])
     second = _fake_response(output=[_function_call_item('ping', call_id='c2')])
     third = _fake_response(output=[_message_item('done')])
@@ -615,7 +630,7 @@ class TestSendTrackerEmission:
 
   @pytest.mark.asyncio
   async def test_subsequent_send_advances_turn_for_new_user_input(self):
-    gpt, tracker, captured = _make_openai_with_tracker()
+    gpt, tracker, captured = _make_responses_loop_with_tracker()
     _install_responses(
       gpt,
       [
@@ -659,7 +674,7 @@ class TestNotificationDelivery:
     inbox = Inbox()
     registry = Registry(inbox)
     tool = _NewsTool(registry)
-    gpt, tracker, captured = _make_openai_with_tracker([tool], inbox=inbox)
+    gpt, tracker, captured = _make_responses_loop_with_tracker([tool], inbox=inbox)
     observer = MagicMock(spec=Observer)
     gpt.observer = observer
     first = _fake_response(output=[_function_call_item('news', call_id='c1')])
@@ -688,7 +703,7 @@ class TestNotificationDelivery:
   @pytest.mark.asyncio
   async def test_pending_news_precedes_the_next_user_message(self):
     inbox = Inbox()
-    gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
+    gpt, tracker, captured = _make_responses_loop_with_tracker(inbox=inbox)
     _install_responses(
       gpt,
       [
@@ -717,7 +732,7 @@ class TestNotificationDelivery:
   @pytest.mark.asyncio
   async def test_wake_starts_a_notification_only_turn(self):
     inbox = Inbox()
-    gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
+    gpt, tracker, captured = _make_responses_loop_with_tracker(inbox=inbox)
     _install_responses(
       gpt,
       [
@@ -742,7 +757,7 @@ class TestNotificationDelivery:
   @pytest.mark.asyncio
   async def test_wake_delivers_a_posted_notice_as_a_user_item_without_job_ids(self):
     inbox = Inbox()
-    gpt, tracker, captured = _make_openai_with_tracker(inbox=inbox)
+    gpt, tracker, captured = _make_responses_loop_with_tracker(inbox=inbox)
     observer = MagicMock(spec=Observer)
     gpt.observer = observer
     _install_responses(
@@ -778,7 +793,7 @@ class TestNotificationDelivery:
     inbox = Inbox()
     registry = Registry(inbox)
     tool = _NewsTool(registry)
-    gpt, tracker, captured = _make_openai_with_tracker([tool], inbox=inbox)
+    gpt, tracker, captured = _make_responses_loop_with_tracker([tool], inbox=inbox)
     first = _fake_response(output=[_function_call_item('news', call_id='c1')])
     followup_started = asyncio.Event()
 
@@ -789,7 +804,7 @@ class TestNotificationDelivery:
       followup_started.set()
       await asyncio.Future()
 
-    gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+    gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
     turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
     await followup_started.wait()
     turn.cancel()
@@ -813,7 +828,7 @@ class TestNotificationDelivery:
 class TestParseResponse:
   def test_single_message_text_returned(self):
     response = _fake_response(output=[_message_item('hello')])
-    assert parse_response(response) == 'hello'
+    assert parse_response(response.model_dump(mode='json')) == 'hello'
 
   def test_commentary_is_not_part_of_the_reply(self):
     response = _fake_response(
@@ -823,26 +838,26 @@ class TestParseResponse:
         _message_item('PR merged; task closed', phase='final_answer'),
       ]
     )
-    assert parse_response(response) == 'PR merged; task closed'
+    assert parse_response(response.model_dump(mode='json')) == 'PR merged; task closed'
 
   def test_commentary_alone_raises(self):
     response = _fake_response(output=[_message_item('still working', phase='commentary')])
     with pytest.raises(RuntimeError, match="doesn't contain reply messages"):
-      parse_response(response)
+      parse_response(response.model_dump(mode='json'))
 
   def test_multiple_messages_without_phase_concatenated_in_order(self):
     response = _fake_response(output=[_message_item('part one'), _message_item('part two')])
-    assert parse_response(response) == 'part one\n\npart two'
+    assert parse_response(response.model_dump(mode='json')) == 'part one\n\npart two'
 
   def test_no_message_items_raises(self):
     response = _fake_response(output=[_reasoning_item('only thinking')])
     with pytest.raises(RuntimeError, match="doesn't contain reply messages"):
-      parse_response(response)
+      parse_response(response.model_dump(mode='json'))
 
   def test_messages_without_text_raise(self):
     response = _fake_response(output=[SimpleNamespace(type='message', phase=None, content=[])])
     with pytest.raises(RuntimeError, match='no output texts'):
-      parse_response(response)
+      parse_response(response.model_dump(mode='json'))
 
   def test_refusal_raises_with_refusal_text(self):
     refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
@@ -850,7 +865,7 @@ class TestParseResponse:
       output=[SimpleNamespace(type='message', phase=None, content=[refusal])]
     )
     with pytest.raises(RuntimeError, match='cannot help with that'):
-      parse_response(response)
+      parse_response(response.model_dump(mode='json'))
 
 
 class TestReplyExtractionFallback:
@@ -859,7 +874,7 @@ class TestReplyExtractionFallback:
 
   @pytest.mark.asyncio
   async def test_send_falls_back_to_message_text_when_extraction_raises(self):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
     terminal = _fake_response(
       output=[
@@ -872,31 +887,84 @@ class TestReplyExtractionFallback:
     assert await gpt.send([{'role': 'user', 'content': 'hi'}]) == 'the work landed'
 
   @pytest.mark.asyncio
-  async def test_send_raises_when_terminal_response_has_no_text(self):
-    gpt, _, captured = _make_openai_with_tracker()
-    refusal = SimpleNamespace(type='refusal', refusal='cannot help with that')
-    terminal = _fake_response(
-      output=[SimpleNamespace(type='message', phase=None, content=[refusal])]
+  @pytest.mark.parametrize('refusal', [False, True], ids=['no-output', 'refusal-only'])
+  async def test_unusable_terminal_response_is_recorded_and_accounted(self, monkeypatch, refusal):
+    gpt, tracker, captured = _make_responses_loop_with_tracker(agent='test-agent')
+    output = (
+      [
+        SimpleNamespace(
+          type='message',
+          phase=None,
+          content=[SimpleNamespace(type='refusal', refusal='cannot help with that')],
+        )
+      ]
+      if refusal
+      else []
     )
+    terminal = _fake_response(
+      output=output,
+      model='billed-model',
+      usage=_fake_usage(input_tokens=13, cached_tokens=4, output_tokens=7),
+    )
+    published = []
+    monkeypatch.setattr(usage, 'publish', lambda agent, counts: published.append((agent, counts)))
     _install_responses(gpt, [terminal], captured)
-    with pytest.raises(RuntimeError, match='cannot help with that'):
+
+    with pytest.raises(RuntimeError, match='cannot help' if refusal else "doesn't contain reply"):
       await gpt.send([{'role': 'user', 'content': 'hi'}])
+
+    assert [kind for kind, _, _ in tracker.steps] == ['user_input', 'llm_call']
+    assert tracker.steps[-1][1]['response'] == terminal.model_dump(mode='json')
+    totals = {'billed-model': {'input': 9, 'cache_write': 0, 'cache_read': 4, 'output': 7}}
+    assert gpt.cumulative_usage() == totals
+    assert published == [('test-agent', totals)]
+
+  @pytest.mark.asyncio
+  async def test_unusable_response_acknowledges_pending_notification_inputs(self):
+    inbox = Inbox()
+    inbox.post('notice')
+    gpt, tracker, captured = _make_responses_loop_with_tracker(inbox=inbox)
+    refusal = _fake_response(
+      response_id='accepted',
+      output=[
+        SimpleNamespace(
+          type='message',
+          phase=None,
+          content=[SimpleNamespace(type='refusal', refusal='cannot help')],
+        )
+      ],
+    )
+    _install_responses(
+      gpt, [refusal, _fake_response(output=[_message_item('continued')])], captured
+    )
+
+    with pytest.raises(RuntimeError, match='cannot help'):
+      await gpt.send([{'role': 'user', 'content': 'hi'}])
+    assert await gpt.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+
+    assert captured[0]['input'] == [
+      {'role': 'user', 'content': 'notice'},
+      {'role': 'user', 'content': 'hi'},
+    ]
+    assert captured[1]['previous_response_id'] == 'accepted'
+    assert captured[1]['input'] == [{'role': 'user', 'content': 'continue'}]
+    assert [kind for kind, _, _ in tracker.steps].count('notification') == 1
 
 
 class TestReasoningKwargs:
   def test_include_added_when_reasoning_effort_set(self):
-    gpt = OpenAI(api_key='dummy', inbox=Inbox(), reasoning_effort='medium')
-    kwargs = gpt._reasoning_kwargs()
+    gpt = make_loop(api_key='dummy', inbox=Inbox(), reasoning_effort='medium')
+    kwargs = gpt.wire.recipe.request_options()
     assert kwargs['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
     assert kwargs['include'] == ['reasoning.encrypted_content']
 
   def test_no_include_when_reasoning_effort_absent(self):
-    gpt = OpenAI(api_key='dummy', inbox=Inbox())
-    assert gpt._reasoning_kwargs() == {}
+    gpt = make_loop(api_key='dummy', inbox=Inbox())
+    assert gpt.wire.recipe.request_options() == {}
 
   @pytest.mark.asyncio
   async def test_send_passes_include_to_responses_create(self):
-    gpt, _, captured = _make_openai_with_tracker(reasoning_effort='medium')
+    gpt, _, captured = _make_responses_loop_with_tracker(reasoning_effort='medium')
     _install_responses(gpt, [_fake_response(output=[_message_item('hi')])], captured)
     await gpt.send([{'role': 'user', 'content': 'go'}])
     assert captured[0]['include'] == ['reasoning.encrypted_content']
@@ -905,20 +973,22 @@ class TestReasoningKwargs:
 
 class TestContextManagementKwargs:
   def test_kwargs_present_when_threshold_set(self):
-    gpt = OpenAI(api_key='dummy', inbox=Inbox(), compact_threshold=50_000)
-    assert gpt._context_management_kwargs() == {
+    gpt = make_loop(api_key='dummy', inbox=Inbox(), compact_threshold=50_000)
+    assert gpt.wire.recipe.request_options() == {
       'context_management': [{'type': 'compaction', 'compact_threshold': 50_000}]
     }
 
   def test_no_kwargs_when_threshold_absent(self):
-    gpt = OpenAI(api_key='dummy', inbox=Inbox())
-    assert gpt._context_management_kwargs() == {}
+    gpt = make_loop(api_key='dummy', inbox=Inbox())
+    assert gpt.wire.recipe.request_options() == {}
 
   @pytest.mark.asyncio
   async def test_send_passes_context_management_on_every_create(self):
     # the tool loop's follow-up create must carry the param too — compaction
     # most plausibly triggers mid-loop, where the context grows fastest.
-    gpt, _, captured = _make_openai_with_tracker([_StaticTool('ping')], compact_threshold=1_000)
+    gpt, _, captured = _make_responses_loop_with_tracker(
+      [_StaticTool('ping')], compact_threshold=1_000
+    )
     first = _fake_response(output=[_function_call_item('ping', call_id='c1')])
     second = _fake_response(output=[_message_item('done')])
     _install_responses(gpt, [first, second], captured)
@@ -930,7 +1000,7 @@ class TestContextManagementKwargs:
 
   @pytest.mark.asyncio
   async def test_send_omits_context_management_when_disabled(self):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('hi')])], captured)
 
     await gpt.send([{'role': 'user', 'content': 'go'}])
@@ -942,7 +1012,7 @@ class TestUsageAccounting:
   @pytest.mark.asyncio
   async def test_cumulative_usage_maps_openai_classes(self):
     # reasoning tokens sit inside output_tokens, not beside it.
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     response = _fake_response(
       output=[_message_item('ok')],
       usage=_fake_usage(input_tokens=100, output_tokens=22, cached_tokens=30),
@@ -957,7 +1027,7 @@ class TestUsageAccounting:
 
   @pytest.mark.asyncio
   async def test_cumulative_usage_credits_cache_writes(self):
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     response = _fake_response(
       output=[_message_item('ok')],
       usage=_fake_usage(
@@ -974,7 +1044,7 @@ class TestUsageAccounting:
 
   @pytest.mark.asyncio
   async def test_cumulative_usage_sums_across_calls_keyed_by_response_model(self):
-    gpt, _, captured = _make_openai_with_tracker([_StaticTool('ping')])
+    gpt, _, captured = _make_responses_loop_with_tracker([_StaticTool('ping')])
     first = _fake_response(
       output=[_function_call_item('ping', call_id='c1')],
       usage=_fake_usage(input_tokens=10, output_tokens=5, cached_tokens=0),
@@ -996,7 +1066,7 @@ class TestUsageAccounting:
   @pytest.mark.asyncio
   async def test_agent_publishes_usage_file_after_every_call(self, tmp_path, monkeypatch):
     monkeypatch.setattr('tempfile.gettempdir', lambda: str(tmp_path))
-    gpt, _, captured = _make_openai_with_tracker([_StaticTool('ping')], agent='bro//dev')
+    gpt, _, captured = _make_responses_loop_with_tracker([_StaticTool('ping')], agent='bro//dev')
     first = _fake_response(
       output=[_function_call_item('ping', call_id='c1')],
       usage=_fake_usage(input_tokens=10, output_tokens=5, cached_tokens=0),
@@ -1019,7 +1089,7 @@ class TestUsageAccounting:
   @pytest.mark.asyncio
   async def test_no_agent_publishes_nothing(self, monkeypatch):
     monkeypatch.delenv(usage.USAGE_FILE_VARIABLE, raising=False)
-    gpt, _, captured = _make_openai_with_tracker()
+    gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
 
     await gpt.send([{'role': 'user', 'content': 'hi'}])
@@ -1067,7 +1137,7 @@ class TestInterruptedTurn:
   @pytest.mark.asyncio
   async def test_pending_tool_calls_are_answered_and_parked(self):
     blocking = _BlockingTool('slow')
-    gpt, tracker, captured = _make_openai_with_tracker([blocking, _StaticTool('quick')])
+    gpt, tracker, captured = _make_responses_loop_with_tracker([blocking, _StaticTool('quick')])
     _install_responses(
       gpt,
       [_tool_calls_response('slow', 'quick'), _fake_response(output=[_message_item('after')])],
@@ -1082,11 +1152,11 @@ class TestInterruptedTurn:
 
     # both the call that was running and the one that never started come back
     # answered, so the next request is a turn the API accepts
-    parked = [cast(dict, item) for item in gpt._pending_input]
-    assert [item['call_id'] for item in parked] == ['call_1', 'call_2']
-    assert all(item['output'] == openai_llm.INTERRUPTED_TOOL_OUTPUT for item in parked)
+    parked = [cast(ToolOutput, item) for item in gpt._pending_input]
+    assert [item.call_id for item in parked] == ['call_1', 'call_2']
+    assert all(item.output == loop_module.INTERRUPTED_TOOL_OUTPUT for item in parked)
     # the trail records them too — a replay reconstructs the same turn
-    interrupted = [step for step in tracker.steps if step[1] == openai_llm.INTERRUPTED_TOOL_OUTPUT]
+    interrupted = [step for step in tracker.steps if step[1] == loop_module.INTERRUPTED_TOOL_OUTPUT]
     assert [step[0] for step in interrupted] == ['tool_result', 'tool_result']
     assert all(step[2]['is_error'] is True for step in interrupted)
 
@@ -1102,7 +1172,7 @@ class TestInterruptedTurn:
 
   @pytest.mark.asyncio
   async def test_unanswered_request_is_parked_whole(self):
-    gpt, _tracker, captured = _make_openai_with_tracker()
+    gpt, _tracker, captured = _make_responses_loop_with_tracker()
     started = asyncio.Event()
 
     async def create(**kwargs):
@@ -1110,7 +1180,7 @@ class TestInterruptedTurn:
       started.set()
       await asyncio.Event().wait()
 
-    gpt.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
+    gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
     turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
     await asyncio.wait_for(started.wait(), timeout=5)
@@ -1120,5 +1190,5 @@ class TestInterruptedTurn:
 
     # no response came back, so the whole request rides into the next send
     # rather than vanishing from the conversation
-    assert [item['content'] for item in cast(list, gpt._pending_input)] == ['go']
-    assert gpt._last_response_id is None
+    assert [item.content for item in cast(list, gpt._pending_input)] == ['go']
+    assert gpt.wire._last_response_id is None
