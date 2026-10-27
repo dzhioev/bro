@@ -21,6 +21,7 @@ from bro.llm.observer import (
   ToolResultEvent,
 )
 from bro.llm.records import Call, Message, Reasoning
+from bro.llm.retry import retry_llm
 from bro.llm.tracker import ToolStepSource, Tracker
 from bro.llm.wire import (
   Input,
@@ -156,14 +157,21 @@ class Loop(LLM):
           )
         )
     except asyncio.CancelledError:
-      results.extend(
-        await self._interrupted_outputs(
-          calls[len(results) :], turn_index=turn_index, call_index=call_index
+      await _finish_on_cancel(
+        self._park_interrupted(
+          calls[len(results) :], results, turn_index=turn_index, call_index=call_index
         )
       )
-      self._pending_input = results
       raise
     return results
+
+  async def _park_interrupted(
+    self, calls: tuple[Call, ...], outputs: list[Input], *, turn_index: int, call_index: int
+  ) -> None:
+    self._pending_input = outputs
+    outputs.extend(
+      await self._interrupted_outputs(calls, turn_index=turn_index, call_index=call_index)
+    )
 
   async def _interrupted_outputs(
     self, calls: tuple[Call, ...], *, turn_index: int, call_index: int
@@ -212,7 +220,12 @@ class Loop(LLM):
     self._call_index += 1
     self._pending_input = inputs
     try:
-      leg = await self.wire.exchange(inputs, tools, request_timeout)
+      leg = await retry_llm(
+        lambda: self.wire.exchange(inputs, tools, request_timeout),
+        lambda error: False,
+        capacity=lambda leg: leg.stop == 'capacity',
+        on_capacity=self._record_capacity_leg,
+      )
     except asyncio.CancelledError:
       self._pending_input = inputs
       raise
@@ -226,13 +239,18 @@ class Loop(LLM):
       await _finish_on_cancel(self._record_leg(leg))
     except asyncio.CancelledError:
       if leg.stop == 'completed':
-        self._pending_input = await self._interrupted_outputs(
-          leg.calls, turn_index=self._turn_index, call_index=self._call_index
+        await _finish_on_cancel(
+          self._park_interrupted(
+            leg.calls, [], turn_index=self._turn_index, call_index=self._call_index
+          )
         )
       raise
     if leg.stop != 'completed':
       raise LLMStopped(leg.stop, leg.stop_reason)
     return leg
+
+  async def _record_capacity_leg(self, leg: Leg) -> None:
+    await _finish_on_cancel(self._record_leg(leg))
 
   async def _record_leg(self, leg: Leg) -> None:
     step_id = await self._track_step(
@@ -354,8 +372,13 @@ def _extract_text(msg: dict) -> str:
 async def _finish_on_cancel[T](operation: Awaitable[T]) -> T:
   # Persist an accepted leg or result before its interruption records can follow it.
   task = asyncio.ensure_future(operation)
-  try:
-    return await asyncio.shield(task)
-  except asyncio.CancelledError:
-    await task
-    raise
+  cancelled = False
+  while not task.done():
+    try:
+      await asyncio.shield(task)
+    except asyncio.CancelledError:
+      cancelled = True
+  result = task.result()
+  if cancelled:
+    raise asyncio.CancelledError
+  return result
