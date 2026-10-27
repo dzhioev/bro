@@ -57,6 +57,7 @@ def recipe(values: Mapping[str, Value], reading: Reading) -> LLMSpec | None:
   name = reading.resolve_harness(cast(str | None, values.get('harness')), summon=True)
   installed = reading.installation
   installed.check_bro(target)
+  installed.check_harness(name)
   if target not in installed.bros or name not in installed.harnesses:
     return None
   driver = installed.harnesses[name]
@@ -121,6 +122,7 @@ def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
 def configured_kinds(target: str, harness: str, provider: str, reading: Reading) -> frozenset[str]:
   installed = reading.installation
   installed.check_bro(target)
+  installed.check_harness(harness)
   if target not in installed.bros or harness not in installed.harnesses:
     return frozenset()
   kinds: set[str] = {'trails'}
@@ -306,7 +308,7 @@ def existence(
   target, harness = cast(str, values['target']), cast(str, values['harness'])
   installed = reading.installation
   installed.check_bro(target)
-  installed.check_bro(target)
+  installed.check_harness(harness)
   if target not in installed.bros:
     raise ValueError(f'target {target!r} is not installed')
   if harness not in installed.harnesses:

@@ -10,6 +10,7 @@ when selected or searched for their advertised capabilities.
 """
 
 import dataclasses
+import functools
 import importlib.metadata
 import re
 from collections.abc import Collection, Iterator, Mapping
@@ -33,6 +34,7 @@ class LLMSelectionError(ValueError):
   or preset, or a malformed `--llm` value. The message is operator-facing."""
 
 
+@functools.cache
 def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
   return tuple(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
 
@@ -65,6 +67,23 @@ def declaration(provider: str) -> ModuleType:
       raise TypeError('entry must load a declaration module')
     if not issubclass(module.LLMSpec, LLMSpec) or module.LLMSpec.TYPE != provider:
       raise ValueError('declaration LLMSpec.TYPE must equal the entry name')
+    if not isinstance(module.DEFAULT_MODEL, str) or not isinstance(module.LLMSpec.WIRE, str):
+      raise TypeError('declaration must name a default model and a wire')
+    if not isinstance(module.MODELS, Mapping) or any(
+      not isinstance(name, str) or not isinstance(model, str)
+      for name, model in module.MODELS.items()
+    ):
+      raise TypeError('declaration MODELS must map short names to model ids')
+    if not isinstance(module.FAILURE_SIGNATURES, tuple) or any(
+      not isinstance(signature, FailureSignature) for signature in module.FAILURE_SIGNATURES
+    ):
+      raise TypeError('declaration must export FAILURE_SIGNATURES')
+    if not callable(module.price) or not isinstance(module.PRICE_TABLE_SHA256, str):
+      raise TypeError('declaration must export pricing and its table digest')
+    if not hasattr(module, 'PRICE_TABLE'):
+      raise TypeError('declaration must export PRICE_TABLE')
+    if hasattr(module, 'MODEL_SLUG') and not callable(module.model_family):
+      raise TypeError('declaration MODEL_SLUG requires model_family')
   except Exception as error:
     raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
   return module
@@ -99,7 +118,11 @@ def models(provider: str) -> dict[str, str]:
 
 def default_spec(provider: str) -> LLMSpec:
   """the provider's own default recipe — its default model and no knobs."""
-  return declaration(provider).LLMSpec()
+  module = declaration(provider)
+  try:
+    return module.LLMSpec()
+  except Exception as error:
+    raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
 
 
 def effort_values() -> frozenset[str]:

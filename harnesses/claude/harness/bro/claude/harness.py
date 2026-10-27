@@ -73,7 +73,12 @@ def _raise_and_terminate(result: str, status: int) -> None:
 
 class ClaudeHarness(Harness):
   name = 'claude'
-  llm_providers = (LLMSpec.TYPE,)
+
+  @property
+  def llm_providers(self) -> tuple[str, ...]:
+    from bro.llm import providers
+
+    return tuple(name for name, spec in providers.available_specs() if isinstance(spec, LLMSpec))
 
   def facts(self) -> Variables:
     return {

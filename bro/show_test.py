@@ -80,7 +80,7 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_identity_includes_model(self):
-    card = await format_card(_MinimalBro())
+    card = await format_card(_FullBro())
     assert '- model: `' in card
 
   @pytest.mark.asyncio
@@ -358,3 +358,10 @@ async def test_card_composes_a_prompt_for_each_installed_harness(monkeypatch, ho
     assert expected in section
     assert f'{name} tool rule' in section
     assert '{{' not in section
+
+
+@pytest.mark.asyncio
+async def test_a_persona_without_a_recipe_has_no_llm_key_or_model():
+  card = await format_card(_MinimalBro())
+  assert '- model:' not in card
+  assert 'LLM key' not in card

@@ -1,6 +1,3 @@
-# Every bro module constructs an `LLMSpec` at class-definition time, so this
-# declaration module must not import the provider SDK or native client.
-
 from __future__ import annotations
 
 import dataclasses

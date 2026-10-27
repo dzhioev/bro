@@ -94,11 +94,6 @@ class TestLLMSpec:
     assert restored == LLMSpec(model='gpt-5')
 
   def test_from_dict_works_without_pre_importing_provider_module(self):
-    # Run in a fresh interpreter so `bro.openai.declaration` is genuinely absent at
-    # call time — simulates a process (e.g. an ad-hoc decisions_log reader)
-    # that imports only `bro.llm.llm` and expects `from_dict` to still dispatch.
-    # In-process monkeypatching would leave the dataclass class registered on
-    # `LLMSpec.__subclasses__` even after sys.modules restoration.
     import subprocess
     import sys
 
@@ -142,9 +137,6 @@ class TestLLMSpec:
     assert result.returncode == 0, f'stderr: {result.stderr}'
 
   def test_importing_module_does_not_import_openai(self):
-    # every bro module constructs an LLMSpec at class-definition time, so the
-    # spec side must stay decoupled from the heavyweight openai package. Fresh
-    # interpreter: in-process, other tests would already have openai loaded.
     import subprocess
     import sys
 

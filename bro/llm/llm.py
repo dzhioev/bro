@@ -131,7 +131,7 @@ class LLMSpec(ABC):
 
   @classmethod
   def from_dict(cls, data: dict) -> 'LLMSpec':
-    """reconstruct via the discriminator. dispatches across LLMSpec subclasses."""
+    """Reconstruct through only the declaration named by the stored type."""
     from bro.llm import providers
 
     return providers.declaration(data['type']).LLMSpec._from_dict_impl(data)

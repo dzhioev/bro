@@ -52,10 +52,6 @@ class Harness:
   def llm_providers(self) -> tuple[str, ...]:
     return self._llm_providers
 
-  @llm_providers.setter
-  def llm_providers(self, value: tuple[str, ...]) -> None:
-    self._llm_providers = value
-
   def __init__(self, name: str | None = None):
     if name is not None:
       self.name = harness_name(name)
@@ -102,13 +98,7 @@ class Harness:
     harness does not run is refused, naming the installed harnesses that do."""
     from bro.llm.providers import LLMSelectionError, default_spec, known_names, resolve
 
-    if selection.provider is not None:
-      selected = default_spec(selection.provider)
-      if selected.TYPE not in self.llm_providers:
-        raise LLMSelectionError(
-          f'the {self.name} harness cannot run provider {selected.TYPE!r} '
-          f'on wire {selected.WIRE!r}; {_harnesses_running(selected.TYPE)}'
-        )
+    selected = default_spec(selection.provider) if selection.provider is not None else None
     if not self.runs(selection):
       served = ', '.join(self.llm_providers) or 'no provider'
       elsewhere = '; '.join(
@@ -118,6 +108,7 @@ class Harness:
       raise LLMSelectionError(
         f'the {self.name} harness cannot run recipe {selection.format()!r}: '
         f'it serves {served}; {elsewhere}'
+        + (f'; wire {selected.WIRE!r} is not served' if selected is not None else '')
       )
     spec = resolve(base, selection, self.llm_providers)
     if spec.TYPE not in self.llm_providers:

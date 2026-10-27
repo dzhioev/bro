@@ -52,6 +52,8 @@ def create(
   agent: Optional[str] = None,
   activity_file: Optional[Path] = None,
 ) -> LLM:
+  if spec.WIRE not in wires.client_names():
+    raise ValueError(f'native harness cannot run wire {spec.WIRE!r}: no installed client')
   secrets = spec.needed_secrets()
   if len(secrets) > 1:
     raise ValueError(f'recipe {spec.TYPE!r} must name one credential material')

@@ -1207,3 +1207,16 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   assert captured['initial'] is None
   assert captured['history'] == []
   assert captured['chat_hold'] == 'attended'
+
+
+def test_native_launch_without_a_recipe_is_refused(monkeypatch):
+  from bro.launch.run import create_bro_for_run
+  from bro.llm.providers import LLMSelection, LLMSelectionError
+
+  class NoRecipeBro(Bro):
+    name = 'no-recipe'
+    description = 'fixture without a recipe'
+
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: NoRecipeBro())
+  with pytest.raises(LLMSelectionError, match='no-recipe declares no LLM recipe: pass --llm'):
+    create_bro_for_run('no-recipe', LLMSelection())

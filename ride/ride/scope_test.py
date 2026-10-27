@@ -59,7 +59,7 @@ def scoped_installation(monkeypatch, tmp_path):
   monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'host.json'))
   harness = Harness('test')
-  harness.llm_providers = ('echo',)
+  harness._llm_providers = ('echo',)
   installation = Installation(
     {
       bro.name: bro(credential_presence=kinds, credential_kinds=kinds)

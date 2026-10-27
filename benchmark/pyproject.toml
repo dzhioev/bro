@@ -9,6 +9,7 @@ description = "running a bro as an agent under the Harbor benchmark harness"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "bro-anthropic",
   "boto3==1.43.114",
   "botocore==1.43.114",
   "bro",
@@ -40,6 +41,7 @@ dev = [
 "bro.benchmark.job" = "bro.benchmark._entrypoints:bro_benchmark_job"
 
 [tool.uv.sources]
+bro-anthropic = { path = "../llms/anthropic", editable = true }
 bro-claude = { path = "../harnesses/claude/harness", editable = true }
 bro-claude-trails = { path = "../harnesses/claude/trails", editable = true }
 bro-native-trails = { path = "../harnesses/native/trails", editable = true }
@@ -51,6 +53,7 @@ bro-bench = { path = "../bench", editable = true }
 bro-ride = { path = "../ride", editable = true }
 
 [tool.deptry.package_module_name_map]
+bro-anthropic = ["bro"]
 bro-claude = ["bro"]
 bro-native-trails = ["bro"]
 bro-claude-trails = ["bro"]

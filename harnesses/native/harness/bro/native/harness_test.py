@@ -745,7 +745,7 @@ class TestRecipeResolution:
 
     with pytest.raises(
       LLMSelectionError,
-      match="the bro harness cannot run recipe ':fable5': it serves openai, echo; "
+      match="the bro harness cannot run recipe ':fable5': it serves echo, openai; "
       'anthropic runs on the claude harness',
     ):
       resolve_native(openai.LLMSpec(), LLMSelection(model='fable5'))

@@ -1,12 +1,14 @@
 """Plug-in imports and provider literals require a direct distribution dependency."""
 
 import ast
+import importlib.util
 import re
 import subprocess
 import tomllib
 from pathlib import Path
 
 from bro.dev.packaging_policy import distribution_roots
+from bro.local.run_tests import PROJECTS
 
 _ROOT = Path(__file__).resolve().parents[3]
 _GROUPS = (
@@ -26,21 +28,30 @@ def _dependencies(project: dict) -> set[str]:
 
 
 def _violations(root: Path) -> list[str]:
-  directories = distribution_roots(root)
+  directories = distribution_roots(root, [project.directory for project in PROJECTS])
   metadata = {
     directory: tomllib.loads((directory / 'pyproject.toml').read_text())
     for directory in directories
   }
   packages: dict[str, str] = {}
   providers: dict[str, str] = {}
-  for data in metadata.values():
+  for directory, data in metadata.items():
     project = data['project']
     owner = project['name']
     entries = project.get('entry-points', {})
+    if any(entries.get(group) for group in _GROUPS):
+      module_root = directory / data.get('tool', {}).get('uv', {}).get('build-backend', {}).get(
+        'module-root', ''
+      )
+      for source in module_root.rglob('*.py'):
+        if source.name.endswith(('_test.py', '_test_helper.py')) or source.name == 'conftest.py':
+          continue
+        parts = source.relative_to(module_root).with_suffix('').parts
+        module = '.'.join(parts[:-1] if parts[-1] == '__init__' else parts)
+        packages[module] = owner
     for group in _GROUPS:
       for name, target in entries.get(group, {}).items():
         module = target.split(':')[0]
-        # A declaration and its credential module share the provider package.
         package = module.rpartition('.')[0]
         packages[package] = owner
         if group == 'bro.llm.providers':
@@ -69,17 +80,20 @@ def _violations(root: Path) -> list[str]:
     project = metadata[directory]['project']
     allowed = _dependencies(project) | {project['name']}
     for node in ast.walk(ast.parse(path.read_text())):
-      imported = []
-      if isinstance(node, ast.Import):
-        imported = [alias.name for alias in node.names]
-      elif isinstance(node, ast.ImportFrom):
-        if node.level:
-          continue
-        imported = [node.module or '', *(f'{node.module}.{alias.name}' for alias in node.names)]
-      for module in imported:
-        for package, owner in packages.items():
-          if (module == package or module.startswith(package + '.')) and owner not in allowed:
-            result.append(f'{relative}:{node.lineno}: import {module} requires {owner}')
+      if isinstance(node, (ast.Import, ast.ImportFrom)):
+        if isinstance(node, ast.Import):
+          imported = [alias.name for alias in node.names]
+        else:
+          module = node.module or ''
+          if node.level:
+            parts = path.relative_to(directory).with_suffix('').parts
+            package = '.'.join(parts[:-1])
+            module = importlib.util.resolve_name('.' * node.level + module, package)
+          imported = [module, *(f'{module}.{alias.name}' for alias in node.names)]
+        for module in imported:
+          for package, owner in packages.items():
+            if (module == package or module.startswith(package + '.')) and owner not in allowed:
+              result.append(f'{relative}:{node.lineno}: import {module} requires {owner}')
       if isinstance(node, ast.Constant) and isinstance(node.value, str):
         owner = providers.get(node.value)
         if (

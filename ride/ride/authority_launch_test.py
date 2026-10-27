@@ -56,7 +56,7 @@ def source(monkeypatch, tmp_path):
   monkeypatch.setattr(credentials, 'default_registry', lambda: registry)
   monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path / 'store'))
   driver = Harness('probe')
-  driver.llm_providers = ('echo',)
+  driver._llm_providers = ('echo',)
   installed = Installation(
     {'root': Root(credential_presence=kinds), 'browser': Browser(credential_presence=kinds)},
     {'probe': HarnessReading(driver, {'root': LLMSpec(), 'browser': LLMSpec()})},
@@ -198,7 +198,7 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   from bro.openai.declaration import LLMSpec as OpenAIRecipe
 
   driver = source.installation.harnesses['probe']
-  driver.harness.llm_providers = ('openai', 'echo')
+  driver.harness._llm_providers = ('openai', 'echo')
   source = replace(
     source,
     installation=replace(

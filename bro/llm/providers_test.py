@@ -344,6 +344,14 @@ def test_installation_preserves_broken_persona_and_provider_faults(monkeypatch):
   reading = Reading(Configuration.parse({}), {}, installation)
   spec = recipe({'target': 'bro-dev', 'harness': 'bro', 'provider': 'echo'}, reading)
   assert spec == echo.LLMSpec()
+  from bro.authority.rules import Request
+
+  launch = reading.rules.start(
+    Request('bro', {'target': 'bro-dev', 'harness': 'bro', 'provider': 'echo'}),
+    reading.operator(),
+    reading,
+  )
+  assert launch.descriptor.values['provider'] == echo.LLMSpec.TYPE
   with pytest.raises(ValueError, match='faulty-persona.*unavailable.*fixture declaration failed'):
     recipe({'target': 'faulty-persona', 'harness': 'bro'}, reading)
   with pytest.raises(ValueError, match='faulty.*unavailable.*fixture declaration failed'):
@@ -385,3 +393,17 @@ def test_declaration_type_must_match_entry_name(monkeypatch):
   monkeypatch.setattr(providers, '_entry_points', lambda: (entry,))
   with pytest.raises(providers.LLMSelectionError, match='different.*TYPE'):
     providers.default_spec('different')
+
+
+def test_uninstalled_provider_refusal_names_installation_route():
+  with pytest.raises(
+    providers.LLMSelectionError, match='unknown provider.*installed providers:.*install the plug-in'
+  ):
+    LLMSpec.from_dict({'type': 'absent-provider'})
+
+
+def test_native_refusal_identifies_a_decode_only_wire():
+  from bro.native.harness import BRO
+
+  with pytest.raises(providers.LLMSelectionError, match="wire 'messages'"):
+    BRO.resolve_recipe(echo.LLMSpec(), providers.parse('anthropic'))

@@ -35,8 +35,7 @@ if TYPE_CHECKING:
 def resolve_native(base: LLMSpec | None, selection: LLMSelection) -> LLMSpec:
   """the recipe a bro-native launcher runs: `selection` over the bro's own spec,
   among the providers the engine has a client for."""
-  spec = BRO.resolve_recipe(base, selection)
-  return spec
+  return BRO.resolve_recipe(base, selection)
 
 
 class _NativeRun(Protocol):

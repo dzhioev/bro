@@ -173,6 +173,7 @@ class Installation:
   credential_kinds: frozenset[str]
   provider_needs: Mapping[str, frozenset[str]]
   declarations: Mapping[str, Declaration]
+  unavailable_harnesses: Mapping[str, str] = field(default_factory=dict)
   unavailable_bros: Mapping[str, str] = field(default_factory=dict)
   unavailable_providers: Mapping[str, str] = field(default_factory=dict)
 
@@ -182,6 +183,7 @@ class Installation:
       'harnesses',
       'provider_needs',
       'declarations',
+      'unavailable_harnesses',
       'unavailable_bros',
       'unavailable_providers',
     ):
@@ -203,9 +205,15 @@ class Installation:
         unavailable_bros[name] = str(error)
         log.warning('bro %r is unavailable: %s', name, error)
     harnesses = {}
+    unavailable_harnesses = {}
     for name in installed_harness_names():
-      driver = get_harness(name)
-      scope = driver.scope_recipe()
+      try:
+        driver = get_harness(name)
+        scope = driver.scope_recipe()
+      except Exception as error:
+        unavailable_harnesses[name] = str(error)
+        log.warning('harness %r is unavailable: %s', name, error)
+        continue
       recipes: dict[str, LLMSpec | None] = {}
       unavailable_recipes: dict[str, str] = {}
       for target, bro in bros.items():
@@ -234,9 +242,14 @@ class Installation:
       kinds,
       provider_needs,
       {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
+      unavailable_harnesses,
       unavailable_bros,
       unavailable_providers,
     )
+
+  def check_harness(self, name: str) -> None:
+    if name in self.unavailable_harnesses:
+      raise ValueError(f'harness {name!r} is unavailable: {self.unavailable_harnesses[name]}')
 
   def check_bro(self, name: str) -> None:
     if name in self.unavailable_bros:

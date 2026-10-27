@@ -36,6 +36,8 @@ HOLD_HELP = (
 
 def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
   """Resolve an explicit selection over the bro's declared native recipe."""
+  if selection.is_empty():
+    return None
   from bro.registry import get_class
 
   bro_class = get_class(bro_name)
@@ -48,7 +50,10 @@ def create_bro_for_run(bro_name: str, selection: 'LLMSelection') -> BaseBro:
   from bro.registry import create_bro, get_class
 
   spec = run_llm_spec(bro_name, selection)
-  return create_bro(bro_name) if spec is None else get_class(bro_name).create(spec)
+  bro = create_bro(bro_name) if spec is None else get_class(bro_name).create(spec)
+  if bro.llm_spec is None:
+    raise LLMSelectionError(f'{bro_name} declares no LLM recipe: pass --llm provider:model')
+  return bro
 
 
 def _ask_observer(bro_name: str) -> LiveDisplayObserver:

@@ -82,9 +82,9 @@ def installation(monkeypatch):
     credentials, 'available', lambda name: pytest.fail('material probe during normalization')
   )
   native = Harness('native')
-  native.llm_providers = ('echo',)
+  native._llm_providers = ('echo',)
   auth = Harness('auth')
-  auth.llm_providers = ('echo',)
+  auth._llm_providers = ('echo',)
   return Installation(
     {'child': Child(credential_presence=kinds), 'other': Other(credential_presence=kinds)},
     {
@@ -599,7 +599,7 @@ def test_model_alias_is_mapped_before_use_checks(installation):
   from bro.openai.declaration import LLMSpec as OpenAISpec
 
   native = Harness('native')
-  native.llm_providers = ('openai',)
+  native._llm_providers = ('openai',)
   installation = replace(
     installation,
     harnesses={
@@ -639,7 +639,7 @@ def test_new_grammar_snapshot_does_not_open_the_ambient_store(tmp_path, monkeypa
 
 def recipe_installation(installation: Installation, harness: str, spec: Recipe) -> Installation:
   driver = Harness(harness)
-  driver.llm_providers = (spec.TYPE,)
+  driver._llm_providers = (spec.TYPE,)
   return replace(
     installation,
     harnesses={harness: HarnessReading(driver, dict.fromkeys(installation.bros, spec))},
