@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "the bro framework checkout's own persona and scripts"
 requires-python = ">=3.12"
 dependencies = [
+  "bro-openai",
   "bro",
   "bro-dev",
   "bro-filetypes",
@@ -26,6 +27,7 @@ dependencies = [
 "syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
 
 [tool.uv.sources]
+bro-openai = { workspace = true }
 bro = { workspace = true }
 bro-dev = { workspace = true }
 bro-filetypes = { workspace = true }
@@ -37,6 +39,7 @@ bro-watch-probe = "bros.bro_watch_probe:BroWatchProbe"
 bro-file-probe = "bros.bro_file_probe:BroFileProbe"
 
 [tool.deptry.package_module_name_map]
+bro-openai = ["bro"]
 bro = ["bro", "bros"]
 bro-dev = ["bro", "bros"]
 bro-filetypes = ["bro"]

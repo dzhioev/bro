@@ -21,7 +21,7 @@ class DecodeSide(Protocol):
 
 
 class WireUnavailable(ValueError):
-  """A record's wire is not installed, or no wire claims untagged records."""
+  """A wire or its client is unavailable."""
 
 
 def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
@@ -114,18 +114,31 @@ def client_names() -> tuple[str, ...]:
   return tuple(sorted(_client_entries()))
 
 
-def open(recipe: LLMSpec, secrets: dict) -> Wire:
+def load_client(name: str) -> type[Wire]:
   entries = _client_entries()
-  name = recipe.WIRE
   if name not in entries:
     raise WireUnavailable(
       f'wire {name!r} has no client; install a client for that wire or select another recipe'
     )
-  client = entries[name].load()
+  entry = entries[name]
+  try:
+    client = entry.load()
+  except ImportError as error:
+    assert entry.dist is not None
+    distribution = entry.dist.metadata['Name']
+    raise WireUnavailable(
+      f'wire {name!r} client cannot be imported: {error}; '
+      f'install the client extra of {distribution} ({distribution}[client])'
+    ) from error
   if not isinstance(client, type) or not issubclass(client, Wire) or client.NAME != name:
     raise TypeError(f'wire client entry {name!r} must load a Wire class with the same NAME')
   if client.CHAINING != registry.get(name).CHAINING:
     raise ValueError(f'wire client {name!r} disagrees with its decode side on CHAINING')
+  return client
+
+
+def open(recipe: LLMSpec, secrets: dict) -> Wire:
+  client = load_client(recipe.WIRE)
   conflicts = client.OWNED & recipe.request_options().keys()
   if conflicts:
     raise ValueError(

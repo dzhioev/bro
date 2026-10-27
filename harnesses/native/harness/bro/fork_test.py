@@ -9,10 +9,10 @@ from openai.types.responses import Response
 
 from bro.fork import fork, latest_fork_point, replay_prefix
 from bro.inbox import Inbox
-from bro.llm.llms.openai import LLMSpec as OpenAISpec
 from bro.llm.tracker import NullTracker, Tracker
 from bro.native.harness import BRO
 from bro.native.loop_test_helper import ResponsesLoop, make_loop
+from bro.openai.declaration import LLMSpec as OpenAISpec
 from bro.registry import create_bro
 from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
 from bro.wire_responses.client import Responses
@@ -675,7 +675,7 @@ def _simple_trail(**header_overrides: Any) -> RecordedTrail:
 @pytest.mark.parametrize('ancestor_mismatch', [False, True])
 def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, ancestor_mismatch):
   import bro.fork as fork_module
-  from bro.llm.llms.echo import LLMSpec as EchoSpec
+  from bro.native.echo_declaration import LLMSpec as EchoSpec
 
   trail = _simple_trail()
   parent = trail

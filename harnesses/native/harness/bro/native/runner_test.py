@@ -31,8 +31,10 @@ from bro.llm.observer import (
 from bro.llm.tracker import NullTracker, Tracker
 from bro.mcp import MCPServerSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
+from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
+from bro.openai.declaration import LLMSpec as OpenAISpec
 from bro.run_lifecycle import RunLifecycle
 
 
@@ -66,6 +68,7 @@ class Declared(BaseBro):
   test that asserts on the recorded bro name or prompt needs no subclass."""
 
   description = 'd'
+  llm_spec = EchoSpec()
 
   def __init__(self, name: str = 'runner-bro', system_prompt: str = ''):
     self.name = name
@@ -970,9 +973,9 @@ class TestNativeTurnEnd:
 
 
 class _GatedBro(BaseBro):
+  llm_spec = OpenAISpec()
   name = 'gated'
   description = 'declares secrets for credential-gate tests'
-  # two manifest names on top of the default openai spec's `openai`
   extra_secrets = ('alpha', 'beta')
 
   def __init__(self):
@@ -1207,7 +1210,7 @@ class TestRunLifecycle:
 
 class TestAgentIdentity:
   def test_create_llm_threads_the_agent_identity(self):
-    from bro.llm.llms.echo import LLMSpec as EchoSpec
+    from bro.native.echo_declaration import LLMSpec as EchoSpec
 
     class PlainBro(Declared):
       llm_spec = EchoSpec()

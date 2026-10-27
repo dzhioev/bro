@@ -4,8 +4,8 @@ from decimal import Decimal
 
 import pytest
 
+from bro.anthropic import declaration as anthropic
 from bro.llm.llm import EFFORT_LEVELS, LLMSpec
-from bro.llm.llms import anthropic
 
 
 def _rates(value: str) -> dict[str, str]:

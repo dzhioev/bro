@@ -1,6 +1,6 @@
 from bro.bro import BaseBro
-from bro.llm.llms import openai
 from bro.mcp import ANY, brash, files
+from bro.openai import declaration as openai
 
 
 class Terminal(BaseBro):

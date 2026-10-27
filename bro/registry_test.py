@@ -6,7 +6,7 @@ import pytest
 
 import bro.registry
 from bro.inbox import Inbox
-from bro.llm.llm import NativeLLMSpec
+from bro.llm.llm import LLMSpec
 from bro.llm.mcp import MCPServer
 from bro.native.llm import LLM
 from bro.registry import _REGISTRY, create_bro, get_class, lineage, list_classes, register
@@ -22,7 +22,7 @@ class MockLLM(LLM):
 
 
 @dataclass(frozen=True)
-class _EchoOnlySpec(NativeLLMSpec):
+class _EchoOnlySpec(LLMSpec):
   TYPE: ClassVar[str] = 'mock'
 
   model: str = 'mock'
@@ -31,7 +31,7 @@ class _EchoOnlySpec(NativeLLMSpec):
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'NativeLLMSpec':
+  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
     return cls(model=data['model'])
 
 

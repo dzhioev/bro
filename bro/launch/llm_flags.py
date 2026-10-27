@@ -36,15 +36,13 @@ LLM_HELP = (
   "project's [tool.bro.llm] table or the host's ~/.bro.json. excludes the four flags above"
 )
 FAST_HELP = (
-  "run with the fast-mode knob of the run's LLM recipe (provider-specific; for OpenAI it is "
-  "the 'priority' service tier — same model and quality, faster and more consistent "
-  'generation at a higher per-token price); a provider with no fast mode falls back to the '
-  'plain recipe'
+  "run with the provider-specific fast-mode knob of the run's LLM recipe; "
+  'a provider with no fast mode falls back to the plain recipe'
 )
 EFFORT_HELP = (
   "override the reasoning-effort knob of the run's LLM recipe with this neutral level, "
-  "mapped onto the provider's own scale (for OpenAI every level maps through); "
-  'without the flag the standing spec remains. errors when the provider has no effort knob'
+  "mapped onto the provider's own scale; without the flag the standing spec remains. "
+  'errors when the provider has no effort knob'
 )
 
 

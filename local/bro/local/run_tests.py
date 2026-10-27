@@ -63,6 +63,8 @@ class Project:
 
 
 DISTRIBUTIONS = [
+  Distribution('llms/openai', (TEST_MODULE_PATTERN,), ('bro',)),
+  Distribution('llms/anthropic', (TEST_MODULE_PATTERN,), ('bro',)),
   Distribution(
     directory='.',
     deptry_exclude=(
@@ -78,6 +80,7 @@ DISTRIBUTIONS = [
       '^browser/',
       '^filetypes/',
       '^wires/',
+      '^llms/',
       f'^{BENCHMARK}/',
       '.venv/',
       '.claude/',
@@ -201,8 +204,8 @@ PYTEST_FILES = [
   'bro/brog/github_test.py',
   'bro/brog/mcp_test.py',
   'bro/llm/cli_tool_test.py',
-  'bro/llm/llms/anthropic_test.py',
-  'bro/llm/llms/openai_test.py',
+  'llms/anthropic/bro/anthropic/declaration_test.py',
+  'llms/openai/bro/openai/declaration_test.py',
   'bro/llm/mcp_test.py',
   'bro/llm/providers_test.py',
   'bro/llm/mu_test.py',
@@ -437,6 +440,7 @@ PYTEST_FILES = [
   'local/bro/local/spell_policy_test.py',
   'local/bro/local/sleep_policy_test.py',
   'local/bro/local/credential_policy_test.py',
+  'local/bro/local/provider_policy_test.py',
   'dev/bro/dev/affected_tests_test.py',
   'dev/bro/dev/packaging_policy_test.py',
   'dev/bro/dev/distribution_test.py',

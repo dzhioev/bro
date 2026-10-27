@@ -10,7 +10,7 @@ import bro.llm.usage as usage
 from bro.base import credentials
 from bro.inbox import Inbox, NotificationBatch
 from bro.llm import providers, wires
-from bro.llm.llm import LLMStopped, NativeLLMSpec
+from bro.llm.llm import LLMSpec, LLMStopped
 from bro.llm.mcp import MCPServer, Tool, ToolControlSignal
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -39,14 +39,12 @@ from bro.native.llm import LLM
 
 def known_names() -> tuple[str, ...]:
   return tuple(
-    name
-    for name in providers.known_names()
-    if providers.default_spec(name).WIRE in wires.client_names()
+    name for name, spec in providers.available_specs() if spec.WIRE in wires.client_names()
   )
 
 
 def create(
-  spec: NativeLLMSpec,
+  spec: LLMSpec,
   inbox: Inbox,
   mcp_servers: Optional[list[MCPServer]] = None,
   observer: Optional[Observer] = None,
@@ -54,6 +52,8 @@ def create(
   agent: Optional[str] = None,
   activity_file: Optional[Path] = None,
 ) -> LLM:
+  if spec.WIRE not in wires.client_names():
+    raise ValueError(f'native harness cannot run wire {spec.WIRE!r}: no installed client')
   secrets = spec.needed_secrets()
   if len(secrets) > 1:
     raise ValueError(f'recipe {spec.TYPE!r} must name one credential material')

@@ -1,4 +1,4 @@
-import bro.llm.llms.openai as llm_llms_openai
+import bro.openai.declaration as llm_llms_openai
 from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.local.prompts import FRAMEWORK_PROJECT
 from bro.mcp import man

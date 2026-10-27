@@ -7,7 +7,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from bro.base import retry
 from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMUnavailable
-from bro.llm.llms.openai import LLMSpec
+from bro.openai.declaration import LLMSpec
 
 _REQUEST = httpx2.Request('POST', 'https://api.example.test/v1/responses')
 

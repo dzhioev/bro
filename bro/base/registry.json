@@ -8,12 +8,6 @@
   "trails_tokens": {
     "description": "Bearer tokens accepted by a trails server"
   },
-  "openai": {
-    "description": "OpenAI API credentials"
-  },
-  "anthropic": {
-    "description": "Anthropic API credentials"
-  },
   "brave": {
     "description": "Brave Search API credentials"
   },
@@ -21,10 +15,14 @@
     "description": "AWS SDK and CLI credentials",
     "install": {
       "files": {
-        "aws/credentials": {"secret": "{{insert #name}}"}
+        "aws/credentials": {
+          "secret": "{{insert #name}}"
+        }
       },
       "env": {
-        "AWS_SHARED_CREDENTIALS_FILE": {"path": "aws/credentials"}
+        "AWS_SHARED_CREDENTIALS_FILE": {
+          "path": "aws/credentials"
+        }
       }
     }
   },
@@ -44,14 +42,18 @@
         "GIT_CONFIG_VALUE_2": "git@github.com:",
         "GIT_CONFIG_KEY_3": "url.https://github.com/.insteadOf",
         "GIT_CONFIG_VALUE_3": "ssh://git@github.com/",
-        "GH_CONFIG_DIR": {"path": "gh"},
+        "GH_CONFIG_DIR": {
+          "path": "gh"
+        },
         "GH_TOKEN": "",
         "GITHUB_TOKEN": ""
       },
       "commands": {
         "gh": {
           "env": {
-            "GH_TOKEN": {"secret": "{{insert #name}}"}
+            "GH_TOKEN": {
+              "secret": "{{insert #name}}"
+            }
           }
         }
       }

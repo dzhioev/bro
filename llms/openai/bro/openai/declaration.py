@@ -1,6 +1,3 @@
-# Every bro module constructs an `LLMSpec` at class-definition time, so this
-# declaration module must not import the provider SDK or native client.
-
 from __future__ import annotations
 
 import dataclasses
@@ -791,7 +788,7 @@ _EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
 
 
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.NativeLLMSpec):
+class LLMSpec(llm_llm.LLMSpec):
   """spec for the OpenAI Responses API.
 
   service_tier='priority' is the analog of Claude Code's /fast — same model

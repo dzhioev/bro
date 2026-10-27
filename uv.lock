@@ -11,6 +11,7 @@ resolution-markers = [
 [manifest]
 members = [
     "bro",
+    "bro-anthropic",
     "bro-bench",
     "bro-browser",
     "bro-claude",
@@ -21,6 +22,7 @@ members = [
     "bro-native",
     "bro-native-trails",
     "bro-oops",
+    "bro-openai",
     "bro-ride",
     "bro-wire-chat",
     "bro-wire-messages",
@@ -352,6 +354,21 @@ dev = [
 ]
 
 [[package]]
+name = "bro-anthropic"
+version = "0.1.0"
+source = { editable = "llms/anthropic" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-messages" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-wire-messages", editable = "wires/messages" },
+]
+
+[[package]]
 name = "bro-bench"
 version = "0.1.0"
 source = { editable = "bench" }
@@ -369,6 +386,7 @@ source = { editable = "browser" }
 dependencies = [
     { name = "anyio" },
     { name = "bro" },
+    { name = "bro-openai" },
     { name = "bro-ride" },
     { name = "mcp" },
     { name = "pydantic" },
@@ -378,6 +396,7 @@ dependencies = [
 requires-dist = [
     { name = "anyio" },
     { name = "bro", editable = "." },
+    { name = "bro-openai", editable = "llms/openai" },
     { name = "bro-ride", editable = "ride" },
     { name = "mcp", specifier = "==2.3.0" },
     { name = "pydantic" },
@@ -389,6 +408,7 @@ version = "0.1.0"
 source = { editable = "harnesses/claude/harness" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-anthropic" },
     { name = "bro-claude-trails" },
     { name = "bro-ride" },
     { name = "bro-wire-messages" },
@@ -399,6 +419,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
+    { name = "bro-anthropic", editable = "llms/anthropic" },
     { name = "bro-claude-trails", editable = "harnesses/claude/trails" },
     { name = "bro-ride", editable = "ride" },
     { name = "bro-wire-messages", editable = "wires/messages" },
@@ -427,6 +448,7 @@ version = "0.1.0"
 source = { editable = "dev" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-openai" },
     { name = "markdown-it-py" },
     { name = "pytest" },
 ]
@@ -434,6 +456,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
+    { name = "bro-openai", editable = "llms/openai" },
     { name = "markdown-it-py" },
     { name = "pytest" },
 ]
@@ -463,6 +486,7 @@ dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
     { name = "bro-filetypes" },
+    { name = "bro-openai" },
     { name = "requests" },
     { name = "rich" },
     { name = "tiktoken" },
@@ -473,6 +497,7 @@ requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-dev", editable = "dev" },
     { name = "bro-filetypes", editable = "filetypes" },
+    { name = "bro-openai", editable = "llms/openai" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "rich" },
     { name = "tiktoken", specifier = ">=0.14.0" },
@@ -487,7 +512,6 @@ dependencies = [
     { name = "bro" },
     { name = "bro-native-trails" },
     { name = "bro-ride" },
-    { name = "bro-wire-responses", extra = ["client"] },
     { name = "humanize" },
     { name = "mcp" },
     { name = "rich" },
@@ -503,7 +527,6 @@ requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-native-trails", editable = "harnesses/native/trails" },
     { name = "bro-ride", editable = "ride" },
-    { name = "bro-wire-responses", extras = ["client"], editable = "wires/responses" },
     { name = "humanize", specifier = "==4.16.0" },
     { name = "mcp", specifier = "==2.3.0" },
     { name = "rich", specifier = "==15.0.0" },
@@ -531,13 +554,37 @@ source = { editable = "oops" }
 dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
+    { name = "bro-openai" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-dev", editable = "dev" },
+    { name = "bro-openai", editable = "llms/openai" },
 ]
+
+[[package]]
+name = "bro-openai"
+version = "0.1.0"
+source = { editable = "llms/openai" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-responses" },
+]
+
+[package.optional-dependencies]
+client = [
+    { name = "bro-wire-responses", extra = ["client"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-wire-responses", editable = "wires/responses" },
+    { name = "bro-wire-responses", extras = ["client"], marker = "extra == 'client'", editable = "wires/responses" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "bro-ride"
