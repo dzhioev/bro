@@ -21,6 +21,7 @@ from bro.authority.values import (
   Symbol,
   Value,
 )
+from bro.base import log
 from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.bro import CredentialManifest
 from bro.broker.environment import TALK_RIGHTS
@@ -52,7 +53,16 @@ def _reading(value: object) -> Reading:
   return value
 
 
-def recipe(values: Mapping[str, Value], reading: Reading) -> LLMSpec | None:
+def no_recipe(target: str) -> str:
+  return (
+    f'{target} declares no LLM recipe: pass --llm provider:model, '
+    f'or set "llm" under projects.<repo>.bros.{target} in ~/.bro.json'
+  )
+
+
+def recipe(
+  values: Mapping[str, Value], reading: Reading, *, required: bool = False
+) -> LLMSpec | None:
   target = cast(str, values.get('target', ''))
   name = reading.resolve_harness(cast(str | None, values.get('harness')), summon=True)
   installed = reading.installation
@@ -63,28 +73,47 @@ def recipe(values: Mapping[str, Value], reading: Reading) -> LLMSpec | None:
   driver = installed.harnesses[name]
   if target in driver.unavailable_recipes:
     raise ValueError(f'bro {target!r} recipe is unavailable: {driver.unavailable_recipes[target]}')
-  selections = [
-    providers.LLMSelection() if text == 'default' else providers.parse(text)
-    for text in reading.recipes(target)
-  ]
-  selection = next((item for item in selections if driver.harness.runs(item)), None)
-  if selection is None:
-    raise ValueError(f'bro {target}: no configured recipe runs on harness {name}')
+  base = driver.recipes[target]
   requested = providers.LLMSelection(
     provider=cast(str | None, values.get('provider')),
     model=cast(str | None, values.get('model')) if values.get('model') != DEFAULT else None,
     effort=cast(str, values['effort']) if values.get('effort') in EFFORT_LEVELS else None,
     fast=values.get('fast') is True,
   )
+  selection = None
+  missing = []
+  for text in reading.recipes(target):
+    item = providers.LLMSelection() if text == 'default' else providers.parse(text)
+    provider = item.provider or (base.TYPE if base is not None else None)
+    if provider is not None and provider not in installed.provider_needs:
+      log.verbose(
+        'bro %s: skipping LLM recipe %r: provider %r is unavailable', target, text, provider
+      )
+      missing.append(provider)
+      continue
+    if provider is None and item.is_empty():
+      continue
+    if provider is None or provider in driver.harness.llm_providers:
+      selection = item
+      break
+  if selection is None:
+    if requested.provider is not None:
+      selection = providers.LLMSelection()
+    else:
+      if missing:
+        installed.check_provider(missing[0])
+      if base is None:
+        if required or not requested.is_empty():
+          raise ValueError(no_recipe(target))
+        return None
+      raise ValueError(f'bro {target}: no configured recipe runs on harness {name}')
   combined = requested.over(selection)
   if combined.provider is not None:
     installed.check_provider(combined.provider)
-  base = driver.recipes[target]
   if base is None and combined.provider is None:
-    raise ValueError(
-      f'{target} declares no LLM recipe: pass --llm provider:model, '
-      f'or set "llm" under projects.<repo>.bros.{target} in ~/.bro.json'
-    )
+    if combined.is_empty() and not required:
+      return None
+    raise ValueError(no_recipe(target))
   spec = driver.harness.resolve_recipe(base, combined)
   effective = spec.selection()
   if values.get('model') == DEFAULT:
@@ -134,8 +163,6 @@ def configured_kinds(target: str, harness: str, provider: str, reading: Reading)
     kinds.add(driver.auth_kind)
   if driver.llm_key and provider:
     installed.check_provider(provider)
-    if provider not in installed.provider_needs:
-      raise ValueError(f'provider {provider!r} is not installed')
     kinds.update(installed.provider_needs[provider])
   for policy in reading.layers(target):
     for entries, action in (
@@ -303,6 +330,7 @@ def existence(
   into_exists: bool = True,
   check_presence: bool = True,
   recording: bool = True,
+  require_recipe: bool = True,
 ) -> CredentialManifest:
   values = descriptor.values
   target, harness = cast(str, values['target']), cast(str, values['harness'])
@@ -325,7 +353,9 @@ def existence(
     optional.update({'trails'} & held)
   if driver.auth_kind is not None:
     required.add(driver.auth_kind)
-  if driver.llm_key:
+  if driver.llm_key and ('provider' in values or require_recipe):
+    if 'provider' not in values:
+      raise ValueError(no_recipe(target))
     provider = cast(str, values['provider'])
     installed.check_provider(provider)
     required.update(installed.provider_needs[provider])
@@ -430,7 +460,7 @@ def option_values(fields: Mapping[str, object], source: object):
     if not isinstance(text, str):
       raise ValueError('llm must be a recipe string')
     presets = {**reading.project.get('llm', {}), **reading.configuration.raw.get('llm', {})}
-    selection = providers.parse(presets.get(text, text))
+    selection = providers.parse_with_presets(text, presets)
     for name in ('provider', 'model', 'effort'):
       value = getattr(selection, name)
       if value is not None:
@@ -450,7 +480,7 @@ def validate_joint(descriptor: Descriptor) -> None:
 
 
 def checked_recipe(request: Request, descriptor: Descriptor, reading: Reading) -> LLMSpec:
-  spec = recipe(request.values, reading)
+  spec = recipe(request.values, reading, required=True)
   if spec is None:
     raise ValueError('cannot materialize a recipe for an uninstalled target or harness')
   if descriptor.values['provider'] != spec.TYPE:

@@ -258,6 +258,11 @@ class Installation:
   def check_provider(self, name: str) -> None:
     if name in self.unavailable_providers:
       raise ValueError(f'provider {name!r} is unavailable: {self.unavailable_providers[name]}')
+    if name not in self.provider_needs:
+      raise ValueError(
+        f'unknown provider {name!r}; installed providers: {", ".join(sorted(self.provider_needs)) or "(none)"}; '
+        'install the plug-in that provides it'
+      )
 
 
 @dataclass(frozen=True)

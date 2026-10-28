@@ -22,9 +22,9 @@ from bro.benchmark.harbor_agent import (
   BUNDLE,
   STORE_DIR,
   BroAgent,
-  bare_recipe,
   harness_name,
   kill_command,
+  llm_recipe,
   reported_agent_name,
   ride_command,
   run_command,
@@ -156,23 +156,23 @@ def _session(command: str) -> str:
 
 
 def test_a_recipe_is_named_within_a_registered_provider():
-  assert bare_recipe('openai/gpt-5.6-terra') == 'gpt-5.6-terra'
-  assert bare_recipe('openai/gpt-5.6-terra:high') == 'gpt-5.6-terra:high'
-  assert bare_recipe('openai/gpt-5.6-terra:high+fast') == 'gpt-5.6-terra:high+fast'
-  assert bare_recipe('anthropic/opus5') == 'opus5'
-  assert bare_recipe(None) is None
+  assert llm_recipe('openai/gpt-5.6-terra') == 'openai:gpt-5.6-terra'
+  assert llm_recipe('openai/gpt-5.6-terra:high') == 'openai:gpt-5.6-terra:high'
+  assert llm_recipe('openai/gpt-5.6-terra:high+fast') == 'openai:gpt-5.6-terra:high+fast'
+  assert llm_recipe('anthropic/opus5') == 'anthropic:opus5'
+  assert llm_recipe(None) is None
 
 
 @pytest.mark.parametrize('model_name', ['mistral/large', 'gpt-5.6-terra', 'openai/'])
 def test_a_recipe_outside_that_form_is_refused(model_name):
   with pytest.raises(ValueError, match='registered provider'):
-    bare_recipe(model_name)
+    llm_recipe(model_name)
 
 
 @pytest.mark.parametrize('model_name', ['openai/a:b:c:d', 'openai/gpt+turbo', 'openai/gpt:sprint'])
 def test_a_recipe_off_the_llm_grammar_is_refused(model_name):
   with pytest.raises(ValueError):
-    bare_recipe(model_name)
+    llm_recipe(model_name)
 
 
 def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
@@ -235,10 +235,10 @@ def test_the_trial_declares_the_task_container_a_sandbox():
   assert '--env IS_SANDBOX=1' in command
 
 
-def test_the_recipe_reaches_the_run_with_its_provider_slot_empty():
-  command = _run_command(llm='gpt-5.6-terra:high')
+def test_the_complete_recipe_reaches_the_run():
+  command = _run_command(llm='openai:gpt-5.6-terra:high')
 
-  assert '--llm :gpt-5.6-terra:high' in command
+  assert '--llm openai:gpt-5.6-terra:high' in command
 
 
 def test_no_recipe_leaves_the_bros_own():
@@ -596,14 +596,14 @@ def test_harbor_import_skips_a_broken_provider_but_explicit_selection_fails(tmp_
       sys.executable,
       '-c',
       """
-from bro.benchmark.harbor_agent import BroAgent, bare_recipe
+from bro.benchmark.harbor_agent import BroAgent, llm_recipe
 from bro.llm import providers
 
 assert 'faulty' in providers.known_names()
 healthy = providers.declaration('openai')
 patterns = {pattern.pattern for pattern in BroAgent.ERROR_PATTERNS}
 assert {signature.pattern for signature in healthy.FAILURE_SIGNATURES} <= patterns
-assert bare_recipe('openai/terra') == 'terra'
+assert llm_recipe('openai/terra') == 'openai:terra'
 try:
   providers.default_spec('faulty')
 except providers.LLMSelectionError as error:
@@ -617,3 +617,20 @@ else:
     check=True,
   )
   assert 'faulty' in result.stderr
+
+
+def test_dev_preset_supplies_a_complete_recipe_without_a_persona_default():
+  from bro.bench.presets import compose
+  from bro.benchmark.bundle import workspace_root
+  from bro.llm.providers import parse, resolve
+
+  preset = compose(
+    workspace_root(), agents='dev-bro-gpt-5.6-terra-high', settings='smoke', tasks='smoke'
+  )['agents'][0]
+  bro = preset['kwargs']['bro']
+  llm = llm_recipe(preset['model_name'])
+  assert llm is not None
+  spec = resolve(None, parse(llm), harbor_agent.known_names())
+  assert spec.TYPE == preset['model_name'].split('/')[0]
+  assert spec.selection()['effort'] == parse(llm).effort
+  assert f'--llm {llm}' in _run_command(bro=bro, llm=llm)

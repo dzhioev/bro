@@ -33,8 +33,8 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   Searches warn and skip broken declarations; an explicit selection fails by name.
   Model resolution tries the short name, then full id, then verbatim;
   the table is a convenience, not a whitelist, and a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
-  A model named without a provider resolves among the providers a harness serves (`bro.harness.Harness.llm_providers`):
-  `carriers` and `provider_of_model` take that set, and `resolve` lays a selection over a standing recipe within it.
+  `carriers` and `provider_of_model` search model declarations among a supplied set of providers.
+  Launch resolution inherits the provider of its standing recipe for a model-only selection; a named provider starts a complete recipe.
   `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
   `price` prices one call from the provider's raw usage record and effective service tier.
   `price_table` exposes the current provider-owned table and its provenance.

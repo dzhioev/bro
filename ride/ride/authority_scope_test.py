@@ -909,3 +909,148 @@ def test_summon_does_not_use_the_root_harness_key(installation):
   )
   with pytest.raises(ValueError, match='summon-harness'):
     normalized(source)
+
+
+@pytest.fixture
+def absent_recipe_installation(installation):
+  native = installation.harnesses['native']
+  return replace(
+    installation,
+    harnesses={
+      **installation.harnesses,
+      'native': replace(native, recipes={'child': None, 'other': None}),
+    },
+  )
+
+
+def test_absent_recipe_reading_has_no_llm_key_but_start_is_refused(absent_recipe_installation):
+  from ride.authority_scope import checked_recipe
+
+  source = reading(absent_recipe_installation)
+  request = Request('bro', {'target': 'child'})
+  descriptor = source.rules.normalize(request, source)
+  assert 'provider' not in descriptor.values
+  assert 'cred.provider_key' not in descriptor.values
+  for check in (
+    lambda: existence(descriptor, source, frozenset(), check_presence=False),
+    lambda: checked_recipe(request, descriptor, source),
+  ):
+    with pytest.raises(
+      ValueError,
+      match='child declares no LLM recipe: pass --llm provider:model, or set "llm" under projects.<repo>.bros.child in ~/.bro.json',
+    ):
+      check()
+
+
+@pytest.mark.parametrize('supplied', ['wire', 'host', 'default'])
+def test_managed_recipe_supplied_to_a_persona_without_one(absent_recipe_installation, supplied):
+  from ride.authority_scope import checked_recipe
+  from ride.bro_worker import BroType
+
+  recipes = ['echo:chosen'] if supplied == 'host' else ['default']
+  source = reading(
+    absent_recipe_installation, {'projects': {'/project': {'bros': {'child': {'llm': recipes}}}}}
+  )
+  fields = {'target': 'child'}
+  if supplied == 'wire':
+    fields['llm'] = 'echo:chosen'
+  requested = Request('bro', BroType.option_values(fields, source).values)
+  descriptor = source.rules.normalize(requested, source)
+  if supplied == 'default':
+    assert 'provider' not in descriptor.values
+    with pytest.raises(ValueError, match='declares no LLM recipe'):
+      checked_recipe(requested, descriptor, source)
+  else:
+    assert checked_recipe(requested, descriptor, source) == LLMSpec(model='chosen')
+    assert 'cred.provider_key' in descriptor.values
+
+
+@pytest.mark.parametrize('value', [':echo', '::high', '+fast'])
+def test_incomplete_summon_recipe_requires_a_base(absent_recipe_installation, value):
+  from ride.bro_worker import BroType
+
+  source = reading(absent_recipe_installation)
+  with pytest.raises(ValueError, match='child declares no LLM recipe'):
+    requested = Request(
+      'bro', BroType.option_values({'target': 'child', 'llm': value}, source).values
+    )
+    source.rules.normalize(requested, source)
+
+
+def test_unknown_host_provider_is_skipped_and_refused_when_exhausted(installation, monkeypatch):
+  from bro.base import log
+
+  messages = []
+  monkeypatch.setattr(log, 'verbose', lambda message, *args: messages.append(message % args))
+  config = {
+    'projects': {'/project': {'bros': {'child': {'llm': ['uninstalled:remote', 'echo:local']}}}}
+  }
+  source = reading(installation, config)
+  assert normalized(source).values['model'] == 'local'
+  assert any('uninstalled' in message and 'skipping' in message for message in messages)
+  config['projects']['/project']['bros']['child']['llm'] = ['uninstalled:remote']
+  source = reading(installation, config)
+  with pytest.raises(ValueError, match='uninstalled.*install the plug-in'):
+    normalized(source)
+  assert normalized(source, provider='echo', model='override').values['model'] == 'override'
+
+
+def test_recipe_layers_preserve_persona_knobs_but_named_provider_resets_them(installation):
+  from bro.openai.declaration import MODELS, LLMSpec as OpenAISpec
+  from ride.authority_scope import checked_recipe
+  from ride.bro_worker import BroType
+
+  standing = OpenAISpec(reasoning_effort='high', compact_threshold=12345)
+  installed = recipe_installation(installation, 'native', standing)
+  source = reading(installed, {'projects': {'/project': {'bros': {'child': {'llm': [':terra']}}}}})
+  requested = Request('bro', {'target': 'child', 'effort': 'low'})
+  descriptor = source.rules.normalize(requested, source)
+  assert checked_recipe(requested, descriptor, source) == replace(
+    standing, model=MODELS['terra'], reasoning_effort='low'
+  )
+  requested = Request(
+    'bro', BroType.option_values({'target': 'child', 'llm': 'openai:sol'}, source).values
+  )
+  descriptor = source.rules.normalize(requested, source)
+  assert checked_recipe(requested, descriptor, source) == OpenAISpec(model=MODELS['sol'])
+
+
+def test_summon_preset_precedence_and_provider_no_shadowing(installation):
+  from ride.bro_worker import BroType
+
+  source = reading(
+    installation,
+    {'llm': {'chosen': 'echo:host', 'echo': 'uninstalled:model'}},
+    project={'summon-harness': 'native', 'llm': {'chosen': 'echo:project'}},
+  )
+  selected = BroType.option_values({'target': 'child', 'llm': 'chosen'}, source).values
+  assert selected['model'] == 'host'
+  selected = BroType.option_values({'target': 'child', 'llm': 'echo'}, source).values
+  assert selected['provider'] == 'echo'
+  assert 'model' not in selected
+
+
+def test_configuration_and_repository_policy_parse_uninstalled_recipes():
+  from ride.authority_reading import _policy
+
+  configuration = Configuration.parse(
+    {
+      'llm': {'future': 'uninstalled:model'},
+      'projects': {'/elsewhere': {'bros': {'missing': {'llm': ['uninstalled:model']}}}},
+    }
+  )
+  assert configuration.projects['/elsewhere'].bros['missing'].recipes == ('uninstalled:model',)
+  assert _policy({'llm': ['uninstalled:model']}, 'fixture', bro=True).recipes == (
+    'uninstalled:model',
+  )
+
+
+def test_default_without_a_declaration_does_not_hide_missing_host_plugins(
+  absent_recipe_installation,
+):
+  source = reading(
+    absent_recipe_installation,
+    {'projects': {'/project': {'bros': {'child': {'llm': ['uninstalled:model', 'default']}}}}},
+  )
+  with pytest.raises(ValueError, match='uninstalled.*install the plug-in'):
+    normalized(source)
