@@ -752,7 +752,13 @@ class TestLifecycle:
   def test_scope_dispatches_harness(self):
     with patch('ride.scope_report.report_scope', return_value=0) as report:
       assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude']) == 0
-    assert report.call_args.kwargs == {'repo': None, 'bro': 'dev', 'harness': 'claude'}
+    assert report.call_args.kwargs == {
+      'repo': None,
+      'bro': 'dev',
+      'harness': 'claude',
+      'llm': None,
+      'recipe_options': {},
+    }
 
   def test_scope_reports_a_malformed_project_config(self, tmp_path, capsys):
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = 5\n')
@@ -928,3 +934,26 @@ class TestSummonedLaunch:
     with pytest.raises(SystemExit):
       ride_cli.main(['ride', 'solo', 'dev'])
     assert 'requires a prompt unless --summoned supplies it' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+  'flags, llm, options',
+  [
+    (['--llm', 'uninstalled:future:high'], 'uninstalled:future:high', {}),
+    (
+      ['--provider', 'uninstalled', '--model', 'future', '--effort', 'high', '--fast'],
+      None,
+      {'provider': 'uninstalled', 'model': 'future', 'effort': 'high', 'fast': True},
+    ),
+  ],
+)
+def test_scope_forwards_llm_flags_to_the_prospective_reading(flags, llm, options):
+  with patch('ride.scope_report.report_scope', return_value=0) as report:
+    assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', *flags]) == 0
+  assert report.call_args.kwargs['llm'] == llm
+  assert report.call_args.kwargs['recipe_options'] == options
+
+
+def test_scope_llm_excludes_piece_flags():
+  with pytest.raises(SystemExit):
+    ride_cli.main(['ride', 'scope', '--bro', 'dev', '--llm', 'echo', '--fast'])

@@ -28,7 +28,7 @@ _CURRENT_PROJECT = object()
 PROVIDER_HELP = 'the provider that answers; selects its default model unless --model names one'
 MODEL_HELP = (
   'the model that answers, by short name or full id — resolved within --provider when given, '
-  'otherwise among the providers the harness runs'
+  'otherwise within the standing recipe’s provider'
 )
 LLM_HELP = (
   'the whole recipe in one value: `provider:model:effort` with an optional `+fast` suffix and '
@@ -49,12 +49,9 @@ EFFORT_HELP = (
 def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
   """register the LLM-selection flag set — `--provider`, `--model`, `--effort`,
   `--fast`, and the `--llm` that excludes all four."""
-  # imported here, not at module level: the provider roster pulls the llm
-  # package, and this module sits on the ride flag path
   from bro.llm.llm import EFFORT_LEVELS
-  from bro.llm.providers import known_names
 
-  parser.add_argument('--provider', choices=known_names(), default=None, help=PROVIDER_HELP)
+  parser.add_argument('--provider', default=None, metavar='NAME', help=PROVIDER_HELP)
   parser.add_argument('--model', default=None, metavar='NAME', help=MODEL_HELP)
   parser.add_argument('--effort', default=None, choices=EFFORT_LEVELS, help=effort_help)
   parser.add_argument('--fast', action='store_true', help=fast_help)
@@ -92,15 +89,8 @@ def presets(project: object = _CURRENT_PROJECT) -> dict[str, str]:
 
 
 def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'LLMSelection':
-  """the LLM selection `args` spells, with a preset name expanded to its value.
-
-  A value that already spells a recipe is read as one and the preset table is
-  never consulted — half of that table lives in the operated project, so a run
-  handed the canonical value (`canonicalize`) resolves it with no repository
-  around it. The names that lose to the grammar are exactly the provider names,
-  the only bare words it accepts.
-  """
-  from bro.llm.providers import LLMSelection, LLMSelectionError, parse
+  """Read the flags, expanding an uninstalled provider word through the preset table."""
+  from bro.llm.providers import LLMSelection, is_preset, parse_with_presets
 
   value = args.get('llm')
   if value is None:
@@ -110,16 +100,7 @@ def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'L
       effort=args.get('effort'),
       fast=args.get('fast', False),
     )
-  try:
-    return parse(value)
-  except LLMSelectionError:
-    expanded = presets(project).get(value)
-    if expanded is None:
-      raise
-  try:
-    return parse(expanded)
-  except LLMSelectionError as error:
-    raise LLMSelectionError(f'--llm preset {value!r} ({expanded}): {error}') from error
+  return parse_with_presets(value, presets(project) if is_preset(value) else {})
 
 
 def canonicalize(args: dict, selection: 'LLMSelection') -> Optional[str]:

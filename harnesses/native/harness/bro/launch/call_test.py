@@ -401,7 +401,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     built.append(runner)
 
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
@@ -439,7 +439,7 @@ def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
   ):
     captured.append((initial, hold, preset_name))
 
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
@@ -452,7 +452,7 @@ def test_chat_relays_a_delivered_answer_to_the_summoner(monkeypatch):
     raise AnswerDelivered('the verdict')
 
   channel = MagicMock()
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', deliver)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
   monkeypatch.setattr('bro.launch.call.RunLifecycle.from_env', staticmethod(lambda: channel))
@@ -466,7 +466,7 @@ def test_chat_fails_a_delivered_answer_without_a_channel(monkeypatch, capsys):
   async def deliver(*args, **kwargs):
     raise AnswerDelivered('the verdict')
 
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: _ChatBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', deliver)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
   monkeypatch.setattr('bro.launch.call.RunLifecycle.from_env', staticmethod(lambda: None))
@@ -560,7 +560,7 @@ def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     runner.trail_id = 'trail-xyz'
 
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
@@ -574,7 +574,7 @@ def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     captured.append(initial)
 
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: RecordBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
@@ -1217,6 +1217,6 @@ def test_native_launch_without_a_recipe_is_refused(monkeypatch):
     name = 'no-recipe'
     description = 'fixture without a recipe'
 
-  monkeypatch.setattr('bro.registry.create_bro', lambda name: NoRecipeBro())
+  monkeypatch.setattr('bro.registry.get_class', lambda name: NoRecipeBro)
   with pytest.raises(LLMSelectionError, match='no-recipe declares no LLM recipe: pass --llm'):
     create_bro_for_run('no-recipe', LLMSelection())

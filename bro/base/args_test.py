@@ -876,3 +876,16 @@ class TestCommandSignature:
   def test_capture_leaves_the_parser_untouched(self):
     command_signature(('bro', 'list'))
     assert Parser(description='d').parse(['prog']) == {}
+
+
+@pytest.mark.parametrize('with_destination', [False, True])
+def test_subcommand_exclusive_groups_are_checked(with_destination):
+  parser = Parser()
+  commands = parser.add_subparsers(dest='command') if with_destination else parser.add_subparsers()
+  child = commands.add_parser('inspect')
+  child.add_argument('--recipe')
+  child.add_argument('--fast', action='store_true')
+  child.add_exclusive_groups(['recipe'], ['fast'])
+  assert parser.parse_args(['inspect', '--fast']).fast
+  with pytest.raises(SystemExit):
+    parser.parse_args(['inspect', '--recipe', 'named', '--fast'])
