@@ -98,13 +98,12 @@ class TestParsing:
     'value',
     [
       '',
-      'nope',
-      ':nosuchmodel',
       '::ludicrous',
       'a:b:c:d',
       'openai+slow',
       '+fast+fast',
-      'claude-code',
+      'Bad Provider',
+      ':model name',
     ],
   )
   def test_malformed_values_are_rejected(self, value):
@@ -139,12 +138,12 @@ class TestOver:
   def test_a_provider_named_alone_keeps_its_default_model(self):
     flags = providers.LLMSelection(provider='openai')
     base = providers.LLMSelection(model='fable5', effort='high')
-    assert flags.over(base) == providers.LLMSelection(provider='openai', effort='high')
+    assert flags.over(base) == flags
 
-  def test_a_model_named_alone_keeps_its_own_provider(self):
-    flags = providers.LLMSelection(model='fable5')
+  def test_a_model_named_alone_inherits_the_base_provider(self):
+    flags = providers.LLMSelection(model='terra')
     base = providers.LLMSelection('openai', 'sol', 'xhigh')
-    assert flags.over(base) == providers.LLMSelection(model='fable5', effort='xhigh')
+    assert flags.over(base) == providers.LLMSelection('openai', 'terra', 'xhigh')
 
   def test_fast_holds_from_either_side(self):
     assert providers.LLMSelection(fast=True).over(providers.LLMSelection()).fast
@@ -170,15 +169,21 @@ class TestResolve:
     resolved = providers.resolve(base, providers.parse('openai'), ALL)
     assert resolved == openai_llm.LLMSpec()
 
-  def test_a_model_of_another_provider_switches_recipes(self):
-    base = openai_llm.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
-    resolved = providers.resolve(base, providers.parse(':fable5'), ALL)
-    assert resolved == anthropic.LLMSpec(model='claude-fable-5')
+  def test_a_model_alone_is_resolved_within_the_base_provider(self):
+    base = anthropic.LLMSpec()
+    with pytest.raises(providers.LLMSelectionError, match='names no anthropic model id'):
+      providers.resolve(base, providers.parse(':terra'), ALL)
 
-  @pytest.mark.usefixtures('shared_short_name')
-  def test_a_model_alone_resolves_among_the_given_providers(self):
-    resolved = providers.resolve(openai_llm.LLMSpec(), providers.parse(':shared'), ('anthropic',))
-    assert resolved == anthropic.LLMSpec(model='claude-shared')
+  @pytest.mark.parametrize('value', ['', ':terra', '::high', '+fast'])
+  def test_only_a_named_provider_supplies_an_absent_base(self, value):
+    selection = providers.parse(value) if value else providers.LLMSelection()
+    with pytest.raises(
+      providers.LLMSelectionError, match='no LLM recipe: pass --llm provider:model'
+    ):
+      providers.resolve(None, selection, ALL)
+    assert providers.resolve(None, providers.parse('openai:terra:high'), ALL) == openai_llm.LLMSpec(
+      model=openai_llm.MODELS['terra'], reasoning_effort='high'
+    )
 
   def test_knobs_apply_over_whichever_recipe_was_selected(self):
     resolved = providers.resolve(
@@ -407,3 +412,11 @@ def test_native_refusal_identifies_a_decode_only_wire():
 
   with pytest.raises(providers.LLMSelectionError, match="wire 'messages'"):
     BRO.resolve_recipe(echo.LLMSpec(), providers.parse('anthropic'))
+
+
+def test_selection_parsing_does_not_consult_the_installation(monkeypatch):
+  monkeypatch.setattr(providers, 'known_names', lambda: pytest.fail('read installation'))
+  monkeypatch.setattr(providers, 'declaration', lambda *_: pytest.fail('loaded declaration'))
+  assert providers.parse('future-provider:future-model:high').provider == 'future-provider'
+  assert providers.parse(':future-model').model == 'future-model'
+  assert providers.LLMSelection(provider='future-provider').format() == 'future-provider'

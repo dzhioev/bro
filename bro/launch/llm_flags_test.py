@@ -108,3 +108,23 @@ class TestPresets:
     self.host_file.write_text(json.dumps({'llm': {'broken': '::ludicrous'}}))
     with pytest.raises(LLMSelectionError, match="preset 'broken'"):
       llm_flags.selection_from_args(_args(['--llm', 'broken']))
+
+  def test_an_installed_provider_cannot_be_shadowed(self):
+    self.host_file.write_text(json.dumps({'llm': {'openai': 'anthropic:opus5'}}))
+    assert llm_flags.selection_from_args(_args(['--llm', 'openai'])) == LLMSelection(
+      provider='openai'
+    )
+
+  def test_an_unknown_word_lists_providers_and_presets(self):
+    with pytest.raises(
+      LLMSelectionError, match='installed providers:.*openai.*presets: cheap, sharp'
+    ):
+      llm_flags.selection_from_args(_args(['--llm', 'missing']))
+
+  def test_provider_and_model_flags_validate_grammar_only(self):
+    assert llm_flags.selection_from_args(
+      _args(['--provider', 'future', '--model', 'unlisted'])
+    ) == LLMSelection('future', 'unlisted')
+    assert llm_flags.selection_from_args(_args(['--llm', 'future:unlisted'])) == LLMSelection(
+      'future', 'unlisted'
+    )

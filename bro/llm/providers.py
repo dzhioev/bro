@@ -224,21 +224,13 @@ class LLMSelection:
   fast: bool = False
 
   def __post_init__(self):
-    if self.provider is not None and self.provider not in known_names():
-      raise LLMSelectionError(
-        f'unknown provider {self.provider!r}; installed providers: {", ".join(known_names())}; '
-        'install the plug-in that provides it'
-      )
+    if self.provider is not None and re.fullmatch(r'[a-z][a-z0-9-]*', self.provider) is None:
+      raise LLMSelectionError(f'invalid provider name {self.provider!r}')
+    if self.model is not None and re.fullmatch(r'[^\s:+]+', self.model) is None:
+      raise LLMSelectionError(f'invalid model name {self.model!r}')
     if self.effort is not None and self.effort not in EFFORT_LEVELS:
       raise LLMSelectionError(
         f'unknown effort level {self.effort!r}; expected one of {", ".join(EFFORT_LEVELS)}'
-      )
-    if self.provider is None and self.model is not None and not carriers(self.model, known_names()):
-      # with no provider named, the model is the only thing that can name one —
-      # so it has to be a name some roster actually carries
-      raise LLMSelectionError(
-        f'unknown model {self.model!r}; name its provider, or use one of: '
-        f'{", ".join(_short_names(known_names()))}'
       )
 
   def is_empty(self) -> bool:
@@ -258,15 +250,14 @@ class LLMSelection:
     """this selection with `base` filling what it leaves unnamed — a launch's
     flags over a configured default.
 
-    Provider and model are one slot: a selection naming either keeps its own
-    pair, since a model belongs to its provider and a provider named alone
-    selects its default model. Effort fills on its own, and fast holds where
-    either names it.
+    A named provider is a complete recipe. A model-only override inherits the
+    base provider; effort and fast otherwise fill independently.
     """
-    names_recipe = self.provider is not None or self.model is not None
+    if self.provider is not None:
+      return self
     return LLMSelection(
-      provider=self.provider if names_recipe else base.provider,
-      model=self.model if names_recipe else base.model,
+      provider=base.provider,
+      model=self.model if self.model is not None else base.model,
       effort=self.effort if self.effort is not None else base.effort,
       fast=self.fast or base.fast,
     )
@@ -308,34 +299,40 @@ def parse(value: str) -> LLMSelection:
   return selection
 
 
-def resolve(base: LLMSpec | None, selection: LLMSelection, among: Collection[str]) -> LLMSpec:
-  """the recipe a launch runs: `selection` applied over the standing `base`,
-  with a model named alone resolved among the providers in `among`.
+def is_preset(value: str) -> bool:
+  return re.fullmatch(r'[^\s:+]+', value) is not None and value not in known_names()
 
-  `provider` names a whole recipe — that provider's default model and no knobs —
-  while `model` alone names only the model, keeping `base`'s other knobs when it
-  belongs to `base`'s own provider. `effort` and `fast` then apply on top, so
-  they adjust whichever recipe the first two settled on.
 
-  The two knobs differ on a provider that lacks them: fast is a portable best-effort
-  service-tier preference and falls back to the plain recipe, while an effort override
-  requests an exact reasoning control and raises when the provider has none.
-  """
-  spec = base
-  if selection.provider is not None:
-    spec = default_spec(selection.provider)
-    if selection.model is not None:
-      spec = dataclasses.replace(spec, model=resolve_model(selection.provider, selection.model))
-  elif selection.model is not None:
-    provider = provider_of_model(selection.model, among)
-    model = resolve_model(provider, selection.model)
-    spec = (
-      dataclasses.replace(base, model=model)
-      if base is not None and type(base) is type(default_spec(provider))
-      else dataclasses.replace(default_spec(provider), model=model)
+def parse_with_presets(value: str, presets: Mapping[str, str]) -> LLMSelection:
+  if not is_preset(value):
+    return parse(value)
+  if value not in presets:
+    raise LLMSelectionError(
+      f'unknown --llm provider or preset {value!r}; '
+      f'installed providers: {", ".join(known_names()) or "(none)"}; '
+      f'presets: {", ".join(sorted(presets)) or "(none)"}; '
+      'install the plug-in that provides it or define a preset'
     )
+  try:
+    return parse(presets[value])
+  except LLMSelectionError as error:
+    raise LLMSelectionError(f'--llm preset {value!r} ({presets[value]}): {error}') from error
+
+
+def resolve(base: LLMSpec | None, selection: LLMSelection, among: Collection[str]) -> LLMSpec:
+  """Apply a selection to a base; only a named provider starts a new recipe.
+
+  Fast is a best-effort preference; an unsupported effort override raises.
+  """
+  spec = default_spec(selection.provider) if selection.provider is not None else base
   if spec is None:
     raise LLMSelectionError('no LLM recipe: pass --llm provider:model')
+  if spec.TYPE not in among:
+    raise LLMSelectionError(
+      f'provider {spec.TYPE!r} is not served; expected one of {", ".join(among)}'
+    )
+  if selection.model is not None:
+    spec = dataclasses.replace(spec, model=resolve_model(spec.TYPE, selection.model))
   if selection.fast:
     try:
       spec = spec.fast()

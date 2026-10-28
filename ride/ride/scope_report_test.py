@@ -130,3 +130,27 @@ def test_explicit_target_overrides_the_project_default(report_environment, capsy
   descriptor = json.loads(capsys.readouterr().out.splitlines()[0].removeprefix('descriptor: '))
   assert descriptor['target'] == 'report-test'
   assert descriptor['provider'] == 'echo'
+
+
+@pytest.mark.parametrize('present', [False, True])
+def test_scope_llm_override_reports_selected_provider_key(report_environment, capsys, present):
+  repository, _, material = report_environment
+  if present:
+    (material / 'openai.cred').write_text('{}')
+  assert report_scope(repository, 'report-test', 'bro', 'openai:terra:high') == 0
+  output = capsys.readouterr().out
+  descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
+  assert descriptor['provider'] == 'openai'
+  assert f'openai+: {"PRESENT" if present else "MISSING"}' in output
+
+
+def test_scope_of_absent_recipe_has_no_provider_key(report_environment, capsys, monkeypatch):
+  repository, _, _ = report_environment
+  monkeypatch.setattr(ReportBro, 'llm_spec', None)
+  assert report_scope(repository, 'report-test', 'bro') == 0
+  output = capsys.readouterr().out
+  descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
+  assert 'provider' not in descriptor
+  assert 'cred.openai' not in descriptor
+  assert report_scope(repository, 'report-test', 'bro', 'openai:terra') == 0
+  assert 'openai+: MISSING' in capsys.readouterr().out

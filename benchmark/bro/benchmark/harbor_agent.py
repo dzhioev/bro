@@ -141,19 +141,8 @@ def docker_compose_missing() -> bool:
     return True
 
 
-def bare_recipe(model_name: Optional[str]) -> Optional[str]:
-  """the `--llm` recipe harbor's `model_name` carries past its provider prefix.
-
-  `model_name` is `<provider>/<recipe>`: a registered provider's name, then the
-  exact `--llm` grammar with the provider slot dropped —
-  `<model>[:<effort>][+fast]` — both validated here so a bad name fails at job
-  start rather than inside a graded trial. The framework receives it as
-  `ride solo --llm :<recipe>`, whose empty provider slot replaces only what the
-  recipe names and keeps the persona's own spec; naming the provider there
-  would substitute that provider's default recipe and drop knobs such as the
-  compaction threshold. So the prefix is checked and stripped rather than
-  passed on.
-  """
+def llm_recipe(model_name: Optional[str]) -> Optional[str]:
+  """The complete recipe carried by Harbor's `<provider>/<model>[:<effort>][+fast]`."""
   if model_name is None:
     return None
   provider, separator, recipe = model_name.partition('/')
@@ -162,8 +151,7 @@ def bare_recipe(model_name: Optional[str]) -> Optional[str]:
       f'model {model_name!r} is not of the form <provider>/<recipe> with a '
       f'registered provider ({", ".join(known_names())})'
     )
-  parse(f':{recipe}')
-  return recipe
+  return parse(f'{provider}:{recipe}').format()
 
 
 def harness_name(value: str) -> str:
@@ -269,9 +257,7 @@ def run_command(
   teardown, joined members in their own sessions included.
   The runtime selects the checksum-recorded Claude binary carried beside its own installation.
   """
-  launch = ride_command(
-    bro=bro, instruction=instruction, harness=harness, llm=None if llm is None else f':{llm}'
-  )
+  launch = ride_command(bro=bro, instruction=instruction, harness=harness, llm=llm)
   if timeout_sec is not None:
     launch = f'timeout --signal=TERM --kill-after={TERM_GRACE_SEC} {timeout_sec} {launch}'
   session = '; '.join(
@@ -359,7 +345,7 @@ class BroAgent(BaseInstalledAgent):
     self._credentials = credentials
     self._harness = harness_name(harness)
     self._run_timeout_sec = run_timeout(run_timeout_sec)
-    self._llm = bare_recipe(self.model_name)
+    self._llm = llm_recipe(self.model_name)
     if docker_compose_missing():
       self.logger.warning(
         'no docker compose plugin on this host: a job on the docker environment cannot '
