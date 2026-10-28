@@ -1,6 +1,7 @@
 """Render a prospective descriptor, base authority, and credential presence."""
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -15,7 +16,14 @@ from ride.bro_worker import BroType
 from ride.repository import Repository, as_repository
 
 
-def report_scope(repo: Repository | Path | None, bro: str | None, harness: str | None) -> int:
+def report_scope(
+  repo: Repository | Path | None,
+  bro: str | None,
+  harness: str | None,
+  llm: str | None = None,
+  *,
+  recipe_options: Mapping[str, object] | None = None,
+) -> int:
   try:
     repository = None if repo is None else as_repository(repo)
     if bro is None:
@@ -28,9 +36,10 @@ def report_scope(repo: Repository | Path | None, bro: str | None, harness: str |
       )
     reading = Reading.take(repository)
     harness = reading.resolve_harness(harness)
-    requested, _ = request(
-      BroType, {'target': bro, 'harness': harness}, reading, reading.operator(), forward=False
-    )
+    fields = {'target': bro, 'harness': harness, **(recipe_options or {})}
+    if llm is not None:
+      fields['llm'] = llm
+    requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     descriptor = reading.rules.normalize(requested, reading)
     mission = reading.rules._mission(requested, descriptor, reading)
     selection = {
@@ -45,7 +54,9 @@ def report_scope(repo: Repository | Path | None, bro: str | None, harness: str |
       for kind, instance in selection.items()
       if credentials.storage_name(kind, instance) in present
     )
-    manifest = existence(descriptor, reading, present_kinds, check_presence=False)
+    manifest = existence(
+      descriptor, reading, present_kinds, check_presence=False, require_recipe=False
+    )
     print(
       'descriptor: '
       + json.dumps(dump_values(descriptor.values), ensure_ascii=False, sort_keys=True)

@@ -99,7 +99,7 @@ class Harness:
     from bro.llm.providers import LLMSelectionError, default_spec, known_names, resolve
 
     selected = default_spec(selection.provider) if selection.provider is not None else None
-    if not self.runs(selection):
+    if selection.provider is not None and not self.runs(selection):
       served = ', '.join(self.llm_providers) or 'no provider'
       elsewhere = '; '.join(
         f'{provider} runs on {_harnesses_running(provider)}'

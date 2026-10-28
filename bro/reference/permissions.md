@@ -125,8 +125,8 @@ Defaults never depend on the starter's authority.
 
 The four talk rights are `owner.say`, `owner.question`, `worker.say`, and `worker.question`.
 The wire mapping adds `worker.say` to requested talk.
-Recipe selection takes the first configured `bros.<target>.llm` recipe the harness serves, then overlays the request's LLM fields.
-`default` in that recipe list means the harness's own recipe.
+Recipe selection follows [ride's layering and preset rules](ride.md#recipe-selection).
+The host's per-bro list applies to managed starts, including summons; an earlier reader with no recipe includes no LLM key.
 A requested recipe the harness cannot run fails rather than switching harnesses.
 
 A start holds the configured kinds for its target, harness, and provider, plus `add`, minus `drop`.

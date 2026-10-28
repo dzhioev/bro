@@ -326,6 +326,7 @@ Read the pinned generic and framework-project developer declarations before writ
 4. Explain that `llm_spec` is the recipe the native loop runs the developer on, every launch and summon under the `bro` harness, while a Claude Code session ignores it.
    Ask whether to use the pinned framework developer's current OpenAI model and high reasoning effort or another valid pinned native recipe.
    Declare it even when no OpenAI key is wired yet, so the native loop needs only the key.
+   An inherited persona may declare no recipe: native launches then need a provider-naming `--llm` selection or the managed host per-bro list (`bro/reference/ride.md`, “Recipe selection”).
 
 ### Act
 

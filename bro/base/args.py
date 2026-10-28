@@ -276,7 +276,7 @@ class Parser(argparse.ArgumentParser):
       lines.append(f'  {formatted}  (mutually exclusive)')
     return help_text + '\n'.join(lines) + '\n'
 
-  def _check_exclusive_groups(self, namespace: argparse.Namespace) -> None:
+  def _check_exclusive_groups(self, namespace: object) -> None:
     for groups in self._exclusive_groups:
       set_groups: list[list[str]] = []
       for group in groups:
@@ -375,6 +375,25 @@ class Parser(argparse.ArgumentParser):
       print('  '.join(r[i].ljust(widths[i]) for i in range(4)).rstrip())
 
   @overload
+  def parse_known_args(
+    self, args: Iterable[str] | None = None, namespace: None = None
+  ) -> tuple[argparse.Namespace, list[str]]: ...
+  @overload
+  def parse_known_args(self, args: Iterable[str] | None, namespace: _N) -> tuple[_N, list[str]]: ...
+  @overload
+  def parse_known_args(self, *, namespace: _N) -> tuple[_N, list[str]]: ...
+  def parse_known_args(
+    self, args: Iterable[str] | None = None, namespace: _N | None = None
+  ) -> tuple[argparse.Namespace | _N, list[str]]:
+    parsed, remaining = (
+      super().parse_known_args(args)
+      if namespace is None
+      else super().parse_known_args(args, namespace)
+    )
+    self._check_exclusive_groups(parsed)
+    return parsed, remaining
+
+  @overload
   def parse_args(self, args: Iterable[str], namespace: None = ...) -> argparse.Namespace: ...
   @overload
   def parse_args(self, args: Iterable[str], namespace: _N) -> _N: ...
@@ -400,7 +419,6 @@ class Parser(argparse.ArgumentParser):
     if print_env:
       self._print_env_table(parsed, argv_list)
       sys.exit(0)
-    self._check_exclusive_groups(parsed)
     delattr(parsed, 'log')
     delattr(parsed, 'print_env')
     delattr(parsed, 'allow_env')

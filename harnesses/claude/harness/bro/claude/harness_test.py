@@ -97,7 +97,7 @@ def test_claude_resolution_refuses_an_api_recipe_naming_the_harness_serving_it()
 def test_claude_resolution_refuses_a_model_its_providers_do_not_carry():
   from bro.llm.providers import LLMSelectionError
 
-  with pytest.raises(LLMSelectionError, match="cannot run recipe ':sol'"):
+  with pytest.raises(LLMSelectionError, match='names no anthropic model id'):
     claude_harness.CLAUDE.resolve_llm(':sol', 'bro')
 
 

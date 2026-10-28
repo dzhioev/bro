@@ -40,7 +40,7 @@ A subpackage with a map of its own is pointed at, not described here.
   only `list_classes()` (i.e. `bro list`) imports them all.
   Tests flip the module-level `_autoload` off to isolate the registry to hand-registered bros
 - `show.py` — the `bro show` card, rendered from a bro's metadata alone:
-  identity, features, credential manifest and optional tier, LLM key, and roster.
+  identity, features, credential manifest and optional tier, LLM key when a recipe is declared, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common admission lives in `ride/ride/launch_control.py`, and bro lowering in `ride/ride/bro_worker.py`
 - `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and the ordered journal stream for every worker mission.

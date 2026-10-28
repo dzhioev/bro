@@ -85,10 +85,11 @@ the launcher's own `--log` never reaches the session.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
   The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
-- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
+- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--llm RECIPE]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
   `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
   Detached scope requires `--bro`;
   an attachment may supply the project default.
+  The shared LLM flags select the prospective recipe and its credential key; an absent recipe leaves the LLM key out.
 - `ride banner [--llm]` renders the session facts.
 
 ## Harness selection
@@ -113,10 +114,26 @@ LLM flags resolve within the selected harness.
 They never switch the harness implicitly.
 A provider names the vendor and a harness the transport:
 each harness serves the providers its `llm_providers` names, `claude` serving `anthropic` through Claude Code and `bro` the providers the native engine has clients for.
-A model named without a provider (`:opus55`) resolves among the providers the selected harness serves.
+A model named without a provider (`:opus55`) inherits the standing recipe’s provider.
 A recipe the harness does not serve is refused with the installed harnesses that serve it, on every surface naming a harness: the `--harness` flag, a summon's `harness` field, and `bro run`, which is the bro harness.
-With nothing selected, the bro harness runs the bro's declared `llm_spec` and the claude harness passes Claude Code no `--model` or `--effort`, so it runs its own current default.
+The claude harness passes Claude Code no `--model` or `--effort` when none is selected, so it runs its own current default.
+
 `ride check-harness <name>` starts the selected harness's runtime probe in the current installation.
+
+### Recipe selection
+
+A managed native launch layers the launch's selection over the first entry of `projects.<repo>.bros.<bro>.llm` in `~/.bro.json` that the selected harness serves, over the persona's `llm_spec` declaration.
+`default` in that list means the persona's declaration; it supplies nothing for a persona with none.
+An in-process `bro run` or `bro chat` has no host list: its flags lay over the persona's declaration.
+Naming a provider selects its default recipe with the named knobs, independent of lower layers.
+Model-only, effort-only and fast-only selections inherit the provider and require a base recipe.
+Without a complete recipe, a native launch is refused before starting, naming `--llm provider:model` and, for managed launches, the host per-bro list as ways to supply one.
+
+Recipe parsing checks grammar, not the installed roster.
+A host list may name providers another installation carries; unavailable entries are skipped with a verbose diagnostic, and an exhausted list refuses the launch naming the missing plug-in.
+A one-word `--llm` value naming no installed provider is a preset from `[tool.bro.llm]` or the host's top-level `llm` table, with the host winning per name.
+Installed provider names cannot be shadowed by presets.
+A missing preset reports the installed providers and preset names.
 
 ### Harness seam
 

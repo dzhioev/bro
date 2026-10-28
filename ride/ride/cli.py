@@ -161,6 +161,9 @@ def build_parser() -> Parser:
   )
   scope.add_argument('--bro', default=None, help='bro to scope (required when detached)')
   add_harness_flags(scope)
+  from bro.launch.llm_flags import add_llm_flags
+
+  add_llm_flags(scope, effort_help='reasoning effort level', fast_help='enable fast mode')
 
   banner_parser = subparsers.add_parser('banner', help='print the session banner')
   banner_parser.add_argument('--llm', action='store_true', help='emit plain key:value lines')
@@ -443,6 +446,14 @@ def main(argv: list[str]) -> Optional[int]:
       parser.error(str(error))
     if repository is None and args['bro'] is None:
       parser.error('ride scope requires --bro when detached')
-    return report_scope(repo=repository, bro=args['bro'], harness=args['harness'])
+    return report_scope(
+      repo=repository,
+      bro=args['bro'],
+      harness=args['harness'],
+      llm=args['llm'],
+      recipe_options={
+        key: args[key] for key in ('provider', 'model', 'effort', 'fast') if args[key]
+      },
+    )
   assert command == 'banner'
   return banner(llm=args['llm'])

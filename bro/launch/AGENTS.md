@@ -60,7 +60,9 @@ The admitted recipe reaches the inner session through its resolved environment.
 Native in-process surfaces canonicalize their selection before launching.
 
 Each harness resolves the selection through `bro.harness.Harness.resolve_recipe`, among the providers it declares in `llm_providers`;
-`harnesses/native/harness/bro/native/harness.py:resolve_native` is that resolution over the bro's declared `llm_spec`.
+`harnesses/native/harness/bro/native/harness.py:resolve_native` is that resolution over the bro's optional declared `llm_spec`.
+In-process launches have no host recipe list; managed starts follow `bro/reference/ride.md`, “Recipe selection”.
+Parsing validates grammar only; preset expansion recognizes a bare word that names no installed provider, with host presets overriding the project's.
 A recipe for a provider the harness does not serve is refused, naming the installed harnesses that serve it.
 Harness flags choose a recipe within the selected harness and never silently switch execution shape.
 
