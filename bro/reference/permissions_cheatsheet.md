@@ -283,7 +283,7 @@ Configuration preparation and result commands are in the [benchmark guide](../..
 ## Change a running session
 
 On the host, find the root with `ride list` and its tree with `ride missions <root>`.
-Use the workspace or joined-member name in place of `my-session`:
+Use the mission id from `ride missions` in place of `my-session`:
 
 ```sh
 ride override my-session --grant @browser

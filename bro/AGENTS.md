@@ -65,7 +65,8 @@ A subpackage with a map of its own is pointed at, not described here.
   Settlement blocks on the store's journal signal until the session watch has emitted through the newest event the session can see in the snapshot it reads.
   A distinct set of failed waiters receives at most one notice;
   live work keeps the run waiting silently, and a run with none ends.
-- `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, and `artifact.share` kinds, the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
+- `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.get`, `artifact.share`, and `artifact.export` kinds,
+  the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   `artifact_mcp.py` is the registered `artifact` toolset, reading and grepping reachable text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `job_supervisor.py` — the shared process-group supervisor behind core's `watch-run` and bro-native's jobs:

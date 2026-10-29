@@ -45,9 +45,9 @@ def running():
   )
 
 
-def apply(running, *changes, name='root'):
+def apply(running, *changes):
   return overrides.apply(
-    running.peers, running.journal, running.source, {'name': name, 'changes': list(changes)}
+    running.peers, running.journal, running.source, {'id': 'root-id', 'changes': list(changes)}
   )
 
 
@@ -118,7 +118,7 @@ def test_member_operation_uses_member_records_and_never_rewrites_party_resume(ru
   member.mkdir(parents=True)
   running.facts.member = 'member'
   saved = running.workspace.resume_file.read_bytes()
-  result = apply(running, ('grant', '@bro'), name='member')
+  result = apply(running, ('grant', '@bro'))
   assert json.loads((member / 'override.json').read_text())['id'] == result['operation']
   assert running.workspace.resume_file.read_bytes() == saved
   assert not (member / 'resume.json').exists()

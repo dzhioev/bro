@@ -21,6 +21,9 @@ namespace: its `get` falls back to a private copy under that workspace's own
 `artifacts/` directory. A manually launched child has no host-built launch
 and therefore no view; its `get` is denied with the reason.
 
+The operator reads only what a session exported or the operator itself shared in
+(`share_from_host`); an exported ref reaches no other peer.
+
 The store is wiped at construction and removed at `close()` — it dies with
 the ride — while the JSONL audit beside it (`<ride>.jsonl`) survives,
 recording mints, gets, shares, and denials.
@@ -29,8 +32,9 @@ recording mints, gets, shares, and denials.
 staged under the store's `jobs/`, and the ref that closes the job's mission
 names it `JOB_RUN_NAME` and reaches the peer that requested the job and its owners.
 
-`ArtifactControl` serves the `artifact.mint`, `artifact.get`, and `artifact.share` kinds
-(contract: `bro/artifact.py`) and implements the worker-type resolver
+`ArtifactControl` serves the `artifact.mint`, `artifact.get`, `artifact.share`, and
+`artifact.export` kinds (contract: `bro/artifact.py`), the operator's
+`operator.artifact.share` and `operator.artifact.get`, and implements the worker-type resolver
 (`bro.worker_types.ArtifactResolver`).
 Attribution, authorization, and shape validation run on the broker loop;
 store I/O runs in a thread with the correlated result delivered
@@ -87,6 +91,7 @@ _FICLONE = 0x40049409
 _MINT_KEYS = frozenset({'path', 'name'})
 _GET_KEYS = frozenset({'ref'})
 _SHARE_KEYS = frozenset({'id', 'ref'})
+_EXPORT_KEYS = frozenset({'ref'})
 JOB_RUN_NAME = 'run'  # the name a collected job run's ref carries
 
 
@@ -148,6 +153,26 @@ def _private_copy(source: Path, destination: Path, prefix: str = '') -> int:
   return total
 
 
+def _publish_without_replacing(staging: Path, destination: Path) -> None:
+  """move `staging` to `destination`, refusing if anything exists there at the
+  moment of publication: a file is hard-linked into place and a directory
+  claims its name with an exclusive `mkdir` before the rename."""
+  try:
+    if staging.is_dir():
+      destination.mkdir()
+      try:
+        staging.rename(destination)
+      except OSError:
+        destination.rmdir()
+        raise
+    else:
+      os.link(staging, destination)
+  except FileExistsError:
+    raise ArtifactDenied(f'{destination} already exists') from None
+  except OSError:
+    raise ArtifactDenied(f'cannot place {destination}') from None
+
+
 @contextlib.contextmanager
 def _staged(directory: Path) -> Generator[Path]:
   """a fresh staging path under `directory`, removed — file or tree — when the
@@ -188,6 +213,7 @@ class ArtifactStore:
     self._lock = threading.Lock()
     self._audit_lock = threading.Lock()
     self._reach: dict[str, set[str]] = {}  # digest -> workspace names that may read it
+    self._host_reach: set[str] = set()  # digests the operator may read
     self._bytes = 0
     root = store_dir(workspace.name)
     if root.exists():
@@ -422,6 +448,50 @@ class ArtifactStore:
           raise
     return destination
 
+  def export(self, ref: str, *, by: str) -> None:
+    """extend `ref`'s reach to the operator. The caller checked `by`'s own reach
+    and export right on the loop."""
+    digest, _ = split_ref(ref)
+    with self._lock:
+      self._host_reach.add(digest)
+    self.audit('export', {'by': by, 'ref': ref})
+
+  def share_from_host(self, source: Path, name: str, *, to: str) -> tuple[str, int]:
+    """ingest the host path `source` as `name` and share it with the peer named
+    `to`; the operator may read it afterwards. Heavy, called off-loop."""
+    self.view(to)
+    ref, size = self.adopt(source, name, to, (), event='operator-share', origin=str(source))
+    digest, _ = split_ref(ref)
+    with self._lock:
+      self._host_reach.add(digest)
+    return ref, size
+
+  def share_to_peer(self, ref: str, *, to: str) -> None:
+    """share a ref the operator may read with the peer named `to`. Called
+    off-loop."""
+    digest, _ = split_ref(ref)
+    with self._lock:
+      readable = digest in self._host_reach
+    if not readable:
+      raise ArtifactDenied(f'artifact {ref} is not available to the operator')
+    self.share((ref,), to=to, by='operator')
+
+  def copy_to_host(self, ref: str, directory: Path) -> Path:
+    """copy an exported ref's content to `directory/<name>` and return that
+    path; refuses to replace an existing path. Heavy, called off-loop."""
+    digest, name = split_ref(ref)
+    with self._lock:
+      readable = digest in self._host_reach
+    if not readable:
+      raise ArtifactDenied(f'artifact {ref} is not available to the operator')
+    destination = directory / name
+    directory.mkdir(parents=True, exist_ok=True)
+    with _staged(directory) as staging:
+      _private_copy(self._objects / digest, staging)
+      _publish_without_replacing(staging, destination)
+    self.audit('host-get', {'ref': ref, 'path': str(destination)})
+    return destination
+
   def audit(self, event: str, entry: dict[str, Any]) -> None:
     """append one entry to the ride's artifact audit."""
     entry = {
@@ -474,6 +544,51 @@ def _validate_share(args: dict[str, Any]) -> Optional[str]:
   return None
 
 
+def _validate_export(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - _EXPORT_KEYS)
+  if len(unknown) > 0:
+    return f'unknown artifact.export field(s): {", ".join(unknown)}'
+  if not is_ref(args.get('ref')):
+    return f"artifact.export needs a well-formed 'ref' ({REF_FORM})"
+  return None
+
+
+def _validate_host_share(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - {'id', 'ref', 'path', 'name'})
+  if len(unknown) > 0:
+    return f'unknown operator.artifact.share field(s): {", ".join(unknown)}'
+  if not isinstance(args.get('id'), str) or len(args['id']) == 0:
+    return "operator.artifact.share needs a non-empty string 'id'"
+  if ('ref' in args) == ('path' in args):
+    return "operator.artifact.share needs exactly one of 'ref' and 'path'"
+  if 'ref' in args:
+    if 'name' in args:
+      return "operator.artifact.share takes 'name' only with 'path'"
+    if not is_ref(args['ref']):
+      return f"operator.artifact.share needs a well-formed 'ref' ({REF_FORM})"
+    return None
+  path = args['path']
+  if not isinstance(path, str) or not os.path.isabs(path):
+    return "operator.artifact.share needs an absolute string 'path'"
+  if 'name' in args:
+    name = args['name']
+    if not isinstance(name, str):
+      return "operator.artifact.share 'name' must be a string"
+    return name_error(name)
+  return None
+
+
+def _validate_host_get(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - {'ref', 'to'})
+  if len(unknown) > 0:
+    return f'unknown operator.artifact.get field(s): {", ".join(unknown)}'
+  if not is_ref(args.get('ref')):
+    return f"operator.artifact.get needs a well-formed 'ref' ({REF_FORM})"
+  if not isinstance(args.get('to'), str) or not os.path.isabs(args['to']):
+    return "operator.artifact.get needs an absolute string 'to' directory"
+  return None
+
+
 class JobArtifacts:
   """`bro.broker.dispatcher.JobOutput` over one store: a broker job's run is
   collected in the store and answered with its ref, reaching the requesting
@@ -504,7 +619,8 @@ class JobArtifacts:
 class ArtifactControl:
   """The artifact kinds and worker-type resolver over one store.
 
-  `mint`, `get`, and `share` register as the broker's artifact request handlers.
+  `mint`, `get`, `share`, and `export` register as the broker's artifact request handlers,
+  and `host_share` and `host_get` as the operator channel's.
   Everything here runs on the broker loop, with store content work threaded.
   """
 
@@ -584,32 +700,118 @@ class ArtifactControl:
         f'cannot share artifact the owner cannot reach: {ref}',
       )
       return
-    worker_facts = self._facts.for_mission(mission_id)
-    if worker_facts.expected:
-      self._deny(
-        context,
-        peer,
-        message,
-        owner,
-        'artifact share denied: no artifact view is mounted for a manually launched worker',
-      )
-      return
     try:
-      worker = self._facts.describe(mission_id)
-    except UnattributablePeer:
-      self._deny(
-        context,
-        peer,
-        message,
-        owner,
-        f'artifact share denied: mission {mission_id!r} has no available artifact workspace',
-      )
+      worker = self._worker_workspace(mission_id)
+    except ArtifactDenied as reason:
+      self._deny(context, peer, message, owner, str(reason))
       return
     self._answer_off_loop(
       context,
       peer,
       message.request_id,
-      lambda: self._shared(ref, owner=owner.workspace, worker=worker.workspace),
+      lambda: self._shared(ref, owner=owner.workspace, worker=worker),
+    )
+
+  def _worker_workspace(self, mission_id: str) -> str:
+    """the workspace whose view an artifact share into `mission_id` extends;
+    raises `ArtifactDenied` when that mission has none."""
+    try:
+      if self._facts.for_mission(mission_id).expected:
+        raise ArtifactDenied(
+          'artifact share denied: no artifact view is mounted for a manually launched worker'
+        )
+      return self._facts.describe(mission_id).workspace
+    except UnattributablePeer:
+      raise ArtifactDenied(
+        f'artifact share denied: mission {mission_id!r} has no available artifact workspace'
+      ) from None
+
+  def export(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    try:
+      identity = self._facts.resolve(context, peer)
+    except UnattributablePeer as reason:
+      self._deny(context, peer, message, None, f'artifact export denied: {reason}')
+      return
+    error = _validate_export(message.args)
+    if error is not None:
+      self._deny(context, peer, message, identity, error)
+      return
+    record = identity.mission_record
+    if record is None or record.descriptor.values.get('export') is not True:
+      self._deny(
+        context,
+        peer,
+        message,
+        identity,
+        'artifact export denied: this session was not started with bro.export',
+      )
+      return
+    ref = message.args['ref']
+    if not self._store.reachable(ref, identity.workspace):
+      self._deny(context, peer, message, identity, _denial(ref))
+      return
+    self._answer_off_loop(
+      context, peer, message.request_id, lambda: self._exported(ref, identity.workspace)
+    )
+
+  def _exported(self, ref: str, workspace: str) -> dict[str, Any]:
+    self._store.export(ref, by=workspace)
+    return {}
+
+  def host_share(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    args = message.args
+    error = _validate_host_share(args)
+    if error is not None:
+      self._deny(context, peer, message, None, error)
+      return
+    mission_id = args['id']
+    record = context.journal.records.get(mission_id)
+    if record is None or record.terminal:
+      self._deny(context, peer, message, None, f'no live mission {mission_id!r}')
+      return
+    try:
+      worker = self._worker_workspace(mission_id)
+    except ArtifactDenied as reason:
+      self._deny(context, peer, message, None, str(reason))
+      return
+    if 'ref' in args:
+      ref = args['ref']
+      self._answer_off_loop(
+        context, peer, message.request_id, lambda: self._host_shared_ref(ref, worker)
+      )
+      return
+    source = Path(args['path'])
+    try:
+      name = args['name'] if 'name' in args else path_name(str(source))
+    except ValueError as reason:
+      self._deny(context, peer, message, None, str(reason))
+      return
+    self._answer_off_loop(
+      context, peer, message.request_id, lambda: self._host_shared_path(source, name, worker)
+    )
+
+  def _host_shared_ref(self, ref: str, worker: str) -> dict[str, Any]:
+    self._store.share_to_peer(ref, to=worker)
+    return {'ref': ref}
+
+  def _host_shared_path(self, source: Path, name: str, worker: str) -> dict[str, Any]:
+    if not source.is_file() and not source.is_dir():
+      raise ArtifactDenied(f'no file or directory at {str(source)!r}')
+    ref, size = self._store.share_from_host(source, name, to=worker)
+    return {'ref': ref, 'size': size}
+
+  def host_get(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    args = message.args
+    error = _validate_host_get(args)
+    if error is not None:
+      self._deny(context, peer, message, None, error)
+      return
+    ref, directory = args['ref'], Path(args['to'])
+    self._answer_off_loop(
+      context,
+      peer,
+      message.request_id,
+      lambda: {'path': str(self._store.copy_to_host(ref, directory))},
     )
 
   def _shared(self, ref: str, *, owner: str, worker: str) -> dict[str, Any]:

@@ -149,12 +149,11 @@ class CredentialOverrides:
         value = apply_authority(self.peers, self.journal, self.reading, message.args)
         context.reply(peer, {'outcome': 'ok', 'value': value})
         return
-      if set(message.args) != {'name', 'changes'} or not isinstance(message.args['name'], str):
-        raise ValueError('override check: name and changes required')
-      matches = [row for row in self.peers.missions() if row['name'] == message.args['name']]
-      if len(matches) != 1:
-        raise ValueError('override check: name does not identify one mission')
-      mission_id = matches[0]['id']
+      if set(message.args) != {'id', 'changes'} or not isinstance(message.args['id'], str):
+        raise ValueError('override check: id and changes required')
+      mission_id = message.args['id']
+      if mission_id not in {row['id'] for row in self.peers.missions()}:
+        raise ValueError('override check: id does not identify a mission of this root')
       facts = self.peers.for_mission(mission_id)
       record = self.journal.records[mission_id]
       if record.state != 'started' or facts.type != 'bro' or not isinstance(facts.record, Mission):

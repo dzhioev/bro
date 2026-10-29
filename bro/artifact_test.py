@@ -190,6 +190,16 @@ class TestClient:
     assert artifact.get_artifact(REF, timeout=5) == f'/var/ride/artifacts/{REF}'
     assert client.calls == [(artifact.GET, {'ref': REF}, 5)]
 
+  def test_export_sends_the_kind(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {}})
+    artifact.export_artifact(REF)
+    assert client.calls == [(artifact.EXPORT, {'ref': REF}, artifact.DEFAULT_TIMEOUT)]
+
+  def test_export_denial_raises_with_the_host_reason(self, monkeypatch):
+    _serve(monkeypatch, {'outcome': 'denied', 'error': 'artifact export denied: not started with bro.export'})  # fmt: skip
+    with pytest.raises(artifact.ArtifactError, match='not started with bro.export'):
+      artifact.export_artifact(REF)
+
   def test_denied_raises_with_the_host_reason(self, monkeypatch):
     _serve(monkeypatch, {'outcome': 'denied', 'error': f'artifact {REF} is not shared with this peer'})  # fmt: skip
     with pytest.raises(artifact.ArtifactError, match='is not shared with this peer'):

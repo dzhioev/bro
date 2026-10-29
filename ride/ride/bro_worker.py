@@ -352,6 +352,8 @@ def _joined_ride_command(launch: SummonLaunchSpec) -> str:
       parts.extend(['--' + name, str(value)])
     elif name == 'fast' and value is True:
       parts.append('--fast')
+    elif name == 'export' and value is True:
+      parts.append('--export')
     elif name in ('add', 'drop'):
       for kind in sorted(cast(frozenset[str], value)):
         parts.extend(['--grant' if name == 'add' else '--revoke', kind])

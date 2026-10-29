@@ -103,6 +103,7 @@ _SESSION_INPUT_FIELDS = frozenset(
     'summon_harness',
     'mission',
     'recipe_options',
+    'export',
     'harness_set',
   }
 )
@@ -138,6 +139,7 @@ class SessionSpec:
   env: dict[str, str] = field(default_factory=dict)
   limit: list[str] = field(default_factory=list)
   recipe_options: dict[str, str | bool] = field(default_factory=dict)
+  export: bool = False
   harness_set: bool = True
   authority_request: dict = field(default_factory=dict)
   operator_gift: dict = field(default_factory=dict)
@@ -184,7 +186,11 @@ class SessionSpec:
   def to_command_argv(self) -> list[str]:
     if self.resume:
       return ['ride', 'resume', self.name]
-    flags = {'--unboxed': self.isolation is Isolation.UNBOXED, '--no-trails': self.no_trails}
+    flags = {
+      '--unboxed': self.isolation is Isolation.UNBOXED,
+      '--no-trails': self.no_trails,
+      '--export': self.export,
+    }
     if not self.solo:
       flags['--drop'] = self.drop
     elif not self.workspace_pinned:
@@ -852,6 +858,8 @@ def _prepare_session(
           'limit': spec.limit,
         }
         fields.update(spec.recipe_options)
+        if spec.export:
+          fields['export'] = True
         if spec.llm is not None:
           fields['llm'] = spec.llm
         requested, _ = authority_request(

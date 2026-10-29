@@ -13,7 +13,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 
 - `ride/cli.py` — the `ride` dispatcher.
   `solo` is the one-shot mode verb, `along` the interactive mode verb;
-  `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, `missions`, `override`, and `banner` are lifecycle verbs.
+  `resume`, `list`, `clean`, `exec`, `check-clean`, `scope`, `missions`, `override`, `artifact`, and `banner` are lifecycle verbs.
 - `ride/ask.py`, `ride/call.py` — pure option-preserving aliases of `ride solo` and `ride along`.
   Their scripts live in this distribution and add no implied fast mode or other flags.
 - `ride/dive_in.py` — task utility wrapper:
@@ -50,10 +50,11 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/credential_overrides.py` — pending credential operations, receipt settlement, and the manual applier's operator-channel protocol.
 - `ride/credential_applier.py` — supervisor-owned publication into a process's private root or its container.
 - `ride/manual_credentials.py` — the manual launcher's retained applier connection.
-- `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the mission-listing and joint-start commit/claim clients.
+- `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the mission-listing, joint-start commit/claim, and artifact share/get clients.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
   peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
-- `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, and owner-authorized `artifact.share` kinds, and the broker's `JobOutput`:
+- `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, owner-authorized `artifact.share`, and `bro.export`-gated `artifact.export` kinds,
+  the operator's `operator.artifact.share` and `operator.artifact.get`, and the broker's `JobOutput`:
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind read-only mounts at each peer's declared artifact-view path, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.

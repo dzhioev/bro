@@ -21,6 +21,8 @@ if TYPE_CHECKING:
   from ride.peer_facts import PeerFacts
 
 MISSIONS = 'operator.missions'
+ARTIFACT_SHARE = 'operator.artifact.share'
+ARTIFACT_GET = 'operator.artifact.get'
 
 
 class OperatorUnavailable(RuntimeError):
@@ -206,14 +208,14 @@ def list_missions(root: str) -> int:
   return 0
 
 
-def _request(root: str, kind: str, args: dict[str, Any]) -> dict[str, Any]:
+def _request(root: str, kind: str, args: dict[str, Any], *, timeout: float = 30) -> dict[str, Any]:
   from bro.broker.client import Client
   from bro.broker.transport import connect
 
   record = read_control(root)
   try:
     with _directory_lock(), Client(connect(record.address)) as client:
-      result = client.call(kind, args, timeout=30).payload
+      result = client.call(kind, args, timeout=timeout).payload
   except (ConnectionError, OSError, TimeoutError):
     raise OperatorUnavailable(f'root {root!r} operator channel is unavailable for {kind}') from None
   if result.get('outcome') != 'ok':
@@ -232,6 +234,8 @@ def commit_launch(root: str, token: str, spec: Any) -> dict[str, Any]:
     'revoke': spec.revoke,
   }
   fields.update(spec.recipe_options)
+  if spec.export:
+    fields['export'] = True
   if spec.llm is not None:
     fields['llm'] = spec.llm
   return _request(root, 'operator.commit', {'token': token, 'fields': fields})
@@ -241,19 +245,28 @@ def claim_launch(root: str, token: str, commit: str, workspace: str) -> None:
   _request(root, 'operator.claim', {'token': token, 'commit': commit, 'workspace': workspace})
 
 
-def find_root(name: str) -> str:
-  if _path(name).exists():
-    return name
+def live_roots() -> list[str]:
+  roots = []
+  for path in sorted(_directory().glob('*.json')):
+    try:
+      mission_rows(path.stem)
+    except OperatorUnavailable:
+      continue
+    roots.append(path.stem)
+  return roots
+
+
+def find_root(mission: str) -> str:
   matches = []
   for path in sorted(_directory().glob('*.json')):
     try:
       rows = mission_rows(path.stem)
     except OperatorUnavailable:
       continue
-    if any(row['name'] == name for row in rows):
+    if any(row['id'] == mission for row in rows):
       matches.append(path.stem)
   if len(matches) != 1:
-    raise ValueError(f'name {name!r} has no unique live operator control file')
+    raise ValueError(f'mission {mission!r} has no unique live operator control file')
   return matches[0]
 
 
@@ -268,11 +281,41 @@ def mission_rows(root: str) -> list[dict[str, Any]]:
     args = {'cursor': value['cursor']}
 
 
-def override(root: str, name: str, changes: list[tuple[str, str]]) -> int:
-  value = _request(root, 'operator.override', {'name': name, 'changes': changes})
+def override(root: str, mission: str, changes: list[tuple[str, str]]) -> int:
+  value = _request(root, 'operator.override', {'id': mission, 'changes': changes})
   print(json.dumps(value, indent=2))
   return 0
 
 
 def register_applier(root: str, mission: str) -> dict[str, str]:
   return _request(root, 'operator.applier', {'token': mission})
+
+
+def share_artifact(root: str, mission: str, subject: str, name: str | None) -> int:
+  """share a host path, or an artifact ref the operator may read, with a live mission."""
+  from bro.artifact import DEFAULT_TIMEOUT, is_ref
+
+  args: dict[str, Any] = {'id': mission}
+  if is_ref(subject):
+    args['ref'] = subject
+  else:
+    args['path'] = str(Path(subject).expanduser().resolve())
+  if name is not None:
+    args['name'] = name
+  value = _request(root, ARTIFACT_SHARE, args, timeout=DEFAULT_TIMEOUT)
+  print(value['ref'])
+  return 0
+
+
+def get_artifact(root: str, ref: str, directory: Path) -> int:
+  """copy an artifact a session exported to `directory` and print where it landed."""
+  from bro.artifact import DEFAULT_TIMEOUT
+
+  value = _request(
+    root,
+    ARTIFACT_GET,
+    {'ref': ref, 'to': str(directory.expanduser().resolve())},
+    timeout=DEFAULT_TIMEOUT,
+  )
+  print(value['path'])
+  return 0

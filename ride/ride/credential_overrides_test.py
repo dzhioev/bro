@@ -106,11 +106,11 @@ def running(tmp_path, monkeypatch):
   )
 
 
-def change(running, *changes, name=None):
+def change(running, *changes):
   context = Context()
   message = brotocol.request(
     'operator.override',
-    {'name': name or running.workspace.name, 'changes': list(changes)},
+    {'id': 'root-id', 'changes': list(changes)},
   )
   running.manager.handle(context, 'operator', message)
   return context
@@ -232,7 +232,7 @@ async def test_joined_member_uses_its_records_without_touching_the_party_resume(
   running.facts.member = 'credential-member'
   saved = running.workspace.resume_file.read_bytes()
   async with running.manager.lifetime():
-    result = await change(running, ('cred', 'brave+two'), name='credential-member').result()
+    result = await change(running, ('cred', 'brave+two')).result()
     assert result['value']['status'] == 'applied'
   assert running.workspace.resume_file.read_bytes() == saved
   assert (member / 'override.json').is_file()
@@ -285,7 +285,7 @@ async def test_member_ending_during_apply_drops_the_pending_operation(running, m
 
   running.facts.credential_applier = FinishingApplier()
   async with running.manager.lifetime():
-    result = change(running, ('cred', 'brave+two'), name='ending-member')
+    result = change(running, ('cred', 'brave+two'))
     assert await asyncio.to_thread(entered.wait, 10)
     assert (await result.result())['value']['status'] == 'uncertain'
     pending = running.facts.pending_override

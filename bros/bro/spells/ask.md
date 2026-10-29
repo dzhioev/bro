@@ -126,7 +126,7 @@ If the user asked for follow-up action on the answer, continue with it.
 
 - **Denied** — the target has no usable authority in this session, the request is malformed, a grant exceeds this session's authority, a pass is unauthorized, or the summon exceeds the depth cap.
   The error names the reason and no child starts.
-  A missing target needs the operator's `ride override <name> --grant @<target>` or a new start with that grant.
+  A missing target needs the operator's `ride override <mission> --grant @<target>` or a new start with that grant.
   A mission cannot widen its own authority.
 - **Raised or errored** — the target ran but could not fulfill the request.
   `bro::quest_check` raises with the retained reason.

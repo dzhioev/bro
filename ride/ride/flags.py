@@ -91,6 +91,12 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
   )
   add_scope_flags(parser)
   parser.add_argument(
+    '--export',
+    action='store_true',
+    help='let the session publish artifact refs to the host (bro.export); read them with '
+    '`ride artifact get`',
+  )
+  parser.add_argument(
     '--no-trails',
     dest='no_trails',
     action='store_true',
