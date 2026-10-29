@@ -39,7 +39,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   Results already obtained and inputs not yet exchanged remain pending ahead of the next turn.
   Capacity retries record and count every refused attempt with the same exchange indices and inputs, without advancing the wire.
   A non-completed leg is recorded with `stopped`, counted in usage, and refused with `LLMStopped` before observer events or tools run; its inputs remain pending.
-  Its `restore` and `seed_chain` delegate to the wire.
+  Its `restore` and `seed_chain` delegate to the wire;
+  the Responses client chains on the server and Chat rebuilds history locally.
   Wire clients encode tool results; recording keeps the original object or string.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;

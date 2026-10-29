@@ -14,6 +14,7 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 - **Recipe boundary.** `llm.py` and `providers.py` are declaration-side and import no SDK, harness or live MCP layer.
   Provider declarations live in the distributions under top-level `llms/`; their package hubs and credential modules import nothing.
   A native recipe names a wire with an installed client.
+  The Responses and Chat wires provide clients; Messages is decode-only.
 - **Tool declaration boundary.** Persona and toolset declarations import `bro.mcp`:
   its metadata, conditions, and factories do not import this package until a live server is built.
   `bro.llm.mcp` owns only the resulting tool/server execution path.
@@ -69,7 +70,8 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 - `records.py` — SDK-free response meanings: ordered reasoning, messages, calls and unknown parts, with derived reply and terminal status.
 - `wire.py` — the `Wire` client port, `Leg`, replay `Prefix`, and neutral inputs (`SystemPrompt`, `UserMessage`, `Notification`, `ToolOutput`).
   A leg carries the recorded exchange and its decoded parts, stop, reply and billed counts.
-  `UnusableResponse` retains a received leg when reply extraction fails, so a caller can record and account for it before propagating the failure.
+  `UnusableResponse` retains a received leg when reply extraction fails and explicitly reports whether the wire accepted the exchange.
+  A rejected exchange retains pending inputs and is recorded with `stopped: failed`; an accepted one acknowledges its inputs.
 - `wires.py` — the `bro.llm.wires` decode roster and `bro.llm.wire_clients` client roster.
   Decode-side loading is lazy; a wire declaring `LEGACY` claims untagged records, and several claimants are an error.
   `open(recipe, secrets)` constructs the client named by `recipe.WIRE` from provider credential material, refusing request options that overlap the client's `OWNED` fields.

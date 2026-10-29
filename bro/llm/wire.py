@@ -87,11 +87,15 @@ class Leg:
 
 
 class UnusableResponse(RuntimeError):
-  """A received leg whose terminal reply cannot be extracted."""
+  """A received leg whose terminal reply cannot be extracted.
 
-  def __init__(self, message: str, leg: Leg):
+  accepted reports whether the wire advanced its conversation state.
+  """
+
+  def __init__(self, message: str, leg: Leg, *, accepted: bool):
     super().__init__(message)
     self.leg = leg
+    self.accepted = accepted
 
 
 class Wire(ABC):

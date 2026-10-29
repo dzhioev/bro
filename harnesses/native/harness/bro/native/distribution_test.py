@@ -28,6 +28,7 @@ _PROJECTS = {
   'bro-wire-chat': _ROOT / 'wires' / 'chat',
   'bro-openai': _ROOT / 'llms' / 'openai',
   'bro-anthropic': _ROOT / 'llms' / 'anthropic',
+  'bro-deepseek': _ROOT / 'llms' / 'deepseek',
 }
 _NATIVE_DOMAIN = {
   'bro/fork.py',
@@ -510,7 +511,7 @@ assert not any(name in sys.modules for name in ('openai', 'anthropic', 'bro.nati
   )
 
 
-@pytest.mark.parametrize('provider', ['openai', 'anthropic'])
+@pytest.mark.parametrize('provider', ['openai', 'anthropic', 'deepseek'])
 def test_provider_wheels_hold_only_their_own_leaf(provider, wheels, wheel_files):
   distribution = f'bro-{provider}'
   package = f'bro/{provider}'
@@ -553,4 +554,44 @@ assert not modules.intersection(sys.modules)
     check=True,
     capture_output=True,
     text=True,
+  )
+
+
+def test_deepseek_provider_wheel_loads_without_the_client_extra(wheels, tmp_path):
+  requirements = _metadata(wheels['bro-deepseek']).get_all('Requires-Dist') or []
+  assert {requirement for requirement in requirements if 'extra ==' not in requirement} == {
+    'bro',
+    'bro-wire-chat',
+  }
+  assert _metadata(wheels['bro-deepseek']).get_all('Provides-Extra') == ['client']
+  assert {item.split(';')[0].strip() for item in requirements if 'extra ==' in item} == {
+    'bro-wire-chat[client]'
+  }
+  for distribution in ('bro', 'bro-deepseek', 'bro-wire-chat'):
+    with zipfile.ZipFile(wheels[distribution]) as archive:
+      archive.extractall(tmp_path)
+  probe = """
+import sys
+from bro.llm import providers, wires
+from bro.llm.llm import LLMSpec
+recipe = providers.resolve(None, providers.parse('deepseek:pro:high'), ('deepseek',))
+assert LLMSpec.from_dict(recipe.dump()) == recipe
+assert recipe.WIRE in wires.client_names()
+assert providers.price_table(recipe.TYPE).models
+assert wires.decode(recipe.WIRE, {'choices': [{'finish_reason': 'stop', 'message': {'content': 'reply'}}]}).reply == 'reply'
+assert not any(name in sys.modules for name in ('openai', 'bro.native', 'ride'))
+try:
+  wires.open(recipe, {'api_key': 'fixture-key'})
+except ValueError as error:
+  assert 'bro-wire-chat[client]' in str(error), str(error)
+else:
+  raise AssertionError('client opened without its SDK')
+"""
+  subprocess.run(
+    [sys.executable, '-S', '-c', probe],
+    cwd='/tmp',
+    env={**os.environ, 'PYTHONPATH': str(tmp_path)},
+    capture_output=True,
+    text=True,
+    check=True,
   )

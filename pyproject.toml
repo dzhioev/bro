@@ -64,7 +64,7 @@ dev = [
 ]
 
 [tool.uv.workspace]
-members = ["bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic"]
+members = ["bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic", "llms/deepseek"]
 
 [tool.uv.sources]
 bro-dev = { workspace = true }
@@ -173,17 +173,17 @@ wheel-exclude = [
 consider_namespace_packages = true
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
-pythonpath = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic"]
+pythonpath = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic", "llms/deepseek"]
 max_warnings = "0"
 markers = [
   "credential_gate: run with the real run-start credential gate (opts out of the conftest autouse fixture that pins it open)",
 ]
 
 [tool.pyright]
-include = ["bro", "bros", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "conftest.py", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic"]
+include = ["bro", "bros", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "conftest.py", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic", "llms/deepseek"]
 # `oops/cdk` type-checks in its own environment, the only one holding the CDK
 exclude = ["bro/setup/", ".venv/", "*.egg-info/", "oops/cdk/"]
-extraPaths = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic"]
+extraPaths = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "ride", "browser", "filetypes", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic", "llms/deepseek"]
 venvPath = "."
 venv = ".venv"
 
@@ -191,7 +191,7 @@ venv = ".venv"
 line-length = 100
 indent-width = 2
 target-version = "py312"
-src = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "oops/cdk", "ride", "browser", "filetypes", "benchmark", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic"]
+src = [".", "bench", "dev", "local", "harnesses/native/harness", "harnesses/native/trails", "harnesses/claude/harness", "harnesses/claude/trails", "oops", "oops/cdk", "ride", "browser", "filetypes", "benchmark", "wires/responses", "wires/messages", "wires/chat", "llms/openai", "llms/anthropic", "llms/deepseek"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "C4", "UP", "PIE", "RUF012"]
