@@ -6,7 +6,12 @@ from bro.wire_chat.decode import counts, decode
 
 # Fixtures follow https://api-docs.deepseek.com/api/create-chat-completion.
 def response(
-  *, reasoning='thinking', content: str | None = 'reply', calls=None, finish='stop', usage=None
+  *,
+  reasoning: str | None = 'thinking',
+  content: str | None = 'reply',
+  calls=None,
+  finish='stop',
+  usage=None,
 ):
   return {
     'id': 'chat-1',
@@ -119,3 +124,14 @@ def test_standard_chat_cache_details_and_explicit_hit_count():
   raw = {'prompt_tokens': 10, 'prompt_tokens_details': {'cached_tokens': 6}, 'completion_tokens': 4}
   assert counts(raw) == {'input': 4, 'cache_write': 0, 'cache_read': 6, 'output': 4}
   assert counts({**raw, 'prompt_cache_hit_tokens': 0})['input'] == 10
+
+
+@pytest.mark.parametrize('field', ['id', 'name'])
+@pytest.mark.parametrize('value', [None, '', 17])
+def test_malformed_tool_identity_is_an_unknown_record_not_a_projectable_call(field, value):
+  call = tool_call()
+  target = call if field == 'id' else call['function']
+  target[field] = value
+  decoded = decode(response(reasoning=None, content=None, calls=[call], finish='tool_calls'))
+  assert decoded.parts == (Unknown(1, call),)
+  assert not decoded.calls

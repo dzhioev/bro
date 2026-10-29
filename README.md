@@ -434,7 +434,7 @@ the container's network is unrestricted, and `--unboxed` runs as the launching u
 
 ## Status
 
-Two harnesses and one native provider today, footnoted above;
+Two harnesses and two native providers today, footnoted above;
 installs pin a commit of this repository, with a package index still to come;
 the native loop's third-party skill loader exists with nothing loaded yet.
 A session's git authentication covers github.com alone:
@@ -458,4 +458,6 @@ Apache-2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 The harness seam is one class, and more harnesses are coming.
 
 [^llm]: Model providers are installed plug-ins: the native loop runs recipes whose wire has a client; the Claude Code harness runs Anthropic's recipes.
-A provider is a recipe module plus a client, and more are coming.
+OpenAI runs on the Responses wire and DeepSeek on Chat Completions.
+A provider supplies recipes, credentials and pricing; its wire supplies the client and record decoding.
+See [running a child on another provider](bro/reference/permissions_cheatsheet.md#run-a-child-on-another-provider).

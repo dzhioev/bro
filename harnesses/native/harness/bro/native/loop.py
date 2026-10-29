@@ -230,8 +230,8 @@ class Loop(LLM):
       self._pending_input = inputs
       raise
     except UnusableResponse as error:
-      await self._record_leg(error.leg)
-      self._pending_input = []
+      self._pending_input = [] if error.accepted else inputs
+      await _finish_on_cancel(self._record_leg(error.leg, rejected=not error.accepted))
       raise
     if leg.stop == 'completed':
       self._pending_input = []
@@ -252,7 +252,8 @@ class Loop(LLM):
   async def _record_capacity_leg(self, leg: Leg) -> None:
     await _finish_on_cancel(self._record_leg(leg))
 
-  async def _record_leg(self, leg: Leg) -> None:
+  async def _record_leg(self, leg: Leg, *, rejected: bool = False) -> None:
+    stopped = 'failed' if rejected else leg.stop
     step_id = await self._track_step(
       'llm_call',
       leg.record,
@@ -260,10 +261,10 @@ class Loop(LLM):
       call_index=self._call_index,
       wire=leg.wire,
       **leg.extras,
-      **({'stopped': leg.stop} if leg.stop != 'completed' else {}),
+      **({'stopped': stopped} if stopped != 'completed' else {}),
     )
     self._publish_usage(leg)
-    if leg.stop == 'completed':
+    if stopped == 'completed':
       self._emit_response_steps(leg, llm_call_step_id=step_id)
 
   async def _drain_notifications(
