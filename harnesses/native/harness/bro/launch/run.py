@@ -1,13 +1,14 @@
 """In-process one-shot bro launcher."""
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import bro.base.args as base_args
 from bro.base import log
-from bro.bro import RAISE_EXIT_STATUS, BaseBro, BroRaised
+from bro.bro import RAISE_EXIT_STATUS, BroRaised
 from bro.launch.llm_flags import (
   EFFORT_HELP,
   FAST_HELP,
@@ -47,12 +48,26 @@ def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
   return None if spec == bro_class.llm_spec else spec
 
 
-def create_bro_for_run(bro_name: str, selection: 'LLMSelection') -> BaseBro:
-  """Instantiate a bro with the run's optional recipe override."""
-  from bro.registry import create_bro, get_class
+def add_resolved_llm_flag(parser: base_args.Parser) -> None:
+  """Register the suppressed exact-recipe flag, exclusive with the selection flags."""
+  parser.add_argument('--resolved-llm', default=None, env=False, help=base_args.SUPPRESS)
+  parser.add_exclusive_groups(['resolved_llm'], ['llm', 'provider', 'model', 'effort', 'fast'])
 
-  spec = run_llm_spec(bro_name, selection)
-  return create_bro(bro_name) if spec is None else get_class(bro_name).create(spec)
+
+def launch_llm_spec(bro_name: str, args: dict) -> Optional[LLMSpec]:
+  """The run's recipe override: `--resolved-llm` verbatim, else the selection over the declaration."""
+  from bro.llm import wires
+
+  encoded = args['resolved_llm']
+  if encoded is None:
+    return run_llm_spec(bro_name, selection_from_args(args))
+  try:
+    spec = LLMSpec.from_dict(json.loads(encoded))
+  except (KeyError, TypeError, ValueError) as error:
+    raise LLMSelectionError(f'invalid --resolved-llm recipe: {error}') from error
+  if spec.WIRE not in wires.client_names():
+    raise LLMSelectionError(f'resolved recipe {spec.TYPE} is not runnable by the bro harness')
+  return spec
 
 
 def _ask_observer(bro_name: str) -> LiveDisplayObserver:
@@ -67,15 +82,17 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('bro', help='bro name')
   parser.add_argument('input', help='input to send to the bro')
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
+  add_resolved_llm_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
   parser.add_argument(
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
   )
 
   args = parser.parse(argv)
+  from bro.registry import create_bro
+
   try:
-    selection = selection_from_args(args)
-    bro = create_bro_for_run(args['bro'], selection)
+    bro = create_bro(args['bro'], launch_llm_spec(args['bro'], args))
   except (KeyError, NotImplementedError, LLMSelectionError) as error:
     log.error('%s', error)
     return 1

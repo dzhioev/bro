@@ -17,7 +17,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   Its `Harness.serve` mounts `dev_mcp.py`, the file and search toolset whose shared output rules are `dev_reference.md`, for the `files` group.
   Path-taking dev tools consult `bro.files.access`;
   the seam owns file opens and authorizes search roots.
-  It also owns the `bro run|chat …` spawn with exact-recipe continuation and ride's launch hooks.
+  It also owns the `bro run|chat …` spawn on the session's admitted recipe, its continuation, and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
   `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, trail, and an in-process run's temporary watch store and, outside a managed session, its temporary result store;
   it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and `BaseBro.system_prompt_for`.

@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import http.client
 import importlib.util
-import json
 import signal
 import sys
 import threading
@@ -16,14 +15,9 @@ import bro.base.args as base_args
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
-from bro.launch.llm_flags import (
-  EFFORT_HELP,
-  FAST_HELP,
-  add_llm_flags,
-  selection_from_args,
-)
+from bro.launch.llm_flags import EFFORT_HELP, FAST_HELP, add_llm_flags
 from bro.launch.resume import RESUME_LATEST
-from bro.launch.run import HOLD_HELP, create_bro_for_run, run_llm_spec
+from bro.launch.run import HOLD_HELP, add_resolved_llm_flag, launch_llm_spec
 from bro.llm.observer import Observer
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
@@ -281,7 +275,6 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     '--fork', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=FORK_HELP
   )
   parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
-  parser.add_argument('--continue-llm', default=None, help=base_args.SUPPRESS)
   parser.add_argument(
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
   )
@@ -293,17 +286,13 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     help='with --fork: fork the conversation at this step instead of the latest consistent point',
   )
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
+  add_resolved_llm_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
   args = parser.parse(argv)
-  try:
-    selection = selection_from_args(args)
-  except LLMSelectionError as error:
-    log.error('%s', error)
-    return 1
 
-  continuing = args['continue_trail'] is not None or args['continue_llm'] is not None
-  if (args['continue_trail'] is None) != (args['continue_llm'] is None):
-    log.error('--continue-trail and --continue-llm must be passed together')
+  continuing = args['continue_trail'] is not None
+  if continuing and args['resolved_llm'] is None:
+    log.error('--continue-trail requires --resolved-llm')
     return 1
   if continuing and (args['fork'] is not None or args['what'] is not None):
     log.error('--continue-trail cannot be combined with --fork or an initial message')
@@ -313,7 +302,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     return 1
 
   try:
-    run_spec = None if continuing else run_llm_spec(args['bro'], selection)
+    run_spec = launch_llm_spec(args['bro'], args)
   except (KeyError, NotImplementedError, LLMSelectionError) as error:
     log.error('%s', error)
     return 1
@@ -325,27 +314,12 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     history: Optional[list[DisplayRecord]] = None
     if args['fork'] is not None or continuing:
       from bro.launch.resume import resume
-      from bro.llm import wires
-      from bro.llm.llm import LLMSpec
       from bro.registry import get_class
       from bro.trails.store import default_store
 
       trail_ref = args['continue_trail'] if continuing else args['fork']
       assert trail_ref is not None
-      if continuing:
-        continued_llm = args['continue_llm']
-        assert isinstance(continued_llm, str)
-        try:
-          continued_spec = LLMSpec.from_dict(json.loads(continued_llm))
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-          log.error('invalid recorded LLM recipe: %s', error)
-          return 1
-        if continued_spec.WIRE not in wires.client_names():
-          log.error('recorded recipe %s is not runnable by the bro harness', continued_spec.TYPE)
-          return 1
-        fork_spec = continued_spec
-      else:
-        fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
+      fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
       with default_store() as client:
         try:
           fork_arguments = {
@@ -363,10 +337,10 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       history = forked.history
       log.info('forked trail %s (%d prior display records)', forked.trail_id, len(history))
     else:
+      from bro.registry import create_bro
+
       log.verbose('creating bro %s', args['bro'])
-      runner = Runner(
-        create_bro_for_run(args['bro'], selection), activity_file=args['activity_file']
-      )
+      runner = Runner(create_bro(args['bro'], run_spec), activity_file=args['activity_file'])
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 

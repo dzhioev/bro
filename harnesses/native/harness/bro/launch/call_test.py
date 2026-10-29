@@ -427,6 +427,28 @@ def test_bro_chat_fast_flag_is_explicit(monkeypatch):
   assert spec.service_tier == 'priority'
 
 
+def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
+  built: list[Runner] = []
+
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    built.append(runner)
+
+  resolved = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high').fast()
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+
+  assert _chat(['bro', 'record', 'hi', '--resolved-llm', json.dumps(resolved.dump())]) is None
+  assert built[0].bro.llm_spec == resolved
+
+
+def test_bro_chat_refuses_a_resolved_recipe_beside_a_selection(monkeypatch):
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  resolved = json.dumps(llm_llms_openai.LLMSpec().dump())
+  with pytest.raises(SystemExit):
+    _chat(['bro', 'record', 'hi', '--resolved-llm', resolved, '--fast'])
+
+
 def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
   captured: list[tuple[Optional[str], str, PresetName]] = []
 
@@ -1189,7 +1211,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
       'record',
       '--continue-trail',
       'workspace-trail',
-      '--continue-llm',
+      '--resolved-llm',
       json.dumps(recorded_spec.dump()),
       '--hold',
       'attended',
@@ -1209,8 +1231,14 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   assert captured['chat_hold'] == 'attended'
 
 
+def test_managed_continuation_requires_the_resolved_recipe(monkeypatch, caplog):
+  monkeypatch.setattr('bro.launch.resume.resume', lambda *args, **kwargs: pytest.fail('resumed'))
+  assert _chat(['bro', 'record', '--continue-trail', 'workspace-trail']) == 1
+  assert '--continue-trail requires --resolved-llm' in caplog.text
+
+
 def test_native_launch_without_a_recipe_is_refused(monkeypatch):
-  from bro.launch.run import create_bro_for_run
+  from bro.launch.run import run_llm_spec
   from bro.llm.providers import LLMSelection, LLMSelectionError
 
   class NoRecipeBro(Bro):
@@ -1219,4 +1247,4 @@ def test_native_launch_without_a_recipe_is_refused(monkeypatch):
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: NoRecipeBro)
   with pytest.raises(LLMSelectionError, match='no-recipe declares no LLM recipe: pass --llm'):
-    create_bro_for_run('no-recipe', LLMSelection())
+    run_llm_spec('no-recipe', LLMSelection())
