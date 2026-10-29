@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import shlex
 import threading
 import time
@@ -24,7 +25,7 @@ from bro.native import dev_mcp
 from bro.openai.declaration import LLMSpec
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
-from ride.do_ride import SessionRun
+from ride.do_ride import SessionRun, encode_resolved_llm
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -163,13 +164,13 @@ class TestNativeArgv:
     monkeypatch.setenv(SESSION_DIR_ENV, str(session))
     return session
 
-  def test_chat_composes_the_native_argv(self, monkeypatch):
-    run = _run(llm='openai:fable:high+fast')
+  def test_chat_runs_the_resolved_recipe(self, monkeypatch):
+    run = _run(resolved_llm=LLMSpec(model='gpt-6.1-sol', reasoning_effort='high').fast().dump())
     assert self._argv(run, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
-      '--llm',
-      'openai:fable:high+fast',
+      '--resolved-llm',
+      encode_resolved_llm(run.resolved_llm),
       '--hold',
       'attended',
       '--activity-file',
@@ -192,7 +193,7 @@ class TestNativeArgv:
       async def run(self, text: str, **options) -> None:
         runs.append((text, options['hold']))
 
-    monkeypatch.setattr('bro.launch.run.create_bro_for_run', lambda name, selection: MagicMock())
+    monkeypatch.setattr('bro.registry.create_bro', lambda name, llm_spec: MagicMock())
     monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: None)
     monkeypatch.setattr('bro.launch.run.Runner', _Runner)
     monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
@@ -203,10 +204,11 @@ class TestNativeArgv:
   def test_resume_carries_the_session_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
     session = self._session_dir(monkeypatch, tmp_path)
     trail_pointer.write(session / trail_pointer.FILENAME, 'trail-1')
-    argv = self._argv(_run(resume=True, prompt=None), monkeypatch)
+    run = _run(resume=True, prompt=None)
+    argv = self._argv(run, monkeypatch)
     assert argv[:2] == ['/venv/bin/bro', 'chat'] and argv[-2:] == ['--', 'dev']
     assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
-    assert '"type":"openai"' in argv[argv.index('--continue-llm') + 1]
+    assert json.loads(argv[argv.index('--resolved-llm') + 1]) == run.resolved_llm
 
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)

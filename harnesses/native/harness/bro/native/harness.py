@@ -1,5 +1,4 @@
 import asyncio
-import json
 import math
 import subprocess
 import time
@@ -15,7 +14,6 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.llm import wires
 from bro.llm.llm import LLMSpec
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
@@ -172,24 +170,18 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
 
 
 def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[str]:
-  options: list[str] = []
-  if spec.llm is not None:
-    options.extend(['--llm', spec.llm])
-  options.extend(['--hold', spec.hold, '--activity-file', str(spec.activity_file)])
+  from ride.do_ride import encode_resolved_llm
+
+  options = [
+    '--resolved-llm',
+    encode_resolved_llm(spec.resolved_llm),
+    '--hold',
+    spec.hold,
+    '--activity-file',
+    str(spec.activity_file),
+  ]
   if resume_trail is not None:
-    resolved = spec.llm_spec
-    if resolved is None or resolved.WIRE not in wires.client_names():
-      raise ValueError(
-        f'bro harness resume requires a native recipe, not {type(resolved).__name__}'
-      )
-    options.extend(
-      [
-        '--continue-trail',
-        resume_trail,
-        '--continue-llm',
-        json.dumps(resolved.dump(), separators=(',', ':')),
-      ]
-    )
+    options.extend(['--continue-trail', resume_trail])
   return options
 
 
