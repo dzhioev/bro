@@ -474,7 +474,12 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "bro", editable = "../" }]
+requires-dist = [
+    { name = "bro", editable = "../" },
+    { name = "openai", marker = "extra == 'client'", specifier = "==3.33.0" },
+    { name = "pydantic", marker = "extra == 'client'", specifier = "==2.14.1" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "bro-wire-messages"

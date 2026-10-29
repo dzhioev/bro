@@ -1,0 +1,37 @@
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[project]
+name = "bro-deepseek"
+version = "0.1.0"
+description = "DeepSeek model recipes, pricing and credentials for bro"
+requires-python = ">=3.12"
+dependencies = ["bro", "bro-wire-chat"]
+
+[project.optional-dependencies]
+client = ["bro-wire-chat[client]"]
+
+[project.entry-points."bro.llm.providers"]
+deepseek = "bro.deepseek.declaration"
+
+[project.entry-points."bro.credentials"]
+deepseek = "bro.deepseek.credentials:KIND"
+
+[tool.uv.sources]
+bro = { workspace = true }
+bro-wire-chat = { workspace = true }
+
+[tool.deptry.package_module_name_map]
+bro = ["bro"]
+bro-wire-chat = ["bro"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["bro-wire-chat"]
+DEP003 = ["openai"]
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = ["bro.deepseek"]
+namespace = true
+wheel-exclude = ["**/*_test.py", "**/*_test_helper.py", "**/conftest.py", "**/AGENTS.md", "**/*.egg-info"]

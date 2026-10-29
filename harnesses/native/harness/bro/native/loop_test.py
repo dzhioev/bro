@@ -947,6 +947,7 @@ class TestReplyExtractionFallback:
       {'role': 'user', 'content': 'notice'},
       {'role': 'user', 'content': 'hi'},
     ]
+    assert 'stopped' not in next(extras for kind, _, extras in tracker.steps if kind == 'llm_call')
     assert captured[1]['previous_response_id'] == 'accepted'
     assert captured[1]['input'] == [{'role': 'user', 'content': 'continue'}]
     assert [kind for kind, _, _ in tracker.steps].count('notification') == 1

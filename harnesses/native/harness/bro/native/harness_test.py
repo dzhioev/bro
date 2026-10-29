@@ -740,15 +740,16 @@ class TestRecipeResolution:
 
   def test_native_resolution_refuses_a_self_driving_recipe(self):
     from bro.llm.providers import LLMSelection, LLMSelectionError
-    from bro.native.harness import resolve_native
+    from bro.native.harness import BRO, resolve_native
     from bro.openai import declaration as openai
 
     with pytest.raises(
       LLMSelectionError,
-      match="the bro harness cannot run recipe 'anthropic:fable5': it serves echo, openai; "
-      'anthropic runs on the claude harness',
-    ):
+      match="the bro harness cannot run recipe 'anthropic:fable5'",
+    ) as refused:
       resolve_native(openai.LLMSpec(), LLMSelection(provider='anthropic', model='fable5'))
+    assert f'it serves {", ".join(BRO.llm_providers)};' in str(refused.value)
+    assert 'anthropic runs on the claude harness' in str(refused.value)
 
   def test_native_selection_keeps_provider_knobs(self):
     from bro.llm.providers import LLMSelection

@@ -65,6 +65,7 @@ class Project:
 DISTRIBUTIONS = [
   Distribution('llms/openai', (TEST_MODULE_PATTERN,), ('bro',)),
   Distribution('llms/anthropic', (TEST_MODULE_PATTERN,), ('bro',)),
+  Distribution('llms/deepseek', (TEST_MODULE_PATTERN,), ('bro',)),
   Distribution(
     directory='.',
     deptry_exclude=(
@@ -173,6 +174,9 @@ DISTRIBUTIONS = [
 
 PYTEST_FILES = [
   'wires/chat/bro/wire_chat/decode_test.py',
+  'wires/chat/bro/wire_chat/client_test.py',
+  'llms/deepseek/bro/deepseek/declaration_test.py',
+  'llms/deepseek/bro/deepseek/routes_test.py',
   'wires/messages/bro/wire_messages/decode_test.py',
   'wires/responses/bro/wire_responses/decode_test.py',
   'wires/responses/bro/wire_responses/structured_test.py',
@@ -497,6 +501,7 @@ LLM_PYTEST_FILES = [
   'browser/bros/browser/reader_llm_test.py',
   'dev/bros/dev/commit_llm_test.py',
   'harnesses/native/harness/bro/native/openai_llm_test.py',
+  'llms/deepseek/bro/deepseek/deepseek_llm_test.py',
   'harnesses/claude/harness/bro/claude/input_channels_llm_test.py',
   'harnesses/claude/harness/bro/claude/interrupt_llm_test.py',
   'harnesses/claude/harness/bro/claude/session_end_llm_test.py',

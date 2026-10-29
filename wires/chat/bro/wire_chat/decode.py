@@ -44,7 +44,13 @@ def decode(response: dict) -> DecodedCall:
           for call in calls:
             index = len(parts) + 1
             function = call.get('function') if isinstance(call, dict) else None
-            if not isinstance(function, dict) or call.get('type') != 'function':
+            if (
+              not isinstance(function, dict)
+              or call.get('type') != 'function'
+              or not all(
+                isinstance(value, str) and value for value in (call.get('id'), function.get('name'))
+              )
+            ):
               parts.append(Unknown(index, call))
             else:
               parts.append(

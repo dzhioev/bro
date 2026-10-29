@@ -29,11 +29,12 @@ core imports none of them, and `bro-native` depends on `bro-ride` for the manage
 | `bench/` | `bro-bench` | the launcher-side benchmark credentials, registered worker type, and session commands | `bench/AGENTS.md` |
 | `browser/` | `bro-browser` | the browser persona and page reader, registered webview worker type, owner and profile-setup commands, image, daemon, and capture process | `browser/AGENTS.md` |
 | `filetypes/` | `bro-filetypes` | sandboxed file-type providers, including PDF inspection | `filetypes/AGENTS.md` |
+| `llms/deepseek/` | `bro-deepseek` | DeepSeek recipes, peak pricing and credential kind | `llms/deepseek/AGENTS.md` |
 | `llms/openai/` | `bro-openai` | OpenAI recipes, pricing and credential kind | `llms/openai/AGENTS.md` |
 | `llms/anthropic/` | `bro-anthropic` | Anthropic recipes, pricing, model-family labels and credential kind | `llms/anthropic/AGENTS.md` |
 | `wires/responses/` | `bro-wire-responses` | Responses response decoding, usage counts and wire client | `wires/responses/AGENTS.md` |
 | `wires/messages/` | `bro-wire-messages` | SDK-free Messages response decoding and usage counts | `wires/messages/AGENTS.md` |
-| `wires/chat/` | `bro-wire-chat` | SDK-free Chat Completions response decoding and usage counts | `wires/chat/AGENTS.md` |
+| `wires/chat/` | `bro-wire-chat` | Chat Completions decoding, usage counts and wire client | `wires/chat/AGENTS.md` |
 | `local/` | `bro-local` | this checkout's own personas and policy scripts, kept out of every published wheel by riding the root's `dev` dependency group | `local/AGENTS.md` |
 | `benchmark/` | `bro-benchmark` | the Terminal-Bench harness adapter; deliberately **not** a member, it locks, syncs and tests in an environment of its own | `benchmark/AGENTS.md` |
 
