@@ -30,7 +30,7 @@ def test_bare_summon_forwards_the_request(monkeypatch):
   monkeypatch.setattr(
     summon,
     'relay_summon',
-    lambda target, prompt, *, timeout, into, hold, grant, revoke, limit, passes, share, llm, harness, placement, talk, manual: (
+    lambda target, prompt, *, timeout, into, hold, grant, revoke, limit, passes, share, llm, harness, placement, export, talk, manual: (
       calls.append((target, prompt, timeout, into)) or 0
     ),
   )
@@ -49,9 +49,10 @@ def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
     ['--start'],
     ['--join'],
     ['--unboxed'],
+    ['--export'],
   ):
     assert summon.main(['summon', '--manual', *flags, 'dev', 'work']) == 1
-  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 7
+  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 8
 
 
 @pytest.mark.asyncio

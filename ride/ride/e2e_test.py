@@ -3712,14 +3712,17 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
       _wait_until(lambda: path.exists() or root_ended.is_set(), 150, marker, None)
       assert path.exists(), f'root ended before {marker}'
 
+    from ride import operator
+
     wait_for('.override-ready')
+    [mission] = [row['id'] for row in operator.mission_rows(name) if row['workspace'] == name]
     with pytest.raises(SystemExit):
-      ride_cli.main(['ride', 'override', name, '--grant', 'bro.placement=join'])
-    assert ride_cli.main(['ride', 'override', name, '--grant', '@bro']) == 0
+      ride_cli.main(['ride', 'override', mission, '--grant', 'bro.placement=join'])
+    assert ride_cli.main(['ride', 'override', mission, '--grant', '@bro']) == 0
     wait_for('.override-summoned')
-    assert ride_cli.main(['ride', 'override', name, '--revoke', '@bro']) == 0
+    assert ride_cli.main(['ride', 'override', mission, '--revoke', '@bro']) == 0
     wait_for('.override-revoked')
-    assert ride_cli.main(['ride', 'override', name, '--grant', '@browser']) == 0
+    assert ride_cli.main(['ride', 'override', mission, '--grant', '@browser']) == 0
 
   launch = DockerLaunchSpec(
     workspace_docker.Launch(
@@ -3795,12 +3798,17 @@ assert read()['may_summon'] == []
     ready = workspace.tree / '.override-refusal-ready'
     _wait_until(lambda: ready.exists() or root_ended.is_set(), 60, 'refusal root ready', None)
     assert ready.exists(), 'root ended before refusal checks'
+    [root_mission] = [
+      row['id']
+      for row in operator.mission_rows(workspace.name)
+      if row['workspace'] == workspace.name
+    ]
     for name, rule in [('bro.placement=join', 'override check'), ('@browser', 'gift rule')]:
       with pytest.raises(ValueError, match=rule):
         operator._request(
           workspace.name,
           'operator.override',
-          {'name': workspace.name, 'changes': [['grant', name]]},
+          {'id': root_mission, 'changes': [['grant', name]]},
         )
     (workspace.tree / '.override-refusal-finished').touch()
 
@@ -4137,7 +4145,9 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
             None,
           )
           assert marker.exists(), 'session ended before checking the prior override'
-        result = _request(workspace.name, 'operator.override', {'name': name, 'changes': changes})
+        result = _request(
+          workspace.name, 'operator.override', {'id': target['id'], 'changes': changes}
+        )
         assert result['status'] == ('applied' if fault is None else 'uncertain'), result
         if fault is not None:
           assert publication_finished.wait(90), 'applier did not publish its receipt'

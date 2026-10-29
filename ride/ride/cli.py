@@ -112,7 +112,7 @@ def build_parser() -> Parser:
   override = subparsers.add_parser(
     'override', help="change a running session's bro targets or credentials"
   )
-  override.add_argument('name', help='workspace or member name from `ride missions`')
+  override.add_argument('mission', help='mission id from `ride missions`')
   for verb in ('grant', 'revoke', 'cred'):
     override.add_argument(
       '--' + verb,
@@ -123,6 +123,27 @@ def build_parser() -> Parser:
       type=lambda value, verb=verb: (verb, value),
       help=f'{verb} a bro target or credential (latest flag per name wins)',
     )
+
+  artifact = subparsers.add_parser(
+    'artifact', help='hand files to a running session, or read what a session exported'
+  )
+  artifact_verbs = artifact.add_subparsers(dest='verb', required=True)
+  artifact_share = artifact_verbs.add_parser(
+    'share', help='share a host path, or a ref the operator can read, with a live mission'
+  )
+  artifact_share.add_argument('mission', help='mission id from `ride missions`')
+  artifact_share.add_argument('subject', help='host file or directory, or an artifact ref')
+  artifact_share.add_argument('--name', help="the ref's file name (default: the path's last component)")  # fmt: skip
+  artifact_get = artifact_verbs.add_parser(
+    'get', help='copy an artifact a session exported into a host directory'
+  )
+  artifact_get.add_argument('ref', help='artifact ref')
+  artifact_get.add_argument(
+    '--to', default='.', metavar='DIRECTORY', help='directory to copy into (default: current)'
+  )
+  artifact_get.add_argument(
+    '--root', help='root workspace name; needed only when several roots are live'
+  )
 
   clean = subparsers.add_parser(
     'clean', help='remove stale workspaces, unreferenced mirrors, and unlocked runtime bundles'
@@ -377,7 +398,20 @@ def main(argv: list[str]) -> Optional[int]:
       from ride.overrides import changes
 
       changes(args['changes'])
-      args['root'] = operator.find_root(args['name'])
+      args['root'] = operator.find_root(args['mission'])
+      control = operator.read_control(args['root'])
+      reexec_from_runtime(control.runtime, argv)
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
+  elif command == 'artifact':
+    try:
+      if args['verb'] == 'share':
+        args['root'] = operator.find_root(args['mission'])
+      elif args['root'] is None:
+        roots = operator.live_roots()
+        if len(roots) != 1:
+          raise ValueError(f'pass --root: {len(roots)} live roots {roots}')
+        args['root'] = roots[0]
       control = operator.read_control(args['root'])
       reexec_from_runtime(control.runtime, argv)
     except (ValueError, RuntimeError) as error:
@@ -399,7 +433,14 @@ def main(argv: list[str]) -> Optional[int]:
     return _start_mode(parser, args, solo=command == 'solo')
   if command == 'override':
     try:
-      return operator.override(args['root'], args['name'], args['changes'])
+      return operator.override(args['root'], args['mission'], args['changes'])
+    except (ValueError, RuntimeError) as error:
+      parser.error(str(error))
+  if command == 'artifact':
+    try:
+      if args['verb'] == 'share':
+        return operator.share_artifact(args['root'], args['mission'], args['subject'], args['name'])
+      return operator.get_artifact(args['root'], args['ref'], Path(args['to']))
     except (ValueError, RuntimeError) as error:
       parser.error(str(error))
   if command == 'missions':

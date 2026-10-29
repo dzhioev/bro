@@ -249,19 +249,19 @@ def test_joint_start_requests_report_an_unavailable_operator_channel(monkeypatch
 
 def test_override_reexecutes_root_runtime_and_preserves_cross_flag_order(monkeypatch):
   calls = []
-  argv = ['ride', 'override', 'member', '--grant', '@bro', '--revoke', '@bro', '--grant', '@bro']
-  monkeypatch.setattr(operator, 'find_root', lambda name: 'root')
+  argv = ['ride', 'override', 'mission-1', '--grant', '@bro', '--revoke', '@bro', '--grant', '@bro']
+  monkeypatch.setattr(operator, 'find_root', lambda mission: 'root')
   monkeypatch.setattr(cli, 'reexec_from_runtime', lambda *args: calls.append(('runtime', args)))
   monkeypatch.setattr(operator, 'override', lambda *args: calls.append(('override', args)) or 0)
   with operator.publish_control('root', _record()):
     assert cli.main(argv) == 0
   assert calls == [
     ('runtime', (_record().runtime, argv)),
-    ('override', ('root', 'member', [('grant', '@bro'), ('revoke', '@bro'), ('grant', '@bro')])),
+    ('override', ('root', 'mission-1', [('grant', '@bro'), ('revoke', '@bro'), ('grant', '@bro')])),
   ]
 
 
-def test_override_refuses_a_pre_switch_root_by_name(capsys):
+def test_override_refuses_an_unknown_mission(capsys):
   with pytest.raises(SystemExit):
     cli.main(['ride', 'override', 'before-switch', '--grant', '@bro'])
   assert "'before-switch'" in capsys.readouterr().err
@@ -278,10 +278,10 @@ def test_override_rejects_a_fixed_name_before_runtime_reexec(monkeypatch, capsys
   assert 'override check' in error and 'bro.placement=join' in error
 
 
-def test_member_name_resolves_through_the_operator_listing(monkeypatch):
+def test_mission_id_resolves_through_the_operator_listing(monkeypatch):
   with operator.publish_control('root', _record()):
-    monkeypatch.setattr(operator, 'mission_rows', lambda root: [{'name': 'member'}])
-    assert operator.find_root('member') == 'root'
+    monkeypatch.setattr(operator, 'mission_rows', lambda root: [{'id': 'mission-1'}])
+    assert operator.find_root('mission-1') == 'root'
 
 
 def test_live_override_replays_before_watch_arm_and_changes_authority(tmp_path, monkeypatch):
@@ -307,7 +307,7 @@ def test_live_override_replays_before_watch_arm_and_changes_authority(tmp_path, 
       assert authority_view.initial()['may_summon'] == []
       save_deferred_contract(harness=get_harness('bro'), hold='unattended')
       first = operator._request('root', 'operator.override', {
-        'name': 'root', 'changes': [['grant', '@bro']],
+        'id': operator.mission_rows('root')[0]['id'], 'changes': [['grant', '@bro']],
       })
       assert authority_view.read()['may_summon'] == ['bro']
       with contextlib.closing(watch()) as stream:
@@ -316,7 +316,7 @@ def test_live_override_replays_before_watch_arm_and_changes_authority(tmp_path, 
         assert '# Summoning session' in contract and 'bro::quest_watch' not in contract
         assert '# One-shot turn end' in contract
         second = operator._request('root', 'operator.override', {
-          'name': 'root', 'changes': [['revoke', '@bro']],
+          'id': operator.mission_rows('root')[0]['id'], 'changes': [['revoke', '@bro']],
         })
         assert second['operation'] in next(stream)
         assert authority_view.read()['may_summon'] == []
@@ -402,11 +402,11 @@ def test_startup_snapshot_survives_override_before_harness_process_starts(
       capture_initial()
       save_deferred_contract(harness=get_harness('bro'), hold='unattended')
       operator._request('root', 'operator.override', {
-        'name': 'root', 'changes': [['revoke' if initially_granted else 'grant', '@bro']],
+        'id': operator.mission_rows('root')[0]['id'], 'changes': [['revoke' if initially_granted else 'grant', '@bro']],
       })
       rendered = json.loads(subprocess.check_output([sys.executable, '-c', render], text=True, timeout=10))
       operator._request('root', 'operator.override', {
-        'name': 'root', 'changes': [['grant', '@bro']],
+        'id': operator.mission_rows('root')[0]['id'], 'changes': [['grant', '@bro']],
       })
       deferred = json.loads(subprocess.check_output([sys.executable, '-c', consume], text=True, timeout=10))
     Path(sys.argv[1]).write_text(json.dumps({'rendered': rendered, 'deferred': deferred}))

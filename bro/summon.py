@@ -70,6 +70,9 @@ PASS_HELP = 'set the child credential kind to this stored instance (repeatable)'
 SHARE_HELP = (
   'give the child read access to an artifact ref this session can itself read (repeatable)'
 )
+EXPORT_HELP = (
+  'let the child publish artifact refs it can read to the host (bro.export; needs that permission)'
+)
 INTO_HELP = "base the child's workspace on this git ref instead of the summoner's workspace HEAD"
 DETACH_HELP = 'print the quest id and exit after host acceptance; read it with `quest check`'
 TALK_HELP = (
@@ -209,6 +212,7 @@ def _payload(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
@@ -237,7 +241,13 @@ def _payload(
     payload['share'] = list(share)
   if llm is not None:
     payload['llm'] = llm
-  for name, value in (('provider', provider), ('model', model), ('effort', effort), ('fast', fast)):
+  for name, value in (
+    ('provider', provider),
+    ('model', model),
+    ('effort', effort),
+    ('fast', fast),
+    ('export', export),
+  ):
     if value is not None:
       payload[name] = value
   if harness is not None:
@@ -335,6 +345,7 @@ def summon_and_wait(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
@@ -363,6 +374,7 @@ def summon_and_wait(
     model=model,
     effort=effort,
     fast=fast,
+    export=export,
     harness=harness,
     placement=placement,
     talk=talk,
@@ -415,6 +427,7 @@ def summon_detached(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
@@ -440,6 +453,7 @@ def summon_detached(
     model=model,
     effort=effort,
     fast=fast,
+    export=export,
     harness=harness,
     placement=placement,
     talk=talk,
@@ -500,6 +514,7 @@ def relay_summon(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
   talk: Optional[list[str]] = None,
@@ -527,6 +542,7 @@ def relay_summon(
     model=model,
     effort=effort,
     fast=fast,
+    export=export,
     harness=harness,
     placement=placement,
     talk=talk,
@@ -647,6 +663,7 @@ def main(argv: list[str]) -> Optional[int]:
     const='unboxed',
     help='start an unboxed party (requires bro.placement=unboxed)',
   )
+  parser.add_argument('--export', action='store_true', help=EXPORT_HELP)
   parser.add_argument('--manual', action='store_true', help=MANUAL_HELP)
   parser.add_argument('--detach', action='store_true', help=DETACH_HELP)
   args = parser.parse(argv)
@@ -667,6 +684,7 @@ def main(argv: list[str]) -> Optional[int]:
       '--hold': args['hold'],
       '--harness': args['harness'],
       '--llm': args['llm'],
+      '--export': args['export'] or None,
       **{f'--{name}': value for name, value in recipe_options.items()},
       '--start/--join': args['placement'],
       '--boxed/--unboxed': args['placement'],
@@ -708,6 +726,7 @@ def main(argv: list[str]) -> Optional[int]:
           harness=args['harness'],
           placement=args['placement'],
           **recipe_options,
+          export=args['export'] or None,
           talk=args['talk'],
         )
     except QuestError as error:
@@ -730,6 +749,7 @@ def main(argv: list[str]) -> Optional[int]:
     harness=args['harness'],
     placement=args['placement'],
     **recipe_options,
+    export=args['export'] or None,
     talk=args['talk'],
     manual=args['manual'],
   )

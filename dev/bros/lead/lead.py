@@ -38,7 +38,7 @@ credential passes, and the operator chooses placement, driving loop, and final
 credentials under the root's reading.
 The final descriptor is rechecked at commit; authority changes on that launch
 line are refused.
-The operator can use `ride override <name> --grant @<bro>` or credential flags
+The operator can use `ride override <mission> --grant @<bro>` or credential flags
 while the tree lives; other changes need a new start or resume.
 Read the permissions man pages for complete checks and everyday examples.
 

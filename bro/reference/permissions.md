@@ -120,6 +120,7 @@ Defaults never depend on the starter's authority.
 | `hold` | `unattended`, `detached`, `attended`, `guided` | `unattended` | Yes | No |
 | `talk` | Subset of the four talk rights | `[worker.say]` | Yes | No |
 | `timeout` | Positive whole seconds or `none` | 1800 | Yes | No |
+| `export` | Flag | Unset | No | No |
 | `cred.<kind>` | Instance names, including empty | Held kind's configured pick | No | Yes |
 | `add`, `drop` | Subsets of registered kinds | `[]` | Yes | Yes |
 
@@ -227,7 +228,9 @@ A join refuses `into` and `manual` and inherits its party's isolation.
 For each start the host resolves the starter's mission record, maps the request, normalizes it under the reading, runs use and gift rules, runs admission checks such as summon depth, records its authority, then checks existence and runs the worker.
 Only a starter authorized to name an item learns that it is missing.
 A cap on configured credentials may refuse starting the bro unless the request drops that kind.
-Artifacts are outside this model: a mission can share only refs it can already read.
+Artifacts are outside this model except for publishing to the host:
+a mission can share only refs it can already read, and `bro.export` is the one permission a session needs to publish a ref it can read to the operator, who reads it with `ride artifact get`.
+The operator needs no permission to hand a host file or an exported ref to any live mission.
 
 ## Manual children: joint starts
 
@@ -252,12 +255,12 @@ The runtime, resume record, and host record therefore refer to one committed lau
 
 ## Running-session overrides
 
-From the host, use `ride missions <root>` to find workspace or joined-member names, then:
+From the host, use `ride missions <root>` to find mission ids, then:
 
 ```sh
-ride override <name> --grant @browser
-ride override <name> --cred github+reviewer
-ride override <name> --revoke github
+ride override <mission> --grant @browser
+ride override <mission> --cred github+reviewer
+ride override <mission> --revoke github
 ```
 
 Only concrete `@<bro>` names and bare credential kinds are accepted by `--grant`/`--revoke`; `--cred` selects and holds a kind.

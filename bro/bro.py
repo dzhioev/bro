@@ -207,7 +207,8 @@ _SUMMON_DESCRIPTION = (
   '`webview.cred=cookies+profile to @browser`. Plain gifts forward use with your own '
   'recipient bounds; qualified gifts must fit those bounds. `passes` sets exact '
   'credential picks as `kind+instance` or `kind+` for the empty instance. '
-  '`share` gives read access to artifact refs you can reach. `talk` widens the quest '
+  '`share` gives read access to artifact refs you can reach. `export` lets the child '
+  'publish artifact refs it can read to the host (needs `bro.export` authority). `talk` widens the quest '
   'from worker.say with owner.say, owner.question, worker.say, or worker.question. '
   'Answers, questions, replies, refusals, and terminal states arrive through the session '
   'watch; `quest_check` reads the retained outcome. `manual: true` prepares a joint start '
@@ -321,6 +322,7 @@ async def _run_summon_request(
   llm: Optional[str],
   harness: Optional[str],
   placement: Optional[Literal['boxed', 'unboxed', 'join']],
+  export: bool,
   talk: Optional[list[str]],
   manual: bool,
 ) -> dict[str, Any]:
@@ -336,6 +338,7 @@ async def _run_summon_request(
       'llm': llm,
       'harness': harness,
       'placement': placement,
+      'export': export or None,
     }
     passed = sorted(name for name, value in launch_owned.items() if value is not None)
     if passed:
@@ -377,6 +380,7 @@ async def _run_summon_request(
     llm=llm,
     harness=harness,
     placement=placement,
+    export=export or None,
     talk=talk,
     step_id=step_id,
     index=index,
@@ -399,6 +403,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
     llm: Optional[str] = None,
     harness: Optional[str] = None,
     placement: Optional[Literal['boxed', 'unboxed', 'join']] = None,
+    export: bool = False,
     talk: Optional[list[str]] = None,
     manual: bool = False,
   ) -> dict[str, Any]:
@@ -417,6 +422,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
       llm=llm,
       harness=harness,
       placement=placement,
+      export=export,
       talk=talk,
       manual=manual,
     )

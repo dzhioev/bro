@@ -177,6 +177,7 @@ def declaration(kinds: frozenset[str]) -> Declaration:
         'scalar', Scalars((finite(*providers.effort_values()), finite(DEFAULT))), open=True
       ),
       'fast': Option('scalar', finite(True), open=True),
+      'export': Option('scalar', finite(True)),
       'hold': Option('scalar', finite(*HOLDS), open=True),
       'talk': Option('subset', Subsets(TALK_RIGHTS).universe(), open=True),
       'timeout': Option('scalar', seconds('none'), open=True),
@@ -389,7 +390,7 @@ def option_values(fields: Mapping[str, object], source: object):
       values[name] = frozenset(members)
   if 'talk' in values:
     values['talk'] = cast(frozenset[str], values['talk']) | {'worker.say'}
-  for flag in ('fast',):
+  for flag in ('fast', 'export'):
     if flag in values:
       if type(values[flag]) is not bool:
         raise ValueError(f'{flag} must be a flag')

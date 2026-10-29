@@ -52,7 +52,7 @@ Interpret them as follows:
    Where several entries answer to one role they all qualify;
    pick by their descriptions.
    The banner reads this list live.
-   The operator may change it with `ride override <name> --grant @<bro>` or `--revoke @<bro>`;
+   The operator may change it with `ride override <mission> --grant @<bro>` or `--revoke @<bro>`;
    a watch notification reports the change.
 
 6. `talk` lists the chat moves fixed for this run's own quest.

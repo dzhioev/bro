@@ -16,6 +16,8 @@ This module owns their kinds, argument keys, and ref grammar for the library cli
   The path is not the peer's to write;
   a peer that wants an editable copy makes one itself.
 - `artifact.share` with args `{id, ref}` — the owner of a live mission hands one ref it can reach to that mission's worker.
+- `artifact.export` with args `{ref}` — a peer started with `bro.export` publishes one ref it can reach to the host.
+  The operator reads it with `ride artifact get`; no other peer's reach changes.
 
 A ref is `<digest>/<name>`. The digest is `sha256:` plus 64 hex digits. For a
 file it is the plain content digest, so `sha256sum` checks it. For a directory
@@ -29,12 +31,14 @@ the manifest digested as compact sorted-key JSON. The name is one file name
 names is one stored object and two refs, and passing a ref passes its name.
 
 A minted ref is readable by the minting peer and its summoners up to the ride root.
-An owner may hand a ref down when the mission opens or after it is live.
+An owner may hand a ref down when the mission opens or after it is live,
+and the operator may hand a host file or an exported ref to any live mission (`ride artifact share`).
 Nothing else reaches a ref — knowing one is not access.
 Reach is to the digest, so a peer that may read the content gets or shares it under any name.
 
 The CLI blocks for the host's answer: `artifact mint <path>` prints the ref,
-`artifact get <ref>` prints the path, and `artifact digest <path>` computes the
+`artifact get <ref>` prints the path, `artifact export <ref>` publishes a ref to the host,
+and `artifact digest <path>` computes the
 ref locally, with no channel involved. Like `summon`, an unset
 `BROKER_CHANNEL` is an error rather than inert, and broker imports are
 deferred to call time so importers of the contract constants never pull the
@@ -62,6 +66,7 @@ __cli_name__ = 'artifact'
 MINT = 'artifact.mint'  # the kind a mint request names; args {path, name?}
 GET = 'artifact.get'  # the kind a get request names; args {ref}
 SHARE = 'artifact.share'  # the kind a live mission share names; args {id, ref}
+EXPORT = 'artifact.export'  # the kind a publish-to-host names; args {ref}
 # client-side bound on the host's answer — ingest reads and copies the full
 # content, so a multi-gigabyte bundle takes real time
 DEFAULT_TIMEOUT = 600.0
@@ -265,6 +270,13 @@ def get_artifact(ref: str, *, timeout: Optional[float] = None) -> str:
   return path
 
 
+def export_artifact(ref: str, *, timeout: Optional[float] = None) -> None:
+  """publish `ref`, which this peer can reach, to the host. Raises
+  `ArtifactError` on any failure, including a peer started without
+  `bro.export`."""
+  _call(EXPORT, {'ref': ref}, timeout)
+
+
 # --- CLI ------------------------------------------------------------------------
 
 
@@ -286,6 +298,15 @@ def _get(ref: str, timeout: Optional[float]) -> int:
     log.error('%s', e)
     return 1
   print(path)
+  return 0
+
+
+def _export(ref: str, timeout: Optional[float]) -> int:
+  try:
+    export_artifact(ref, timeout=timeout)
+  except ArtifactError as e:
+    log.error('%s', e)
+    return 1
   return 0
 
 
@@ -324,6 +345,15 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument('ref', help=f'artifact ref ({REF_FORM})')
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
     return _get(**parser.parse(argv[1:]))
+  if len(argv) > 1 and argv[1] == 'export':
+    parser = base_args.Parser(
+      prog='artifact export',
+      description='publish an artifact ref this peer can reach to the host, where the '
+      'operator reads it with `ride artifact get`; needs the session to be started with bro.export',
+    )
+    parser.add_argument('ref', help=f'artifact ref ({REF_FORM})')
+    parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
+    return _export(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'digest':
     parser = base_args.Parser(
       prog='artifact digest',
@@ -334,5 +364,5 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument('path', help='file or directory to digest')
     parser.add_argument('--name', help=_NAME_HELP)
     return _digest(**parser.parse(argv[1:]))
-  log.error('usage: artifact mint|get|digest …; each verb takes --help')
+  log.error('usage: artifact mint|get|export|digest …; each verb takes --help')
   return 2

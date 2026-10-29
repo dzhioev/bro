@@ -1,14 +1,16 @@
 import asyncio
+import dataclasses
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 
 import ride.artifacts
-from bro.artifact import GET, MINT, SHARE, compose_ref, digest_path, split_ref
+from bro.artifact import EXPORT, GET, MINT, SHARE, compose_ref, digest_path, split_ref
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal, Record
@@ -256,6 +258,73 @@ class TestShare:
   def test_sharing_nothing_writes_nothing(self, store):
     store.share([], to='broker-CH', by='ws')
     assert not ride.artifacts.audit_file('ws').exists()
+
+
+class TestHostReach:
+  def test_the_operator_reads_only_what_a_session_exported(self, store, tmp_path):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    with pytest.raises(ArtifactDenied, match='not available to the operator'):
+      store.copy_to_host(ref, tmp_path / 'out')
+    store.export(ref, by='ws')
+    destination = store.copy_to_host(ref, tmp_path / 'out')
+    assert destination == tmp_path / 'out' / 'a.bin'
+    assert destination.read_bytes() == b'payload'
+    assert [entry['event'] for entry in _audit()] == ['mint', 'export', 'host-get']
+
+  def test_an_exported_ref_reaches_no_other_peer(self, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    store.export(ref, by='ws')
+    assert not store.reachable(ref, 'broker-OTHER')
+
+  def test_copying_never_replaces_an_existing_path(self, store, tmp_path):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    store.export(ref, by='ws')
+    (tmp_path / 'a.bin').write_bytes(b'mine')
+    with pytest.raises(ArtifactDenied, match='already exists'):
+      store.copy_to_host(ref, tmp_path)
+    assert (tmp_path / 'a.bin').read_bytes() == b'mine'
+
+  @pytest.mark.parametrize('directory_ref', [False, True])
+  def test_a_destination_created_during_the_copy_is_never_replaced(
+    self, store, tmp_path, monkeypatch, directory_ref
+  ):
+    if directory_ref:
+      _tree_file('out/a/inner.txt', b'payload')
+      relative = 'out/a'
+    else:
+      relative = _tree_file('a', b'payload')
+    ref, _ = store.mint(_root_identity(), (), relative)
+    store.export(ref, by='ws')
+    copy = ride.artifacts._private_copy
+
+    def racing(source, destination, prefix=''):
+      total = copy(source, destination, prefix)
+      (tmp_path / 'a').mkdir() if directory_ref else (tmp_path / 'a').write_bytes(b'mine')
+      return total
+
+    monkeypatch.setattr(ride.artifacts, '_private_copy', racing)
+    with pytest.raises(ArtifactDenied, match='already exists'):
+      store.copy_to_host(ref, tmp_path)
+    assert (tmp_path / 'a').is_dir() if directory_ref else (tmp_path / 'a').read_bytes() == b'mine'
+    assert not list(tmp_path.glob('.*'))
+
+  def test_a_host_path_is_shared_with_the_target_and_stays_readable_to_the_operator(
+    self, store, tmp_path
+  ):
+    source = tmp_path / 'notes.txt'
+    source.write_bytes(b'from the host')
+    ref, size = store.share_from_host(source, 'notes.txt', to='broker-CH')
+    assert size == 13
+    assert store.reachable(ref, 'broker-CH')
+    assert not store.reachable(ref, 'ws')
+    assert (ride.artifacts.view_dir('ws', 'broker-CH') / ref).read_bytes() == b'from the host'
+    store.share_to_peer(ref, to='broker-OTHER')
+    assert store.reachable(ref, 'broker-OTHER')
+
+  def test_the_operator_cannot_share_a_ref_it_cannot_read(self, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    with pytest.raises(ArtifactDenied, match='not available to the operator'):
+      store.share_to_peer(ref, to='broker-CH')
 
 
 class TestMaterialize:
@@ -624,3 +693,95 @@ class TestArtifactControl:
     assert resolved.read_bytes() == b'payload'
     with pytest.raises(ArtifactDenied, match='is not shared with this peer'):
       control.resolve(ref, PeerIdentity('broker-OTHER', workspace_tree('broker-OTHER')))
+
+
+def _exporting(control: _ArtifactControlHarness, *, flag: bool = True) -> None:
+  """resolve the root peer as a session started with (or without) `bro.export`."""
+  values = {'export': True} if flag else {}
+  description = dataclasses.replace(
+    PeerIdentity(workspace='ws', tree=workspace_tree('ws')),
+    mission_record=cast(Any, SimpleNamespace(descriptor=SimpleNamespace(values=values))),
+  )
+  control.test_facts.resolve = lambda context, peer: description  # type: ignore[method-assign]
+
+
+class TestExportAndOperatorKinds:
+  @pytest.mark.asyncio
+  async def test_export_publishes_a_reachable_ref_to_the_operator(self, control, store, tmp_path):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    _exporting(control)
+    context = _context(control)
+    control.export(cast(Dispatcher, context), ROOT, brotocol.request(EXPORT, {'ref': ref}))
+    _, result = await _delivered(context)
+    assert result.payload == {'outcome': 'ok', 'value': {}}
+    assert store.copy_to_host(ref, tmp_path).read_bytes() == b'payload'
+
+  def test_export_needs_the_session_to_have_started_with_it(self, control, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    _exporting(control, flag=False)
+    context = _context(control)
+    control.export(cast(Dispatcher, context), ROOT, brotocol.request(EXPORT, {'ref': ref}))
+    [(_, payload)] = context.replies
+    assert payload['outcome'] == 'denied'
+    assert 'not started with bro.export' in payload['error']
+
+  def test_export_refuses_a_ref_the_peer_cannot_reach(self, control):
+    _exporting(control)
+    context = _context(control)
+    control.export(cast(Dispatcher, context), ROOT, brotocol.request(EXPORT, {'ref': UNKNOWN_REF}))  # fmt: skip
+    [(_, payload)] = context.replies
+    assert payload == {
+      'outcome': 'denied',
+      'error': f'artifact {UNKNOWN_REF} is not shared with this peer',
+    }
+
+  @pytest.mark.asyncio
+  async def test_the_operator_shares_a_host_path_into_any_live_mission(
+    self, control, store, tmp_path
+  ):
+    _live_mission(control, owner='someone-else')
+    source = tmp_path / 'notes.txt'
+    source.write_bytes(b'from the host')
+    context = _context(control)
+    message = brotocol.request('operator.artifact.share', {'id': 'WEB-1', 'path': str(source)})
+    control.host_share(cast(Dispatcher, context), 'operator', message)
+    _, result = await _delivered(context)
+    ref = result.payload['value']['ref']
+    assert split_ref(ref)[1] == 'notes.txt'
+    assert store.reachable(ref, 'webview-CH')
+
+  @pytest.mark.asyncio
+  async def test_the_operator_reads_an_exported_ref_into_a_directory(
+    self, control, store, tmp_path
+  ):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    store.export(ref, by='ws')
+    context = _context(control)
+    message = brotocol.request('operator.artifact.get', {'ref': ref, 'to': str(tmp_path / 'out')})
+    control.host_get(cast(Dispatcher, context), 'operator', message)
+    _, result = await _delivered(context)
+    assert result.payload['value'] == {'path': str(tmp_path / 'out' / 'a.bin')}
+
+  def test_the_operator_shares_nothing_into_an_ended_mission(self, control, tmp_path):
+    record = _live_mission(control)
+    _context(control).journal.end(record, {'outcome': 'ok'})
+    context = _context(control)
+    message = brotocol.request('operator.artifact.share', {'id': 'WEB-1', 'path': str(tmp_path)})
+    control.host_share(cast(Dispatcher, context), 'operator', message)
+    [(_, payload)] = context.replies
+    assert payload == {'outcome': 'denied', 'error': "no live mission 'WEB-1'"}
+
+  @pytest.mark.parametrize(
+    'args',
+    [
+      {'id': 'WEB-1'},
+      {'id': 'WEB-1', 'path': '/x', 'ref': UNKNOWN_REF},
+      {'id': 'WEB-1', 'path': 'relative'},
+      {'id': 'WEB-1', 'ref': UNKNOWN_REF, 'name': 'n'},
+    ],
+  )
+  def test_a_malformed_operator_share_is_denied(self, control, args):
+    context = _context(control)
+    control.host_share(cast(Dispatcher, context), 'operator', brotocol.request('operator.artifact.share', args))  # fmt: skip
+    [(_, payload)] = context.replies
+    assert payload['outcome'] == 'denied'

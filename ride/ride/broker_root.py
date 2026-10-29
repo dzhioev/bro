@@ -10,7 +10,7 @@ from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any, cast
 
-from bro.artifact import GET, MINT, SHARE
+from bro.artifact import EXPORT, GET, MINT, SHARE
 from bro.authority.rules import Mission
 from bro.base import log
 from bro.broker.dispatcher import PING, Broker, ping_handler
@@ -23,7 +23,7 @@ from ride.artifacts import ArtifactControl, ArtifactStore, JobArtifacts
 from ride.authority_reading import Reading
 from ride.bro_worker import BroFacts, Placement, SummonSpawner
 from ride.launch_control import LaunchControl
-from ride.operator import OperatorControl
+from ride.operator import ARTIFACT_GET, ARTIFACT_SHARE, OperatorControl
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.runtime_bundle import RuntimeBundle
 from ride.worker_container import WorkerContainerSpawner
@@ -180,6 +180,9 @@ def run_root_via_broker(
   facade.on(MINT, artifact_control.mint)
   facade.on(GET, artifact_control.get)
   facade.on(SHARE, artifact_control.share)
+  facade.on(EXPORT, artifact_control.export)
+  operator.on(ARTIFACT_SHARE, artifact_control.host_share)
+  operator.on(ARTIFACT_GET, artifact_control.host_get)
   facade.subscribe(facts.observe_journal)
   facade.subscribe(control.audit_event)
   facade.subscribe(control.observe_journal)

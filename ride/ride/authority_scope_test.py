@@ -482,6 +482,32 @@ def test_wire_mapping_separates_values_from_content_and_checks_sentinels(install
   )
 
 
+def test_export_is_a_guarded_flag_that_needs_its_own_use_permission(installation):
+  source = reading(installation)
+  worker = installed_types()['bro']
+  mapped = worker.option_values({'target': 'child', 'export': True}, source)
+  descriptor = source.rules.normalize(Request('bro', mapped.values), source)
+  assert descriptor.values['export'] is True
+  guarded = frozenset({'export'})
+  with pytest.raises(Refusal, match='use rule'):
+    source.rules.use(
+      source.syntax.layer(parse_layer(grant=['bro', '@child'])).gift,
+      descriptor,
+      options=guarded,
+      start=False,
+    )
+  source.rules.use(
+    source.syntax.layer(parse_layer(grant=['bro.export'])).gift,
+    descriptor,
+    options=guarded,
+    start=False,
+  )
+  unset = worker.option_values({'target': 'child', 'export': False}, source)
+  assert 'export' not in unset.values
+  with pytest.raises(ValueError, match='export must be a flag'):
+    worker.option_values({'target': 'child', 'export': 'yes'}, source)
+
+
 def test_joint_commit_refuses_join_even_for_operator(installation):
   source = reading(installation)
   prepared = source.rules.prepare(Request('bro', {'target': 'child'}), Authority.top(), source)

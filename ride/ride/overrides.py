@@ -116,17 +116,16 @@ def pending(facts: WorkerFacts, operation: dict[str, Any]) -> Generator[None]:
 def apply(
   peers: PeerFacts, journal: Journal, reading: Reading, args: Mapping[str, Any]
 ) -> dict[str, Any]:
-  if set(args) != {'name', 'changes'} or not isinstance(args['name'], str):
-    raise ValueError('override check: name and changes required')
+  if set(args) != {'id', 'changes'} or not isinstance(args['id'], str):
+    raise ValueError('override check: id and changes required')
   requested = changes(args['changes'])
-  matches = [row for row in peers.missions() if row['name'] == args['name']]
-  if len(matches) != 1:
-    raise ValueError(f'override check: name {args["name"]!r} does not identify one mission')
-  mission_id = matches[0]['id']
+  mission_id = args['id']
   record = journal.records.get(mission_id)
+  if record is None or mission_id not in {row['id'] for row in peers.missions()}:
+    raise ValueError(f'override check: {mission_id!r} is not a mission of this root')
   facts = peers.for_mission(mission_id)
-  if record is None or record.state != 'started' or facts.type != 'bro':
-    raise ValueError(f'override check: {args["name"]!r} is not a running bro session')
+  if record.state != 'started' or facts.type != 'bro':
+    raise ValueError(f'override check: {mission_id!r} is not a running bro session')
   if facts.pending_override is not None:
     raise ValueError(f'override check: operation {facts.pending_override["id"]} is pending')
   mission = facts.record

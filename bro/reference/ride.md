@@ -66,10 +66,10 @@ the launcher's own `--log` never reaches the session.
 
 - `ride resume <workspace>` relaunches the recorded session recipe, with optional `--cred`, `--grant`, and `--revoke` adjustments.
   Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
-- `ride override <name> --grant N` / `--revoke N` changes a running workspace or joined member's bro targets (`@<bro>`) or credential kinds;
+- `ride override <mission> --grant N` / `--revoke N` changes a running session's bro targets (`@<bro>`) or credential kinds;
   `--cred kind+instance` changes a held instance and holds its kind.
   Requests go through the root's operator channel.
-  Names come from `ride missions <root>`;
+  Mission ids come from `ride missions <root>`;
   repeated flags are applied in order, with the last flag per name winning.
   The banner reads the updated authority, and the next summon uses it.
   An override affects no already-running child and a resume retains it.
@@ -142,8 +142,8 @@ Both depend on `bro-ride`, which discovers installed harnesses by entry point an
 
 ## Operator channel
 
-`ride missions <root>` lists a running root's mission tree as JSON, including each mission's id, target name, workspace, joined member, type, and state.
-The target name is the joined member's name, the workspace name for a started party, or the mission id for a worker without a workspace or an unclaimed manual launch.
+`ride missions <root>` lists a running root's mission tree as JSON, including each mission's id, display name, workspace, joined member, type, and state.
+The display name is the joined member's name, the workspace name for a started party, or the mission id for a worker without a workspace or an unclaimed manual launch.
 The command re-executes into the root's runtime before contacting its broker.
 A root with no operator control file is refused by name.
 
@@ -1035,7 +1035,8 @@ underneath it are two client surfaces over the same request, each split into the
   `--start` / `--join` / `--boxed` / `--unboxed` select placement.
   The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--limit <entry>` / `--pass <kind>+<instance>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
-  `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers".
+  `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers";
+  `--export` starts it with `bro.export`, which lets it publish refs to the host.
   Grant/revoke/limit shape the child's authority; bare credential kinds in grant/revoke add or drop kinds.
   Harness and LLM flags shape the child's driving loop without answering to the summoner's credentials;
   the target's own host-config entry supplies whatever credentials that choice needs.
@@ -1234,6 +1235,16 @@ Peers pass files by content-addressed reference through the ride's store the lau
   — a resumed root starts a new ride with an empty store, so a stale ref fails at its own `artifact get`
   — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the launch audit.
   Each audit row keys the ride under `ride`.
+
+- The host side is the operator, who reaches the store through the root's operator channel (`ride artifact`, re-executing into the root's runtime like `ride override`):
+  `ride artifact share <mission> <path-or-ref> [--name N]` ingests a host file or directory, or takes a ref the operator can already read, and shares it with any live mission by its id from `ride missions <root>`.
+  A member of a joined party shares its summoner's view, so the whole party reads what is shared with one of them.
+  `ride artifact get <ref> [--to <directory>] [--root <root>]` copies an exported ref to `<directory>/<name>` (the current directory by default) and prints the path, refusing to replace an existing one;
+  `--root` is needed only when several roots are live.
+- The operator reads only what a session exported or the operator itself shared.
+  A session exports with `artifact export <ref>`, which needs the session to have started with `bro.export` (`ride along --export`, `summon --export`, or the summon tool's `export`) and the ref to be one it can read.
+  An exported ref reaches no other peer.
+  Exports, operator shares, and operator reads are audited with the rest.
 
 Worker types resolve accepted shared refs through `Host.artifacts`, under the same sharing check.
 
