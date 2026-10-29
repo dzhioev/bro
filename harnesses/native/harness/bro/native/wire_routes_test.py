@@ -18,6 +18,7 @@ from bro.llm.wire import Leg, SystemPrompt, UserMessage, Wire
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.native.runner import Runner
+from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
 from bro.native.wire_fixtures_test_helper import call, message, response
 from bro.openai.declaration import LLMSpec as ResponsesSpec
 from bro.registry import create_bro
@@ -283,3 +284,30 @@ async def test_interrupt_received_calls_records_answers_and_continues_the_same_c
     },
     {'role': 'user', 'content': 'continue'},
   ]
+
+
+@pytest.mark.asyncio
+async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit(
+  server, replies, monkeypatch, tmp_path
+):
+  release = tmp_path / 'release'
+  replies.extend(
+    [
+      response(call(job_arguments(release), name=JOB_TOOL), id='started'),
+      response({**message(''), 'phase': 'final_answer'}, id='silent'),
+      response(message('done'), id='woken'),
+    ]
+  )
+  store = LocalStore(tmp_path / 'trails')
+  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
+  runner = Runner(ShellBro.create(ResponsesSpec(model='fixture-model')))
+  async with asyncio.timeout(60):
+    assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
+  assert server[2]['previous_response_id'] == 'silent'
+  [notification] = server[2]['input']
+  assert notification['role'] == 'user'
+  assert 'job-1' in notification['content'] and 'exited (code 0)' in notification['content']
+  assert runner.trail_id is not None
+  recorded = fetch_recorded_trail(store, runner.trail_id)
+  assert not any('stopped' in step.extras for step in recorded.steps if step.kind == 'llm_call')
+  assert store.get_trail(recorded.header.id)['end']['reason'] == 'ok'

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from openai import AsyncOpenAI, pydantic_function_tool
@@ -9,7 +8,7 @@ from pydantic import BaseModel
 from bro.base import log
 from bro.llm.llm import LLMSpec, LLMStopped, UnsupportedContent
 from bro.llm.mcp import Tool, encode_tool_result
-from bro.llm.records import Chaining, DecodedCall
+from bro.llm.records import Chaining, DecodedCall, Unknown
 from bro.llm.retry import retry_llm
 from bro.llm.wire import (
   Input,
@@ -36,21 +35,26 @@ if TYPE_CHECKING:
 
 def parse_response(response: dict, decoded: DecodedCall | None = None) -> str:
   decoded = decode(response) if decoded is None else decoded
-  messages = [
-    item
-    for item in response['output']
-    if item['type'] == 'message' and item.get('phase') != 'commentary'
-  ]
-  if not messages:
-    raise RuntimeError(f"output doesn't contain reply messages. output: {response['output']}")
-  for message in messages:
-    for item in message['content']:
-      if item['type'] == 'refusal':
-        raise RuntimeError(f'got refusal: {item["refusal"]}')
-      assert item['type'] == 'output_text'
+  for item in response['output']:
+    if item['type'] != 'message' or item.get('phase') == 'commentary':
+      continue
+    for part in item['content']:
+      if part['type'] == 'refusal':
+        raise RuntimeError(f'got refusal: {part["refusal"]}')
+      if part['type'] != 'output_text' or not isinstance(part.get('text'), str):
+        raise RuntimeError(f'unreadable reply content: {part}')
   if decoded.reply is None:
-    raise RuntimeError(f'no output texts in messages: {messages}')
+    raise RuntimeError(f'output holds tool calls, not a reply: {response["output"]}')
+  unreadable = [
+    part.raw for part in decoded.parts if isinstance(part, Unknown) and not _is_compaction(part.raw)
+  ]
+  if not decoded.reply and unreadable:
+    raise RuntimeError(f'unreadable output without reply text: {unreadable}')
   return decoded.reply
+
+
+def _is_compaction(item: dict) -> bool:
+  return item['type'] == 'compaction'
 
 
 def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
@@ -170,13 +174,11 @@ class Responses(Wire):
     self._input_prefix = []
     if not leg.calls:
       try:
-        reply = parse_response(raw, decoded)
+        parse_response(raw, decoded)
       except Exception as error:
-        if decoded.reply is None:
+        if not leg.reply:
           raise UnusableResponse(str(error), leg, accepted=True) from error
         log.warning('reply extraction failed, falling back to the terminal message text: %s', error)
-        reply = decoded.reply
-      leg = replace(leg, reply=reply)
     return leg
 
   async def structured[T: BaseModel](
@@ -219,7 +221,7 @@ class Responses(Wire):
         items.append({'role': 'user', 'content': step.body})
       elif step.kind == 'llm_call' and 'stopped' not in step.extras:
         for item in step.body['response']['output']:
-          if item['type'] != 'compaction':
+          if not _is_compaction(item):
             items.append(_replay_item(item))
       elif step.kind == 'tool_result':
         items.append(self._encode(ToolOutput(step.extras['call_id'], step.body)))

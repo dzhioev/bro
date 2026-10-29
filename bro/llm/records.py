@@ -82,7 +82,7 @@ class DecodedCall:
     if self.calls:
       return None
     texts = [part.text for part in self.parts if isinstance(part, Message) and not part.commentary]
-    return '\n\n'.join(texts) if texts else None
+    return '\n\n'.join(texts)
 
   @property
   def terminal(self) -> bool:

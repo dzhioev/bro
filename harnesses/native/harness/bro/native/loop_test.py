@@ -841,23 +841,51 @@ class TestParseResponse:
     )
     assert parse_response(response.model_dump(mode='json')) == 'PR merged; task closed'
 
-  def test_commentary_alone_raises(self):
-    response = _fake_response(output=[_message_item('still working', phase='commentary')])
-    with pytest.raises(RuntimeError, match="doesn't contain reply messages"):
-      parse_response(response.model_dump(mode='json'))
-
   def test_multiple_messages_without_phase_concatenated_in_order(self):
     response = _fake_response(output=[_message_item('part one'), _message_item('part two')])
     assert parse_response(response.model_dump(mode='json')) == 'part one\n\npart two'
 
-  def test_no_message_items_raises(self):
-    response = _fake_response(output=[_reasoning_item('only thinking')])
-    with pytest.raises(RuntimeError, match="doesn't contain reply messages"):
-      parse_response(response.model_dump(mode='json'))
+  @pytest.mark.parametrize(
+    'output',
+    [
+      [_message_item('', phase='final_answer')],
+      [SimpleNamespace(type='message', phase=None, content=[])],
+      [_message_item('still working', phase='commentary')],
+      [_reasoning_item('only thinking')],
+      [{'type': 'compaction', 'encrypted_content': 'opaque'}, _message_item('')],
+      [],
+    ],
+    ids=[
+      'empty-final-answer',
+      'no-content',
+      'commentary-alone',
+      'reasoning-alone',
+      'compaction',
+      'no-output',
+    ],
+  )
+  def test_an_answer_without_reply_text_is_empty(self, output):
+    response = _fake_response(output=output)
+    assert parse_response(response.model_dump(mode='json')) == ''
 
-  def test_messages_without_text_raise(self):
-    response = _fake_response(output=[SimpleNamespace(type='message', phase=None, content=[])])
-    with pytest.raises(RuntimeError, match='no output texts'):
+  @pytest.mark.parametrize(
+    'item', [{'type': 'future_output'}, {'type': 'reasoning', 'summary': {}}]
+  )
+  def test_unrecognized_output_raises_without_reply_text(self, item):
+    response = _fake_response(output=[item])
+    with pytest.raises(RuntimeError, match='unreadable output without reply text'):
+      parse_response(response.model_dump(mode='json'))
+    beside_text = _fake_response(output=[item, _message_item('reply')])
+    assert parse_response(beside_text.model_dump(mode='json')) == 'reply'
+
+  @pytest.mark.parametrize(
+    'part',
+    [{'type': 'output_text', 'text': 123}, {'type': 'output_text'}, {'type': 'output_audio'}],
+    ids=['non-string-text', 'missing-text', 'unknown-type'],
+  )
+  def test_unreadable_reply_content_raises(self, part):
+    response = _fake_response(output=[SimpleNamespace(type='message', phase=None, content=[part])])
+    with pytest.raises(RuntimeError, match='unreadable reply content'):
       parse_response(response.model_dump(mode='json'))
 
   def test_refusal_raises_with_refusal_text(self):
@@ -888,22 +916,25 @@ class TestReplyExtractionFallback:
     assert await gpt.send([{'role': 'user', 'content': 'hi'}]) == 'the work landed'
 
   @pytest.mark.asyncio
-  @pytest.mark.parametrize('refusal', [False, True], ids=['no-output', 'refusal-only'])
-  async def test_unusable_terminal_response_is_recorded_and_accounted(self, monkeypatch, refusal):
+  @pytest.mark.parametrize(
+    'part,error',
+    [
+      ({'type': 'refusal', 'refusal': 'cannot help with that'}, 'cannot help'),
+      ({'type': 'output_text', 'text': 123}, 'unreadable reply content'),
+      (None, 'unreadable output without reply text'),
+    ],
+    ids=['refusal-only', 'unreadable-text', 'unrecognized-item'],
+  )
+  async def test_unusable_terminal_response_is_recorded_and_accounted(
+    self, monkeypatch, part, error
+  ):
     gpt, tracker, captured = _make_responses_loop_with_tracker(agent='test-agent')
-    output = (
-      [
-        SimpleNamespace(
-          type='message',
-          phase=None,
-          content=[SimpleNamespace(type='refusal', refusal='cannot help with that')],
-        )
-      ]
-      if refusal
-      else []
-    )
     terminal = _fake_response(
-      output=output,
+      output=[
+        {'type': 'future_output'}
+        if part is None
+        else SimpleNamespace(type='message', phase=None, content=[part])
+      ],
       model='billed-model',
       usage=_fake_usage(input_tokens=13, cached_tokens=4, output_tokens=7),
     )
@@ -911,7 +942,7 @@ class TestReplyExtractionFallback:
     monkeypatch.setattr(usage, 'publish', lambda agent, counts: published.append((agent, counts)))
     _install_responses(gpt, [terminal], captured)
 
-    with pytest.raises(RuntimeError, match='cannot help' if refusal else "doesn't contain reply"):
+    with pytest.raises(RuntimeError, match=error):
       await gpt.send([{'role': 'user', 'content': 'hi'}])
 
     assert [kind for kind, _, _ in tracker.steps] == ['user_input', 'llm_call']

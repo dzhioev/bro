@@ -115,6 +115,8 @@ Capacity responses use [the shared retry driver](../llm/retry.py), with every lo
 other uncompleted legs, and exhausted capacity retries, raise `LLMStopped`.
 `structured` uses the same retry and stop rules, but contributes no loop usage.
 
+A completed response without calls ends the turn even when it carries no text:
+its reply is empty, and the session's turn-end rule decides what follows.
 A completed response that the client cannot use raises `UnusableResponse` with the received leg and explicit `accepted` status.
 That status says whether the wire advanced its conversation state.
 If rejected, Loop records the leg with `stopped: failed`, counts it and keeps the exchange's inputs pending without emitting accepted events.
@@ -126,7 +128,7 @@ Records without that marker replay as accepted history.
 
 Add fixtures to the shared [wire suite](../../harnesses/native/harness/bro/native/wire_test.py)
 and [fixture adapter](../../harnesses/native/harness/bro/native/wire_fixtures_test_helper.py).
-Cover plain replies, reasoning, interim text with calls, valid/empty/malformed arguments,
+Cover plain replies, replies without text, reasoning, interim text with calls, valid/empty/malformed arguments,
 usage, every stop, record/restore/next-request equivalence, and call indexes matching projected tool-call indexes.
 Also exercise cancellation, rejected completions and pending inputs, initial prompt ordering, and same-wire fork/resume.
 Wire-specific tests cover the protocol's own constraints.
@@ -234,11 +236,12 @@ its [client](../../wires/chat/bro/wire_chat/client.py) owns history, tools, JSON
 Neither the native loop nor core needs a DeepSeek-specific branch.
 
 Chat is client-chained: every live request resends accepted history, but each record stores only new messages.
-It retains assistant `content: null`, `reasoning_content` and tool calls when replaying, and normalizes the initial system prompt to the head,
-including when the first exchange contains an inbox notification.
-Function calls missing a nonempty string id or name decode as `Unknown`, retaining forensic evidence without projecting invalid calls.
-An empty completed Chat reply is rejected without advancing history, so its inputs survive continuation and replay as described above.
-The route tests compare live continuation and restored requests through those failures.
+It retains `reasoning_content`, tool calls and the `content: null` beside them when replaying;
+an assistant turn without tool calls is sent with string content, empty when the reply had none.
+It normalizes the initial system prompt to the head, including when the first exchange contains an inbox notification.
+Function calls missing a nonempty string id or name decode as `Unknown`, retaining forensic evidence without projecting invalid calls;
+such a completion is rejected without advancing history, so its inputs survive continuation and replay as described above.
+The route tests compare live continuation and restored requests through those failures and through a silent turn end.
 The live probe saves evidence for the protocol details that documented fixtures cannot establish.
 
 Select `deepseek:pro:high` for any suitable persona rather than copying it into a provider-specific persona.

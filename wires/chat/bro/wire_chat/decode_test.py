@@ -105,6 +105,15 @@ def test_every_finish_reason(finish, stop):
   assert decoded.terminal is (stop == 'completed')
 
 
+@pytest.mark.parametrize('reasoning', [None, ''])
+@pytest.mark.parametrize('content', [None, ''])
+def test_a_message_without_reasoning_text_or_calls_is_an_empty_terminal_reply(reasoning, content):
+  decoded = decode(response(reasoning=reasoning, content=content))
+  assert decoded.parts == ()
+  assert decoded.reply == ''
+  assert decoded.terminal
+
+
 @pytest.mark.parametrize('choices', [None, [], [{}, {}], ['invalid']])
 def test_choice_count_must_be_exactly_one(choices):
   raw = {**response(), 'choices': choices}
@@ -112,7 +121,13 @@ def test_choice_count_must_be_exactly_one(choices):
 
 
 @pytest.mark.parametrize(
-  'message', [None, {'tool_calls': 'invalid'}, {'tool_calls': [None, {'type': 'future'}]}]
+  'message',
+  [
+    None,
+    {'content': [{'type': 'text', 'text': 'unread'}]},
+    {'tool_calls': 'invalid'},
+    {'tool_calls': [None, {'type': 'future'}]},
+  ],
 )
 def test_unrecognized_shapes_are_preserved(message):
   raw = response()
