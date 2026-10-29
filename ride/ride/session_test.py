@@ -437,13 +437,6 @@ class TestGrantRevoke:
     assert code == 0
     assert harness.run_started_party.call_args.args[0].secrets == {'github'}
 
-  def test_start_session_injects_the_llm_recipe_into_the_container_command(self):
-    with _ContainerHarness() as h:
-      rc = ride_session.start_session(_spec(drop=True, llm='::xhigh'))
-    assert rc == 0
-    command = h.run_started_party.call_args.args[0].command
-    assert command[command.index('--llm') + 1] == '::xhigh'
-
 
 class TestNoTrails:
   """The neutral recording need, environment switch, and trails mounts."""
@@ -555,7 +548,7 @@ class TestContainerCommand:
     command = h.run_started_party.call_args.args[0].command
     assert command == [
       'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
-      '--hold', 'attended', '--llm', '::xhigh+fast', '--', 'dev', 'go',
+      '--hold', 'attended', '--', 'dev', 'go',
     ]  # fmt: skip
 
   def test_bro_carried_in_command_and_stamped_into_the_container_env(self):
@@ -1132,8 +1125,6 @@ class TestUnboxedSession:
       str(Path.cwd()),
       '--hold',
       'attended',
-      '--llm',
-      '::xhigh',
       '--',
       'bro-dev',
       'go',

@@ -53,7 +53,6 @@ class SessionRun:
   repo: Optional[str]
   harness: str
   hold: str
-  llm: Optional[str]
   resolved_llm: dict
   solo: bool
   resume: bool
@@ -80,10 +79,7 @@ def command(spec: 'SessionSpec') -> list[str]:
   ]
   if spec.repo is not None:
     parts.extend(['--repo', spec.repo])
-  parts.extend(['--hold', spec.hold])
-  if spec.llm is not None:
-    parts.extend(['--llm', spec.llm])
-  parts.extend(['--', spec.bro])
+  parts.extend(['--hold', spec.hold, '--', spec.bro])
   if spec.prompt is not None:
     parts.append(spec.prompt)
   return parts
@@ -100,7 +96,6 @@ def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
   )
   parser.add_argument('--repo', default=None, metavar='PATH|URL', help='repository attachment')
   parser.add_argument('--hold', required=True, choices=HOLDS, help='session user-involvement level')
-  parser.add_argument('--llm', default=None, help='session LLM recipe')
   parser.add_argument('bro', help='bro personality to run the harness as')
   parser.add_argument(
     'prompt',
@@ -127,10 +122,10 @@ def encode_resolved_llm(resolved_llm: dict) -> str:
   return json.dumps(resolved_llm, separators=(',', ':'))
 
 
-def _resolved_llm(harness: 'SessionHarness', llm: Optional[str], bro: str) -> dict:
+def _resolved_llm() -> dict:
   encoded = os.environ.get(RESOLVED_LLM_ENV)
   if encoded is None:
-    return harness.resolve_llm(llm, bro).dump()
+    raise RuntimeError(f'{RESOLVED_LLM_ENV} is unset: do-ride requires the admitted recipe')
   data = json.loads(encoded)
   if not isinstance(data, dict):
     raise TypeError(f'{RESOLVED_LLM_ENV} must encode an object')
@@ -144,15 +139,11 @@ def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:
   harness_name = args.pop('harness')
   harness = get_harness(harness_name)
   name = args.pop('workspace')
-  bro = args.pop('bro')
-  llm = args.pop('llm')
   run = SessionRun(
     name=name,
     harness=harness_name,
     solo=mode == 'solo',
-    bro=bro,
-    llm=llm,
-    resolved_llm=_resolved_llm(harness, llm, bro),
+    resolved_llm=_resolved_llm(),
     activity_file=_session_state() / ACTIVITY_FILENAME,
     **args,
   )

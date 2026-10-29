@@ -70,6 +70,8 @@ from ride.authority_launch import request as authority_request
 from ride.authority_reading import Reading
 from ride.bro_worker import BroType
 from ride.broker_root import broker_bind_hosts
+from ride.do_ride import RESOLVED_LLM_ENV, encode_resolved_llm
+from ride.harness import get_harness
 from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import CONTAINER_BROKER_HOST, find_container_id
@@ -619,7 +621,7 @@ launch = Launch(name=name,
                      'RIDE_SESSION_DIR': '/var/ride/session',
                      **{
                          key: os.environ[key]
-                         for key in ('RIDE_E2E_QUEST_ROUTE',)
+                         for key in ('RIDE_E2E_QUEST_ROUTE', 'RIDE_RESOLVED_LLM')
                          if key in os.environ
                      }},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
@@ -1323,6 +1325,11 @@ def _do_ride_command(*inner: str) -> list[str]:
   return ['bash', '-ec', _DO_RIDE_WRAPPER, 'ride-e2e-wrapper', *inner]
 
 
+def _admitted_recipe(harness: str, llm: Optional[str], bro: str) -> dict[str, str]:
+  recipe = get_harness(harness).resolve_llm(llm, bro).dump()
+  return {RESOLVED_LLM_ENV: encode_resolved_llm(recipe)}
+
+
 def _report(env: IsolatedEnv, name: str) -> dict:
   path = env.tree(name) / '.e2e-report.json'
   assert path.is_file(), f'no report from the fake claude at {path}'
@@ -1363,12 +1370,14 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
       str(env.project),
       '--hold',
       'unattended',
-      '--llm',
-      '::+fast',
       'bro-dev',
       'e2e',
     ),
-    extra_env={'RIDE_BRO': 'bro-dev', 'RIDE_E2E_SECRETS': '["brog"]'},
+    extra_env={
+      'RIDE_BRO': 'bro-dev',
+      'RIDE_E2E_SECRETS': '["brog"]',
+      **_admitted_recipe('claude', '::+fast', 'bro-dev'),
+    },
   )
   request.addfinalizer(driver.close)
   run = LiveRun(exit_code=driver.wait(300), output=driver.output())
@@ -1440,6 +1449,7 @@ def test_claude_summoner_receives_a_child_question_and_end_through_its_session_w
       'RIDE_E2E_QUEST_ROUTE': 'summoner',
       'RIDE_E2E_TARGETS': '["bro"]',
       'RIDE_E2E_CHILD_COMMAND': json.dumps(_session_broxy_probe(_SESSION_WATCH_QUESTION_CHILD)),
+      **_admitted_recipe('claude', None, 'bro-dev'),
     },
   )
   request.addfinalizer(driver.close)
@@ -1482,12 +1492,14 @@ def test_a_launched_native_session_records_the_git_header(
         str(env.project),
         '--hold',
         'unattended',
-        '--llm',
-        'echo',
         'bro',
         'record the git header',
       ],
-      extra_env={'RIDE_BRO': 'bro', 'RIDE_E2E_LOCAL_TRAILS': '1'},
+      extra_env={
+        'RIDE_BRO': 'bro',
+        'RIDE_E2E_LOCAL_TRAILS': '1',
+        **_admitted_recipe('bro', 'echo', 'bro'),
+      },
     )
     request.addfinalizer(driver.close)
     run = LiveRun(exit_code=driver.wait(300), output=driver.output())
@@ -1531,7 +1543,7 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
       'bro-dev',
       'e2e',
     ),
-    extra_env={'RIDE_E2E_SECRETS': '["brog"]'},
+    extra_env={'RIDE_E2E_SECRETS': '["brog"]', **_admitted_recipe('claude', None, 'bro-dev')},
   )
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)

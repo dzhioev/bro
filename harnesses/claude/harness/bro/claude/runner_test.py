@@ -40,7 +40,6 @@ def _spec(**kwargs) -> SessionRun:
     repo=spec.repo,
     harness=spec.resolved_harness,
     hold=spec.hold,
-    llm=spec.llm,
     resolved_llm=spec.resolved_llm,
     solo=spec.solo,
     resume=spec.resume,
