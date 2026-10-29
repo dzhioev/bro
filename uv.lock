@@ -16,6 +16,7 @@ members = [
     "bro-browser",
     "bro-claude",
     "bro-claude-trails",
+    "bro-deepseek",
     "bro-dev",
     "bro-filetypes",
     "bro-local",
@@ -443,6 +444,28 @@ requires-dist = [
 ]
 
 [[package]]
+name = "bro-deepseek"
+version = "0.1.0"
+source = { editable = "llms/deepseek" }
+dependencies = [
+    { name = "bro" },
+    { name = "bro-wire-chat" },
+]
+
+[package.optional-dependencies]
+client = [
+    { name = "bro-wire-chat", extra = ["client"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "bro-wire-chat", editable = "wires/chat" },
+    { name = "bro-wire-chat", extras = ["client"], marker = "extra == 'client'", editable = "wires/chat" },
+]
+provides-extras = ["client"]
+
+[[package]]
 name = "bro-dev"
 version = "0.1.0"
 source = { editable = "dev" }
@@ -484,6 +507,7 @@ version = "0.1.0"
 source = { editable = "local" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-deepseek" },
     { name = "bro-dev" },
     { name = "bro-filetypes" },
     { name = "bro-openai" },
@@ -495,6 +519,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
+    { name = "bro-deepseek", editable = "llms/deepseek" },
     { name = "bro-dev", editable = "dev" },
     { name = "bro-filetypes", editable = "filetypes" },
     { name = "bro-openai", editable = "llms/openai" },
@@ -621,8 +646,19 @@ dependencies = [
     { name = "bro" },
 ]
 
+[package.optional-dependencies]
+client = [
+    { name = "openai" },
+    { name = "pydantic" },
+]
+
 [package.metadata]
-requires-dist = [{ name = "bro", editable = "." }]
+requires-dist = [
+    { name = "bro", editable = "." },
+    { name = "openai", marker = "extra == 'client'", specifier = "==3.33.0" },
+    { name = "pydantic", marker = "extra == 'client'", specifier = "==2.14.1" },
+]
+provides-extras = ["client"]
 
 [[package]]
 name = "bro-wire-messages"

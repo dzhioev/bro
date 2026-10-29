@@ -5,9 +5,15 @@ build-backend = "uv_build"
 [project]
 name = "bro-wire-chat"
 version = "0.1.0"
-description = "SDK-free chat wire decoding for bro"
+description = "Chat Completions protocol decoding and client for bro"
 requires-python = ">=3.12"
 dependencies = ["bro"]
+
+[project.optional-dependencies]
+client = ["openai==3.33.0", "pydantic==2.14.1"]
+
+[project.entry-points."bro.llm.wire_clients"]
+chat = "bro.wire_chat.client:Chat"
 
 [project.entry-points."bro.llm.wires"]
 chat = "bro.wire_chat.decode"

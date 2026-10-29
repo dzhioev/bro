@@ -2,10 +2,12 @@
 
 from dataclasses import dataclass
 
+from bro.deepseek.declaration import LLMSpec as ChatSpec
 from bro.llm.llm import LLMSpec
 from bro.llm.records import Call, Message, Reasoning
 from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.openai.declaration import LLMSpec as ResponsesSpec
+from bro.wire_chat.fixtures_test_helper import call as chat_call, response as chat_response
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,7 @@ def cases() -> dict[str, dict[str, Case]]:
     )
   return {
     'responses': cases,
+    'chat': chat_cases(),
     'echo': {'plain': Case(EchoSpec(), {'model': 'echo', 'text': 'reply'}, (Message(1, 'reply'),))},
   }
 
@@ -134,3 +137,46 @@ def capture_requests(monkeypatch, sent: list[dict]) -> None:
     return respond(self, request)
 
   monkeypatch.setattr(Echo, '_respond', captured)
+
+
+def chat_cases() -> dict[str, Case]:
+  recipe = ChatSpec()
+  usage = {'input': 6, 'cache_read': 4, 'cache_write': 0, 'output': 3}
+  cases = {
+    'plain': Case(recipe, chat_response(), (Message(1, 'reply'),), counts=usage),
+    'reasoning': Case(
+      recipe,
+      chat_response(reasoning='thought'),
+      (Reasoning(1, 'thought'), Message(2, 'reply')),
+      counts=usage,
+    ),
+  }
+  for name, arguments in [('valid', '{"x":1}'), ('empty', ''), ('malformed', '{')]:
+    cases[name] = Case(
+      recipe,
+      chat_response('checking', calls=[chat_call(arguments)], stop='tool_calls'),
+      (Message(1, 'checking'), Call.parse(2, 'call_1', 'svc__ping', arguments)),
+      counts=usage,
+    )
+  for reason, stop in [
+    ('length', 'truncated'),
+    ('content_filter', 'filtered'),
+    ('insufficient_system_resource', 'capacity'),
+    ('aborted', 'failed'),
+  ]:
+    cases[stop] = Case(
+      recipe,
+      chat_response('partial', stop=reason),
+      (Message(1, 'partial'),),
+      stop=stop,
+      counts=usage,
+    )
+  return cases
+
+
+RESTORE_ITEMS['chat'] = {
+  'field': 'messages',
+  'initial': [{'role': 'system', 'content': 'system'}, {'role': 'user', 'content': 'reply'}],
+  'assistant': [{'role': 'assistant', 'content': 'reply'}],
+  'next': [{'role': 'user', 'content': 'next'}],
+}

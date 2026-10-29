@@ -173,7 +173,7 @@ class Responses(Wire):
         reply = parse_response(raw, decoded)
       except Exception as error:
         if decoded.reply is None:
-          raise UnusableResponse(str(error), leg) from error
+          raise UnusableResponse(str(error), leg, accepted=True) from error
         log.warning('reply extraction failed, falling back to the terminal message text: %s', error)
         reply = decoded.reply
       leg = replace(leg, reply=reply)
