@@ -172,24 +172,15 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
 
 
 def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[str]:
-  options: list[str] = []
-  if spec.llm is not None:
-    options.extend(['--llm', spec.llm])
-  options.extend(['--hold', spec.hold, '--activity-file', str(spec.activity_file)])
-  if resume_trail is not None:
-    resolved = spec.llm_spec
-    if resolved is None or resolved.WIRE not in wires.client_names():
-      raise ValueError(
-        f'bro harness resume requires a native recipe, not {type(resolved).__name__}'
-      )
-    options.extend(
-      [
-        '--continue-trail',
-        resume_trail,
-        '--continue-llm',
-        json.dumps(resolved.dump(), separators=(',', ':')),
-      ]
-    )
+  resolved = spec.llm_spec
+  if resolved.WIRE not in wires.client_names():
+    raise ValueError(f'bro harness requires a native recipe, not {type(resolved).__name__}')
+  encoded = json.dumps(resolved.dump(), separators=(',', ':'))
+  options = ['--hold', spec.hold, '--activity-file', str(spec.activity_file)]
+  if resume_trail is None:
+    options.extend(['--recipe', encoded])
+  else:
+    options.extend(['--continue-trail', resume_trail, '--continue-llm', encoded])
   return options
 
 

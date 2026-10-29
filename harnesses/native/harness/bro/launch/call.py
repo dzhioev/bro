@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import http.client
 import importlib.util
-import json
 import signal
 import sys
 import threading
@@ -23,7 +22,7 @@ from bro.launch.llm_flags import (
   selection_from_args,
 )
 from bro.launch.resume import RESUME_LATEST
-from bro.launch.run import HOLD_HELP, create_bro_for_run, run_llm_spec
+from bro.launch.run import HOLD_HELP, create_bro_for_run, decode_recipe, run_llm_spec
 from bro.llm.observer import Observer
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
@@ -282,6 +281,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   )
   parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
   parser.add_argument('--continue-llm', default=None, help=base_args.SUPPRESS)
+  parser.add_argument('--recipe', default=None, help=base_args.SUPPRESS)
   parser.add_argument(
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
   )
@@ -325,8 +325,6 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     history: Optional[list[DisplayRecord]] = None
     if args['fork'] is not None or continuing:
       from bro.launch.resume import resume
-      from bro.llm import wires
-      from bro.llm.llm import LLMSpec
       from bro.registry import get_class
       from bro.trails.store import default_store
 
@@ -336,14 +334,10 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
         continued_llm = args['continue_llm']
         assert isinstance(continued_llm, str)
         try:
-          continued_spec = LLMSpec.from_dict(json.loads(continued_llm))
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-          log.error('invalid recorded LLM recipe: %s', error)
+          fork_spec = decode_recipe(continued_llm)
+        except LLMSelectionError as error:
+          log.error('%s', error)
           return 1
-        if continued_spec.WIRE not in wires.client_names():
-          log.error('recorded recipe %s is not runnable by the bro harness', continued_spec.TYPE)
-          return 1
-        fork_spec = continued_spec
       else:
         fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
       with default_store() as client:
@@ -364,9 +358,13 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       log.info('forked trail %s (%d prior display records)', forked.trail_id, len(history))
     else:
       log.verbose('creating bro %s', args['bro'])
-      runner = Runner(
-        create_bro_for_run(args['bro'], selection), activity_file=args['activity_file']
-      )
+      try:
+        recipe = None if args['recipe'] is None else decode_recipe(args['recipe'])
+        bro = create_bro_for_run(args['bro'], selection, recipe)
+      except LLMSelectionError as error:
+        log.error('%s', error)
+        return 1
+      runner = Runner(bro, activity_file=args['activity_file'])
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 

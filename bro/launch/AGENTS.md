@@ -22,7 +22,8 @@ The following modules ship from `bro-native`:
   either calls `Runner.wake()` when background news arrives while idle.
   `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe;
   omitting the id selects the bro's newest recorded call.
-  The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract.
+  The suppressed `--continue-trail` / `--continue-llm` pair is the managed bro harness's exact-recipe continuation contract;
+  the suppressed `--recipe` (here and on `bro run`) starts a fresh run on the recipe the launcher resolved, excluding the selection flags.
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
 

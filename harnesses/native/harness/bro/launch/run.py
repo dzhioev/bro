@@ -1,6 +1,7 @@
 """In-process one-shot bro launcher."""
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -47,10 +48,29 @@ def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
   return None if spec == bro_class.llm_spec else spec
 
 
-def create_bro_for_run(bro_name: str, selection: 'LLMSelection') -> BaseBro:
-  """Instantiate a bro with the run's optional recipe override."""
+def decode_recipe(encoded: str) -> LLMSpec:
+  """Read a recipe a launcher resolved and serialized, refusing one the native engine cannot run."""
+  from bro.llm import wires
+
+  try:
+    spec = LLMSpec.from_dict(json.loads(encoded))
+  except (KeyError, TypeError, ValueError) as error:
+    raise LLMSelectionError(f'invalid recorded LLM recipe: {error}') from error
+  if spec.WIRE not in wires.client_names():
+    raise LLMSelectionError(f'recorded recipe {spec.TYPE} is not runnable by the bro harness')
+  return spec
+
+
+def create_bro_for_run(
+  bro_name: str, selection: 'LLMSelection', recipe: Optional[LLMSpec] = None
+) -> BaseBro:
+  """Instantiate a bro on the launcher's resolved recipe, else the selection over its declaration."""
   from bro.registry import create_bro, get_class
 
+  if recipe is not None:
+    if not selection.is_empty():
+      raise LLMSelectionError('--recipe cannot be combined with the LLM selection flags')
+    return get_class(bro_name).create(recipe)
   spec = run_llm_spec(bro_name, selection)
   return create_bro(bro_name) if spec is None else get_class(bro_name).create(spec)
 
@@ -67,6 +87,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('bro', help='bro name')
   parser.add_argument('input', help='input to send to the bro')
   add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
+  parser.add_argument('--recipe', default=None, help=base_args.SUPPRESS)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
   parser.add_argument(
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
@@ -75,7 +96,8 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   args = parser.parse(argv)
   try:
     selection = selection_from_args(args)
-    bro = create_bro_for_run(args['bro'], selection)
+    recipe = None if args['recipe'] is None else decode_recipe(args['recipe'])
+    bro = create_bro_for_run(args['bro'], selection, recipe)
   except (KeyError, NotImplementedError, LLMSelectionError) as error:
     log.error('%s', error)
     return 1

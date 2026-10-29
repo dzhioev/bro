@@ -411,6 +411,29 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   assert spec.service_tier is None
 
 
+def test_bro_chat_runs_the_launchers_resolved_recipe(monkeypatch):
+  built: list[Runner] = []
+
+  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+    built.append(runner)
+
+  resolved = llm_llms_openai.LLMSpec(model='gpt-5.4', service_tier='priority')
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+
+  recipe = json.dumps(resolved.dump())
+  assert _chat(['bro', 'record', 'hi', '--recipe', recipe]) is None
+  assert built[0].bro.llm_spec == resolved
+
+
+def test_bro_chat_refuses_a_recipe_beside_selection_flags(monkeypatch, caplog):
+  monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
+  recipe = json.dumps(llm_llms_openai.LLMSpec(model='gpt-5.4').dump())
+  assert _chat(['bro', 'record', 'hi', '--recipe', recipe, '--fast']) == 1
+  assert '--recipe cannot be combined' in caplog.text
+
+
 def test_bro_chat_fast_flag_is_explicit(monkeypatch):
   built: list[Runner] = []
 

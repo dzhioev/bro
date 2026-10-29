@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import shlex
 import threading
 import time
@@ -168,12 +169,12 @@ class TestNativeArgv:
     assert self._argv(run, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
-      '--llm',
-      'openai:fable:high+fast',
       '--hold',
       'attended',
       '--activity-file',
       str(_ACTIVITY_FILE),
+      '--recipe',
+      json.dumps(run.llm_spec.dump(), separators=(',', ':')),
       '--',
       'dev',
       'start here',
@@ -192,7 +193,9 @@ class TestNativeArgv:
       async def run(self, text: str, **options) -> None:
         runs.append((text, options['hold']))
 
-    monkeypatch.setattr('bro.launch.run.create_bro_for_run', lambda name, selection: MagicMock())
+    monkeypatch.setattr(
+      'bro.launch.run.create_bro_for_run', lambda name, selection, recipe=None: MagicMock()
+    )
     monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: None)
     monkeypatch.setattr('bro.launch.run.Runner', _Runner)
     monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
