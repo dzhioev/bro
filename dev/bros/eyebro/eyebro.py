@@ -1,5 +1,10 @@
 import bros.eyebro as eyebro
-from bro.datasources.references import permission_model, permissions, permissions_cheatsheet
+from bro.datasources.references import (
+  llm_providers,
+  permission_model,
+  permissions,
+  permissions_cheatsheet,
+)
 from bro.dev import references
 from bro.mcp import ANY, brash, creds, files, man, source, web
 from bros.bro import Bro
@@ -48,6 +53,7 @@ class Eyebro(Bro):
     web(),
     source(references.dev_style),
     *(man(guide) for guide in references.guides),
+    man(llm_providers),
     man(permission_model),
     man(permissions),
     man(permissions_cheatsheet),
