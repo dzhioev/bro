@@ -28,6 +28,7 @@ A distribution contributes through these `[project.entry-points]` groups of its 
   A provider contributes its credential kind separately through `bro.credentials` from an import-free literal module.
   Provider package hubs import nothing, and declarations import no SDK at module level and no harness.
   Explicit selection loads only that declaration; searches warn and skip a broken declaration.
+  Provider and model adoption follows [llm-providers](llm_providers.md).
 - `bro.llm.wires` — SDK-free wire decode modules, `<name> = "<module>"`;
   a module exports matching `NAME`, `CHAINING`, `decode(response)` and `counts(usage)`, and may claim untagged records with `LEGACY = True`
 - `bro.llm.wire_clients` — client classes implementing `bro.llm.wire.Wire`, `<name> = "<module>:<Client>"`;

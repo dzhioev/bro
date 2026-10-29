@@ -31,6 +31,7 @@ def test_repository_packaging_policy():
     required_modules=(
       _REBUILD_MODULE_PATH,
       'bro/pdf/manual.md',
+      'bro/reference/llm_providers.md',
       *_WEBVIEW_MODULE_PATHS,
       *_CLAUDE_PLUGIN_PATHS,
       *_PERMISSION_REFERENCE_PATHS,

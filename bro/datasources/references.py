@@ -100,3 +100,14 @@ permissions_cheatsheet = FileSource(
   ),
   path=reference.DIRECTORY / 'permissions_cheatsheet.md',
 )
+
+
+llm_providers = FileSource(
+  'llm-providers',
+  summary=(
+    'how to adopt an LLM provider or model: provider and wire contracts, isolation, '
+    'client extras, the artifact checklist, live probes and operator setup. '
+    'Read when adding or changing a provider, wire or model.'
+  ),
+  path=reference.DIRECTORY / 'llm_providers.md',
+)

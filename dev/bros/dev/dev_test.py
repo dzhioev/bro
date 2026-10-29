@@ -1,13 +1,18 @@
+from contextlib import closing
 from typing import ClassVar
 
 import pytest
 
 import bro.dev as dev
 from bro.authority_view_test_helper import publish
+from bro.datasources.references import llm_providers
 from bro.dev import references
 from bro.harness import get_harness
+from bro.monitor import SESSION_DIR_ENV
 from bros.bro import Bro
 from bros.dev import Dev
+from bros.eyebro import Eyebro
+from bros.lead import Lead
 
 
 class _TrackerDev(Dev):
@@ -128,3 +133,16 @@ def test_run_pr_and_resume_pr_are_offered_together():
   assert {'run-pr', 'resume-pr'} <= set(Pair().spell_paths)
   with pytest.raises(ValueError, match="requires spell 'resume-pr'"):
     RunPrOnly()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('persona', [Dev, Eyebro, Lead])
+async def test_provider_adoption_page_reaches_the_man_tool(persona, monkeypatch, tmp_path):
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+  with closing(persona()) as bro:
+    servers = bro.assemble(harness='claude', hold='attended')
+    manual = next(server for server in servers if server.namespace == 'man-source')
+    [read] = await manual.list_tools()
+    assert 'llm-providers' in read.parameters['properties']['topic']['enum']
+    assert await read.call({'topic': 'llm-providers'}) == llm_providers.read()
+    assert llm_providers.read() == llm_providers._path.read_text()
