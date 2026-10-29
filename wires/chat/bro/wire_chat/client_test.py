@@ -100,7 +100,6 @@ async def test_uncompleted_response_does_not_advance_history(transport, stop):
 @pytest.mark.parametrize(
   'message',
   [
-    {'role': 'assistant', 'content': None},
     {'role': 'assistant', 'refusal': 'no'},
     {'role': 'assistant', 'tool_calls': [call(name='')]},
     {'role': 'assistant', 'tool_calls': [call(call_id='')]},
@@ -131,14 +130,50 @@ async def test_cancelled_exchange_keeps_history(transport):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'silent,replayed',
+  [
+    (response(None), {'role': 'assistant', 'content': ''}),
+    (
+      response('', reasoning='waiting'),
+      {'role': 'assistant', 'content': '', 'reasoning_content': 'waiting'},
+    ),
+  ],
+  ids=['empty', 'reasoning-only'],
+)
+async def test_silent_completion_ends_the_turn_and_replays_as_sent_live(
+  transport, silent, replayed
+):
+  requests, replies = transport
+  replies.extend([silent, response(), response()])
+  live = Chat(LLMSpec(), {'api_key': 'fixture-key'})
+  leg = await live.exchange([SystemPrompt('system'), UserMessage('go')], [], None)
+  assert leg.reply == ''
+  await live.exchange([Notification('news')], [], None)
+  restored = Chat(LLMSpec(), {'api_key': 'fixture-key'})
+  restored.restore(Prefix('system', (step('user_input', 'go'), step('llm_call', leg.record))))
+  await restored.exchange([Notification('news')], [], None)
+  assert (
+    requests[1]['messages']
+    == requests[2]['messages']
+    == [
+      {'role': 'system', 'content': 'system'},
+      {'role': 'user', 'content': 'go'},
+      replayed,
+      {'role': 'user', 'content': 'news'},
+    ]
+  )
+
+
+def step(kind, body, **extras):
+  return Step(
+    trail_id='test', step_id=1, ts='2026-01-01T00:00:00Z', kind=kind, body=body, extras=extras
+  )
+
+
+@pytest.mark.asyncio
 async def test_restore_uses_steps_not_recorded_requests_and_omits_stopped_legs(transport):
   requests, replies = transport
-
-  def step(kind, body, **extras):
-    return Step(
-      trail_id='test', step_id=1, ts='2026-01-01T00:00:00Z', kind=kind, body=body, extras=extras
-    )
-
   raw = response(None, reasoning='kept', calls=[call('')], stop='tool_calls')
   raw['choices'][0]['message'].update(refusal=None, annotations=[], audio=None)
   wire = Chat(LLMSpec(), {'api_key': 'fixture-key'})

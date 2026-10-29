@@ -41,6 +41,12 @@ def test_reply_excludes_commentary_and_calls_make_text_interim():
   assert [call.index for call in with_call.calls] == [5]
 
 
+def test_a_terminal_response_without_text_has_an_empty_reply():
+  decoded = DecodedCall('model', {}, None, (Reasoning(1, 'waiting'),), 'completed')
+  assert decoded.reply == ''
+  assert decoded.terminal is True
+
+
 @pytest.mark.parametrize('stop', ['truncated', 'filtered', 'capacity', 'failed'])
 def test_incomplete_text_is_not_terminal(stop):
   assert not DecodedCall('model', {}, None, (Message(1, 'partial'),), stop).terminal

@@ -56,7 +56,7 @@ def decode(response: dict) -> DecodedCall:
               parts.append(
                 Call.parse(index, call.get('id'), function.get('name'), function.get('arguments'))
               )
-      if not parts:
+      if not parts and any(value not in (None, '') for value in (reasoning, text)):
         parts.append(Unknown(1, message))
   stop = _STOPS.get(reason, 'failed') if isinstance(reason, str) else 'failed'
   raw_usage = response.get('usage')

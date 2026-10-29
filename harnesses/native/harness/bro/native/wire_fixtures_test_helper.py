@@ -42,12 +42,12 @@ def response(*output: dict, **fields) -> dict:
   }
 
 
-def call(arguments: str) -> dict:
+def call(arguments: str, name: str = 'svc__ping') -> dict:
   return {
     'type': 'function_call',
     'id': 'function_1',
     'call_id': 'call_1',
-    'name': 'svc__ping',
+    'name': name,
     'arguments': arguments,
     'status': 'completed',
   }
@@ -69,6 +69,7 @@ def cases() -> dict[str, dict[str, Case]]:
       ),
       (Reasoning(1, 'thought'), Message(2, 'reply')),
     ),
+    'silent': Case(recipe, response({**message(''), 'phase': 'final_answer'}), ()),
   }
   for name, arguments in [('valid', '{"x":1}'), ('empty', ''), ('malformed', '{')]:
     cases[name] = Case(
@@ -150,6 +151,7 @@ def chat_cases() -> dict[str, Case]:
       (Reasoning(1, 'thought'), Message(2, 'reply')),
       counts=usage,
     ),
+    'silent': Case(recipe, chat_response(None), (), counts=usage),
   }
   for name, arguments in [('valid', '{"x":1}'), ('empty', ''), ('malformed', '{')]:
     cases[name] = Case(

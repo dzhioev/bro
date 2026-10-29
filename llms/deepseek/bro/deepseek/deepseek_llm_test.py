@@ -107,6 +107,13 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
     third = await send('third-leg', messages, tools=tools)
     assert third['choices'][0]['finish_reason'] == 'stop', third
     assert third['choices'][0]['message']['content'], third
+    silent = {**assistant_message(third), 'content': ''}
+    after_silence = await send(
+      'after-empty-turn',
+      [*messages, silent, {'role': 'user', 'content': 'Reply with one short word, no tools.'}],
+      tools=tools,
+    )
+    assert after_silence['choices'][0]['finish_reason'] == 'stop', after_silence
     for raw in (first, second, third):
       assert isinstance(raw['model'], str) and raw['model']
       usage = raw['usage']

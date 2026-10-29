@@ -43,17 +43,20 @@ def tools_to_chat_format(tools: list[Tool]) -> list[dict]:
 
 def assistant_message(response: dict) -> dict:
   message = response['choices'][0]['message']
-  result = {'role': 'assistant', 'content': message.get('content')}
+  calls = message.get('tool_calls')
+  content = message.get('content')
+  # Chat Completions requires an assistant message's content unless it carries tool calls.
+  result = {'role': 'assistant', 'content': '' if content is None and not calls else content}
   if message.get('reasoning_content') is not None:
     result['reasoning_content'] = message['reasoning_content']
-  if message.get('tool_calls') is not None:
+  if calls:
     result['tool_calls'] = [
       {
         'id': call['id'],
         'type': call['type'],
         'function': {'name': call['function']['name'], 'arguments': call['function']['arguments']},
       }
-      for call in message['tool_calls']
+      for call in calls
     ]
   return result
 
@@ -151,10 +154,8 @@ class Chat(Wire):
       return leg
     if any(isinstance(part, Unknown) for part in leg.parts):
       raise UnusableResponse('unusable completed Chat response', leg, accepted=False)
-    if not leg.calls and not leg.reply:
-      raise UnusableResponse(
-        'completed Chat response has no reply text or calls', leg, accepted=False
-      )
+    if not leg.calls and not leg.reply and leg.refusal is not None:
+      raise UnusableResponse(f'completed Chat response refused: {leg.refusal}', leg, accepted=False)
     self._history = request['messages'] + [assistant_message(raw)]
     return leg
 
@@ -191,6 +192,6 @@ class Chat(Wire):
     decoded = decode(response.model_dump(mode='json'))
     if decoded.stop != 'completed':
       raise LLMStopped(decoded.stop, decoded.stop_reason)
-    if decoded.reply is None or decoded.calls:
+    if not decoded.reply:
       raise RuntimeError('completed Chat response has no structured reply')
     return result.model_validate_json(decoded.reply)
