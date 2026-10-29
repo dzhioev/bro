@@ -124,7 +124,6 @@ def _session(prompt: str, activity_file: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    llm=None,
     resolved_llm=LLMSpec(model='haiku').dump(),
     solo=True,
     resume=False,

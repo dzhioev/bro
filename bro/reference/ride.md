@@ -1273,7 +1273,7 @@ removing a bundle also removes its unused runtime volume, while Docker keeps an 
 
 ## The session executable
 
-`do-ride solo|along --workspace NAME --harness H [--resume] [--repo R] --hold HOLD [--llm L] [--] <bro> [prompt]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
+`do-ride solo|along --workspace NAME --harness H [--resume] [--repo R] --hold HOLD [--] <bro> [prompt]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
 It has its own parser:
 there is no `--in-place`, no outer machinery flags or combination refusals, and `--resume` is an ordinary session flag.
 The launcher puts the bro and the prompt past `--`, so a prompt that reads as a flag stays the prompt, and the bro harness hands them to `bro run|chat` the same way.
@@ -1281,7 +1281,7 @@ Unboxed isolation runs it from the snapshot venv and boxed isolation from the mo
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
 
-`do-ride` receives `RIDE_ISOLATION` and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
+`do-ride` receives `RIDE_ISOLATION`, the admitted recipe in `RIDE_RESOLVED_LLM`, and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
 It then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
 It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, asks the selected harness to prepare its session state, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
@@ -1508,7 +1508,7 @@ Wrappers and session daemons rely on a small set of env vars:
   Each launcher sets its own value, overriding ambient session state;
   a direct `do-ride` invocation derives the current isolation's session environment directory and exports it.
 - `RIDE_RESOLVED_LLM` — the JSON encoding of the exact LLM recipe the launcher validated, scoped, and recorded.
-  `do-ride` uses it instead of resolving an omitted or partial `--llm` against defaults that may have changed before a resume.
+  `do-ride` requires it as the session's only recipe input, so the harness runs exactly what the launch admitted and recorded.
 - `BROKER_UPSTREAM` — the host broker address supplied by a launcher, `tcp://<token>@<host>:<port>`.
   Only the session broxy consumes it (`host.docker.internal` in a container, loopback on host), removing it once the local proxy is ready.
   If proxy launch fails, it remains set while `BROKER_CHANNEL` stays unset, which makes `Client.from_env` report the failed session proxy;

@@ -77,7 +77,6 @@ def _session(tmp_path: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    llm=None,
     resolved_llm=LLMSpec(model=None, effort=None).dump(),
     solo=True,
     resume=False,

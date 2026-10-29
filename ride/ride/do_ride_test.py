@@ -29,6 +29,11 @@ def isolated_environ():
     yield
 
 
+@pytest.fixture(autouse=True)
+def admitted_recipe(monkeypatch):
+  monkeypatch.setenv(do_ride.RESOLVED_LLM_ENV, do_ride.encode_resolved_llm(_spec().resolved_llm))
+
+
 def _command(spec) -> list[str]:
   return do_ride.command(spec)
 
@@ -58,7 +63,7 @@ class TestCommand:
     )
     assert _command(spec) == [
       'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(spec.repo),
-      '--hold', 'attended', '--llm', '::xhigh+fast', '--', 'dev', 'do it',
+      '--hold', 'attended', '--', 'dev', 'do it',
     ]  # fmt: skip
 
   def test_resume_is_carried(self):
@@ -72,22 +77,14 @@ class TestCommand:
     from bro.anthropic.declaration import LLMSpec
 
     recorded = LLMSpec(model='recorded-model').dump()
-    spec = dataclasses.replace(_spec(llm=None), resolved_llm=recorded)
+    spec = dataclasses.replace(_spec(), resolved_llm=recorded)
     monkeypatch.setenv(do_ride.RESOLVED_LLM_ENV, do_ride.encode_resolved_llm(recorded))
-    with patch.object(get_harness('claude'), 'resolve_llm') as resolve:
-      run = _parsed_run(_command(spec))
-    assert run.resolved_llm == recorded
-    resolve.assert_not_called()
+    assert _parsed_run(_command(spec)).resolved_llm == recorded
 
-  def test_the_launchers_host_entry_does_not_reach_the_run(self, monkeypatch, tmp_path):
-    config = tmp_path / 'bro.json'
-    config.write_text(
-      json.dumps({'projects': {'/repo': {'bros': {'dev': {'llm': 'openai:sol:xhigh'}}}}})
-    )
-    monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
-    argv = ['do-ride', 'solo', '--workspace', 'w', '--harness', 'bro', '--repo', '/repo']
-    run = _parsed_run([*argv, '--hold', 'unattended', '--llm', '::low', 'dev', 'prompt'])
-    assert run.resolved_llm == get_harness('bro').resolve_llm('::low', 'dev').dump()
+  def test_a_run_without_the_admitted_recipe_is_refused(self, monkeypatch):
+    monkeypatch.delenv(do_ride.RESOLVED_LLM_ENV)
+    with pytest.raises(RuntimeError, match=do_ride.RESOLVED_LLM_ENV):
+      _parsed_run(_command(_spec()))
 
   def test_the_bro_harness_uses_the_same_executable(self):
     spec = dataclasses.replace(_spec(solo=True, bro='dev', prompt='go'), harness='bro')
@@ -197,7 +194,6 @@ class TestRunSession:
       repo='/repo' if repo else None,
       harness='bro',
       hold='attended',
-      llm=None,
       resolved_llm=_spec().resolved_llm,
       solo=False,
       resume=False,
