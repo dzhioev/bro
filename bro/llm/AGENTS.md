@@ -83,10 +83,7 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 
 ## Conventions
 
-- Provider registration and declaration contracts are listed in `bro/reference/extending.md`, "Entry-point groups".
-  Provider packages have import-free hubs, declarations without module-level SDK imports, and literal credential modules.
-  Provider distributions depend on their wires without extras; a provider's `client` extra requests its wire's `client` extra.
-  SDK dependencies belong only in `client` extras, so bare providers and wires can price and decode records without an SDK.
+- Provider and wire adoption, declaration contracts, client extras and isolation: `bro/reference/llm_providers.md` (man topic `llm-providers`).
 - A harness serves a recipe according to its own capabilities; the native harness uses installed wire clients.
 - Price tables use the provider's raw billing vocabulary and record source and effective date.
 - Knob and model validation belongs to the provider declaration, not the roster or a caller.

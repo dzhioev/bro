@@ -445,6 +445,7 @@ a boxed session reaches that remote only where it asks for no authentication, an
 
 - [`AGENTS.md`](AGENTS.md) — the repository map, and the rules every change follows
 - [`bro/reference/extending.md`](bro/reference/extending.md) — how to add a bro, a data source, a toolset or a file type (`bro.file_types`), and the entry-point groups they register through
+- [`bro/reference/llm_providers.md`](bro/reference/llm_providers.md) — how to adopt a provider or model, including wire contracts, client installation and live probes
 - [`bro/reference/ride.md`](bro/reference/ride.md) — the runtime: workspaces, credential delivery, summons, recording
 - [`bro/reference/permission_model.md`](bro/reference/permission_model.md) and [`bro/reference/permissions.md`](bro/reference/permissions.md) — the abstract model and the shipped permission system
 - [`bro/reference/conditions.md`](bro/reference/conditions.md) and [`bro/reference/template.md`](bro/reference/template.md) — conditioning in code and in text

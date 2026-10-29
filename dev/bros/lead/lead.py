@@ -4,6 +4,7 @@ import bros.lead as lead
 from bro.datasources.references import (
   dive_in,
   environment,
+  llm_providers,
   permission_model,
   permissions,
   permissions_cheatsheet,
@@ -79,6 +80,7 @@ class Lead(Bro):
     man(environment),
     man(dive_in),
     man(ride),
+    man(llm_providers),
     man(permission_model),
     man(permissions),
     man(permissions_cheatsheet),

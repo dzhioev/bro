@@ -4,6 +4,7 @@ from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources.references import (
   extending,
+  llm_providers,
   permission_model,
   permissions,
   permissions_cheatsheet,
@@ -61,6 +62,7 @@ class Dev(Bro):
     source(references.rebase_conflicts),
     man(extending),
     *(man(guide) for guide in references.guides),
+    man(llm_providers),
     man(permission_model),
     man(permissions),
     man(permissions_cheatsheet),
