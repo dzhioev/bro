@@ -95,10 +95,14 @@ def test_gate_failure_is_sticky_and_boundary_is_inclusive(capsys):
 
 
 @pytest.mark.parametrize('returncode', [0, 1])
-def test_security_runs_confinement_and_propagates_failure(monkeypatch, capsys, returncode):
+def test_security_runs_confinement_and_corpus_and_propagates_failure(
+  monkeypatch, capsys, returncode
+):
+  commands = []
+
   def run(command, **arguments):
+    commands.append(command)
     assert command[:3] == [file_bench.sys.executable, '-m', 'pytest']
-    assert 'bro/files/confinement_sandbox_test.py' in command
     assert arguments['cwd'] == file_bench.ROOT
     return subprocess.CompletedProcess(command, returncode, 'suite output', 'suite error')
 
@@ -106,9 +110,14 @@ def test_security_runs_confinement_and_propagates_failure(monkeypatch, capsys, r
   report = file_bench.Report()
   file_bench.security(report)
   assert report.failed == bool(returncode)
+  assert [command[7] for command in commands] == [
+    'bro/files/confinement_sandbox_test.py',
+    'filetypes/bro/pdf/hostile_corpus_sandbox_test.py',
+  ]
   output = records(capsys)
-  assert output[0]['output'] == 'suite outputsuite error'
-  assert output[1]['status'] == 'deferred'
+  assert [record['name'] for record in output] == ['confinement', 'hostile corpus']
+  assert all(record['status'] == ('failed' if returncode else 'ok') for record in output)
+  assert all(record['output'] == 'suite outputsuite error' for record in output)
 
 
 def test_main_exits_nonzero_when_a_selected_cell_fails(tmp_path, monkeypatch):
