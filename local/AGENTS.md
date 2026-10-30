@@ -18,15 +18,15 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 - `bro/local/syscall_tables.py` (`syscall-tables`) — generate `bro.files.confinement`'s syscall tables from the pinned Linux tag, recording source hashes and refusing unclassified names.
   `syscall-tables --check` fetches the sources again and compares without writing; run it by hand when bumping the pin and review every classification decision.
   The arm64 parser resolves the native ABI's conditional definitions and rejects unreviewed preprocessor expressions.
-- `bro/local/file_bench.py` (`file-bench`) — checkout-only PDF speed gates, token reporting, fixture fidelity and confinement-suite command.
+- `bro/local/file_bench.py` (`file-bench`) — checkout-only PDF speed gates, token reporting, fixture fidelity and the security-cell command (confinement suite and hostile corpus).
   `uv run -q file-bench` runs all cells and exits nonzero on a failed gate; `--cell` selects a cell and is repeatable.
   `--offline` skips token reporting and public-input cells, never generated fixtures or confinement.
   Public documents are fetched on demand into `--cache` and verified against pinned SHA-256 digests on every read.
   Each tool call has a fresh confined worker; CPU measurements include the parent and reaped children, while wall measurements include snapshot reads and confinement.
   Run timing gates on an otherwise idle host, separately from the parallel pytest suite.
   Token records use compact tool-result JSON and report the difference from separately encoded content strings, averaged over document pages; they impose no gate.
-  The security cell runs the confinement tests at every kernel-supported ABI cap on the current architecture; CI's sandbox matrix covers both supported architectures.
-  Its hostile-corpus record is explicitly deferred to [#1086](https://github.com/dzhioev/bro/issues/1086), which adds the corpus to that cell.
+  The security cell runs the confinement tests at every kernel-supported ABI cap on the current architecture and the hostile PDF corpus (`filetypes/bro/pdf/hostile_corpus_sandbox_test.py`),
+  one case per hostile family at its pinned first-run outcome; CI's sandbox matrix covers both supported architectures.
   Fixture helpers are imported from the checkout and do not ship in wheels.
 - `bro/local/files_test_helper.py` — generated invoices shared by the assembled native/HTTP serving tests (`files_sandbox_test.py`) and the live-model probe (`files_conformance_test.py`).
 - `bro/local/gate_display.py` — how the gate reports: plain lines on a pipe, a live table on a terminal.

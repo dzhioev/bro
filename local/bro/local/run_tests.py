@@ -532,6 +532,7 @@ SANDBOX_PYTEST_FILES = [
   'bro/files/runner_sandbox_test.py',
   'bro/files/operations_sandbox_test.py',
   'filetypes/bro/pdf/provider_sandbox_test.py',
+  'filetypes/bro/pdf/hostile_corpus_sandbox_test.py',
 ]
 
 

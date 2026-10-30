@@ -281,33 +281,25 @@ async def fidelity(directory: Path, report: Report) -> None:
       )
 
 
-def security(report: Report) -> None:
+def _security_gate(report: Report, name: str, files: list[str]) -> None:
   result = subprocess.run(
-    [
-      sys.executable,
-      '-m',
-      'pytest',
-      '-q',
-      '-n',
-      'auto',
-      '--maxprocesses=8',
-      'bro/files/confinement_sandbox_test.py',
-    ],
+    [sys.executable, '-m', 'pytest', '-q', '-n', 'auto', '--maxprocesses=8', *files],
     cwd=ROOT,
     capture_output=True,
     text=True,
   )
   report.record(
     'security',
-    'confinement',
+    name,
     'ok' if result.returncode == 0 else 'failed',
     architecture=platform.machine(),
     output=result.stdout + result.stderr,
   )
-  # The corpus stage adds its command here; it must contribute to Report.failed.
-  report.record(
-    'security', 'hostile corpus', 'deferred', task='https://github.com/dzhioev/bro/issues/1086'
-  )
+
+
+def security(report: Report) -> None:
+  _security_gate(report, 'confinement', ['bro/files/confinement_sandbox_test.py'])
+  _security_gate(report, 'hostile corpus', ['filetypes/bro/pdf/hostile_corpus_sandbox_test.py'])
 
 
 async def benchmark(cells: list[str], offline: bool, cache: Path) -> bool:
