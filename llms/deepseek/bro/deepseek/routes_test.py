@@ -1,43 +1,53 @@
 import asyncio
 import json
 import threading
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock
 
 import openai
 import pytest
+from pydantic import BaseModel
 
+import bro.native.harness as native_harness
+import bro.run as bro_run
 from bro.base import credentials
 from bro.bro import BaseBro
 from bro.deepseek.declaration import LLMSpec
 from bro.fork import fork, latest_fork_point
 from bro.launch.resume import resume
+from bro.llm import providers
+from bro.llm.llm import LLMSpec as Recipe
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
+from bro.llm.mu import Text, mu
 from bro.llm.observer import Observer, ReasoningEvent, ToolCallEvent
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
-from bro.registry import create_bro
+from bro.registry import create_bro, get_class
 from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder
 from bro.trails.store import fetch_recorded_trail
 from bro.wire_chat.fixtures_test_helper import call, response
 from ride import cli
-from ride.authority_launch import request
+from ride.authority_launch import credentials_for, hydrate, request
 from ride.authority_reading import Configuration, Installation, Reading
 from ride.authority_scope import checked_recipe
 from ride.bro_worker import BroType
+from ride.do_ride import SessionRun
 
 
 @pytest.fixture
-def server(monkeypatch):
+def endpoint(monkeypatch):
   requests = []
   replies = []
+  authorizations = []
 
   class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
       assert self.path == '/chat/completions'
+      authorizations.append(self.headers['Authorization'])
       requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
       status, raw = replies.pop(0) if replies else (200, response())
       payload = json.dumps(raw).encode()
@@ -57,8 +67,14 @@ def server(monkeypatch):
     resources.callback(thread.join)
     resources.callback(server.shutdown)
     monkeypatch.setattr(LLMSpec, 'ENDPOINT', f'http://127.0.0.1:{server.server_port}')
-    monkeypatch.setattr(credentials, 'get_json', lambda kind: {'api_key': 'fixture-key'})
-    yield requests, replies
+    yield requests, replies, authorizations
+
+
+@pytest.fixture
+def server(endpoint, monkeypatch):
+  requests, replies, _ = endpoint
+  monkeypatch.setattr(credentials, 'get_json', lambda kind: {'api_key': 'fixture-key'})
+  return requests, replies
 
 
 @pytest.mark.asyncio
@@ -249,6 +265,113 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
   assert descriptor.values['effort'] == 'high'
   assert descriptor.values['cred.deepseek'] == ''
   assert checked_recipe(requested, descriptor, reading) == LLMSpec(reasoning_effort='high')
+
+
+DEEPSEEK_KEY = 'host-deepseek-key'
+OPENAI_KEY = 'host-openai-key'
+MU_BACKINGS = {
+  'openai': ('', {'llm': 'openai:terra:low', 'credential': {'$cred': 'openai+'}}),
+  'deepseek': ('deepseek', {'llm': 'deepseek:flash:low', 'credential': {'$cred': 'deepseek+'}}),
+}
+
+
+class Answer(BaseModel):
+  answer: str
+
+
+@dataclass(frozen=True)
+class Stage:
+  recipe: Recipe
+  files: dict[str, bytes]
+  session: credentials.Store
+  argv: list[str]
+
+
+def summoned_stage(tmp_path, monkeypatch, backing: str) -> Stage:
+  """`bro-dev` summoned onto DeepSeek from a host that also holds an OpenAI key: admitted, its
+  scoped store hydrated, and the argv the bro harness spawns for it."""
+  instance, mu_material = MU_BACKINGS[backing]
+  host = tmp_path / 'host'
+  (host / 'creds').mkdir(parents=True)
+  for name, material in {
+    'deepseek': {'api_key': DEEPSEEK_KEY},
+    'openai': {'api_key': OPENAI_KEY},
+    'github': {'token': 'host-github-token'},
+    'brog': {'backend': 'fixture'},
+    credentials.storage_name('mu', instance): mu_material,
+  }.items():
+    (host / 'creds' / f'{name}.cred').write_text(json.dumps(material))
+  monkeypatch.setattr(credentials, 'STORE_DIR', str(host))
+  reading = Reading(
+    Configuration.parse({}), {}, Installation.take(), None, {'summon-harness': 'bro'}
+  )
+  fields = {
+    'target': 'bro-dev',
+    'llm': 'deepseek:pro:high',
+    **({'pass': [f'mu+{instance}']} if instance != '' else {}),
+  }
+  requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
+  mission = reading.rules.start(requested, reading.operator(), reading)
+  recipe = checked_recipe(mission.request, mission.descriptor, reading)
+  files, _ = hydrate(credentials_for(mission))
+  directory = tmp_path / 'session'
+  for name, content in files.items():
+    (directory / name).parent.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_bytes(content)
+  run = SessionRun(
+    name='stage',
+    repo=None,
+    harness='bro',
+    hold='unattended',
+    resolved_llm=recipe.dump(),
+    solo=True,
+    resume=False,
+    bro='bro-dev',
+    prompt='go',
+    activity_file=tmp_path / 'activity',
+  )
+  spawned: list[list[str]] = []
+  monkeypatch.setattr(native_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
+  monkeypatch.setattr('ride.do_ride.run_agent', lambda argv: spawned.append(argv) or 0)
+  assert native_harness.BRO.run_session(run) == 0
+  session = credentials.Store(credentials.default_registry(), directory, {})
+  return Stage(recipe, files, session, spawned[0])
+
+
+@pytest.mark.credential_gate
+@pytest.mark.parametrize('backing', MU_BACKINGS)
+def test_a_stage_summoned_onto_deepseek_starts_without_the_openai_key(
+  endpoint, tmp_path, monkeypatch, backing
+):
+  requests, _, authorizations = endpoint
+  declared = get_class('bro-dev').llm_spec
+  assert declared is not None and 'openai' in declared.needed_secrets()
+  stage = summoned_stage(tmp_path, monkeypatch, backing)
+  assert stage.session.available('deepseek') and not stage.session.available('openai')
+  monkeypatch.setattr(
+    native_runner, '_default_tracker_factory', lambda: Recorder(LocalStore(tmp_path / 'trails'))
+  )
+  monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
+  with credentials.as_default_store(stage.session):
+    assert bro_run.main(stage.argv) is None
+  assert requests[0]['model'] == stage.recipe.selection()['model']
+  assert set(authorizations) == {f'Bearer {DEEPSEEK_KEY}'}
+
+
+def test_a_deepseek_backed_mu_serves_a_stage_that_holds_no_openai_material(
+  endpoint, tmp_path, monkeypatch
+):
+  requests, replies, authorizations = endpoint
+  replies.append((200, response('{"answer": "42"}')))
+  stage = summoned_stage(tmp_path, monkeypatch, 'deepseek')
+  assert all(OPENAI_KEY.encode() not in content for content in stage.files.values())
+  with credentials.as_default_store(stage.session):
+    assert mu('which answer?', Answer, Text('the record'), role='dispatch').answer == '42'
+  sent = requests[0]
+  assert sent['response_format'] == {'type': 'json_object'}
+  assert sent['model'] == providers.models('deepseek')['flash']
+  assert sent['reasoning_effort'] == 'low'
+  assert authorizations == [f'Bearer {DEEPSEEK_KEY}']
 
 
 @pytest.mark.asyncio
