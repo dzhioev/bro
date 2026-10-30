@@ -13,7 +13,9 @@ from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
 from bro.deepseek.declaration import LLMSpec
 from bro.deepseek.probe_test_helper import managed_roster
+from bro.llm.records import Unknown
 from bro.wire_chat.client import assistant_message
+from bro.wire_chat.decode import decode
 
 
 @pytest.mark.asyncio
@@ -68,16 +70,22 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
       'content': 'Call first_probe with no arguments. Do not call second_probe yet.',
     },
   ]
-  async with client:
-    first = await send('first-leg', messages, tools=tools)
-    first_message = assistant_message(first)
-    assert first_message.get('reasoning_content'), first
-    calls = first_message.get('tool_calls', [])
-    assert calls and all(call['function']['name'] == 'first_probe' for call in calls), first
+
+  def probe_calls(raw, name):
+    message = assistant_message(raw)
+    assert isinstance(message.get('reasoning_content'), str), raw
+    assert raw['choices'][0]['finish_reason'] == 'tool_calls', raw
+    calls = message.get('tool_calls', [])
+    assert calls and all(call['function']['name'] == name for call in calls), raw
     assert all(
       not call['function']['arguments'].strip() or json.loads(call['function']['arguments']) == {}
       for call in calls
-    )
+    ), raw
+    return message, calls
+
+  async with client:
+    first = await send('first-leg', messages, tools=tools)
+    first_message, calls = probe_calls(first, 'first_probe')
     messages.append(first_message)
     messages.extend(
       {'role': 'tool', 'tool_call_id': call['id'], 'content': 'first value'} for call in calls
@@ -90,10 +98,7 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
     )
     second_messages = deepcopy(messages)
     second = await send('second-leg', messages, tools=tools)
-    second_message = assistant_message(second)
-    calls = second_message.get('tool_calls', [])
-    assert calls and all(call['function']['name'] == 'second_probe' for call in calls), second
-    assert second_message.get('reasoning_content'), second
+    second_message, calls = probe_calls(second, 'second_probe')
     messages.append(second_message)
     messages.extend(
       {'role': 'tool', 'tool_call_id': call['id'], 'content': 'second value'} for call in calls
@@ -106,7 +111,9 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
     )
     third = await send('third-leg', messages, tools=tools)
     assert third['choices'][0]['finish_reason'] == 'stop', third
-    assert third['choices'][0]['message']['content'], third
+    decoded = decode(third)
+    assert not any(isinstance(part, Unknown) for part in decoded.parts), third
+    assert decoded.reply or decoded.refusal is None, third
     silent = {**assistant_message(third), 'content': ''}
     after_silence = await send(
       'after-empty-turn',
@@ -137,12 +144,15 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
     for message in without_reasoning:
       message.pop('reasoning_content', None)
     try:
-      await send('missing-reasoning', without_reasoning, tools=tools)
+      missing = await send('missing-reasoning', without_reasoning, tools=tools)
     except openai.APIStatusError as error:
       assert error.status_code == 400
+    else:
+      assert missing['choices'][0]['finish_reason'] in {'stop', 'tool_calls'}, missing
 
     off_history = [{'role': 'user', 'content': 'Say hello briefly.'}]
     off = await send('thinking-off', off_history, options={'thinking': {'type': 'disabled'}})
+    assert off['choices'][0]['finish_reason'] == 'stop', off
     off_history.append(assistant_message(off))
     off_history.append({'role': 'user', 'content': 'Say goodbye briefly.'})
     try:

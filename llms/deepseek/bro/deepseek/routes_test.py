@@ -3,6 +3,7 @@ import json
 import threading
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import Mock
 
 import openai
 import pytest
@@ -370,3 +371,117 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   recorded = fetch_recorded_trail(store, runner.trail_id)
   assert not any('stopped' in step.extras for step in recorded.steps if step.kind == 'llm_call')
   assert store.get_trail(recorded.header.id)['end']['reason'] == 'ok'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('first_reasoning', ['first thought', ''])
+@pytest.mark.parametrize('missing_status', [200, 400])
+@pytest.mark.parametrize('transition_status', [200, 400])
+async def test_live_probe_reaches_every_leg_with_empty_reasoning(
+  server, monkeypatch, tmp_path, first_reasoning, missing_status, transition_status
+):
+  from copy import deepcopy
+
+  from bro.deepseek import deepseek_llm_test
+
+  requests, replies = server
+  empty = response('', reasoning='')
+  empty['usage']['completion_tokens_details']['reasoning_tokens'] = 0
+  first = response(
+    '', reasoning=first_reasoning, calls=[call(name='first_probe')], stop='tool_calls'
+  )
+  if not first_reasoning:
+    first['usage']['completion_tokens_details']['reasoning_tokens'] = 0
+  second = response(
+    '', reasoning='', calls=[call(name='second_probe')], stop='tool_calls', usage=empty['usage']
+  )
+  error = {'error': {'message': 'missing reasoning_content', 'type': 'invalid_request_error'}}
+  replies.extend(
+    [
+      (200, first),
+      (200, second),
+      (200, empty),
+      (200, empty),
+      (200, empty),
+      (missing_status, empty if missing_status == 200 else error),
+      (200, empty),
+      (transition_status, empty if transition_status == 200 else error),
+      (200, response('', reasoning='', stop='length')),
+    ]
+  )
+  monkeypatch.setattr(credentials, 'available', lambda kind: True)
+  request = Mock()
+  await deepseek_llm_test.test_deepseek_protocol_shapes_and_native_tool_roster(
+    tmp_path, request, monkeypatch
+  )
+  assert not replies
+  assert len(requests) == 9
+  assert requests[2]['messages'][-3]['reasoning_content'] == ''
+  assert requests[3]['messages'][-2]['content'] == ''
+  assert requests[3]['messages'][-2]['reasoning_content'] == ''
+  without_reasoning = deepcopy(requests[1])
+  for message in without_reasoning['messages']:
+    message.pop('reasoning_content', None)
+  assert requests[5] == without_reasoning
+  assert requests[6]['thinking'] == {'type': 'disabled'}
+  assert requests[7]['thinking'] == {'type': 'enabled'}
+  assert requests[7]['messages'][1]['reasoning_content'] == ''
+  assert requests[8]['max_tokens'] == 1
+  captures = json.loads((tmp_path / 'deepseek-responses.json').read_text())
+  assert list(captures) == [
+    'first-leg',
+    'second-leg',
+    'third-leg',
+    'after-empty-turn',
+    'native-roster',
+    'native-roster-tool-count',
+    'missing-reasoning',
+    'thinking-off',
+    'thinking-off-to-on',
+    'forced-length',
+  ]
+  assert captures['native-roster-tool-count'] == len(requests[4]['tools'])
+  for name, status in [
+    ('missing-reasoning', missing_status),
+    ('thinking-off-to-on', transition_status),
+  ]:
+    if status == 400:
+      assert captures[name]['status'] == status
+      assert json.loads(captures[name]['body']) == error
+    else:
+      assert captures[name]['choices'][0]['finish_reason'] == 'stop'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'message',
+  [
+    {'content': None, 'refusal': 'not allowed'},
+    {'content': '', 'refusal': 'not allowed'},
+    {'content': None, 'refusal': ''},
+    {'content': '', 'refusal': ''},
+    {'content': '', 'tool_calls': [call(call_id='')]},
+  ],
+)
+async def test_live_probe_rejects_an_unusable_third_reply(server, monkeypatch, tmp_path, message):
+  from bro.deepseek import deepseek_llm_test
+
+  requests, replies = server
+  third = response('', reasoning='')
+  third['choices'][0]['message'].update(message)
+  replies.extend(
+    [
+      (200, response('', reasoning='', calls=[call(name='first_probe')], stop='tool_calls')),
+      (200, response('', reasoning='', calls=[call(name='second_probe')], stop='tool_calls')),
+      (200, third),
+    ]
+  )
+  monkeypatch.setattr(credentials, 'available', lambda kind: True)
+  with pytest.raises(AssertionError):
+    await deepseek_llm_test.test_deepseek_protocol_shapes_and_native_tool_roster(
+      tmp_path, Mock(), monkeypatch
+    )
+  assert not replies
+  assert len(requests) == 3
+  captures = json.loads((tmp_path / 'deepseek-responses.json').read_text())
+  assert captures['third-leg']['choices'][0]['message']['content'] == message['content']
