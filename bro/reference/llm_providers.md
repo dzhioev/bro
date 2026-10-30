@@ -166,6 +166,11 @@ an unknown wire degrades to a forensic event without losing its record.
    otherwise write fixtures from the vendor's documented shapes and identify that provenance.
    Test decode, usage and prices, a multi-leg tool loop and required history pass-back, terminal and transient HTTP errors,
    capacity retries, projection, fork/resume and `ride scope` selection.
+   Also summon a persona that declares another provider's recipe onto this provider, from a host that holds the other provider's key,
+   and run it with the real credential gate:
+   it must start without that key.
+   For a provider that can serve auxiliary roles, hydrate a `mu` entry naming it into that stage and call it:
+   the one-shot must reach the endpoint with no other provider's key material in the session.
    [DeepSeek's route tests](../../llms/deepseek/bro/deepseek/routes_test.py) use an in-test HTTP server rather than a vendor key.
 5. **Provide the live probe.** Add an opt-in `<provider>_llm_test.py` that saves raw responses for refreshing offline fixtures,
    and register it in `LLM_PYTEST_FILES`, never the ordinary unit roster.
