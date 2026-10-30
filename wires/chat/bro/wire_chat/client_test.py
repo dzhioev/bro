@@ -32,13 +32,16 @@ def transport(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_history_preserves_reasoning_null_content_and_raw_arguments(transport):
+@pytest.mark.parametrize('first_reasoning,second_reasoning', [('first', 'second'), ('', '')])
+async def test_history_preserves_reasoning_null_content_and_raw_arguments(
+  transport, first_reasoning, second_reasoning
+):
   requests, replies = transport
   wire = Chat(LLMSpec(reasoning_effort='high'), {'api_key': 'fixture-key'})
   replies.extend(
     [
-      response(None, reasoning='first', calls=[call('')], stop='tool_calls'),
-      response('answer', reasoning='second'),
+      response(None, reasoning=first_reasoning, calls=[call('')], stop='tool_calls'),
+      response('answer', reasoning=second_reasoning),
       response('next'),
     ]
   )
@@ -53,14 +56,14 @@ async def test_history_preserves_reasoning_null_content_and_raw_arguments(transp
   assert requests[1]['messages'][2] == {
     'role': 'assistant',
     'content': None,
-    'reasoning_content': 'first',
+    'reasoning_content': first_reasoning,
     'tool_calls': [call('')],
   }
   assert requests[2]['messages'][2] == requests[1]['messages'][2]
   assert requests[2]['messages'][4] == {
     'role': 'assistant',
     'content': 'answer',
-    'reasoning_content': 'second',
+    'reasoning_content': second_reasoning,
   }
   assert requests[1]['messages'][3] == {
     'role': 'tool',
@@ -134,12 +137,13 @@ async def test_cancelled_exchange_keeps_history(transport):
   'silent,replayed',
   [
     (response(None), {'role': 'assistant', 'content': ''}),
+    (response('', reasoning=''), {'role': 'assistant', 'content': '', 'reasoning_content': ''}),
     (
       response('', reasoning='waiting'),
       {'role': 'assistant', 'content': '', 'reasoning_content': 'waiting'},
     ),
   ],
-  ids=['empty', 'reasoning-only'],
+  ids=['empty', 'empty-reasoning', 'reasoning-only'],
 )
 async def test_silent_completion_ends_the_turn_and_replays_as_sent_live(
   transport, silent, replayed
@@ -172,9 +176,12 @@ def step(kind, body, **extras):
 
 
 @pytest.mark.asyncio
-async def test_restore_uses_steps_not_recorded_requests_and_omits_stopped_legs(transport):
+@pytest.mark.parametrize('reasoning', ['kept', ''])
+async def test_restore_uses_steps_not_recorded_requests_and_omits_stopped_legs(
+  transport, reasoning
+):
   requests, replies = transport
-  raw = response(None, reasoning='kept', calls=[call('')], stop='tool_calls')
+  raw = response(None, reasoning=reasoning, calls=[call('')], stop='tool_calls')
   raw['choices'][0]['message'].update(refusal=None, annotations=[], audio=None)
   wire = Chat(LLMSpec(), {'api_key': 'fixture-key'})
   wire.restore(
@@ -194,7 +201,12 @@ async def test_restore_uses_steps_not_recorded_requests_and_omits_stopped_legs(t
   assert requests[0]['messages'] == [
     {'role': 'system', 'content': 'system'},
     {'role': 'user', 'content': 'original'},
-    {'role': 'assistant', 'content': None, 'reasoning_content': 'kept', 'tool_calls': [call('')]},
+    {
+      'role': 'assistant',
+      'content': None,
+      'reasoning_content': reasoning,
+      'tool_calls': [call('')],
+    },
     {'role': 'tool', 'tool_call_id': 'call_1', 'content': '{"answer":42}'},
     {'role': 'user', 'content': 'news'},
     {'role': 'user', 'content': 'continue'},
