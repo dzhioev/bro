@@ -1,4 +1,4 @@
-# Design: model inputs — typed message content, listed models and unrestricted recipes
+# Design: model inputs — typed message content, listed models and passthrough recipes
 
 This file is the specification of [#1143](https://github.com/dzhioev/bro/issues/1143).
 It lives on the branch `design/1143-model-inputs`, which is never merged:
@@ -16,7 +16,7 @@ What it enables, for example:
 - `bro.native.llm --provider deepseek --model flash 'what does it show?' --attach chart.png` sends the image;
   the same command with `--model pro` is refused before the request.
 - `--llm openai:gpt-7:high` is refused at launch, since `gpt-7` is not a listed model;
-  `--llm openai:gpt-7:high+unrestricted` launches, and the vendor alone decides what that model takes.
+  `--llm openai:gpt-7:high+passthrough` launches, and the vendor alone decides what that model takes.
 
 Settled by the owner during the discussion of 2026-10-31 (the decision record, §13, lists every decision with its status):
 
@@ -24,7 +24,7 @@ Settled by the owner during the discussion of 2026-10-31 (the decision record, �
 2. One file content class carries `data`, `mime_type` and an optional `filename`, with a constructor that reads a path.
 3. Whether a recipe accepts a file is decided per model and per MIME type, from each vendor's documentation of each listed model.
 4. A model its provider does not list is refused by default, and the accepted types are always checked before a request.
-5. One recipe flag, `unrestricted`, admits unlisted models and makes every MIME type accepted;
+5. One recipe flag, `passthrough`, admits unlisted models and makes every MIME type accepted;
    the check keeps its name, `accepts`, and returns true under the flag.
 6. `JSON`, `DateTimeEncoder` and `Markdown` leave `mu`.
 
@@ -51,7 +51,8 @@ backward compatibility is not a constraint (`AGENTS.md`, "Conventions").
 - **Model inputs** — for one model, the set of MIME types of `File` content it accepts.
   `Text` is accepted by every model and is not part of the set.
 - **Listed model** — a model id that is a key of its recipe class's model-inputs table, `MODEL_INPUTS` (§4).
-- **Unrestricted recipe** — a recipe whose `unrestricted` flag is set (§4).
+- **Passthrough recipe** — a recipe whose `passthrough` flag is set (§4):
+  the framework consults no model list for it, so its model and content pass through to the vendor unchecked.
 - **Admitted recipe** — a recipe allowed to drive a model (rule A1, §5).
 - **Selection** — a launch's recipe choice as `--llm` or the piece flags spell it (`LLMSelection`, `bro/llm/providers.py`);
   the **standing recipe** is the one it applies to, the persona's declared or the configured recipe.
@@ -126,7 +127,7 @@ the vendor checks the bytes (DeepSeek documents that it detects the format from 
 @dataclass(frozen=True)
 class LLMSpec(ABC):
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]]
-  unrestricted: bool = field(default=False, kw_only=True)
+  passthrough: bool = field(default=False, kw_only=True)
 
   def admitted(self) -> bool: ...
   def accepts(self, mime_type: str) -> bool: ...
@@ -137,15 +138,15 @@ class LLMSpec(ABC):
 - **R1.** `MODEL_INPUTS` maps each listed model id to its model inputs.
   Every provider recipe class defines it.
   The recipe's model is `selection()['model']`; `None` means the model is deferred to the session, which only Anthropic recipes allow (`deferred_fields`).
-- **R2.** `accepts(mime_type)` is true when the recipe is unrestricted;
+- **R2.** `accepts(mime_type)` is true for a passthrough recipe;
   otherwise it is true when the model is listed and `mime_type` is in its model inputs;
   otherwise it is false.
   It is defined once, in the base class: DeepSeek's and echo's overrides are deleted.
 - **R3.** `admitted()` is rule A1 (§5).
 - **R4.** `dump()` is concrete in the base class:
-  it returns `_dump_impl()`, which each provider implements in place of today's `dump()`, plus `"unrestricted": true` when the flag is set.
+  it returns `_dump_impl()`, which each provider implements in place of today's `dump()`, plus `"passthrough": true` when the flag is set.
   A recipe without the flag dumps exactly as today.
-  `from_dict()` builds the recipe through `_from_dict_impl()` as today, then applies an `unrestricted` key when present;
+  `from_dict()` builds the recipe through `_from_dict_impl()` as today, then applies a `passthrough` key when present;
   a value that is not a JSON boolean raises `TypeError`.
 
 Loading a declaration (`providers.declaration`) also validates the table:
@@ -174,8 +175,8 @@ an animated GIF passes the model gate for OpenAI, which refuses it, and for Anth
 
 ## 5. Admission
 
-- **A1.** A recipe is admitted when it is unrestricted, its model is deferred, or its model is listed.
-- **A2.** `providers.require_admitted(recipe)` raises `LLMSelectionError` for a recipe that is not admitted, naming the model, the provider's short names and the `+unrestricted` suffix (§7).
+- **A1.** A recipe is admitted when it is a passthrough recipe, its model is deferred, or its model is listed.
+- **A2.** `providers.require_admitted(recipe)` raises `LLMSelectionError` for a recipe that is not admitted, naming the model, the provider's short names and the `+passthrough` suffix (§7).
   It is enforced at two points:
   - `providers.resolve` checks its result.
     Every launch surface resolves its recipe there (`Harness.resolve_recipe` for the native and Claude harnesses, `ride`'s authority scope, `mu`),
@@ -183,10 +184,10 @@ an animated GIF passes the model gate for OpenAI, which refuses it, and for Anth
   - `wires.open` checks the recipe before it constructs a client.
     Every model call of the native loop or of `mu` opens its client there, including recipes rebuilt from a record (a fork's trail header, `--resolved-llm`) that never pass through resolution.
 - **A3.** `providers.resolve_model` keeps its rules (a short name, else a full id, else the name verbatim if it fits the provider's `MODEL_ID`).
-  Admission runs after the selection's model and flags are applied, so `openai:gpt-7+unrestricted` is admitted and `openai:gpt-7` is not.
+  Admission runs after the selection's model and flags are applied, so `openai:gpt-7+passthrough` is admitted and `openai:gpt-7` is not.
 - **A4.** Reading a recipe never checks admission:
   loading, displaying and pricing a recorded recipe of a model since delisted keeps working;
-  a fork of it is refused at `wires.open` unless the fork's own selection names a listed model or `+unrestricted`.
+  a fork of it is refused at `wires.open` unless the fork's own selection names a listed model or `+passthrough`.
 
 ## 6. Wire encoding
 
@@ -204,7 +205,7 @@ an animated GIF passes the model gate for OpenAI, which refuses it, and for Anth
 |---|---|---|---|
 | `Text` | `input_text` | `text` | joined with the other `Text` items by `\n` |
 | `File`, `image/*` | `input_image` with `image_url` the data URL and `detail` `high` | `image_url` with the data URL | refused by the model gate (echo accepts none) |
-| other `File` | `input_file` with `file_data` the data URL and `filename` with `/` and `\` replaced by `_`, omitted when `None` | refused by the protocol gate: Chat Completions carries files only in OpenAI's dialect, and no Chat-wire recipe lists a non-image type | refused by the model gate |
+| other `File` | `input_file` with `file_data` the data URL, `filename` with `/` and `\` replaced by `_` and omitted when `None`, and no `detail`, so the vendor's `auto` applies | refused by the protocol gate: Chat Completions carries files only in OpenAI's dialect, and no Chat-wire recipe lists a non-image type | refused by the model gate |
 
 The Responses encoder lives in `wires/responses/bro/wire_responses/content.py`;
 `convert_content_part`, `convert_message`, `image_to_content`, `png_to_content` and `image_file_to_content` are deleted.
@@ -212,28 +213,28 @@ The Responses encoder lives in `wires/responses/bro/wire_responses/content.py`;
 A restore replays a recorded `user_input` or `notification` step as `UserMessage((Text(body),))` through the same encoder;
 the Responses client's hand-built replay item goes.
 
-## 7. Selecting `unrestricted`
+## 7. Selecting `passthrough`
 
-- **G1.** The recipe grammar is `provider:model:effort` followed by the optional suffixes `+fast` and `+unrestricted`, each at most once, in either order.
-  `LLMSelection.format()` writes `+fast` before `+unrestricted`.
+- **G1.** The recipe grammar is `provider:model:effort` followed by the optional suffixes `+fast` and `+passthrough`, each at most once, in either order.
+  `LLMSelection.format()` writes `+fast` before `+passthrough`.
   Any other suffix is refused with `LLMSelectionError`.
-  A suffix alone applies to the standing recipe, as `+fast` does today: `+unrestricted`.
-- **G2.** `LLMSelection` gains `unrestricted: bool`.
+  A suffix alone applies to the standing recipe, as `+fast` does today: `+passthrough`.
+- **G2.** `LLMSelection` gains `passthrough: bool`.
   `over()` combines it as it combines `fast`:
   a launch selection that names a provider is complete and keeps only its own flag;
   for any other launch selection, the result carries the flag when either the launch selection or the configured default does.
   `resolve()` sets the recipe's flag after the model and before admission (A3).
   A selection that names a provider starts from the provider's default recipe, so its flag comes from the selection alone;
   a selection that names only a model, an effort or a flag keeps the standing recipe's flag.
-- **G3.** Every surface that takes, forwards or reports `fast` does the same for `unrestricted`:
-  the piece flag `--unrestricted` beside `--fast` (`bro/launch/llm_flags.py`, excluded with `--llm` like the other piece flags);
+- **G3.** Every surface that takes, forwards or reports `fast` does the same for `passthrough`:
+  the piece flag `--passthrough` beside `--fast` (`bro/launch/llm_flags.py`, excluded with `--llm` like the other piece flags);
   the summon payload (`bro/summon.py`);
   `ride`'s launch and `scope` options (`ride/ride/cli.py`);
   the authority scope's option, an open flag that is not overridable like `fast` (`ride/ride/authority_scope.py`), which reads the flag back from the resolved recipe's `dump()`;
   the forwarded argv of a session (`ride/ride/session.py`) and of a worker (`ride/ride/bro_worker.py`).
 - **G4.** The names of the selection's options are written out separately at each of those surfaces.
-  They are defined once in `bro/llm/providers.py`, with the flag-valued subset (`fast`, `unrestricted`), and every surface derives its handling from that definition.
-- **G5.** `mu`'s material names its recipes in the same grammar, so `"llm": "openai:gpt-7:low+unrestricted"` works with no change to `mu`.
+  They are defined once in `bro/llm/providers.py`, with the flag-valued subset (`fast`, `passthrough`), and every surface derives its handling from that definition.
+- **G5.** `mu`'s material names its recipes in the same grammar, so `"llm": "openai:gpt-7:low+passthrough"` works with no change to `mu`.
 
 ## 8. The native loop and the chat command
 
@@ -262,17 +263,17 @@ the Responses client's hand-built replay item goes.
 
 ## 10. Records and rollout
 
-- A trail header records the recipe's `dump()`, so the `unrestricted` key appears only on unrestricted recipes.
+- A trail header records the recipe's `dump()`, so the `passthrough` key appears only on passthrough recipes.
 - `user_input` step bodies stay text (L2).
   `File` content is not recorded in steps, so a restore or a fork does not replay it, as for an attached image today.
 - A raw request record carries each wire's encoding, including the base64 data of files, as for images today.
 - `TRAIL_FORMAT` does not change.
   The hosted trails server stores rows verbatim and never rebuilds a recipe, so this design needs no redeploy of it.
-- An installation from before this design ignores an `unrestricted` key in a recipe dump, and refuses the `+unrestricted` suffix as an unsupported suffix.
+- An installation from before this design ignores a `passthrough` key in a recipe dump, and refuses the `+passthrough` suffix as an unsupported suffix.
   So configuration that names the suffix (host recipe lists, `--llm` presets, `mu` material) is written only after every installation reading it is re-synced.
 - Once an installation is re-synced, its configured recipes that name an unlisted model stop launching.
   Before re-syncing, the operator checks the host's recipe lists and presets and the `mu` material's `llm` values,
-  and moves each unlisted model to a listed one or adds `+unrestricted` after the re-sync.
+  and moves each unlisted model to a listed one or adds `+passthrough` after the re-sync.
   This repository's own configuration and personas name only listed models.
 - A root keeps the runtime it froze at start, and so do the sessions it summons:
   they run under the rules of that runtime until a root starts after the re-sync.
@@ -288,9 +289,9 @@ the Responses client's hand-built replay item goes.
 | `from_path` on an unknown or compressed name | `ValueError` | `File.from_path` | the file is opened |
 | `from_path` on a refused, irregular or missing path | `FileAccessDenied`, `ValueError`, `FileNotFoundError` | the access seam | the file is read |
 | a recipe string with an unknown suffix | `LLMSelectionError` | `providers.parse` | resolution |
-| a dump whose `unrestricted` is not a boolean | `TypeError` | `LLMSpec.from_dict` | the recipe exists |
+| a dump whose `passthrough` is not a boolean | `TypeError` | `LLMSpec.from_dict` | the recipe exists |
 | a declaration whose `MODELS` or `DEFAULT_MODEL` is unlisted, or whose table is malformed | `LLMSelectionError` (provider unavailable) | `providers.declaration` | the provider is used |
-| what the vendor refuses (an unrestricted recipe's content, an animated GIF on OpenAI) | the provider's API error | the vendor | — |
+| what the vendor refuses (a passthrough recipe's content, an animated GIF on OpenAI) | the provider's API error | the vendor | — |
 
 ## 12. Examples
 
@@ -305,21 +306,21 @@ the Responses client's hand-built replay item goes.
    `File(pdf, 'application/pdf')` is refused by the model gate, since flash lists only images;
    on a Chat-wire recipe that listed `application/pdf`, the protocol gate would refuse it instead.
 4. `File(data, 'image/tiff', 'scan.tiff')` on `openai:sol` is refused by the model gate;
-   on `openai:sol+unrestricted` it passes, Responses sends it as `input_image`, and OpenAI's refusal comes back as its API error.
+   on `openai:sol+passthrough` it passes, Responses sends it as `input_image`, and OpenAI's refusal comes back as its API error.
 5. `File(data, 'application/pdf', 'Payslip4/2026.pdf')` on Responses is sent with `filename='Payslip4_2026.pdf'`.
 6. `--llm openai:gpt-7:high` raises `LLMSelectionError` at resolution;
-   `--llm openai:gpt-7:high+unrestricted` is admitted, and so is its piece-flag spelling, `--provider openai --model gpt-7 --effort high --unrestricted`.
+   `--llm openai:gpt-7:high+passthrough` is admitted, and so is its piece-flag spelling, `--provider openai --model gpt-7 --effort high --passthrough`.
 7. A fork of a trail recorded on `gpt-5.5`, which is not listed:
    the header's recipe is rebuilt and displayed, and the fork is refused at `wires.open`;
-   a fork whose selection names a listed model (`--llm openai:terra`) or the flag (`--llm +unrestricted`) proceeds.
+   a fork whose selection names a listed model (`--llm openai:terra`) or the flag (`--llm +passthrough`) proceeds.
 8. On the Claude harness, `--llm anthropic` with the model left to the session is admitted, since its model is deferred;
-   `--llm anthropic:claude-opus-6` is refused unless it carries `+unrestricted`.
+   `--llm anthropic:claude-opus-6` is refused unless it carries `+passthrough`.
 9. `File.from_path('report.pdf.gz')` and `File.from_path('notes')` raise `ValueError`;
    `File.from_path('chart.webp', 'image/webp')` succeeds.
 
 ## 13. Decision record
 
-Status: `settled` (decided by the owner) or `proposed` (raised by the design, to be settled with its approval).
+D1 to D7 were decided by the owner in the discussion; P1 to P11 were raised by the design and settled by the owner with its approval on 2026-10-31.
 
 | id | decision | status |
 |---|---|---|
@@ -327,19 +328,20 @@ Status: `settled` (decided by the owner) or `proposed` (raised by the design, to
 | D2 | `File(data, mime_type, filename=None)` and `File.from_path` (§3) | settled |
 | D3 | model inputs per model and MIME type, copied from vendor documentation; `Text` always accepted (§4) | settled |
 | D4 | unlisted models refused by default; the model gate always runs (§5, §6) | settled |
-| D5 | the `unrestricted` flag admits unlisted models and accepts every MIME type; `accepts` keeps its name (§4, §5) | settled |
+| D5 | the `passthrough` flag admits unlisted models and accepts every MIME type; `accepts` keeps its name (§4, §5) | settled |
 | D6 | `JSON`, `DateTimeEncoder` and `Markdown` deleted from `mu` (§9) | settled |
-| P1 | `mu`'s first argument named `instructions` (§9) | proposed |
-| P2 | `LLM.send` takes typed inputs instead of role dicts (§8) | proposed |
-| P3 | `from_path` reads through the access seam, guesses with Python's built-in table, and refuses unknown and compressed names (§3) | proposed |
-| P4 | an empty `File` refused (C2) | proposed |
-| P5 | the table is a class attribute of the recipe, covering `MODELS` and `DEFAULT_MODEL`, validated when the declaration loads (§4) | proposed |
-| P6 | admission enforced at `providers.resolve` and `wires.open` (A2) | proposed |
-| P7 | `+unrestricted` suffix, `--unrestricted` piece flag and an open authority option, mirroring `fast` (§7) | proposed |
-| P8 | the selection's option names defined once (G4) | proposed |
-| P9 | a single-`Text` message encoded as string content (W2) | proposed |
-| P10 | the Chat wire carries only image files (§6) | proposed |
-| P11 | OpenAI's inputs include every documented `input_file` type, not only PDF (§4) | proposed |
+| D7 | the flag is named `passthrough` (§4, §7) | settled |
+| P1 | `mu`'s first argument named `instructions` (§9) | settled |
+| P2 | `LLM.send` takes typed inputs instead of role dicts (§8) | settled |
+| P3 | `from_path` reads through the access seam, guesses with Python's built-in table, and refuses unknown and compressed names (§3) | settled |
+| P4 | an empty `File` refused (C2) | settled |
+| P5 | the table is a class attribute of the recipe, covering `MODELS` and `DEFAULT_MODEL`, validated when the declaration loads (§4) | settled |
+| P6 | admission enforced at `providers.resolve` and `wires.open` (A2) | settled |
+| P7 | `+passthrough` suffix, `--passthrough` piece flag and an open authority option, mirroring `fast` (§7) | settled |
+| P8 | the selection's option names defined once (G4) | settled |
+| P9 | a single-`Text` message encoded as string content (W2) | settled |
+| P10 | the Chat wire carries only image files (§6) | settled |
+| P11 | OpenAI's inputs include every documented `input_file` type, not only PDF (§4) | settled |
 
 ## 14. Unverified assumptions
 
@@ -354,12 +356,11 @@ Status: `settled` (decided by the owner) or `proposed` (raised by the design, to
 ## 15. Documentation
 
 - `bro/llm/AGENTS.md`: the `wire.py` entry (content items, `require_accepted`), the `mu.py` entry, and the `providers.py` sentence calling the short-name table "a convenience, not a whitelist".
-- `bro/reference/llm_providers.md`: the provider contract (`MODEL_INPUTS`, admission, `unrestricted`, no `accepts` override),
+- `bro/reference/llm_providers.md`: the provider contract (`MODEL_INPUTS`, admission, `passthrough`, no `accepts` override),
   the client contract (encode `Text` and `File`, call `require_accepted`, the protocol gate), and the same "not a whitelist" sentence.
 - `bro/llm/providers.py`: the `resolve_model` docstring.
 - `wires/responses/AGENTS.md`: what `content.py` encodes.
 - `bro/reference/ride.md`: the LLM selection flags and the recipe grammar.
-- `bro/reference/permissions.md`: the `unrestricted` row of the bro option table.
-- `bro/launch/llm_flags.py`: the `--llm` and `--unrestricted` help.
+- `bro/reference/permissions.md`: the `passthrough` row of the bro option table.
+- `bro/launch/llm_flags.py`: the `--llm` and `--passthrough` help.
 - Any other page naming a deleted or renamed symbol, found by grep when the change is made.
-- [#1048](https://github.com/dzhioev/bro/issues/1048): its draft's sentence that `mu` already has `PDFFile` and `Image`.
