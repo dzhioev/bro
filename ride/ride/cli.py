@@ -6,6 +6,7 @@ from typing import Optional
 
 from bro.base import log
 from bro.base.args import REMAINDER, Parser
+from bro.llm import providers
 from bro.workspace.banner import banner
 from bro.workspace.paths import fresh_workspace_name, project_root
 from ride import operator, pending_launch
@@ -278,9 +279,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, isolation=isolation)
   selected_harness = args.pop('harness')
-  recipe_options = {
-    name: args.pop(name) for name in ('provider', 'model', 'effort', 'fast') if name in args
-  }
+  recipe_options = {name: args.pop(name) for name in providers.SELECTION_OPTIONS if name in args}
   recipe_options = {
     name: value
     for name, value in recipe_options.items()
@@ -492,9 +491,7 @@ def main(argv: list[str]) -> Optional[int]:
       bro=args['bro'],
       harness=args['harness'],
       llm=args['llm'],
-      recipe_options={
-        key: args[key] for key in ('provider', 'model', 'effort', 'fast') if args[key]
-      },
+      recipe_options={key: args[key] for key in providers.SELECTION_OPTIONS if args[key]},
     )
   assert command == 'banner'
   return banner(llm=args['llm'])

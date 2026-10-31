@@ -5,6 +5,7 @@ from bro.bro import feature
 from bro.datasources.references import (
   extending,
   llm_providers,
+  mu,
   permission_model,
   permissions,
   permissions_cheatsheet,
@@ -63,6 +64,7 @@ class Dev(Bro):
     man(extending),
     *(man(guide) for guide in references.guides),
     man(llm_providers),
+    man(mu),
     man(permission_model),
     man(permissions),
     man(permissions_cheatsheet),

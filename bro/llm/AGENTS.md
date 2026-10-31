@@ -33,20 +33,21 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   `known_names()` reads sorted metadata without imports; `declaration(name)` loads and validates only the named provider.
   Searches warn and skip broken declarations; an explicit selection fails by name.
   Model resolution tries the short name, then full id, then verbatim;
-  the table is a convenience, not a whitelist, and a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
+  a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
+  `require_admitted` checks the driven recipe at authority settlement, native launch and wire opening; discovery and resolution remain unchecked.
   `carriers` and `provider_of_model` search model declarations among a supplied set of providers.
   Launch resolution inherits the provider of its standing recipe for a model-only selection; a named provider starts a complete recipe.
   `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
   `price` prices one call from the provider's raw usage record and effective service tier.
   `price_table` exposes the current provider-owned table and its provenance.
-  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` suffix, and `over` lays one selection over another
+  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` and `+passthrough` suffixes, and `over` lays one selection over another
   — a launch's flags over a configured default.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.
 - `mu.py` — typed one-shot calls configured by the `mu` credential.
-  `mu(prompt, result, *contents, role=None)` blocks; `mu.aio(...)` is awaitable.
+  `mu(instructions, result, *content, role=None)` blocks; `mu.aio(...)` is awaitable.
   The material's default recipe and credential, or the named role's pair, open a wire through `wires.open` and call `structured`.
-  `Text` and `JSON` reduce to neutral text parts; `Markdown` is a convenience result model.
+  Content is the wire port’s `Text` and `File`; see `bro/reference/mu.md` (man topic `mu`).
   Uncompleted replies raise `LLMStopped`.
   Operator configuration: `bro/reference/permissions.md`, "Auxiliary LLM credentials".
 - `retry.py` — `retry_llm(request, transient)`, retrying through a provider outage until `RETRY_WINDOW_SECONDS` run out,
@@ -69,6 +70,7 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   `NullObserver` is the explicit no-op.
 - `records.py` — SDK-free response meanings: ordered reasoning, messages, calls and unknown parts, with derived reply and terminal status.
 - `wire.py` — the `Wire` client port, `Leg`, replay `Prefix`, and neutral inputs (`SystemPrompt`, `UserMessage`, `Notification`, `ToolOutput`).
+  `Text` and `File` are validated content items; `EXTENSION_TYPES` types file paths and `require_accepted` enforces the model gate.
   A leg carries the recorded exchange and its decoded parts, stop, reply and billed counts.
   `UnusableResponse` retains a received leg when reply extraction fails and explicitly reports whether the wire accepted the exchange.
   A rejected exchange retains pending inputs and is recorded with `stopped: failed`; an accepted one acknowledges its inputs.

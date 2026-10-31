@@ -35,7 +35,7 @@ from bro.llm.observer import (
   ToolResultEvent,
 )
 from bro.llm.tracker import Tracker
-from bro.llm.wire import ToolOutput
+from bro.llm.wire import File, SystemPrompt, Text, ToolOutput, UserMessage
 from bro.native.loop_test_helper import ResponsesLoop, make_loop
 from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder
@@ -391,7 +391,7 @@ class TestSendTrackerEmission:
       gpt.tracker = tracker
       _install_responses(gpt, [_fake_response(output=[_message_item('done')])], captured)
 
-      turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+      turn = asyncio.create_task(gpt.send([UserMessage((Text('go'),))]))
       while not store.append_started.is_set():
         await asyncio.sleep(0)
       store.loop_responsive.set()
@@ -404,12 +404,7 @@ class TestSendTrackerEmission:
     gpt, tracker, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('hi back')])], captured)
 
-    await gpt.send(
-      [
-        {'role': 'system', 'content': 'be helpful'},
-        {'role': 'user', 'content': 'hello'},
-      ]
-    )
+    await gpt.send([SystemPrompt('be helpful'), UserMessage((Text('hello'),))])
 
     user_steps = [s for s in tracker.steps if s[0] == 'user_input']
     assert len(user_steps) == 1
@@ -418,31 +413,31 @@ class TestSendTrackerEmission:
     assert extras == {'turn_index': 0}
 
   @pytest.mark.asyncio
-  async def test_user_input_text_extracted_from_multimodal_content(self):
+  @pytest.mark.parametrize(
+    'content,expected',
+    [
+      (
+        (Text('caption this'), File(b'image', 'image/png'), Text('next line')),
+        'caption this\nnext line',
+      ),
+      ((File(b'image', 'image/png'),), ''),
+    ],
+  )
+  async def test_user_input_text_extracted_from_multimodal_content(self, content, expected):
     gpt, tracker, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ack')])], captured)
 
-    await gpt.send(
-      [
-        {
-          'role': 'user',
-          'content': [
-            {'type': 'text', 'text': 'caption this'},
-            {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AAAA'}},
-          ],
-        }
-      ]
-    )
+    await gpt.send([UserMessage(content)])
 
     user_steps = [s for s in tracker.steps if s[0] == 'user_input']
-    assert user_steps[0][1] == 'caption this'
+    assert user_steps[0][1] == expected
 
   @pytest.mark.asyncio
   async def test_request_timeout_forwarded_to_responses_create(self):
     gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'hi'}], request_timeout=120.0)
+    await gpt.send([UserMessage((Text('hi'),))], request_timeout=120.0)
 
     assert captured[0]['timeout'] == 120.0
 
@@ -451,7 +446,7 @@ class TestSendTrackerEmission:
     gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'hi'}])
+    await gpt.send([UserMessage((Text('hi'),))])
 
     assert 'timeout' not in captured[0]
 
@@ -461,7 +456,7 @@ class TestSendTrackerEmission:
     _install_failing_create(gpt, captured, APITimeoutError(request=_REQUEST))
     monkeypatch.setattr('bro.base.retry.asyncio_sleep', _no_wait)
 
-    assert await gpt.send([{'role': 'user', 'content': 'hi'}]) == 'ok'
+    assert await gpt.send([UserMessage((Text('hi'),))]) == 'ok'
     assert len(captured) == 2
 
   @pytest.mark.asyncio
@@ -472,7 +467,7 @@ class TestSendTrackerEmission:
     monkeypatch.setattr('bro.base.retry.asyncio_sleep', _no_wait)
 
     with pytest.raises(APIStatusError):
-      await gpt.send([{'role': 'user', 'content': 'hi'}])
+      await gpt.send([UserMessage((Text('hi'),))])
     assert len(captured) == 1
 
   @pytest.mark.asyncio
@@ -486,7 +481,7 @@ class TestSendTrackerEmission:
     )
     _install_responses(gpt, [response], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'hi'}])
+    await gpt.send([UserMessage((Text('hi'),))])
 
     llm_calls = [s for s in tracker.steps if s[0] == 'llm_call']
     assert len(llm_calls) == 1
@@ -525,7 +520,7 @@ class TestSendTrackerEmission:
     )
     _install_responses(gpt, [first, second], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     assert [step[0] for step in tracker.steps] == [
       'user_input',
@@ -549,7 +544,7 @@ class TestSendTrackerEmission:
     second = _fake_response(output=[_message_item('final')])
     _install_responses(gpt, [first, second], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     assert observer.on_event.call_args_list == [
       call(ReasoningEvent('thinking')),
@@ -575,7 +570,7 @@ class TestSendTrackerEmission:
     )
     _install_responses(gpt, [terminal], captured)
 
-    reply = await gpt.send([{'role': 'user', 'content': 'go'}])
+    reply = await gpt.send([UserMessage((Text('go'),))])
 
     assert reply == 'Waiting for your choice: (1) or (2).'
     assert observer.on_event.call_args_list == [
@@ -600,7 +595,7 @@ class TestSendTrackerEmission:
     second = _fake_response(output=[_message_item('done')])
     _install_responses(gpt, [first, second], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     assert sources == [{'step_id': 1, 'index': 2}]
     assert tracker.current_tool_step_id is None
@@ -613,7 +608,7 @@ class TestSendTrackerEmission:
     third = _fake_response(output=[_message_item('done')])
     _install_responses(gpt, [first, second, third], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     turns_by_kind: dict[str, list[int]] = {}
     for kind, _, extras in tracker.steps:
@@ -641,8 +636,8 @@ class TestSendTrackerEmission:
       captured,
     )
 
-    await gpt.send([{'role': 'user', 'content': 'first'}])
-    await gpt.send([{'role': 'user', 'content': 'second'}])
+    await gpt.send([UserMessage((Text('first'),))])
+    await gpt.send([UserMessage((Text('second'),))])
 
     user_turns = [extras['turn_index'] for kind, _, extras in tracker.steps if kind == 'user_input']
     llm_turns = [extras['turn_index'] for kind, _, extras in tracker.steps if kind == 'llm_call']
@@ -682,7 +677,7 @@ class TestNotificationDelivery:
     second = _fake_response(output=[_message_item('done')], response_id='r2')
     _install_responses(gpt, [first, second], captured)
 
-    assert await gpt.send([{'role': 'user', 'content': 'go'}]) == 'done'
+    assert await gpt.send([UserMessage((Text('go'),))]) == 'done'
 
     [function_output, notification] = captured[1]['input']
     assert function_output['type'] == 'function_call_output'
@@ -713,10 +708,10 @@ class TestNotificationDelivery:
       ],
       captured,
     )
-    await gpt.send([{'role': 'user', 'content': 'first'}])
+    await gpt.send([UserMessage((Text('first'),))])
     inbox.post('[watch] between turns')
 
-    await gpt.send([{'role': 'user', 'content': 'second'}])
+    await gpt.send([UserMessage((Text('second'),))])
 
     notification, user_message = captured[1]['input']
     assert notification['role'] == 'user'
@@ -742,7 +737,7 @@ class TestNotificationDelivery:
       ],
       captured,
     )
-    await gpt.send([{'role': 'user', 'content': 'first'}])
+    await gpt.send([UserMessage((Text('first'),))])
     inbox.post('[watch] wake')
 
     assert await gpt.wake() == 'noticed'
@@ -769,7 +764,7 @@ class TestNotificationDelivery:
       ],
       captured,
     )
-    await gpt.send([{'role': 'user', 'content': 'first'}])
+    await gpt.send([UserMessage((Text('first'),))])
     inbox.post('[notification: the framework]\nsettle the run')
 
     assert await gpt.wake() == 'settled'
@@ -806,7 +801,7 @@ class TestNotificationDelivery:
       await asyncio.Future()
 
     gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
-    turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+    turn = asyncio.create_task(gpt.send([UserMessage((Text('go'),))]))
     await followup_started.wait()
     turn.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -816,7 +811,7 @@ class TestNotificationDelivery:
     _install_responses(
       gpt, [_fake_response(output=[_message_item('resumed')], response_id='r2')], resumed
     )
-    assert await gpt.send([{'role': 'user', 'content': 'continue'}]) == 'resumed'
+    assert await gpt.send([UserMessage((Text('continue'),))]) == 'resumed'
 
     pending_output, pending_notification, user_message = resumed[0]['input']
     assert pending_output['type'] == 'function_call_output'
@@ -913,7 +908,7 @@ class TestReplyExtractionFallback:
       ]
     )
     _install_responses(gpt, [terminal], captured)
-    assert await gpt.send([{'role': 'user', 'content': 'hi'}]) == 'the work landed'
+    assert await gpt.send([UserMessage((Text('hi'),))]) == 'the work landed'
 
   @pytest.mark.asyncio
   @pytest.mark.parametrize(
@@ -943,7 +938,7 @@ class TestReplyExtractionFallback:
     _install_responses(gpt, [terminal], captured)
 
     with pytest.raises(RuntimeError, match=error):
-      await gpt.send([{'role': 'user', 'content': 'hi'}])
+      await gpt.send([UserMessage((Text('hi'),))])
 
     assert [kind for kind, _, _ in tracker.steps] == ['user_input', 'llm_call']
     assert tracker.steps[-1][1]['response'] == terminal.model_dump(mode='json')
@@ -971,8 +966,8 @@ class TestReplyExtractionFallback:
     )
 
     with pytest.raises(RuntimeError, match='cannot help'):
-      await gpt.send([{'role': 'user', 'content': 'hi'}])
-    assert await gpt.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+      await gpt.send([UserMessage((Text('hi'),))])
+    assert await gpt.send([UserMessage((Text('continue'),))]) == 'continued'
 
     assert captured[0]['input'] == [
       {'role': 'user', 'content': 'notice'},
@@ -999,7 +994,7 @@ class TestReasoningKwargs:
   async def test_send_passes_include_to_responses_create(self):
     gpt, _, captured = _make_responses_loop_with_tracker(reasoning_effort='medium')
     _install_responses(gpt, [_fake_response(output=[_message_item('hi')])], captured)
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
     assert captured[0]['include'] == ['reasoning.encrypted_content']
     assert captured[0]['reasoning'] == {'effort': 'medium', 'summary': 'auto'}
 
@@ -1026,7 +1021,7 @@ class TestContextManagementKwargs:
     second = _fake_response(output=[_message_item('done')])
     _install_responses(gpt, [first, second], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     expected = [{'type': 'compaction', 'compact_threshold': 1_000}]
     assert [kwargs['context_management'] for kwargs in captured] == [expected, expected]
@@ -1036,7 +1031,7 @@ class TestContextManagementKwargs:
     gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('hi')])], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     assert 'context_management' not in captured[0]
 
@@ -1052,7 +1047,7 @@ class TestUsageAccounting:
     )
     _install_responses(gpt, [response], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'hi'}])
+    await gpt.send([UserMessage((Text('hi'),))])
 
     assert gpt.cumulative_usage() == {
       'gpt-5': {'input': 70, 'cache_write': 0, 'cache_read': 30, 'output': 22}
@@ -1069,7 +1064,7 @@ class TestUsageAccounting:
     )
     _install_responses(gpt, [response], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'hi'}])
+    await gpt.send([UserMessage((Text('hi'),))])
 
     assert gpt.cumulative_usage() == {
       'gpt-5': {'input': 3, 'cache_write': 8_684, 'cache_read': 0, 'output': 190}
@@ -1090,7 +1085,7 @@ class TestUsageAccounting:
     )
     _install_responses(gpt, [first, second], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     assert gpt.cumulative_usage() == {
       'gpt-5-2025-08-07': {'input': 25, 'cache_write': 0, 'cache_read': 25, 'output': 11}
@@ -1110,7 +1105,7 @@ class TestUsageAccounting:
     )
     _install_responses(gpt, [first, second], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'go'}])
+    await gpt.send([UserMessage((Text('go'),))])
 
     published = usage.current_usage()
     assert published is not None
@@ -1125,7 +1120,7 @@ class TestUsageAccounting:
     gpt, _, captured = _make_responses_loop_with_tracker()
     _install_responses(gpt, [_fake_response(output=[_message_item('ok')])], captured)
 
-    await gpt.send([{'role': 'user', 'content': 'hi'}])
+    await gpt.send([UserMessage((Text('hi'),))])
 
     # publishing is gated on the agent identity; without it no pointer is minted
     assert usage.USAGE_FILE_VARIABLE not in os.environ
@@ -1177,7 +1172,7 @@ class TestInterruptedTurn:
       captured,
     )
 
-    turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+    turn = asyncio.create_task(gpt.send([UserMessage((Text('go'),))]))
     await asyncio.wait_for(blocking.started.wait(), timeout=5)
     turn.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1193,7 +1188,7 @@ class TestInterruptedTurn:
     assert [step[0] for step in interrupted] == ['tool_result', 'tool_result']
     assert all(step[2]['is_error'] is True for step in interrupted)
 
-    reply = await gpt.send([{'role': 'user', 'content': 'never mind, do this'}])
+    reply = await gpt.send([UserMessage((Text('never mind, do this'),))])
     assert reply == 'after'
     # the resumed request chains on the response that made the calls and leads
     # with their answers, then the new message
@@ -1215,7 +1210,7 @@ class TestInterruptedTurn:
 
     gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
 
-    turn = asyncio.create_task(gpt.send([{'role': 'user', 'content': 'go'}]))
+    turn = asyncio.create_task(gpt.send([UserMessage((Text('go'),))]))
     await asyncio.wait_for(started.wait(), timeout=5)
     turn.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -1223,7 +1218,7 @@ class TestInterruptedTurn:
 
     # no response came back, so the whole request rides into the next send
     # rather than vanishing from the conversation
-    assert [item.content for item in cast(list, gpt._pending_input)] == ['go']
+    assert gpt._pending_input == [UserMessage((Text('go'),))]
     assert gpt.wire._last_response_id is None
 
 
@@ -1248,7 +1243,7 @@ async def test_argument_errors_are_returned_to_the_model_without_calling_the_too
     captured,
   )
 
-  assert await loop.send([{'role': 'user', 'content': 'go'}]) == 'recovered'
+  assert await loop.send([UserMessage((Text('go'),))]) == 'recovered'
 
   empty = not arguments.strip()
   assert invoked == ([{}] if empty else [])
@@ -1281,7 +1276,7 @@ async def test_cancellation_during_recording_keeps_the_conversation_answerable(k
     [_tool_calls_response('ping', 'ping'), _fake_response(output=[_message_item('continued')])],
     captured,
   )
-  turn = asyncio.create_task(loop.send([{'role': 'user', 'content': 'go'}]))
+  turn = asyncio.create_task(loop.send([UserMessage((Text('go'),))]))
   with ExitStack() as cleanup:
     cleanup.callback(release.set)
     await entered.wait()
@@ -1291,7 +1286,7 @@ async def test_cancellation_during_recording_keeps_the_conversation_answerable(k
 
   if kind == 'user_input':
     _install_responses(loop, [_fake_response(output=[_message_item('continued')])], captured)
-  assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+  assert await loop.send([UserMessage((Text('continue'),))]) == 'continued'
   if kind == 'user_input':
     assert [item['content'] for item in captured[0]['input']] == ['go', 'continue']
   else:
@@ -1337,7 +1332,7 @@ async def test_stopped_legs_are_recorded_counted_and_refused_before_events(
   _install_responses(loop, [stopped, _fake_response(output=[_message_item('continued')])], captured)
 
   with pytest.raises(LLMStopped, match=reason) as error:
-    await loop.send([{'role': 'system', 'content': 'prompt'}, {'role': 'user', 'content': 'go'}])
+    await loop.send([SystemPrompt('prompt'), UserMessage((Text('go'),))])
 
   assert error.value.reason == stop
   assert error.value.stop_reason == reason
@@ -1348,7 +1343,7 @@ async def test_stopped_legs_are_recorded_counted_and_refused_before_events(
   assert published[0][1]['gpt-5']['output'] == 20
   observer.on_event.assert_not_called()
   assert loop.wire._last_response_id is None
-  assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+  assert await loop.send([UserMessage((Text('continue'),))]) == 'continued'
   assert 'previous_response_id' not in captured[1]
   assert [item['content'] for item in captured[1]['input']] == ['prompt', 'go', 'continue']
 
@@ -1374,7 +1369,7 @@ async def test_cancelled_capacity_wait_keeps_inputs_without_answering_refused_ca
   original_exchange = loop.wire.exchange
   monkeypatch.setattr(loop.wire, 'exchange', exchange)
   monkeypatch.setattr(llm_retry, 'asyncio_sleep', pause)
-  turn = asyncio.create_task(loop.send([{'role': 'user', 'content': 'go'}]))
+  turn = asyncio.create_task(loop.send([UserMessage((Text('go'),))]))
   await waiting.wait()
   turn.cancel()
   with pytest.raises(asyncio.CancelledError):
@@ -1384,7 +1379,7 @@ async def test_cancelled_capacity_wait_keeps_inputs_without_answering_refused_ca
   observer.on_event.assert_not_called()
   monkeypatch.setattr(loop.wire, 'exchange', original_exchange)
   _install_responses(loop, [_fake_response(output=[_message_item('continued')])], captured)
-  assert await loop.send([{'role': 'user', 'content': 'continue'}]) == 'continued'
+  assert await loop.send([UserMessage((Text('continue'),))]) == 'continued'
   assert [item['content'] for item in captured[0]['input']] == ['go', 'continue']
 
 
@@ -1408,7 +1403,7 @@ async def test_repeated_cancellation_cannot_interrupt_answering_the_received_cal
 
   monkeypatch.setattr(loop, '_track_step', track)
   _install_responses(loop, [_tool_calls_response('ping', 'ping')], captured)
-  turn = asyncio.create_task(loop.send([{'role': 'user', 'content': 'go'}]))
+  turn = asyncio.create_task(loop.send([UserMessage((Text('go'),))]))
   with ExitStack() as cleanup:
     cleanup.callback(release_leg.set)
     cleanup.callback(release_result.set)

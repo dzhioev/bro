@@ -309,3 +309,20 @@ def test_manual_preparation_publishes_the_bro_default_talk(tmp_path):
   host = Host()
   request = _request(tmp_path, host=host, manual=True)
   assert BroType(host).talk(request) == DEFAULT_TALK
+
+
+@pytest.mark.parametrize('passthrough', [False, True])
+def test_summon_admission_and_join_command_forward_passthrough(tmp_path, passthrough):
+  text = 'openai:gpt-7:high' + ('+passthrough' if passthrough else '')
+  if not passthrough:
+    with pytest.raises(LaunchDenied, match='gpt-7.*passthrough'):
+      _request(tmp_path, llm=text)
+    return
+  host = Host()
+  admitted = _request(tmp_path, host=host, llm=text)
+  launch = cast(SummonLaunchSpec, cast(Spawn, BroType(host).launch(admitted)).launch)
+  spec = bro_worker._child_session_spec(launch, 'child', None)
+  assert spec.llm_spec.passthrough
+  assert spec.llm_spec.selection()['model'] == 'gpt-7'
+  command = bro_worker._joined_ride_command(launch)
+  assert '--passthrough' in command and '--model gpt-7' in command

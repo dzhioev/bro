@@ -20,7 +20,7 @@ How to add a source of either shape: `bro/reference/extending.md`, "Adding a dat
   single `get_time` tool (wire `current-time-source__get_time`)
 - `references.py` — the core reference docs as ready-made instances:
   one `FileSource` per doc,
-  `environment` over `bro/prompts/environment.md` and `template` / `conditions` / `ride` / `dive-in` / `extending` / `llm-providers` and the three permission pages over the same-named `bro/reference/*.md`.
+  `environment` over `bro/prompts/environment.md` and `template` / `conditions` / `ride` / `dive-in` / `extending` / `llm-providers` / `mu` and the three permission pages over the same-named `bro/reference/*.md`.
   A bro declares whichever shape fits in `tools`, as `source(<doc>)` or `man(<doc>)`;
   `bro-dev` contributes its development-style source separately
 - `file.py` — `FileSource(name, summary, path, render=True)`:

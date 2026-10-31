@@ -257,7 +257,7 @@ def text_result(value):
 
 
 class ScriptedLLM(LLM):
-  async def send(self, messages, *, request_timeout=None):
+  async def send(self, inputs, *, request_timeout=None):
     opened = await self.tools.call('webview__open', {})
     webview = opened['webview']
     html = (
@@ -430,7 +430,7 @@ def text_result(value):
 
 
 class ScriptedLLM(LLM):
-  async def send(self, messages, *, request_timeout=None):
+  async def send(self, inputs, *, request_timeout=None):
     spell = await self.tools.call('spell__browse', {})
     assert 'Run an owner-led webview' in spell, spell
     opened = await self.tools.call('webview__open', {})

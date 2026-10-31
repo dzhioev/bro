@@ -28,7 +28,7 @@ The following modules ship from `bro-native`:
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
 
-Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--llm` registration, preset expansion, and canonicalization.
+Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--passthrough` / `--llm` registration, preset expansion, and canonicalization.
 Recipe resolution belongs to each harness implementation.
 `bro-native`'s `bro/run.py` is the lightweight dispatcher;
 it imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
@@ -56,7 +56,7 @@ They add no implied `--fast` or other defaults.
 ## Naming the LLM
 
 Every native run and every managed mode registers one flag set from `llm_flags.py`.
-`--llm` takes `provider:model:effort` with an optional `+fast` suffix and any field left empty (`:fable5`, `::high`, `openai:sol:max+fast`), or a preset from the project's `[tool.bro.llm]` table / host `~/.bro.json`.
+`--llm` takes the recipe grammar in `bro/reference/ride.md`, “Recipe selection”, or a preset from the project's `[tool.bro.llm]` table / host `~/.bro.json`.
 Managed launches carry recipe inputs to the host, which expands presets and resolves them under the root reading.
 The admitted recipe reaches the inner session through its resolved environment.
 Native in-process surfaces canonicalize their selection before launching.

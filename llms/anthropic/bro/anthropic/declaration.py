@@ -501,6 +501,11 @@ class LLMSpec(llm_llm.LLMSpec):
 
   TYPE: ClassVar[str] = 'anthropic'
   WIRE: ClassVar[str] = 'messages'
+  # Anthropic vision and PDF-support guides, read 2026-10-31.
+  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = dict.fromkeys(
+    MODELS.values(),
+    frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'}),
+  )
   selection_fields = MappingProxyType({'model': 'model', 'effort': 'effort'})
   deferred_fields = frozenset({'model', 'effort'})
   effort_values = frozenset(llm_llm.EFFORT_LEVELS)
@@ -525,7 +530,7 @@ class LLMSpec(llm_llm.LLMSpec):
       )
     return dataclasses.replace(self, effort=effort)
 
-  def dump(self) -> dict:
+  def _dump_impl(self) -> dict:
     return {
       'type': self.TYPE,
       'model': self.model,

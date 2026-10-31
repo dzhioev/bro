@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from bro.llm.llm import LLMStopped, UnsupportedContent
-from bro.llm.wire import Prefix
+from bro.llm.wire import File, Prefix, Text
 from bro.openai.declaration import LLMSpec
 from bro.wire_responses import client as client_module
 from bro.wire_responses.client import Responses
@@ -61,12 +61,12 @@ async def test_structured_enforces_the_schema_and_options_without_conversation_s
   wire = Responses(recipe, {'api_key': 'key'})
   wire.restore(Prefix('restored prompt', ()))
   wire.seed_chain('previous')
-  result = await wire.structured('question', _Answer, [{'type': 'text', 'text': 'record'}], 17)
+  result = await wire.structured('question', _Answer, (Text('record'),), 17)
   assert result.answer == '42'
   request = client.requests[0]
   assert request['input'] == [
     {'role': 'system', 'content': 'question'},
-    {'role': 'user', 'content': [{'type': 'input_text', 'text': 'record'}]},
+    {'role': 'user', 'content': 'record'},
   ]
   assert 'previous_response_id' not in request
   assert request['model'] == recipe.model
@@ -94,7 +94,9 @@ async def test_structured_enforces_the_schema_and_options_without_conversation_s
 async def test_stops_are_checked_before_partial_json_is_validated(client, status, reason, stop):
   client.replies = [_response('{"answer":', status=status, incomplete_details={'reason': reason})]
   with pytest.raises(LLMStopped) as error:
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured('question', _Answer, [], None)
+    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+      'question', _Answer, (Text('input'),), None
+    )
   assert error.value.reason == stop
   assert error.value.stop_reason == (reason or status)
   assert client.closed
@@ -105,7 +107,9 @@ async def test_stops_are_checked_before_partial_json_is_validated(client, status
 async def test_empty_or_invalid_completed_replies_raise(client, text):
   client.replies = [_response(text)]
   with pytest.raises((RuntimeError, ValidationError)):
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured('question', _Answer, [], None)
+    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+      'question', _Answer, (Text('input'),), None
+    )
   assert client.closed
 
 
@@ -115,14 +119,16 @@ async def test_a_refusal_is_not_validated_as_an_answer(client):
     _response(output=[{'type': 'message', 'content': [{'type': 'refusal', 'refusal': 'no'}]}])
   ]
   with pytest.raises(RuntimeError, match='refusal'):
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured('question', _Answer, [], None)
+    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+      'question', _Answer, (Text('input'),), None
+    )
 
 
 @pytest.mark.asyncio
 async def test_unsupported_content_is_refused_before_a_request(client):
   with pytest.raises(UnsupportedContent, match='audio.*gpt'):
     await Responses(LLMSpec(), {'api_key': 'key'}).structured(
-      'question', _Answer, [{'type': 'audio', 'data': 'bytes'}], None
+      'question', _Answer, (File(b'audio', 'audio/wav'),), None
     )
   assert client.requests == []
 
@@ -139,7 +145,9 @@ async def test_transient_errors_use_the_recipe_retry_and_close_the_client(client
     openai.APIConnectionError(request=httpx2.Request('POST', 'https://test')),
     _response(),
   ]
-  answer = await Responses(LLMSpec(), {'api_key': 'key'}).structured('question', _Answer, [], None)
+  answer = await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+    'question', _Answer, (Text('input'),), None
+  )
   assert answer.answer == '42'
   assert len(client.requests) == 2
   assert waits
@@ -171,11 +179,11 @@ async def test_capacity_uses_the_shared_retry_without_chaining(client, monkeypat
   wire = Responses(LLMSpec(), {'api_key': 'key'})
   if exhausted:
     with pytest.raises(LLMStopped, match='capacity'):
-      await wire.structured('question', _Answer, [], None)
+      await wire.structured('question', _Answer, (Text('input'),), None)
     assert len(client.requests) == 7
     assert len(waits) == 6
   else:
-    assert (await wire.structured('question', _Answer, [], None)).answer == '42'
+    assert (await wire.structured('question', _Answer, (Text('input'),), None)).answer == '42'
     assert len(waits) == 1
   assert all(request == client.requests[0] for request in client.requests)
   assert wire._last_response_id is None

@@ -15,15 +15,24 @@ The shared interfaces are [LLMSpec](../llm/llm.py) and the [provider roster](../
   The provider entry name follows `[a-z][a-z0-9-]*` and equals the recipe's `TYPE` and credential kind.
   Duplicate entry names fail rather than establish a priority.
   Entry points require an environment sync after they change.
-- Export a frozen `LLMSpec` with validated model and knob fields, `dump()` and `_from_dict_impl()` for round trips,
+- Export a frozen `LLMSpec` with validated model and knob fields, `_dump_impl()` and `_from_dict_impl()` for round trips,
   and `selection_fields`, `deferred_fields` and `effort_values` for selection and reconstruction.
   Map the neutral levels of `with_effort()` onto the provider's documented scale;
   implement `fast()` only when supported.
   A client-driven recipe supplies `WIRE`, `ENDPOINT` when needed, `request_options()`,
-  `needed_secrets()`, `is_transient(error)` and `accepts(part_kind)`.
+  `needed_secrets()` and `is_transient(error)`.
+  Every recipe class defines `MODEL_INPUTS`, mapping listed model ids to `frozenset`s of lowercase MIME types without parameters, copied from the vendor’s model and input-format guides.
+  `DEFAULT_MODEL` and every `MODELS` value must occur in the table;
+  declaration loading validates the table and its MIME types.
+  The base `accepts(mime_type)` accepts every MIME type under the keyword-only `passthrough` flag, otherwise checks the selected model’s row; do not override it.
+  `admitted()` accepts listed or deferred models, or any model under `passthrough`.
+  The base `dump()` adds the flag only when true; `from_dict()` requires a boolean when the key is present.
+  Text is always accepted and is not listed in the table.
   Options must not overlap the wire client's `OWNED` fields; unsupported input raises `UnsupportedContent` before sending.
 - Export `DEFAULT_MODEL`, `MODELS` (short names to full ids), and `MODEL_ID` when verbatim model ids need a pattern.
-  The table is a convenience, not a whitelist: resolution tries a short name, then a full id, then a verbatim id.
+  Resolution tries a short name, then a full id, then a verbatim id.
+  Before a recipe drives a run, `require_admitted` refuses an unlisted model unless it carries `+passthrough`; resolution and declaration discovery do not check admission.
+  Authority settlement, native launches and `wires.open` check the final recipe, so a listed selection can override an unlisted declaration.
   Export `FAILURE_SIGNATURES` using the neutral failure categories in `llm.py`.
   Pricing exports are `PRICE_TABLE`, `PRICE_TABLE_SHA256` and `price(model, usage, service_tier, table)`;
   add `price_table_from_content` for retained benchmark tables.
@@ -94,7 +103,14 @@ A new protocol needs a distribution under `wires/<name>/`, with an import-free p
   `counts()` maps billing onto the four classes of [usage](../llm/usage.py).
 - **Client:** register a class implementing [Wire](../llm/wire.py), with its SDK in the distribution's `client` extra.
   It accepts the recipe and credential material, encodes neutral inputs and tools, owns `OWNED` request fields,
-  and implements `exchange`, `restore`, and `structured` for auxiliary one-shot calls.
+  and implements `exchange`, `restore`, and `structured(instructions, result, content, request_timeout)` for auxiliary one-shot calls.
+  User content is a nonempty tuple of `Text` and `File` from `bro.llm.wire`.
+  Call `require_accepted(recipe, content)` before encoding any item, then refuse any model-accepted type the protocol cannot carry with `UnsupportedContent`.
+  One `Text` encodes as string content;
+  multiple items or a file encode as a list.
+  Read no file in a wire;
+  `File` carries bytes and a declared MIME type.
+  Replay recorded user and notification text through the same encoder as `UserMessage((Text(body),))`.
   A server-chained client may implement `seed_chain`; a client-chained wire must reject it.
   Build each `Leg` from the same raw JSON passed to decode and counts, retaining the raw response, nulls included.
   A wire's decode and client sides share a version.
@@ -193,13 +209,23 @@ an unknown wire degrades to a forensic event without losing its record.
 
 ## Adding a model to an existing provider
 
-Use the existing declaration: add a `MODELS` alias and a price row, and check `MODEL_ID` admits the vendor's full and returned snapshot ids.
+Use the existing declaration: add a `MODELS` alias, a `MODEL_INPUTS` row copied from the vendor’s input-format documentation, and a price row, and check `MODEL_ID` admits the vendor's full and returned snapshot ids.
+Add newly documented filename suffixes to `EXTENSION_TYPES` in `bro.llm.wire`, choosing a MIME type every vendor accepting that format lists.
+When no single type serves them all, leave the suffix out and require callers to pass `mime_type` explicitly.
 Test knob defaults, effort mapping, content support, usage and pricing for any model-specific differences.
 A new model need not require a new wire, credential or provider distribution.
 Update and run the provider's live probe, refresh captured fixtures, and adjust presets and operator recipes that select the model.
-A model without a price row remains usable but unpriced.
+An unlisted model is refused unless the recipe carries `+passthrough`, which also bypasses its model-input checks, but not the wire’s protocol constraints.
+A listed model without a price row remains usable but unpriced.
 
 ## Operator adoption
+
+Before re-syncing an installation, move configured unlisted models to listed ones in host and repository presets, per-bro lists and `mu` materials.
+A kept workspace whose recorded selection names an unlisted model cannot resume after the re-sync; see [ride](ride.md#bro-harness) for continuation.
+End or cancel running Harbor jobs before re-syncing, and start none until the benchmark bundle is rebuilt.
+Re-sync every installation reading the shared configuration, rebuild the benchmark bundle, and start fresh roots; move consumer repositories’ framework pins when they adopt the content routes.
+Only after every such installation has moved and every root from before its re-sync has ended may `+passthrough` appear in shared configuration or benchmark presets.
+An older installation refuses that suffix; a root and all its children retain the runtime frozen when it started.
 
 1. Install the provider with the client extra wherever it will run, and the decode side on trail readers.
    In this checkout, sync the workspace and any independent projects in use;

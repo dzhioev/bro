@@ -128,3 +128,13 @@ class TestPresets:
     assert llm_flags.selection_from_args(_args(['--llm', 'future:unlisted'])) == LLMSelection(
       'future', 'unlisted'
     )
+
+
+def test_passthrough_piece_flag_canonicalizes_and_excludes_whole_recipe():
+  args = _args(['--provider', 'openai', '--model', 'gpt-7', '--effort', 'high', '--passthrough'])
+  selection = llm_flags.selection_from_args(args)
+  assert selection.passthrough
+  assert llm_flags.canonicalize(args, selection) == 'openai:gpt-7:high+passthrough'
+  assert _parser().reconstruct(args, prog=[]) == ['--llm', selection.format()]
+  with pytest.raises(SystemExit):
+    _args(['--llm', 'openai', '--passthrough'])

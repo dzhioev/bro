@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +29,7 @@ from bro.llm.wire import (
   Notification,
   Prefix,
   SystemPrompt,
+  Text,
   ToolOutput,
   UnusableResponse,
   UserMessage,
@@ -293,45 +294,51 @@ class Loop(LLM):
     self.observer.on_event(NotificationEvent(batch.text, batch.job_ids))
     return batch
 
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
-    return await self._send(messages, notification_turn=False, request_timeout=request_timeout)
+  async def send(
+    self, inputs: Sequence[SystemPrompt | UserMessage], *, request_timeout: Optional[float] = None
+  ) -> str:
+    return await self._send(inputs, notification_turn=False, request_timeout=request_timeout)
 
   async def wake(self, *, request_timeout: Optional[float] = None) -> str:
     return await self._send([], notification_turn=True, request_timeout=request_timeout)
 
   async def _send(
     self,
-    messages: list[dict],
+    inputs: Sequence[SystemPrompt | UserMessage],
     *,
     notification_turn: bool,
     request_timeout: Optional[float],
   ) -> str:
     tools = await self._resolve_tools()
     api_input: list[Input] = []
-    incoming = messages
+    incoming = inputs
     if self._restored:
-      incoming = [message for message in messages if message.get('role') != 'system']
+      incoming = [item for item in inputs if not isinstance(item, SystemPrompt)]
       self._restored = False
     api_input.extend(self._pending_input)
 
-    user_messages = [message for message in incoming if message.get('role') == 'user']
+    user_messages = [item for item in incoming if isinstance(item, UserMessage)]
     if notification_turn or (len(user_messages) > 0 and self._has_user_input):
       self._turn_index += 1
-    converted_incoming: list[Input] = [_convert_message(message) for message in incoming]
+    incoming_items: list[Input] = list(incoming)
     notification = await self._drain_notifications(
       api_input,
       call_index=self._call_index + 1,
-      following=converted_incoming,
+      following=incoming_items,
     )
     if notification_turn and notification is None:
       raise RuntimeError('notification turn started without inbox news')
     if notification is None:
-      api_input.extend(converted_incoming)
+      api_input.extend(incoming_items)
 
     self._pending_input = list(api_input)
     for message in user_messages:
       await _finish_on_cancel(
-        self._track_step('user_input', _extract_text(message), turn_index=self._turn_index)
+        self._track_step(
+          'user_input',
+          '\n'.join(item.text for item in message.content if isinstance(item, Text)),
+          turn_index=self._turn_index,
+        )
       )
     if notification_turn or len(user_messages) > 0:
       self._has_user_input = True
@@ -351,23 +358,6 @@ class Loop(LLM):
 
     assert response.reply is not None
     return response.reply
-
-
-def _convert_message(message: dict) -> Input:
-  if message['role'] == 'system':
-    return SystemPrompt(message['content'])
-  if message['role'] != 'user':
-    raise ValueError(f'unsupported incoming role {message["role"]!r}')
-  return UserMessage(message['content'])
-
-
-def _extract_text(msg: dict) -> str:
-  content = msg.get('content', '')
-  if isinstance(content, str):
-    return content
-  if isinstance(content, list):
-    return '\n'.join(p.get('text', '') for p in content if p.get('type') == 'text')
-  return str(content)
 
 
 async def _finish_on_cancel[T](operation: Awaitable[T]) -> T:
