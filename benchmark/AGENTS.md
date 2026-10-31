@@ -10,15 +10,16 @@ The launcher-side `bro-bench` member is mapped by `../bench/AGENTS.md`.
 ## Development
 
 This is not a uv workspace member:
-`harbor` reaches `openai < 3` through litellm while the native wire client
-pins `openai == 3`, so no single lock satisfies both.
+`harbor` reaches `openai < 3` through litellm while the wire distributions' `client` extras pin `openai == 3`,
+so no single lock satisfies both.
 The directory therefore locks and syncs on its own:
 `uv sync --directory benchmark --all-groups` builds `.venv` from the `uv.lock` committed beside this file.
-It depends through editable path sources on core, ride, the Claude harness, both trail-format distributions, the bare provider plug-ins, and `bro-bench`,
+It depends through editable path sources on core, ride, both trail-format distributions, the bare provider plug-ins, and `bro-bench`,
 whose launcher-side credential and command registrations, and the preset composition the job runner reads, are shared with the root environment.
 Bare provider plug-ins supply declarations and pricing without pulling wire clients into Harbor's interpreter.
-The relocatable bundle builds and installs `bro` plus both harnesses and their trail-format distributions
-from the root workspace instead of adding the engine to this project's environment.
+No harness is a dependency:
+Harbor's process runs none,
+and a trial gets both from the relocatable bundle, which builds and installs `bro` plus both harnesses and their trail-format distributions from the root workspace.
 Its requirements export requests the `client` extras, and the build validates every registered wire client in the bundled interpreter.
 
 Formatting and linting stay the repository root's, which walks this directory through its
