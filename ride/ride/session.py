@@ -21,6 +21,7 @@ from bro.authority.rules import Mission
 from bro.base import configs, credentials, log
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM, Talk
 from bro.harness import harness_name
+from bro.llm import providers
 from bro.llm.llm import LLMSpec
 from bro.monitor import (
   SESSION_DIR_ENV,
@@ -209,7 +210,9 @@ class SessionSpec:
     if self.harness_set:
       parts.extend(['--harness', self.resolved_harness])
     for name, value in self.recipe_options.items():
-      parts.extend(['--' + name] if name == 'fast' else ['--' + name, str(value)])
+      parts.extend(
+        ['--' + name] if name in providers.SELECTION_FLAGS else ['--' + name, str(value)]
+      )
     if self.workspace_pinned:
       parts.extend(['--workspace', self.name])
     for value in self.cred:

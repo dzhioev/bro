@@ -335,7 +335,11 @@ def test_summoned_child_env_without_a_summoner_carries_no_provenance(monkeypatch
 
 @pytest.mark.parametrize(
   ('flags', 'field', 'value'),
-  [(['--llm', 'chosen-preset'], 'llm', 'chosen-preset'), (['--effort', 'high'], 'effort', 'high')],
+  [
+    (['--llm', 'chosen-preset'], 'llm', 'chosen-preset'),
+    (['--effort', 'high'], 'effort', 'high'),
+    (['--passthrough'], 'passthrough', True),
+  ],
 )
 def test_cli_keeps_recipe_inputs_for_the_host(monkeypatch, flags, field, value):
   calls = []

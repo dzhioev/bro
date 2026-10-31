@@ -81,6 +81,60 @@ def test_in_process_selection_does_not_read_the_managed_host_list(register_test_
 
   register_test_bros(RecipeLess)
   monkeypatch.setattr(Reading, 'take', lambda *_: pytest.fail('read managed configuration'))
-  assert run_llm_spec('recipe-less', parse('echo:chosen')) == LLMSpec(model='chosen')
+  assert run_llm_spec('recipe-less', parse('echo:chosen+passthrough')) == LLMSpec(
+    model='chosen', passthrough=True
+  )
   with pytest.raises(ValueError, match='declares no LLM recipe'):
     run_llm_spec('recipe-less', LLMSelection())
+
+
+@pytest.mark.parametrize('surface', ['run', 'chat'])
+@pytest.mark.parametrize('encoded', [False, True])
+def test_native_launch_refuses_an_unlisted_driven_recipe_before_the_runner(
+  surface, encoded, monkeypatch, register_test_bros, caplog
+):
+  import json
+
+  from bro.bro import BaseBro
+  from bro.launch.call import chat_main
+  from bro.openai.declaration import LLMSpec
+
+  class Reader(BaseBro):
+    name = 'unlisted-reader'
+    llm_spec = LLMSpec(model='gpt-7')
+
+  register_test_bros(Reader)
+  monkeypatch.setattr('bro.launch.run.Runner', lambda *args, **kwargs: pytest.fail('started'))
+  monkeypatch.setattr('bro.launch.call.Runner', lambda *args, **kwargs: pytest.fail('started'))
+  main = run_main if surface == 'run' else chat_main
+  arguments = ['bro', Reader.name, 'read']
+  if encoded:
+    declared = Reader.llm_spec
+    assert declared is not None
+    arguments += ['--resolved-llm', json.dumps(declared.dump())]
+  assert main(arguments, program=['bro', surface]) == 1
+  assert 'gpt-7' in caplog.text and '+passthrough' in caplog.text
+
+
+def test_native_unlisted_declaration_accepts_a_listed_override_or_flag(register_test_bros):
+  from bro.bro import BaseBro
+  from bro.launch.run import run_llm_spec
+  from bro.llm.providers import parse
+  from bro.openai.declaration import LLMSpec
+
+  class Reader(BaseBro):
+    name = 'unlisted-reader'
+    llm_spec = LLMSpec(model='gpt-7')
+
+  register_test_bros(Reader)
+  spec = run_llm_spec(Reader.name, parse(':sol'))
+  assert spec is not None and spec.admitted() and not spec.passthrough
+  spec = run_llm_spec(Reader.name, parse('+passthrough'))
+  assert spec is not None and spec.passthrough and spec.selection()['model'] == 'gpt-7'
+
+
+def test_resolved_recipe_excludes_passthrough_piece_flag():
+  with pytest.raises(SystemExit):
+    run_main(
+      ['bro', 'dev', 'read', '--resolved-llm', '{}', '--passthrough'], program=['bro', 'run']
+    )

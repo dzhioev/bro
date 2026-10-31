@@ -34,7 +34,7 @@ def response(*output: dict, **fields) -> dict:
     'id': 'response_1',
     'object': 'response',
     'created_at': 0,
-    'model': 'fixture-model',
+    'model': 'gpt-6.1-sol',
     'status': 'completed',
     'output': list(output),
     'usage': None,
@@ -54,7 +54,7 @@ def call(arguments: str, name: str = 'svc__ping') -> dict:
 
 
 def cases() -> dict[str, dict[str, Case]]:
-  recipe = ResponsesSpec(model='fixture-model')
+  recipe = ResponsesSpec(model='gpt-6.1-sol')
   cases = {
     'plain': Case(recipe, response(message('reply')), (Message(1, 'reply'),)),
     'reasoning': Case(

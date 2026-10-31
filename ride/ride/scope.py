@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bro.base import credentials
+from bro.llm import providers
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
@@ -87,6 +88,13 @@ def scoped_secrets(
     }
     if llm_spec is not None:
       fields.update(provider=llm_spec.TYPE, **llm_spec.selection())
+      fields.update(
+        {
+          name: True
+          for name in providers.SELECTION_FLAGS
+          if name != 'fast' and getattr(llm_spec, name)
+        }
+      )
       fields = {name: value for name, value in fields.items() if value is not None}
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     return credentials_for(

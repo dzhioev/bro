@@ -366,10 +366,11 @@ class _FastlessSpec(LLMSpec):
   """test spec that intentionally has no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'fastless'
+  MODEL_INPUTS: ClassVar = {'whatever': frozenset()}
 
   model: str = 'whatever'
 
-  def dump(self) -> dict:
+  def _dump_impl(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod
@@ -380,7 +381,7 @@ class _FastlessSpec(LLMSpec):
 class _ChatBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_openai.LLMSpec(model='gpt-5.4-mini')
+  llm_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol')
 
   def __init__(self):
     super().__init__(system_prompt='record')
@@ -1190,7 +1191,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
 
   captured: dict = {}
   resumed_runner = _MockRunner()
-  recorded_spec = llm_llms_openai.LLMSpec(model='gpt-5', reasoning_effort='low')
+  recorded_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='low')
 
   def fake_resume(
     client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided', activity_file=None

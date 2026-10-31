@@ -40,7 +40,7 @@ class LLMSpec(llm_llm.LLMSpec):
 
   model: str = DEFAULT_MODEL
 
-  def dump(self) -> dict:
+  def _dump_impl(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod

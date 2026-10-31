@@ -18,6 +18,7 @@ from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_request
 from bro.authority.rules import Mission, Prepared
 from bro.base import log
+from bro.llm import providers
 from bro.quest import BRO
 from bro.summon import (
   DEFAULT_TALK,
@@ -348,10 +349,11 @@ def _joined_ride_command(launch: SummonLaunchSpec) -> str:
     if name.startswith('cred.'):
       kind = name.removeprefix('cred.')
       parts.extend(['--pass', f'{kind}+{value}'])
-    elif name in ('provider', 'model', 'effort'):
-      parts.extend(['--' + name, str(value)])
-    elif name == 'fast' and value is True:
-      parts.append('--fast')
+    elif name in providers.SELECTION_OPTIONS:
+      if name not in providers.SELECTION_FLAGS:
+        parts.extend(['--' + name, str(value)])
+      elif value is True:
+        parts.append('--' + name)
     elif name == 'export' and value is True:
       parts.append('--export')
     elif name in ('add', 'drop'):

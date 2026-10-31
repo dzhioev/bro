@@ -73,7 +73,7 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   a join-only ride in the task's directory whose records land under the collected agent directory,
   reaped through a fresh root exec when harbor cancels the phase.
   The root revokes `bro.placement=boxed` and grants `bro.placement=join`, so its summons may join the task tree and start no new party (`bro/reference/permissions.md`, "Start surfaces").
-  Harbor's `model_name` carries `<provider>/<model>[:<effort>][+fast]`, mapped onto a complete `--llm` recipe;
+  Harbor's `model_name` carries `<provider>/<model>[:<effort>][+fast][+passthrough]`, mapped onto a complete `--llm` recipe;
   the retry classification is the roster providers' declared failure signatures;
   the token counters harbor keeps are summed from the trial's trail store
 - `bro/benchmark/trial_store.py` — the trail store a trial's run leaves under its collected agent directory:

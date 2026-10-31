@@ -138,6 +138,9 @@ def load_client(name: str) -> type[Wire]:
 
 
 def open(recipe: LLMSpec, secrets: dict) -> Wire:
+  from bro.llm.providers import require_admitted
+
+  require_admitted(recipe)
   client = load_client(recipe.WIRE)
   conflicts = client.OWNED & recipe.request_options().keys()
   if conflicts:

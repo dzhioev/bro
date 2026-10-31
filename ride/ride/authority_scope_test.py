@@ -23,6 +23,7 @@ from bro.worker_types import installed_types
 from ride.authority_launch import mission_view
 from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
 from ride.authority_scope import configured_entries, configured_kinds, existence
+from ride.bro_worker import BroType
 from ride.repository import Repository
 
 
@@ -369,7 +370,7 @@ def test_recipe_list_prefers_first_served_and_more_specific_replaces(installatio
         'https://github.com/example/project.git': {
           'bros': {'child': {'llm': ['anthropic:opus55:high', 'echo:echo', 'default']}}
         },
-        '/project': {'bros': {'child': {'llm': ['echo:custom']}}},
+        '/project': {'bros': {'child': {'llm': ['echo:custom+passthrough']}}},
       }
     },
   )
@@ -694,7 +695,13 @@ def test_deferred_recipe_choices_are_checked_then_omitted(installation):
   source.rules.use(Authority.top().meet(literal_cap), descriptor)
   explicit = Request(
     'bro',
-    {'target': 'child', 'provider': 'anthropic', 'model': 'claude-opaque-new', 'effort': 'high'},
+    {
+      'target': 'child',
+      'provider': 'anthropic',
+      'model': 'claude-opaque-new',
+      'effort': 'high',
+      'passthrough': True,
+    },
   )
   explicit_descriptor = source.rules.normalize(explicit, source)
   cap = source.syntax.layer(parse_layer(revoke=['bro.model=~default', 'bro.effort=~default'])).cap
@@ -707,7 +714,9 @@ def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation
 
   source = reading(recipe_installation(installation, 'native', OpenAISpec()))
   for model in ('default', '~default', 'vendor-private-variant'):
-    request = Request('bro', {'target': 'child', 'provider': 'openai', 'model': model})
+    request = Request(
+      'bro', {'target': 'child', 'provider': 'openai', 'model': model, 'passthrough': True}
+    )
     descriptor = source.rules.normalize(request, source)
     assert descriptor.values['model'] == model and descriptor.values['model'] != DEFAULT
     source.rules.use(Authority.top(), descriptor)
@@ -724,6 +733,7 @@ def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, 
 
   standing = OpenAISpec(
     model='vendor-private-variant',
+    passthrough=True,
     reasoning_effort=effort,
     service_tier='flex',
     compact_threshold=12345,
@@ -744,7 +754,13 @@ def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, 
   value = 'minimal' if effort is None else effort
   explicit = Request(
     'bro',
-    {'target': 'child', 'provider': 'openai', 'model': 'vendor-private-variant', 'effort': value},
+    {
+      'target': 'child',
+      'provider': 'openai',
+      'model': 'vendor-private-variant',
+      'effort': value,
+      'passthrough': True,
+    },
   )
   explicit_descriptor = source.rules.normalize(explicit, source)
   source.rules.use(Authority.top(), explicit_descriptor)
@@ -973,13 +989,13 @@ def test_managed_recipe_supplied_to_a_persona_without_one(absent_recipe_installa
   from ride.authority_scope import checked_recipe
   from ride.bro_worker import BroType
 
-  recipes = ['echo:chosen'] if supplied == 'host' else ['default']
+  recipes = ['echo:chosen+passthrough'] if supplied == 'host' else ['default']
   source = reading(
     absent_recipe_installation, {'projects': {'/project': {'bros': {'child': {'llm': recipes}}}}}
   )
   fields = {'target': 'child'}
   if supplied == 'wire':
-    fields['llm'] = 'echo:chosen'
+    fields['llm'] = 'echo:chosen+passthrough'
   requested = Request('bro', BroType.option_values(fields, source).values)
   descriptor = source.rules.normalize(requested, source)
   if supplied == 'default':
@@ -987,7 +1003,9 @@ def test_managed_recipe_supplied_to_a_persona_without_one(absent_recipe_installa
     with pytest.raises(ValueError, match='declares no LLM recipe'):
       checked_recipe(requested, descriptor, source)
   else:
-    assert checked_recipe(requested, descriptor, source) == LLMSpec(model='chosen')
+    assert checked_recipe(requested, descriptor, source) == LLMSpec(
+      model='chosen', passthrough=True
+    )
     assert 'cred.provider_key' in descriptor.values
 
 
@@ -1009,7 +1027,9 @@ def test_unknown_host_provider_is_skipped_and_refused_when_exhausted(installatio
   messages = []
   monkeypatch.setattr(log, 'verbose', lambda message, *args: messages.append(message % args))
   config = {
-    'projects': {'/project': {'bros': {'child': {'llm': ['uninstalled:remote', 'echo:local']}}}}
+    'projects': {
+      '/project': {'bros': {'child': {'llm': ['uninstalled:remote', 'echo:local+passthrough']}}}
+    }
   }
   source = reading(installation, config)
   assert normalized(source).values['model'] == 'local'
@@ -1018,7 +1038,10 @@ def test_unknown_host_provider_is_skipped_and_refused_when_exhausted(installatio
   source = reading(installation, config)
   with pytest.raises(ValueError, match='uninstalled.*install the plug-in'):
     normalized(source)
-  assert normalized(source, provider='echo', model='override').values['model'] == 'override'
+  assert (
+    normalized(source, provider='echo', model='override', passthrough=True).values['model']
+    == 'override'
+  )
 
 
 def test_recipe_layers_preserve_persona_knobs_but_named_provider_resets_them(installation):
@@ -1046,8 +1069,8 @@ def test_summon_preset_precedence_and_provider_no_shadowing(installation):
 
   source = reading(
     installation,
-    {'llm': {'chosen': 'echo:host', 'echo': 'uninstalled:model'}},
-    project={'summon-harness': 'native', 'llm': {'chosen': 'echo:project'}},
+    {'llm': {'chosen': 'echo:host+passthrough', 'echo': 'uninstalled:model'}},
+    project={'summon-harness': 'native', 'llm': {'chosen': 'echo:project+passthrough'}},
   )
   selected = BroType.option_values({'target': 'child', 'llm': 'chosen'}, source).values
   assert selected['model'] == 'host'
@@ -1080,3 +1103,123 @@ def test_default_without_a_declaration_does_not_hide_missing_host_plugins(
   )
   with pytest.raises(ValueError, match='uninstalled.*install the plug-in'):
     normalized(source)
+
+
+@pytest.mark.parametrize('surface', ['authority', 'scope'])
+@pytest.mark.parametrize(
+  'selection',
+  [
+    {'llm': 'openai:gpt-7:high'},
+    {'llm': 'openai:gpt-7:high+passthrough'},
+    {'provider': 'openai', 'model': 'gpt-7', 'effort': 'high', 'passthrough': True},
+  ],
+)
+def test_admission_on_the_final_launch_recipe(
+  installation, monkeypatch, capsys, surface, selection
+):
+  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from ride.authority_launch import request
+  from ride.authority_scope import checked_recipe
+  from ride.scope_report import report_scope
+
+  source = reading(recipe_installation(installation, 'native', OpenAISpec()))
+  if surface == 'scope':
+    monkeypatch.setattr(Reading, 'take', lambda *_: source)
+    options = {name: value for name, value in selection.items() if name != 'llm'}
+    status = report_scope(None, 'child', 'native', selection.get('llm'), recipe_options=options)
+    assert status == (1 if selection == {'llm': 'openai:gpt-7:high'} else 0)
+    output = capsys.readouterr().out
+    assert 'gpt-7' in output
+    assert 'passthrough' in output
+    return
+
+  def launch():
+    requested, _ = request(
+      BroType, {'target': 'child', **selection}, source, source.operator(), forward=False
+    )
+    mission = source.rules.start(requested, source.operator(), source)
+    return checked_recipe(mission.request, mission.descriptor, source)
+
+  if selection == {'llm': 'openai:gpt-7:high'}:
+    with pytest.raises(ValueError, match='gpt-7.*\\+passthrough'):
+      launch()
+  else:
+    recipe = launch()
+    assert recipe.selection()['model'] == 'gpt-7' and recipe.passthrough
+
+
+@pytest.mark.parametrize(
+  'selection,model,passthrough',
+  [
+    ({}, None, False),
+    ({'llm': ':sol'}, 'gpt-6.1-sol', False),
+    ({'llm': '+passthrough'}, 'gpt-7', True),
+  ],
+)
+def test_unlisted_standing_recipe_is_overridable(installation, selection, model, passthrough):
+  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from ride.authority_scope import checked_recipe
+
+  installed = recipe_installation(installation, 'native', OpenAISpec(model='gpt-7'))
+  source = reading(installed)
+  fields = {'target': 'child', **selection}
+  if model is None:
+    with pytest.raises(ValueError, match='gpt-7.*passthrough'):
+      BroType.option_values(fields, source)
+      normalized(source)
+  else:
+    values = BroType.option_values(fields, source).values
+    requested = Request('bro', values)
+    descriptor = source.rules.normalize(requested, source)
+    spec = checked_recipe(requested, descriptor, source)
+    assert spec.selection()['model'] == model and spec.passthrough is passthrough
+  source = reading(
+    installed, {'projects': {'/project': {'bros': {'child': {'llm': ['openai:terra']}}}}}
+  )
+  assert normalized(source).values['model'] == 'gpt-5.6-terra'
+
+
+@pytest.mark.parametrize(
+  'text,admitted',
+  [
+    ('::xhigh', True),
+    ('anthropic', True),
+    ('anthropic:claude-opus-6', False),
+    ('anthropic:claude-opus-6+passthrough', True),
+  ],
+)
+def test_claude_deferred_listed_and_unlisted_admission(installation, text, admitted):
+  from bro.anthropic.declaration import LLMSpec as AnthropicSpec
+  from ride.authority_scope import checked_recipe
+
+  source = reading(
+    recipe_installation(installation, 'claude', AnthropicSpec(model=None, effort=None)),
+    project={'summon-harness': 'claude'},
+  )
+
+  def launch():
+    values = BroType.option_values({'target': 'child', 'llm': text}, source).values
+    requested = Request('bro', values)
+    return checked_recipe(requested, source.rules.normalize(requested, source), source)
+
+  if admitted:
+    assert launch().admitted()
+  else:
+    with pytest.raises(ValueError, match='claude-opus-6.*passthrough'):
+      launch()
+
+
+def test_passthrough_cannot_be_overridden_or_set_on_a_manual_start(installation):
+  source = reading(installation)
+  from bro.authority.rules import Override
+
+  requested = Request('bro', {'target': 'child', 'passthrough': True})
+  descriptor = source.rules.normalize(requested, source)
+  source.rules.use(source.operator(), descriptor)
+  mission = source.rules.start(requested, source.operator(), source)
+  with pytest.raises(Refusal, match='not overridable'):
+    source.rules.override(mission, Override(values={'passthrough': True}), source.operator())
+  with pytest.raises(ValueError, match='launch-owned.*passthrough'):
+    BroType.option_values({'target': 'child', 'manual': True, 'passthrough': True}, source)
+  with pytest.raises(ValueError, match='passthrough.*flag'):
+    BroType.option_values({'target': 'child', 'passthrough': 1}, source)
