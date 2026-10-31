@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.16.0
+version: 2.17.0
 ---
 
 # orchestrate
@@ -43,7 +43,9 @@ and ends.
   Everything durable must land on the page or be linked from it;
   a phase's answer carries only what you have to act on.
 - **You are the human's interface.** A summoned bro runs isolated with no human channel,
-  but each phase is granted `worker.question` so it can consult this coordinator before giving up its live state.
+  but its quest talks both ways:
+  the phase can consult this coordinator before giving up its live state,
+  and you can reach it while it runs.
   Questions,
   corrections,
   and go/no-go between phases are yours to handle;
@@ -109,8 +111,8 @@ Recover per-stage progress from the stage tasks' own statuses, not from memory.
 ## Launching a phase
 
 Every phase below opens with its **launch line**
-— the knobs that phase needs;
-anything the line does not name takes the default.
+— the knobs that phase needs beyond the rules its kind follows below;
+anything neither names takes the default.
 Design and review-and-plan are manual summons the user launches into an interactive session;
 the rest are summoned outright, bar the rollout steps your summon check leaves to a manual summon (phase 5).
 
@@ -123,11 +125,17 @@ and every failure mode
 this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
-  open every one with `worker.question` in its talk and collect its result through the session watch.
+  collect every one's result through the session watch.
   When it reports a child's question, answer that quest with `bro::quest_say(reply_to=…)`, then end the turn when nothing else remains.
   The watch wakes the run on the next transition;
   read the retained answer with `bro::quest_check` after the terminal line.
   Never launch a replacement phase to answer it.
+- **Talk.** Open every phase with `talk` `owner.say`, `owner.question`, `worker.question`.
+  Speak up only with what the phase must answer or act on:
+  relay the user's question to it with `bro::quest_ask`,
+  and send it an amendment to its task or a problem seen from outside, such as a hung gate run, with `bro::quest_say`.
+  Record an amendment as a comment on the task the phase works from before sending it, so a retry carries it too.
+  Never message a phase to check on its progress or to do its work for it.
 - **Hold and effort.** Leave both at the summon defaults.
   A bro with no human channel either delivers or raises with a reason you relay, and these phases execute a settled plan rather than working one out
   — the thinking was bought in the phases before them.
@@ -295,7 +303,7 @@ Before starting stage 1, take to the user the material objections, the open ques
 
 ### 3 — stages
 
-**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -322,7 +330,7 @@ the retry is a fresh summon on the same stage task.
 
 ### 4 — integrate
 
-**Summon:** `into` the landing's integration branch · `timeout` 28800 · `talk` `worker.question`{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the landing's integration branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
 
 Once every stage task of the landing is done, tell the user what the last step needs from them:
 where master is a protected base, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
@@ -362,7 +370,7 @@ re-fire it on that PR, which [[run pr]] resumes through its `pr` argument, rathe
 
 **Summon:** use the bro the step names.
 Set `into` to the commit its landing landed, as the integration phase answered it;
-size `timeout` for the step and grant `talk` `worker.question`.
+size `timeout` for the step.
 Pass the step's credential instance when this coordinator may use its `bro.cred=kind+instance` permission;
 otherwise take it from the target bro's host-config entry.
 
@@ -401,7 +409,7 @@ every step's check passed and recorded on the page, or a failed step rolled back
 
 ### 6 — verify
 
-**Summon:** `into` `master`, which the work is on by then · `talk` `worker.question` · pass a phase-only credential when authorized, otherwise take credentials from `projects.<identity>.bros.<the phase bro>` in the host config
+**Summon:** `into` `master`, which the work is on by then · pass a phase-only credential when authorized, otherwise take credentials from `projects.<identity>.bros.<the phase bro>` in the host config
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:
