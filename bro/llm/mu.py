@@ -1,49 +1,11 @@
 import asyncio
-import json
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
-from json import JSONEncoder
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from bro.base import credentials
 from bro.llm import providers, wires
-from bro.llm.wire import Wire
-
-
-class Markdown(BaseModel):
-  markdown: str
-
-
-class Content(ABC):
-  @abstractmethod
-  def to_text(self) -> str: ...
-
-
-@dataclass
-class Text(Content):
-  text: str
-
-  def to_text(self) -> str:
-    return self.text
-
-
-class DateTimeEncoder(json.JSONEncoder):
-  def default(self, o):
-    if isinstance(o, datetime):
-      return o.isoformat()
-    return super().default(o)
-
-
-@dataclass
-class JSON(Content):
-  json: dict[str, Any]
-  encoder: type[JSONEncoder] | None = None
-
-  def to_text(self) -> str:
-    return json.dumps(self.json, indent=4, cls=self.encoder)
+from bro.llm.wire import Content, UserMessage, Wire
 
 
 class _Pair(BaseModel):
@@ -77,16 +39,16 @@ def _configured_wire(role: str | None) -> Wire:
 
 class _Mu:
   def __call__[T: BaseModel](
-    self, prompt: str, result: type[T], *contents: Content, role: str | None = None
+    self, instructions: str, result: type[T], *content: Content, role: str | None = None
   ) -> T:
-    return asyncio.run(self.aio(prompt, result, *contents, role=role))
+    return asyncio.run(self.aio(instructions, result, *content, role=role))
 
   async def aio[T: BaseModel](
-    self, prompt: str, result: type[T], *contents: Content, role: str | None = None
+    self, instructions: str, result: type[T], *content: Content, role: str | None = None
   ) -> T:
+    message = UserMessage(content)
     wire = _configured_wire(role)
-    parts = [{'type': 'text', 'text': content.to_text()} for content in contents]
-    return await wire.structured(prompt, result, parts, request_timeout=None)
+    return await wire.structured(instructions, result, message.content, request_timeout=None)
 
 
 mu = _Mu()

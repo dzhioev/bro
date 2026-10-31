@@ -3,6 +3,7 @@
 import asyncio
 import dataclasses
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Optional
 
@@ -13,7 +14,7 @@ from bro.llm import wires
 from bro.llm.mcp import MCPServer, ToolRegistry
 from bro.llm.observer import NullObserver, Observer
 from bro.llm.tracker import NullTracker, StepKind, Tracker
-from bro.llm.wire import Prefix
+from bro.llm.wire import File, Prefix, SystemPrompt, Text, UserMessage
 
 
 class LLM(ABC):
@@ -34,7 +35,9 @@ class LLM(ABC):
     self.activity_file = activity_file
 
   @abstractmethod
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str: ...
+  async def send(
+    self, inputs: Sequence[SystemPrompt | UserMessage], *, request_timeout: Optional[float] = None
+  ) -> str: ...
 
   async def wake(self, *, request_timeout: Optional[float] = None) -> str:
     raise NotImplementedError
@@ -68,13 +71,10 @@ async def llm_main(request: str, provider: str, model: Optional[str], attachment
   if model is not None:
     spec = dataclasses.replace(spec, model=llm_providers.resolve_model(provider, model))
   instance = loop.create(spec, Inbox())
-  content: list[dict] = [{'type': 'text', 'text': request}]
-  for path in attachments:
-    content.append({'type': 'image_url', 'image_url': {'url': path}})
-  messages: list[dict] = [{'role': 'user', 'content': content}]
+  inputs = [UserMessage((Text(request), *(File.from_path(path) for path in attachments)))]
   print(f'> {request}')
   print()
-  response = await instance.send(messages)
+  response = await instance.send(inputs)
   print(f'< {response}')
 
 

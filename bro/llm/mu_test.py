@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 
 import pytest
 from pydantic import BaseModel
@@ -8,8 +7,8 @@ import bro.llm.mu as mu_module
 from bro.base import credentials
 from bro.llm import providers
 from bro.llm.llm import LLMStopped
-from bro.llm.mu import JSON, DateTimeEncoder, Text, mu
-from bro.llm.wire import Wire
+from bro.llm.mu import mu
+from bro.llm.wire import File, Text, Wire
 
 
 class _Answer(BaseModel):
@@ -43,8 +42,8 @@ def calls(monkeypatch):
     def restore(self, prefix):
       raise AssertionError('mu must be stateless')
 
-    async def structured(self, prompt, result, contents, request_timeout):
-      calls.append((self.recipe, self.secrets, prompt, contents, request_timeout))
+    async def structured(self, instructions, result, content, request_timeout):
+      calls.append((self.recipe, self.secrets, instructions, content, request_timeout))
       return result(answer='42')
 
   monkeypatch.setattr(mu_module.wires, 'open', _Wire)
@@ -52,16 +51,15 @@ def calls(monkeypatch):
 
 
 def test_call_resolves_the_default_recipe_and_encodes_neutral_text(material, calls):
-  assert mu('what is it?', _Answer, Text('the record'), JSON({'id': 7})).answer == '42'
+  assert (
+    mu('what is it?', _Answer, Text('the record'), File(b'pdf', 'application/pdf')).answer == '42'
+  )
   recipe, secrets, prompt, contents, timeout = calls[0]
   assert recipe.selection()['model'] == providers.models('openai')['terra']
   assert recipe.request_options()['reasoning']['effort'] == 'low'
   assert secrets == material['credential']
   assert prompt == 'what is it?'
-  assert contents == [
-    {'type': 'text', 'text': 'the record'},
-    {'type': 'text', 'text': json.dumps({'id': 7}, indent=4)},
-  ]
+  assert contents == (Text('the record'), File(b'pdf', 'application/pdf'))
   assert timeout is None
 
 
@@ -70,8 +68,8 @@ async def test_aio_selects_a_defined_role_and_defaults_for_an_unknown_role(mater
   material['roles'] = {
     'reader': {'llm': 'openai:luna5.6:high', 'credential': {'api_key': 'reader-key'}}
   }
-  assert (await mu.aio('question', _Answer, role='reader')).answer == '42'
-  await mu.aio('question', _Answer, role='dispatch')
+  assert (await mu.aio('question', _Answer, Text('input'), role='reader')).answer == '42'
+  await mu.aio('question', _Answer, Text('input'), role='dispatch')
   assert calls[0][0].selection()['model'] == providers.models('openai')['luna5.6']
   assert calls[0][0].request_options()['reasoning']['effort'] == 'high'
   assert calls[0][1] == {'api_key': 'reader-key'}
@@ -98,7 +96,7 @@ def test_bad_material_names_mu_and_never_reaches_a_wire(monkeypatch, value, faul
   monkeypatch.setattr(credentials, 'get_json', lambda name: value)
   monkeypatch.setattr(mu_module.wires, 'open', lambda *args: pytest.fail('bad material'))
   with pytest.raises(ValueError, match=f'(?s)mu credential:.*{fault}'):
-    mu('question', _Answer, role='reader')
+    mu('question', _Answer, Text('input'), role='reader')
 
 
 @pytest.mark.parametrize(
@@ -112,7 +110,7 @@ def test_bad_material_names_mu_and_never_reaches_a_wire(monkeypatch, value, faul
 def test_unusable_wire_or_provider_credential_is_a_mu_error(material, recipe, secret, fault):
   material.update(llm=recipe, credential=secret)
   with pytest.raises(ValueError, match=f'(?s)mu credential:.*{fault}'):
-    mu('question', _Answer)
+    mu('question', _Answer, Text('input'))
 
 
 def test_missing_material_names_mu(monkeypatch):
@@ -121,7 +119,7 @@ def test_missing_material_names_mu(monkeypatch):
 
   monkeypatch.setattr(credentials, 'get_json', read)
   with pytest.raises(ValueError, match='mu credential:.*not found'):
-    mu('question', _Answer)
+    mu('question', _Answer, Text('input'))
 
 
 def test_a_wire_stop_propagates_unchanged(material, monkeypatch):
@@ -131,7 +129,7 @@ def test_a_wire_stop_propagates_unchanged(material, monkeypatch):
 
   monkeypatch.setattr(mu_module.wires, 'open', lambda *args: _Stopped())
   with pytest.raises(LLMStopped, match='filtered.*content_filter'):
-    mu('question', _Answer)
+    mu('question', _Answer, Text('input'))
 
 
 @pytest.mark.parametrize(
@@ -164,10 +162,11 @@ def test_references_follow_explicit_instances_or_the_hydrating_selection(
     path.write_bytes(content)
   session = credentials.Store(credentials.default_registry(), session_directory, {})
   with credentials.as_default_store(session):
-    assert mu('question', _Answer).answer == '42'
+    assert mu('question', _Answer, Text('input')).answer == '42'
   assert calls[0][1] == {'api_key': expected}
 
 
-def test_json_keeps_the_callers_encoder():
-  value = JSON({'date': datetime(2026, 10, 27)}, encoder=DateTimeEncoder)
-  assert json.loads(value.to_text()) == {'date': '2026-10-27T00:00:00'}
+def test_empty_content_is_refused_before_configuration(monkeypatch):
+  monkeypatch.setattr(credentials, 'get_json', lambda name: pytest.fail('empty content'))
+  with pytest.raises(ValueError, match='must not be empty'):
+    mu('question', _Answer)

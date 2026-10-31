@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import base64
 import json
-import mimetypes
-from pathlib import Path
 from typing import ClassVar
 
 from openai import AsyncOpenAI
@@ -14,15 +11,19 @@ from bro.llm.mcp import Tool, encode_tool_result
 from bro.llm.records import Chaining, Unknown
 from bro.llm.retry import retry_llm
 from bro.llm.wire import (
+  Content,
+  File,
   Input,
   Leg,
   Notification,
   Prefix,
   SystemPrompt,
+  Text,
   ToolOutput,
   UnusableResponse,
   UserMessage,
   Wire,
+  require_accepted,
 )
 from bro.wire_chat.decode import CHAINING, NAME, counts, decode
 
@@ -83,33 +84,18 @@ class Chat(Wire):
         'content': encode_tool_result(item.output),
       }
     content = item.content
-    if isinstance(content, str):
-      self._check_content('text')
-      return {'role': 'user', 'content': content}
+    require_accepted(self.recipe, content)
+    if len(content) == 1 and isinstance(content[0], Text):
+      return {'role': 'user', 'content': content[0].text}
     parts = []
     for part in content:
-      kind = part['type']
-      self._check_content('image' if kind == 'image_url' else kind)
-      if kind == 'text':
-        parts.append({'type': 'text', 'text': part['text']})
-      elif kind == 'image_url':
-        url = part['image_url']['url']
-        if not url.startswith(('data:', 'https://', 'http://')):
-          media_type = mimetypes.guess_type(url)[0]
-          if media_type is None or not media_type.startswith('image/'):
-            raise UnsupportedContent(f'unknown image media type: {url}')
-          encoded = base64.b64encode(Path(url).read_bytes()).decode('ascii')
-          url = f'data:{media_type};base64,{encoded}'
-        parts.append({'type': 'image_url', 'image_url': {'url': url}})
+      if isinstance(part, Text):
+        parts.append({'type': 'text', 'text': part.text})
+      elif isinstance(part, File) and part.mime_type.startswith('image/'):
+        parts.append({'type': 'image_url', 'image_url': {'url': part.data_url(), 'detail': 'auto'}})
       else:
-        raise UnsupportedContent(f'unsupported Chat content part {kind!r}')
+        raise UnsupportedContent(f'Chat cannot carry {part.mime_type} content')
     return {'role': 'user', 'content': parts}
-
-  def _check_content(self, kind: str) -> None:
-    if not self.recipe.accepts(kind):
-      raise UnsupportedContent(
-        f'{kind} content is not supported by {self.recipe.selection()["model"]}'
-      )
 
   async def _create(self, request: dict, request_timeout: float | None):
     # Non-standard protocol fields must reach the JSON body, not the SDK signature.
@@ -163,7 +149,7 @@ class Chat(Wire):
     items = [self._encode(SystemPrompt(prefix.system_prompt))]
     for step in prefix.steps:
       if step.kind in {'user_input', 'notification'}:
-        items.append(self._encode(UserMessage(step.body)))
+        items.append(self._encode(UserMessage((Text(step.body),))))
       elif step.kind == 'llm_call' and 'stopped' not in step.extras:
         items.append(assistant_message(step.body['response']))
       elif step.kind == 'tool_result':
@@ -171,15 +157,19 @@ class Chat(Wire):
     self._history = items
 
   async def structured[T: BaseModel](
-    self, prompt: str, result: type[T], contents: list, request_timeout: float | None
+    self,
+    instructions: str,
+    result: type[T],
+    content: tuple[Content, ...],
+    request_timeout: float | None,
   ) -> T:
     schema = json.dumps(result.model_json_schema(), ensure_ascii=False)
     request = {
       **self.recipe.request_options(),
       'model': self.recipe.selection()['model'],
       'messages': [
-        self._encode(SystemPrompt(f'{prompt}\nReturn JSON matching this schema:\n{schema}')),
-        self._encode(UserMessage(contents)),
+        self._encode(SystemPrompt(f'{instructions}\nReturn JSON matching this schema:\n{schema}')),
+        self._encode(UserMessage(content)),
       ],
       'response_format': {'type': 'json_object'},
     }

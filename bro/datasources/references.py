@@ -111,3 +111,13 @@ llm_providers = FileSource(
   ),
   path=reference.DIRECTORY / 'llm_providers.md',
 )
+
+
+mu = FileSource(
+  'mu',
+  summary=(
+    'structured one-shot calls: mu and mu.aio, roles, Text and File content, '
+    'path typing, content gates and errors. Read when writing auxiliary model calls.'
+  ),
+  path=reference.DIRECTORY / 'mu.md',
+)

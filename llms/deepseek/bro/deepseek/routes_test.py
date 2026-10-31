@@ -20,8 +20,9 @@ from bro.launch.resume import resume
 from bro.llm import providers
 from bro.llm.llm import LLMSpec as Recipe
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
-from bro.llm.mu import Text, mu
+from bro.llm.mu import mu
 from bro.llm.observer import Observer, ReasoningEvent, ToolCallEvent
+from bro.llm.wire import Text
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments

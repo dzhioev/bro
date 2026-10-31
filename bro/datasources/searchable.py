@@ -50,7 +50,8 @@ class SearchableDataSource(DataSource):
         f'the `query` parameter requires the `{SUMMARY_SECRET}` secret, not available '
         'this session; retry with `query` omitted for the raw record'
       )
-    from bro.llm.mu import Text, mu
+    from bro.llm.mu import mu
+    from bro.llm.wire import Text
     from bro.prompts import get_prompt
 
     prompt = get_prompt(

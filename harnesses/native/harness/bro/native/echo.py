@@ -9,9 +9,11 @@ from bro.llm.wire import (
   Notification,
   Prefix,
   SystemPrompt,
+  Text,
   ToolOutput,
   UserMessage,
   Wire,
+  require_accepted,
 )
 
 NAME = 'echo'
@@ -60,25 +62,16 @@ class Echo(Wire):
       return {'role': 'user', 'text': item.text}
     if isinstance(item, ToolOutput):
       raise ValueError('echo cannot answer tool calls')
-    content = item.content
-    if isinstance(content, list):
-      for part in content:
-        kind = 'image' if part['type'] == 'image_url' else part['type']
-        if not self.recipe.accepts(kind):
-          raise UnsupportedContent(
-            f'{kind} content is not supported by {self.recipe.selection()["model"]}'
-          )
-    text = (
-      content
-      if isinstance(content, str)
-      else '\n'.join(part['text'] for part in content if part['type'] == 'text')
-    )
+    require_accepted(self.recipe, item.content)
+    if any(not isinstance(part, Text) for part in item.content):
+      raise UnsupportedContent('echo cannot carry file content')
+    text = '\n'.join(part.text for part in item.content if isinstance(part, Text))
     return {'role': 'user', 'text': text}
 
   def restore(self, prefix: Prefix) -> None:
     self.history = [self._encode(SystemPrompt(prefix.system_prompt))]
     for step in prefix.steps:
       if step.kind in {'user_input', 'notification'}:
-        self.history.append(self._encode(UserMessage(step.body)))
+        self.history.append(self._encode(UserMessage((Text(step.body),))))
       elif step.kind == 'llm_call' and 'stopped' not in step.extras:
         self.history.append({'role': 'assistant', 'text': step.body['response']['text']})

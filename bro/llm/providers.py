@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from bro.base import log
 from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
+from bro.llm.wire import MIME_TYPE
 
 ENTRY_POINT_GROUP = 'bro.llm.providers'
 
@@ -74,6 +75,21 @@ def declaration(provider: str) -> ModuleType:
       for name, model in module.MODELS.items()
     ):
       raise TypeError('declaration MODELS must map short names to model ids')
+    inputs = module.LLMSpec.MODEL_INPUTS
+    if not isinstance(inputs, Mapping) or any(
+      not isinstance(model, str)
+      or not isinstance(types, frozenset)
+      or any(
+        not isinstance(mime_type, str) or MIME_TYPE.fullmatch(mime_type) is None
+        for mime_type in types
+      )
+      for model, types in inputs.items()
+    ):
+      raise TypeError(
+        'declaration MODEL_INPUTS must map model ids to frozensets of lowercase MIME types'
+      )
+    if any(model not in inputs for model in (module.DEFAULT_MODEL, *module.MODELS.values())):
+      raise ValueError('declaration MODEL_INPUTS must cover DEFAULT_MODEL and MODELS')
     if not isinstance(module.FAILURE_SIGNATURES, tuple) or any(
       not isinstance(signature, FailureSignature) for signature in module.FAILURE_SIGNATURES
     ):
