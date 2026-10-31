@@ -211,7 +211,8 @@ The Responses encoder lives in `wires/responses/bro/wire_responses/content.py`;
 `convert_content_part`, `convert_message`, `image_to_content`, `png_to_content` and `image_file_to_content` are deleted.
 
 The Responses client sent images with `detail` `high` before this design, and the Chat client sent no `detail`, whose default DeepSeek does not document;
-`auto` lets the vendor choose per image and per rendered PDF page, which is `high` on GPT-5.6 and later models for files.
+`auto` lets the vendor choose per image and per rendered PDF page:
+OpenAI documents it as `high` for files on GPT-5.6 and later models, and DeepSeek as currently equal to `original`, the full-resolution image.
 A setting on `File` that chooses the level is [#1048](https://github.com/dzhioev/bro/issues/1048)'s.
 
 A restore replays a recorded `user_input` or `notification` step as `UserMessage((Text(body),))` through the same encoder;
