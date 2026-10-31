@@ -385,9 +385,12 @@ a root keeps the runtime it froze at its start, and so do the sessions it starts
 - **The benchmark bundle** is an installation of its own.
   Harbor forwards each trial's recipe to `ride solo --runtime-bundle` in the task container, which runs the bundle `benchmark bundle` built,
   and `cached()` reuses any complete bundle whatever commit built it.
-  So the bundle is rebuilt after the re-sync, and its trials then refuse unlisted models like any re-synced installation.
-  A Harbor job keeps the bundle it uploaded when it started, so a job started before the rebuild runs on the old rules to its end;
-  a `+passthrough` recipe in a benchmark preset, or in a `mu` instance that trials hydrate (`mu+benchmark`), waits for the rebuild and for those jobs to end.
+  Each trial uploads the shared bundle when it installs (`BroAgent.install`), and a rebuild deletes the bundle before writing the new one,
+  so a running job's later or retried trials would pick up whichever bundle is there when they install, or find it incomplete.
+  Order: no Harbor job runs across the change.
+  Running jobs end or are cancelled before the re-sync, the bundle is rebuilt after it, and only then do jobs start again;
+  from the rebuild on, trials refuse unlisted models like any re-synced installation.
+  A `+passthrough` recipe in a benchmark preset, or in a `mu` instance that trials hydrate (`mu+benchmark`), waits for the rebuild.
 - **Recipe dumps with a `passthrough` key** — trail headers, `resolved_llm` (`RIDE_RESOLVED_LLM`, `--resolved-llm`), and benchmark retention records.
   An older reader ignores the key, since every provider's `_from_dict_impl` reads only its own keys,
   and runs the model as before, having no admission.
@@ -418,9 +421,10 @@ a root keeps the runtime it froze at its start, and so do the sessions it starts
 ### 10.3 Rollout order
 
 1. Before the re-sync, every unlisted model named in `~/.bro.json`, in repository presets and in every `mu` instance moves to a listed one.
-2. The installations re-sync, the benchmark bundle is rebuilt, and fresh roots start from them.
-3. Other repositories move their framework pins when they adopt the content routes.
-4. Only after the first contract's condition holds, and every Harbor job started before the rebuild has ended, may `+passthrough` appear in shared configuration or a benchmark preset.
+2. Every running Harbor job ends or is cancelled, and no new one starts until step 3 is done.
+3. The installations re-sync, the benchmark bundle is rebuilt, and fresh roots start from them.
+4. Other repositories move their framework pins when they adopt the content routes.
+5. Only after the first contract's condition holds may `+passthrough` appear in shared configuration or a benchmark preset.
 
 ## 11. Failure behavior
 
