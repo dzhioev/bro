@@ -243,13 +243,20 @@ an animated GIF passes the model gate for OpenAI, which refuses it, and for Anth
 
 - **A1.** A recipe is admitted when it is a passthrough recipe, its model is deferred, or its model is listed.
 - **A2.** `providers.require_admitted(recipe)` raises `LLMSelectionError` for a recipe that is not admitted, naming the model, the provider's short names and the `+passthrough` suffix (§7).
-  It is enforced at two points:
-  - `providers.resolve` checks its result.
-    Every managed launch resolves its recipe there (`Harness.resolve_recipe` for the native and Claude harnesses, through `ride`'s authority scope), and so does `mu`;
-    so on those surfaces an unlisted model fails before a session or a container starts.
+  It checks the recipe a run will drive, once every layer is applied, and never a recipe that is only resolved, discovered or read:
+  - `ride`'s authority scope checks the recipe it settles for a managed start (`ride/ride/authority_scope.py`, `recipe`), after the host list pick and the launch selection are laid over the standing recipe.
+    Every root start, resume and summon settles its recipe there, and so does `ride scope`, which therefore previews the refusal;
+    an unlisted model fails before a session or a container starts.
+  - The native launchers check the recipe an in-process `bro run` or `bro chat` drives (`harnesses/native/harness/bro/launch/run.py`), the persona's declaration under the selection or `--resolved-llm`, before the runner starts.
   - `wires.open` checks the recipe before it constructs a client.
-    Every model call of the native loop or of `mu` opens its client there, including recipes that never pass through resolution:
-    a persona's declared recipe on an in-process `bro run` or `bro chat` launched without a selection, `--resolved-llm`, and a trail header's recipe that `bro.fork.fork` rebuilds when its caller gives none.
+    Every model call of the native loop or of `mu` opens its client there,
+    so it is where `mu`'s material recipe is checked, right after `mu` resolves it,
+    and it catches every recipe no launch checked, such as a trail header's recipe that `bro.fork.fork` rebuilds when its caller gives none.
+
+  `providers.resolve`, `Harness.resolve_recipe` and the installation's discovery of each persona's standing recipe (`Installation.take` in `ride/ride/authority_reading.py`) check nothing.
+  So a persona whose declaration names an unlisted model keeps a valid standing recipe:
+  a host list entry or a launch selection that names a listed model, or adds `+passthrough`, settles an admitted recipe over it,
+  and only a launch that lays nothing of the kind over it is refused.
 - **A3.** `providers.resolve_model` keeps its rules (a short name, else a full id, else the name verbatim if it fits the provider's `MODEL_ID`).
   Admission runs after the selection's model and flags are applied, so `openai:gpt-7+passthrough` is admitted and `openai:gpt-7` is not.
 - **A4.** Reading a recipe never checks admission:
@@ -300,7 +307,7 @@ the Responses client's hand-built replay item goes.
   `over()` combines it as it combines `fast`:
   a launch selection that names a provider is complete and keeps only its own flag;
   for any other launch selection, the result carries the flag when either the launch selection or the configured default does.
-  `resolve()` sets the recipe's flag after the model and before admission (A3).
+  `resolve()` sets the recipe's flag after it applies the model, and admission reads the result (A2, A3).
   A selection that names a provider starts from the provider's default recipe, so its flag comes from the selection alone;
   a selection that names only a model, an effort or a flag keeps the standing recipe's flag.
 - **G3.** Every surface that takes, forwards or reports `fast` does the same for `passthrough`:
@@ -314,7 +321,8 @@ the Responses client's hand-built replay item goes.
   The lowering of a resolved recipe back into start fields for `dive-in`'s task prefetch (`ride/ride/scope.py`, `scoped_secrets`) carries the flag too, though it carries no `fast`:
   the prefetch resolves those fields again, and without the flag it would refuse the unlisted model the launch admitted.
 
-  Harbor's `model_name` reaches `providers.parse` and `LLMSelection.format()` as written (`benchmark/bro/benchmark/harbor_agent.py`), so it takes the suffix without a change of code.
+  Harbor's `model_name` reaches `providers.parse` and `LLMSelection.format()` as written (`benchmark/bro/benchmark/harbor_agent.py`), so it takes the suffix without a change of code;
+  the trial's bundle reads it once rebuilt (§10.2).
 - **G4.** The names of the selection's options, and their flag-valued subset (`fast`, `passthrough`), are defined once in `bro/llm/providers.py`;
   every surface in G3 derives from that definition what it registers, excludes, forwards, refuses and lowers.
 - **G5.** `mu`'s material names its recipes in the same grammar, so `"llm": "openai:gpt-7:low+passthrough"` works with no change to `mu`.
@@ -372,22 +380,27 @@ a root keeps the runtime it froze at its start, and so do the sessions it starts
   A session's `mu` material is hydrated from the host store when the session starts and parsed at each call,
   so the suffix there fails the `mu` calls (cast, summaries, `look`) of every older session started after it is written, the children of an older root included.
   Order: the suffix is written only after every installation that reads the configuration is re-synced
-  — every checkout on the host that starts roots, and every other repository's framework pin that reads the host store
+  — every checkout on the host that starts roots, every other repository's framework pin that reads the host store, and the benchmark bundle
   — and every root started before its installation's re-sync has ended.
-  Benchmark `model_name`s are read by the Harbor process, which runs the checkout's own source, so they need no order of their own.
+- **The benchmark bundle** is an installation of its own.
+  Harbor forwards each trial's recipe to `ride solo --runtime-bundle` in the task container, which runs the bundle `benchmark bundle` built,
+  and `cached()` reuses any complete bundle whatever commit built it.
+  So the bundle is rebuilt after the re-sync, and its trials then refuse unlisted models like any re-synced installation.
+  A Harbor job keeps the bundle it uploaded when it started, so a job started before the rebuild runs on the old rules to its end;
+  a `+passthrough` recipe in a benchmark preset, or in a `mu` instance that trials hydrate (`mu+benchmark`), waits for the rebuild and for those jobs to end.
 - **Recipe dumps with a `passthrough` key** — trail headers, `resolved_llm` (`RIDE_RESOLVED_LLM`, `--resolved-llm`), and benchmark retention records.
   An older reader ignores the key, since every provider's `_from_dict_impl` reads only its own keys,
   and runs the model as before, having no admission.
   No order is needed;
   within a ride, a dump crosses only processes of one runtime bundle.
-- **Configured unlisted models** — a host list entry or preset, a `mu` material, a persona's declared recipe in another repository, and a kept workspace's recorded selection.
-  A re-synced installation refuses every one of them, while an older installation keeps running them.
+- **Configured unlisted models** — a host list entry or preset, a `mu` material, a benchmark preset, a persona's declared recipe in another repository, and a kept workspace's recorded selection.
+  A re-synced installation refuses every one of them that ends up as a run's recipe (A2), while an older installation keeps running them.
   Order: before an installation is re-synced, each unlisted model in the configuration it reads is moved to a listed one, which works on both versions;
   `+passthrough` instead follows the first contract's order.
   `ride resume` resolves a workspace's recorded selection again under the current runtime and takes no `--llm`,
   so a kept workspace started with an explicit unlisted model (`--llm openai:gpt-5.5`) does not resume after the re-sync.
   Its trail continues with `bro chat <bro> --fork <trail>`, whose selection can name a listed model or the recorded one with `+passthrough`, or the work moves to a new session.
-  This repository's own configuration and personas name only listed models.
+  This repository's own configuration, benchmark presets and personas name only listed models.
 - **The vendors' request shapes** — on 2026-10-31 Responses accepted each shape this design sends (§14):
   `input_file` with `filename` `file` and `detail` `auto`, `input_image` with `detail` `auto`, and string content for one `Text`.
   DeepSeek's API reference defines `image_url` with `detail` `auto` and text parts in list content.
@@ -405,15 +418,15 @@ a root keeps the runtime it froze at its start, and so do the sessions it starts
 ### 10.3 Rollout order
 
 1. Before the re-sync, every unlisted model named in `~/.bro.json`, in repository presets and in every `mu` instance moves to a listed one.
-2. The installations re-sync, and fresh roots start from them.
+2. The installations re-sync, the benchmark bundle is rebuilt, and fresh roots start from them.
 3. Other repositories move their framework pins when they adopt the content routes.
-4. Only after the first contract's condition holds may `+passthrough` appear in shared configuration.
+4. Only after the first contract's condition holds, and every Harbor job started before the rebuild has ended, may `+passthrough` appear in shared configuration or a benchmark preset.
 
 ## 11. Failure behavior
 
 | condition | raises | raised by | before |
 |---|---|---|---|
-| a recipe that is not admitted | `LLMSelectionError` | `providers.resolve`, `wires.open` (A2) | any session or request |
+| a run's recipe that is not admitted | `LLMSelectionError` | `ride`'s authority scope, the native launchers, `wires.open` (A2) | any session or request |
 | a `File` the recipe does not accept | `UnsupportedContent` | `require_accepted` (W1) | the request |
 | a `File` the recipe accepts and the wire cannot carry | `UnsupportedContent` | the client's encoder (W1) | the request |
 | a content item or `UserMessage` breaking C1 to C5, such as a `mu` call without content | `TypeError` or `ValueError` | the class | it exists |
@@ -428,7 +441,7 @@ a root keeps the runtime it froze at its start, and so do the sessions it starts
 
 1. `mu(instructions, Totals, Text('Extract the totals.'), File.from_path('march.pdf'))` with `mu` material `openai:terra:low`:
    the extension table gives `.pdf` the type `application/pdf`, so `from_path` gives `File(<bytes>, 'application/pdf', 'march.pdf')`;
-   resolution admits `gpt-5.6-terra` (listed);
+   `wires.open` admits `gpt-5.6-terra` (listed);
    `require_accepted` passes (`application/pdf` is in its inputs);
    Responses sends a system message and a user message `[input_text, input_file(file_data='data:application/pdf;base64,…', filename='march.pdf', detail='auto')]`.
 2. The same call with material `deepseek:pro:high`:
@@ -440,23 +453,28 @@ a root keeps the runtime it froze at its start, and so do the sessions it starts
    on `openai:sol+passthrough` it passes, Responses sends it as `input_image`, and OpenAI's refusal comes back as its API error.
 5. `File(pdf, 'application/pdf')`, which has no filename, is sent to Responses as an `input_file` with `filename='file'`;
    `File(pdf, 'application/pdf', 'scans/march.pdf')` is sent with `filename='scans/march.pdf'`.
-6. `--llm openai:gpt-7:high` raises `LLMSelectionError` at resolution;
+6. `--llm openai:gpt-7:high` is refused with `LLMSelectionError` by the authority scope at launch;
    `--llm openai:gpt-7:high+passthrough` is admitted, and so is its piece-flag spelling, `--provider openai --model gpt-7 --effort high --passthrough`.
 7. A `bro-dev` trail recorded on `gpt-5.5`, which is not listed:
    `rewind show` displays its header's recipe;
    `bro chat bro-dev --fork <trail>` continues it on `bro-dev`'s declared `gpt-6.1-sol`;
    `bro.fork.fork(trail, step)` called without a recipe rebuilds `gpt-5.5`, and `wires.open` refuses it.
-8. On the Claude harness, `--llm anthropic` with the model left to the session is admitted, since its model is deferred;
+8. On the Claude harness, a launch whose selection names no provider or model, such as `--llm ::xhigh`, runs the harness's session default with its model deferred, and is admitted for that reason;
+   `--llm anthropic` names the provider and runs its default `claude-opus-5-5`, admitted as listed;
    `--llm anthropic:claude-opus-6` is refused unless it carries `+passthrough`.
-9. `File.from_path('report.pdf.gz')`, `File.from_path('notes')` and `File.from_path('scan.tiff')` raise `ValueError`;
-   `File.from_path('Chart.WEBP')` declares `image/webp`, and `File.from_path('scan.tiff', 'image/tiff')` succeeds.
-10. `mu(instructions, Result)`, with no content item, raises `ValueError` and sends nothing.
+9. `my-reader` declares `openai:gpt-7`, which is not listed:
+   a managed launch with nothing laid over the declaration is refused at the authority scope;
+   with `--llm :sol`, or with a host list entry `openai:terra`, it runs the listed model;
+   with `--llm +passthrough` it runs `gpt-7`.
+10. `File.from_path('report.pdf.gz')`, `File.from_path('notes')` and `File.from_path('scan.tiff')` raise `ValueError`;
+    `File.from_path('Chart.WEBP')` declares `image/webp`, and `File.from_path('scan.tiff', 'image/tiff')` succeeds.
+11. `mu(instructions, Result)`, with no content item, raises `ValueError` and sends nothing.
 
 ## 13. Decision record
 
 D1 to D8 were decided by the owner in the discussion;
 P1 to P11 were raised by the design and settled by the owner with its approval on 2026-10-31;
-P12 to P18 were raised by the design's review and settled by the owner the same day, P17 amending P3.
+P12 to P19 were raised by the design's review and settled by the owner the same day, P17 amending P3 and P19 amending P6.
 
 | id | decision | status |
 |---|---|---|
@@ -473,7 +491,7 @@ P12 to P18 were raised by the design's review and settled by the owner the same 
 | P3 | `from_path` reads through the access seam and refuses a name the extension table does not type (§3.1) | settled, amended by P17 |
 | P4 | an empty `File` refused (C2) | settled |
 | P5 | the table is a class attribute of the recipe, covering `MODELS` and `DEFAULT_MODEL`, validated when the declaration loads (§4) | settled |
-| P6 | admission enforced at `providers.resolve` and `wires.open` (A2) | settled |
+| P6 | admission enforced before any session and before any request (A2) | settled, amended by P19 |
 | P7 | `+passthrough` suffix, `--passthrough` piece flag and an open authority option, mirroring `fast` (§7) | settled |
 | P8 | the selection's option names defined once (G4) | settled |
 | P9 | a single-`Text` message encoded as string content (W2) | settled |
@@ -486,6 +504,7 @@ P12 to P18 were raised by the design's review and settled by the owner the same 
 | P16 | a kept workspace whose recorded selection names an unlisted model does not resume after the re-sync (§10.2) | settled |
 | P17 | `from_path` takes its type from the framework's extension table alone, never from Python's tables or the host's (§3.2) | settled |
 | P18 | a `mu` man page documents the interface for extensions (§15) | settled |
+| P19 | admission checks the recipe a run drives, at `ride`'s authority scope, the native launchers and `wires.open`, never a recipe that is only resolved or discovered, so a persona's unlisted declaration stays a standing recipe a listed selection or `+passthrough` can override (A2) | settled |
 
 ## 14. Assumptions and evidence
 
