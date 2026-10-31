@@ -204,13 +204,13 @@ an animated GIF passes the model gate for OpenAI, which refuses it, and for Anth
 | item | Responses (`wires/responses`) | Chat (`wires/chat`) | echo |
 |---|---|---|---|
 | `Text` | `input_text` | `text` | joined with the other `Text` items by `\n` |
-| `File`, `image/*` | `input_image` with `image_url` the data URL and `detail` `auto` | `image_url` with the data URL and no `detail`, so the vendor's default applies | refused by the model gate (echo accepts none) |
+| `File`, `image/*` | `input_image` with `image_url` the data URL and `detail` `auto` | `image_url` with the data URL and `detail` `auto` | refused by the model gate (echo accepts none) |
 | other `File` | `input_file` with `file_data` the data URL, `filename` with `/` and `\` replaced by `_` and omitted when `None`, and `detail` `auto` | refused by the protocol gate: Chat Completions carries files only in OpenAI's dialect, and no Chat-wire recipe lists a non-image type | refused by the model gate |
 
 The Responses encoder lives in `wires/responses/bro/wire_responses/content.py`;
 `convert_content_part`, `convert_message`, `image_to_content`, `png_to_content` and `image_file_to_content` are deleted.
 
-The Responses client sent images with `detail` `high` before this design;
+The Responses client sent images with `detail` `high` before this design, and the Chat client sent no `detail`, whose default DeepSeek does not document;
 `auto` lets the vendor choose per image and per rendered PDF page, which is `high` on GPT-5.6 and later models for files.
 A setting on `File` that chooses the level is [#1048](https://github.com/dzhioev/bro/issues/1048)'s.
 
@@ -335,7 +335,7 @@ D1 to D8 were decided by the owner in the discussion; P1 to P11 were raised by t
 | D5 | the `passthrough` flag admits unlisted models and accepts every MIME type; `accepts` keeps its name (§4, §5) | settled |
 | D6 | `JSON`, `DateTimeEncoder` and `Markdown` deleted from `mu` (§9) | settled |
 | D7 | the flag is named `passthrough` (§4, §7) | settled |
-| D8 | Responses sends `detail` `auto` for image and file content (§6) | settled |
+| D8 | every wire sends `detail` `auto` for the image and file content it carries (§6) | settled |
 | P1 | `mu`'s first argument named `instructions` (§9) | settled |
 | P2 | `LLM.send` takes typed inputs instead of role dicts (§8) | settled |
 | P3 | `from_path` reads through the access seam, guesses with Python's built-in table, and refuses unknown and compressed names (§3) | settled |
