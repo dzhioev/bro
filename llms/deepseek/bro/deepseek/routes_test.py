@@ -20,8 +20,9 @@ from bro.launch.resume import resume
 from bro.llm import providers
 from bro.llm.llm import LLMSpec as Recipe
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
-from bro.llm.mu import Text, mu
+from bro.llm.mu import mu
 from bro.llm.observer import Observer, ReasoningEvent, ToolCallEvent
+from bro.llm.wire import Text
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
@@ -46,10 +47,16 @@ def endpoint(monkeypatch):
 
   class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-      assert self.path == '/chat/completions'
+      assert self.path in ('/chat/completions', '/responses')
       authorizations.append(self.headers['Authorization'])
       requests.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
-      status, raw = replies.pop(0) if replies else (200, response())
+      if self.path == '/responses':
+        from bro.native.wire_fixtures_test_helper import message, response as responses_response
+
+        fallback = responses_response(message('reply'))
+      else:
+        fallback = response()
+      status, raw = replies.pop(0) if replies else (200, fallback)
       payload = json.dumps(raw).encode()
       self.send_response(status)
       self.send_header('Content-Type', 'application/json')
@@ -66,7 +73,10 @@ def endpoint(monkeypatch):
     thread.start()
     resources.callback(thread.join)
     resources.callback(server.shutdown)
-    monkeypatch.setattr(LLMSpec, 'ENDPOINT', f'http://127.0.0.1:{server.server_port}')
+    from bro.openai.declaration import LLMSpec as OpenAISpec
+
+    for spec in (LLMSpec, OpenAISpec):
+      monkeypatch.setattr(spec, 'ENDPOINT', f'http://127.0.0.1:{server.server_port}')
     yield requests, replies, authorizations
 
 
@@ -287,9 +297,7 @@ class Stage:
   argv: list[str]
 
 
-def summoned_stage(tmp_path, monkeypatch, backing: str) -> Stage:
-  """`bro-dev` summoned onto DeepSeek from a host that also holds an OpenAI key: admitted, its
-  scoped store hydrated, and the argv the bro harness spawns for it."""
+def summoned_stage(tmp_path, monkeypatch, backing: str, llm: str = 'deepseek:pro:high') -> Stage:
   instance, mu_material = MU_BACKINGS[backing]
   host = tmp_path / 'host'
   (host / 'creds').mkdir(parents=True)
@@ -307,12 +315,16 @@ def summoned_stage(tmp_path, monkeypatch, backing: str) -> Stage:
   )
   fields = {
     'target': 'bro-dev',
-    'llm': 'deepseek:pro:high',
+    'llm': llm,
     **({'pass': [f'mu+{instance}']} if instance != '' else {}),
   }
   requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
   mission = reading.rules.start(requested, reading.operator(), reading)
-  recipe = checked_recipe(mission.request, mission.descriptor, reading)
+  from ride.bro_worker import SummonLaunchSpec, _child_session_spec
+
+  launch = SummonLaunchSpec(mission, 'go', 'parent', tmp_path, None)
+  session_spec = _child_session_spec(launch, 'stage', None)
+  recipe = session_spec.llm_spec
   files, _ = hydrate(credentials_for(mission))
   directory = tmp_path / 'session'
   for name, content in files.items():
@@ -323,7 +335,7 @@ def summoned_stage(tmp_path, monkeypatch, backing: str) -> Stage:
     repo=None,
     harness='bro',
     hold='unattended',
-    resolved_llm=recipe.dump(),
+    resolved_llm=session_spec.resolved_llm,
     solo=True,
     resume=False,
     bro='bro-dev',
@@ -608,3 +620,20 @@ async def test_live_probe_rejects_an_unusable_third_reply(server, monkeypatch, t
   assert len(requests) == 3
   captures = json.loads((tmp_path / 'deepseek-responses.json').read_text())
   assert captures['third-leg']['choices'][0]['message']['content'] == message['content']
+
+
+@pytest.mark.credential_gate
+def test_unlisted_openai_summon_carries_passthrough_through_worker_and_session(
+  endpoint, tmp_path, monkeypatch
+):
+  requests, _, authorizations = endpoint
+  stage = summoned_stage(tmp_path, monkeypatch, 'deepseek', 'openai:gpt-7+passthrough')
+  assert stage.recipe.passthrough
+  monkeypatch.setattr(
+    native_runner, '_default_tracker_factory', lambda: Recorder(LocalStore(tmp_path / 'trails'))
+  )
+  monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
+  with credentials.as_default_store(stage.session):
+    assert bro_run.main(stage.argv) is None
+  assert requests[0]['model'] == 'gpt-7'
+  assert authorizations == [f'Bearer {OPENAI_KEY}']

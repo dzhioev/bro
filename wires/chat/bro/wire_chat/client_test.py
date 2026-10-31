@@ -9,7 +9,7 @@ from pydantic import BaseModel, ValidationError
 from bro.deepseek.declaration import LLMSpec
 from bro.llm.llm import LLMStopped, UnsupportedContent
 from bro.llm.mcp import FunctionTool, Tool
-from bro.llm.wire import Notification, Prefix, SystemPrompt, ToolOutput, UserMessage
+from bro.llm.wire import File, Notification, Prefix, SystemPrompt, Text, ToolOutput, UserMessage
 from bro.trails.model import Step
 from bro.wire_chat.client import Chat
 from bro.wire_chat.fixtures_test_helper import call, response
@@ -50,9 +50,9 @@ async def test_history_preserves_reasoning_null_content_and_raw_arguments(
     return 'pong'
 
   tools: list[Tool] = [FunctionTool(ping, description='Ping')]
-  first = await wire.exchange([SystemPrompt('system'), UserMessage('go')], tools, 4)
+  first = await wire.exchange([SystemPrompt('system'), UserMessage((Text('go'),))], tools, 4)
   second = await wire.exchange([ToolOutput('call_1', {'value': 'pong'})], tools, None)
-  await wire.exchange([Notification('news'), UserMessage('continue')], tools, None)
+  await wire.exchange([Notification('news'), UserMessage((Text('continue'),))], tools, None)
   assert requests[1]['messages'][2] == {
     'role': 'assistant',
     'content': None,
@@ -94,8 +94,8 @@ async def test_uncompleted_response_does_not_advance_history(transport, stop):
   requests, replies = transport
   replies.extend([response('discard', reasoning='discard', stop=stop), response()])
   wire = Chat(LLMSpec(), {'api_key': 'fixture-key'})
-  assert (await wire.exchange([UserMessage('retry')], [], None)).stop != 'completed'
-  await wire.exchange([UserMessage('retry')], [], None)
+  assert (await wire.exchange([UserMessage((Text('retry'),))], [], None)).stop != 'completed'
+  await wire.exchange([UserMessage((Text('retry'),))], [], None)
   assert requests[0] == requests[1]
 
 
@@ -116,8 +116,8 @@ async def test_unusable_completion_raises_without_advancing(transport, message):
   replies.extend([raw, response()])
   wire = Chat(LLMSpec(), {'api_key': 'fixture-key'})
   with pytest.raises(RuntimeError):
-    await wire.exchange([UserMessage('retry')], [], None)
-  await wire.exchange([UserMessage('retry')], [], None)
+    await wire.exchange([UserMessage((Text('retry'),))], [], None)
+  await wire.exchange([UserMessage((Text('retry'),))], [], None)
   assert requests[0] == requests[1]
 
 
@@ -127,8 +127,8 @@ async def test_cancelled_exchange_keeps_history(transport):
   replies.extend([asyncio.CancelledError(), response()])
   wire = Chat(LLMSpec(), {'api_key': 'fixture-key'})
   with pytest.raises(asyncio.CancelledError):
-    await wire.exchange([UserMessage('retry')], [], None)
-  await wire.exchange([UserMessage('retry')], [], None)
+    await wire.exchange([UserMessage((Text('retry'),))], [], None)
+  await wire.exchange([UserMessage((Text('retry'),))], [], None)
   assert requests[0] == requests[1]
 
 
@@ -151,7 +151,7 @@ async def test_silent_completion_ends_the_turn_and_replays_as_sent_live(
   requests, replies = transport
   replies.extend([silent, response(), response()])
   live = Chat(LLMSpec(), {'api_key': 'fixture-key'})
-  leg = await live.exchange([SystemPrompt('system'), UserMessage('go')], [], None)
+  leg = await live.exchange([SystemPrompt('system'), UserMessage((Text('go'),))], [], None)
   assert leg.reply == ''
   await live.exchange([Notification('news')], [], None)
   restored = Chat(LLMSpec(), {'api_key': 'fixture-key'})
@@ -197,7 +197,7 @@ async def test_restore_uses_steps_not_recorded_requests_and_omits_stopped_legs(
     )
   )
   replies.append(response())
-  await wire.exchange([UserMessage('continue')], [], None)
+  await wire.exchange([UserMessage((Text('continue'),))], [], None)
   assert requests[0]['messages'] == [
     {'role': 'system', 'content': 'system'},
     {'role': 'user', 'content': 'original'},
@@ -235,11 +235,11 @@ async def test_structured_json_schema_validation_capacity_and_no_history(
   wire.restore(Prefix('not part of structured', ()))
   if exhausted:
     with pytest.raises(LLMStopped, match='capacity'):
-      await wire.structured('question', Answer, [{'type': 'text', 'text': 'input'}], 3)
+      await wire.structured('question', Answer, (Text('input'),), 3)
     assert len(requests) == 7
     assert sum(waits) == 610
   else:
-    assert (await wire.structured('question', Answer, [], 3)).answer == 42
+    assert (await wire.structured('question', Answer, (Text('input'),), 3)).answer == 42
     assert waits == [10]
   assert all(request == requests[0] for request in requests)
   assert requests[0]['response_format'] == {'type': 'json_object'}
@@ -264,22 +264,25 @@ async def test_structured_rejects_invalid_or_uncompleted_reply(transport, text, 
   _, replies = transport
   replies.append(response(text, stop=stop))
   with pytest.raises(error):
-    await Chat(LLMSpec(), {'api_key': 'fixture-key'}).structured('question', Answer, [], None)
+    await Chat(LLMSpec(), {'api_key': 'fixture-key'}).structured(
+      'question', Answer, (Text('input'),), None
+    )
 
 
 @pytest.mark.asyncio
-async def test_vision_is_gated_before_file_access_and_encodes_permitted_image(transport, tmp_path):
+async def test_vision_is_gated_before_sending_and_encodes_permitted_image(transport, tmp_path):
   requests, replies = transport
-  path = tmp_path / 'image.png'
-  content = [{'type': 'image_url', 'image_url': {'url': str(path)}}]
+  content = (File(b'image fixture', 'image/png'),)
   with pytest.raises(UnsupportedContent, match='image.*not supported'):
     await Chat(LLMSpec(), {'api_key': 'fixture-key'}).exchange([UserMessage(content)], [], None)
   assert not requests
-  path.write_bytes(b'image fixture')
   replies.append(response())
   await Chat(LLMSpec(model='deepseek-flash'), {'api_key': 'fixture-key'}).exchange(
     [UserMessage(content)], [], None
   )
   assert requests[0]['messages'][0]['content'] == [
-    {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,aW1hZ2UgZml4dHVyZQ=='}}
+    {
+      'type': 'image_url',
+      'image_url': {'url': 'data:image/png;base64,aW1hZ2UgZml4dHVyZQ==', 'detail': 'auto'},
+    }
   ]

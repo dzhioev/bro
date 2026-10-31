@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import threading
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import ClassVar, Optional
 
@@ -29,6 +30,7 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import NullTracker, Tracker
+from bro.llm.wire import SystemPrompt, Text, UserMessage
 from bro.mcp import MCPServerSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.native.echo_declaration import LLMSpec as EchoSpec
@@ -42,11 +44,13 @@ class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(Inbox(), mcp_servers)
     self.response = response
-    self.send_calls: list[list[dict]] = []
+    self.send_calls: list[Sequence[SystemPrompt | UserMessage]] = []
     self.wake_calls = 0
 
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
-    self.send_calls.append(messages)
+  async def send(
+    self, inputs: Sequence[SystemPrompt | UserMessage], *, request_timeout: Optional[float] = None
+  ) -> str:
+    self.send_calls.append(inputs)
     return self.response
 
   async def wake(self, *, request_timeout: Optional[float] = None) -> str:
@@ -138,7 +142,7 @@ class TestRun:
   @pytest.mark.asyncio
   async def test_run_emits_failure_before_propagating_it(self):
     class FailingLLM(MockLLM):
-      async def send(self, messages, *, request_timeout=None):
+      async def send(self, inputs, *, request_timeout=None):
         raise RuntimeError('provider failed')
 
     observer = CapturingObserver()
@@ -276,7 +280,7 @@ class TestRun:
         calls.append(reason)
 
     class Boom(MockLLM):
-      async def send(self, messages, *, request_timeout=None):
+      async def send(self, inputs, *, request_timeout=None):
         raise BroRaised('nope')
 
     with pytest.raises(BroRaised):
@@ -295,7 +299,7 @@ class TestRun:
         calls.append(('end', reason))
 
     class Boom(MockLLM):
-      async def send(self, messages, *, request_timeout=None):
+      async def send(self, inputs, *, request_timeout=None):
         raise RuntimeError('kaboom')
 
     with pytest.raises(RuntimeError):
@@ -320,7 +324,7 @@ class TestRun:
         calls.append(reason)
 
     class Boom(MockLLM):
-      async def send(self, messages, *, request_timeout=None):
+      async def send(self, inputs, *, request_timeout=None):
         raise RuntimeError('kaboom')
 
     with pytest.raises(RuntimeError, match='kaboom'):
@@ -367,9 +371,9 @@ class TestRun:
     assert len(llm.send_calls) == 1
     messages = llm.send_calls[0]
     assert len(messages) == 2
-    assert messages[0]['role'] == 'system'
-    assert 'be helpful' in messages[0]['content']
-    assert messages[1] == {'role': 'user', 'content': 'test input'}
+    assert isinstance(messages[0], SystemPrompt)
+    assert 'be helpful' in messages[0].text
+    assert messages[1] == UserMessage((Text('test input'),))
 
   @pytest.mark.asyncio
   async def test_run_creates_llm_with_the_unattended_hold(self):
@@ -583,9 +587,9 @@ class TestSend:
     assert len(llm.send_calls) == 1
     messages = llm.send_calls[0]
     assert len(messages) == 2
-    assert messages[0]['role'] == 'system'
-    assert 'be helpful' in messages[0]['content']
-    assert messages[1] == {'role': 'user', 'content': 'hi'}
+    assert isinstance(messages[0], SystemPrompt)
+    assert 'be helpful' in messages[0].text
+    assert messages[1] == UserMessage((Text('hi'),))
 
   @pytest.mark.asyncio
   async def test_send_wires_explicit_observer(self):
@@ -695,7 +699,7 @@ class TestSend:
     assert len(llm.send_calls) == 2
     messages = llm.send_calls[1]
     assert len(messages) == 1
-    assert messages[0] == {'role': 'user', 'content': 'second'}
+    assert messages[0] == UserMessage((Text('second'),))
 
   @pytest.mark.asyncio
   async def test_run_does_not_affect_send_llm(self):
@@ -788,10 +792,10 @@ class TestNativeTurnEnd:
         self.runner: Runner | None = None
         self.drained: list[str] = []
 
-      async def send(self, messages, *, request_timeout=None):
+      async def send(self, inputs, *, request_timeout=None):
         assert self.runner is not None
         self.runner.watch_store.start('printf watched')
-        return await super().send(messages, request_timeout=request_timeout)
+        return await super().send(inputs, request_timeout=request_timeout)
 
       async def wake(self, *, request_timeout=None):
         batch = self.inbox.drain()
@@ -822,10 +826,10 @@ class TestNativeTurnEnd:
         self.runner: Runner | None = None
         self.drained: list[str] = []
 
-      async def send(self, messages, *, request_timeout=None):
+      async def send(self, inputs, *, request_timeout=None):
         assert self.runner is not None
         self.runner.watch_store.start(producer)
-        return await super().send(messages, request_timeout=request_timeout)
+        return await super().send(inputs, request_timeout=request_timeout)
 
       async def wake(self, *, request_timeout=None):
         batch = self.inbox.drain()
@@ -1033,7 +1037,9 @@ class _StubLLM(LLM):
     self._response = response
     self._error = error
 
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
+  async def send(
+    self, inputs: Sequence[SystemPrompt | UserMessage], *, request_timeout: Optional[float] = None
+  ) -> str:
     if self._error is not None:
       raise self._error
     return self._response

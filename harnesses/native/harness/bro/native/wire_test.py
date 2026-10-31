@@ -7,7 +7,7 @@ import pytest
 
 from bro.llm import wires
 from bro.llm.records import Call
-from bro.llm.wire import Prefix, SystemPrompt, UserMessage
+from bro.llm.wire import File, Prefix, SystemPrompt, Text, UserMessage
 from bro.native.wire_fixtures_test_helper import RESTORE_ITEMS, capture_requests, cases
 from bro.native_trails.format import BRO_FORMAT
 from bro.trails.model import RecordedTrail, Step, Trail
@@ -42,7 +42,7 @@ async def test_exchange_conformance(name, case, transport):
   canned = _CASES[name][case]
   replies.append(canned.response)
   wire = wires.open(canned.recipe, {'api_key': 'fixture-key'})
-  leg = await wire.exchange([SystemPrompt('system'), UserMessage('reply')], [], 2.0)
+  leg = await wire.exchange([SystemPrompt('system'), UserMessage((Text('reply'),))], [], 2.0)
   recorded = wires.decode(name, leg.record['response'])
   assert recorded.parts == canned.parts
   assert recorded.stop == canned.stop
@@ -73,8 +73,8 @@ async def test_record_restore_and_next_request(name, transport):
   canned = _CASES[name]['plain']
   wire = wires.open(canned.recipe, {'api_key': 'fixture-key'})
   replies.extend([canned.response, canned.response, canned.response])
-  first = await wire.exchange([SystemPrompt('system'), UserMessage('reply')], [], None)
-  second = await wire.exchange([UserMessage('next')], [], None)
+  first = await wire.exchange([SystemPrompt('system'), UserMessage((Text('reply'),))], [], None)
+  second = await wire.exchange([UserMessage((Text('next'),))], [], None)
   recorded = RecordedTrail(
     _header(canned.recipe.dump()),
     [
@@ -84,7 +84,7 @@ async def test_record_restore_and_next_request(name, transport):
   )
   restored = wires.open(canned.recipe, {'api_key': 'fixture-key'})
   restored.restore(Prefix('system', tuple(recorded.steps)))
-  third = await restored.exchange([UserMessage('next')], [], None)
+  third = await restored.exchange([UserMessage((Text('next'),))], [], None)
   fixture = RESTORE_ITEMS[name]
   field = fixture['field']
   assert first.record['request'][field] == fixture['initial']
@@ -154,11 +154,58 @@ async def test_unsupported_content_is_refused_before_sending(name, transport, mo
   from bro.llm.llm import UnsupportedContent
 
   recipe = _CASES[name]['plain'].recipe
-  monkeypatch.setattr(type(recipe), 'accepts', lambda self, kind: kind == 'text')
+  monkeypatch.setattr(type(recipe), 'accepts', lambda self, mime_type: False)
   sent, replies = transport
   wire = wires.open(recipe, {'api_key': 'fixture-key'})
   with pytest.raises(UnsupportedContent, match='image.*not supported'):
-    await wire.exchange(
-      [UserMessage([{'type': 'image_url', 'image_url': {'url': 'missing.png'}}])], [], None
-    )
+    await wire.exchange([UserMessage((File(b'image', 'image/png'),))], [], None)
   assert sent == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', _CASES)
+async def test_model_gate_checks_all_files_before_encoding(name, transport, monkeypatch):
+  from bro.llm.llm import UnsupportedContent
+
+  recipe = _CASES[name]['plain'].recipe
+  monkeypatch.setattr(
+    type(recipe), 'MODEL_INPUTS', {recipe.selection()['model']: frozenset({'application/pdf'})}
+  )
+  wire = wires.open(recipe, {'api_key': 'fixture-key'})
+  with pytest.raises(UnsupportedContent, match='image/png.*not supported'):
+    await wire.exchange(
+      [UserMessage((File(b'pdf', 'application/pdf'), File(b'png', 'image/png')))], [], None
+    )
+  assert transport[0] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', ['chat', 'echo'])
+async def test_protocol_gate_refuses_a_model_accepted_document(name, transport, monkeypatch):
+  from bro.llm.llm import UnsupportedContent
+
+  recipe = _CASES[name]['plain'].recipe
+  monkeypatch.setattr(
+    type(recipe), 'MODEL_INPUTS', {recipe.selection()['model']: frozenset({'application/pdf'})}
+  )
+  wire = wires.open(recipe, {'api_key': 'fixture-key'})
+  with pytest.raises(UnsupportedContent, match='cannot carry'):
+    await wire.exchange([UserMessage((File(b'pdf', 'application/pdf'),))], [], None)
+  assert transport[0] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('name', _CASES)
+async def test_multiple_text_items_use_protocol_content_list(name, transport):
+  _, replies = transport
+  canned = _CASES[name]['plain']
+  replies.append(canned.response)
+  wire = wires.open(canned.recipe, {'api_key': 'fixture-key'})
+  leg = await wire.exchange([UserMessage((Text('first'), Text('second')))], [], None)
+  field = RESTORE_ITEMS[name]['field']
+  encoded = leg.record['request'][field][0]
+  if name == 'echo':
+    assert encoded['text'] == 'first\nsecond'
+  else:
+    kind = 'input_text' if name == 'responses' else 'text'
+    assert encoded['content'] == [{'type': kind, 'text': 'first'}, {'type': kind, 'text': 'second'}]

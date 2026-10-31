@@ -14,7 +14,7 @@ from bro.launch.resume import resume
 from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMStopped
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
-from bro.llm.wire import Leg, SystemPrompt, UserMessage, Wire
+from bro.llm.wire import Leg, SystemPrompt, Text, UserMessage, Wire
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.native.runner import Runner
@@ -68,7 +68,7 @@ def server(monkeypatch, replies):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-  'recipe', [EchoSpec(), ResponsesSpec(model='fixture-model')], ids=['echo', 'responses']
+  'recipe', [EchoSpec(), ResponsesSpec(model='gpt-6.1-sol')], ids=['echo', 'responses']
 )
 async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path):
   store = LocalStore(tmp_path)
@@ -136,7 +136,7 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
   replies.append(stopped)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='fixture-model')))
+  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='gpt-6.1-sol')))
   with pytest.raises(LLMStopped, match='max_output_tokens'):
     await runner.run('original', surface='test')
   assert runner.trail_id is not None
@@ -153,7 +153,7 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
     store,
     'bro',
     recorded.header.id,
-    llm_spec=ResponsesSpec(model='fixture-model'),
+    llm_spec=ResponsesSpec(model='gpt-6.1-sol'),
     hold='unattended',
   )
   with resumed.runner:
@@ -182,7 +182,7 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
     requests.append(list(inputs))
     stopped = len(requests) <= refusals
     raw = {
-      'model': 'fixture-model',
+      'model': 'gpt-6.1-sol',
       'choices': [
         {
           'finish_reason': 'insufficient_system_resource' if stopped else 'stop',
@@ -194,10 +194,15 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
     items = []
     for item in inputs:
       assert isinstance(item, (SystemPrompt, UserMessage))
+      if isinstance(item, SystemPrompt):
+        text = item.text
+      else:
+        assert len(item.content) == 1 and isinstance(item.content[0], Text)
+        text = item.content[0].text
       items.append(
         {
           'role': 'system' if isinstance(item, SystemPrompt) else 'user',
-          'content': item.text if isinstance(item, SystemPrompt) else item.content,
+          'content': text,
         }
       )
     decoded = decode(raw)
@@ -233,7 +238,7 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
   assert all(step.body['request'] == calls[0].body['request'] for step in calls)
   assert all(request == requests[0] for request in requests)
   assert sum(waits) == expected_wait
-  assert recorded.header.native['usage']['fixture-model']['completion_tokens'] == len(calls) * 2
+  assert recorded.header.native['usage']['gpt-6.1-sol']['completion_tokens'] == len(calls) * 2
   header = store.get_trail(recorded.header.id)
   assert header['end']['reason'] == ('ok' if refusals == 3 else 'error')
 
@@ -262,7 +267,7 @@ async def test_interrupt_received_calls_records_answers_and_continues_the_same_c
   replies.append(response(call('{}'), id='with-calls'))
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='fixture-model')))
+  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='gpt-6.1-sol')))
   with runner:
     turn = asyncio.create_task(runner.send('original', surface='test'))
     await entered.wait()
@@ -300,7 +305,7 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   )
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(ShellBro.create(ResponsesSpec(model='fixture-model')))
+  runner = Runner(ShellBro.create(ResponsesSpec(model='gpt-6.1-sol')))
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
   assert server[2]['previous_response_id'] == 'silent'

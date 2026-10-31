@@ -27,6 +27,7 @@ from bro.llm.observer import (
   TurnStartedEvent,
 )
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
+from bro.llm.wire import SystemPrompt, Text, UserMessage
 from bro.monitor import session_dir, trail_pointer
 from bro.native import loop
 from bro.native.harness import BRO
@@ -234,7 +235,7 @@ class Runner:
     tracker: Optional[Tracker],
     surface: str,
     summoned_by: Optional[dict[str, Any]],
-  ) -> tuple[LLM, list[dict], str]:
+  ) -> tuple[LLM, list[SystemPrompt | UserMessage], str]:
     # the shared start sequence of run() and send(): pin the resolved observer
     # and the tracker — a caller-supplied one wins (tests inject recording
     # fakes) — on self before _create_llm, so the LLM construction path picks
@@ -261,8 +262,8 @@ class Runner:
     if self.trail_id is not None:
       trail_pointer.publish(self.trail_id)
     messages = [
-      {'role': 'system', 'content': system_prompt},
-      {'role': 'user', 'content': input},
+      SystemPrompt(system_prompt),
+      UserMessage((Text(input),)),
     ]
     return llm, messages, trail_id
 
@@ -431,7 +432,7 @@ class Runner:
         self._llm.observer = observer
       effective_observer = self._observer
       effective_observer.on_event(TurnStartedEvent(message))
-      messages = [{'role': 'user', 'content': message}]
+      messages = [UserMessage((Text(message),))]
     try:
       result = await self._llm.send(messages, request_timeout=request_timeout)
     except AnswerDelivered:
@@ -443,7 +444,7 @@ class Runner:
     return result
 
   async def _turns_until_settled(
-    self, llm: LLM, messages: list[dict], *, request_timeout: Optional[float]
+    self, llm: LLM, messages: list[SystemPrompt | UserMessage], *, request_timeout: Optional[float]
   ) -> str:
     reply = await llm.send(messages, request_timeout=request_timeout)
     while not await off_loop(self._settle_turn_end):

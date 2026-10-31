@@ -1,5 +1,5 @@
 """the LLM provider roster: which providers exist, what a launch calls them, and
-how a `provider:model:effort+fast` selection resolves to an `LLMSpec`.
+how a `provider:model:effort+fast+passthrough` selection resolves to an `LLMSpec`.
 
 A provider name is the whole vocabulary for one provider — the `--provider`
 value, its spec's `TYPE` discriminator, and (where it reads one) its credential
@@ -21,10 +21,12 @@ from typing import Any, Optional
 
 from bro.base import log
 from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
+from bro.llm.wire import MIME_TYPE
 
 ENTRY_POINT_GROUP = 'bro.llm.providers'
 
-FAST_SUFFIX = '+fast'
+SELECTION_FLAGS = ('fast', 'passthrough')
+SELECTION_OPTIONS = ('provider', 'model', 'effort', *SELECTION_FLAGS)
 _SEPARATOR = ':'
 _SLOTS = 3
 
@@ -74,6 +76,21 @@ def declaration(provider: str) -> ModuleType:
       for name, model in module.MODELS.items()
     ):
       raise TypeError('declaration MODELS must map short names to model ids')
+    inputs = module.LLMSpec.MODEL_INPUTS
+    if not isinstance(inputs, Mapping) or any(
+      not isinstance(model, str)
+      or not isinstance(types, frozenset)
+      or any(
+        not isinstance(mime_type, str) or MIME_TYPE.fullmatch(mime_type) is None
+        for mime_type in types
+      )
+      for model, types in inputs.items()
+    ):
+      raise TypeError(
+        'declaration MODEL_INPUTS must map model ids to frozensets of lowercase MIME types'
+      )
+    if any(model not in inputs for model in (module.DEFAULT_MODEL, *module.MODELS.values())):
+      raise ValueError('declaration MODEL_INPUTS must cover DEFAULT_MODEL and MODELS')
     if not isinstance(module.FAILURE_SIGNATURES, tuple) or any(
       not isinstance(signature, FailureSignature) for signature in module.FAILURE_SIGNATURES
     ):
@@ -164,9 +181,9 @@ def price_table_from_content(
 def resolve_model(provider: str, model: str) -> str:
   """the full model id `model` names within `provider`.
 
-  The short-name table is a convenience, not a whitelist: an unlisted name is
-  the id itself, so a model the table has not learned still launches — once it
-  has the shape of one, where the provider declares that shape (`MODEL_ID`).
+  An unlisted name is the id itself when it fits the provider's `MODEL_ID`,
+  where declared. Resolution does not admit a recipe; `require_admitted` checks
+  the final recipe before it drives a run.
   """
   table = models(provider)
   resolved = table.get(model, model)
@@ -222,6 +239,7 @@ class LLMSelection:
   model: Optional[str] = None
   effort: Optional[str] = None
   fast: bool = False
+  passthrough: bool = False
 
   def __post_init__(self):
     if self.provider is not None and re.fullmatch(r'[a-z][a-z0-9-]*', self.provider) is None:
@@ -251,7 +269,7 @@ class LLMSelection:
     flags over a configured default.
 
     A named provider is a complete recipe. A model-only override inherits the
-    base provider; effort and fast otherwise fill independently.
+    base provider; effort and flags otherwise fill independently.
     """
     if self.provider is not None:
       return self
@@ -259,7 +277,7 @@ class LLMSelection:
       provider=base.provider,
       model=self.model if self.model is not None else base.model,
       effort=self.effort if self.effort is not None else base.effort,
-      fast=self.fast or base.fast,
+      **{name: getattr(self, name) or getattr(base, name) for name in SELECTION_FLAGS},
     )
 
   def format(self) -> str:
@@ -271,19 +289,20 @@ class LLMSelection:
     slots = [self.provider or '', self.model or '', self.effort or '']
     while len(slots) > 0 and slots[-1] == '':
       slots.pop()
-    return _SEPARATOR.join(slots) + (FAST_SUFFIX if self.fast else '')
+    return _SEPARATOR.join(slots) + ''.join(
+      '+' + name for name in SELECTION_FLAGS if getattr(self, name)
+    )
 
 
 def parse(value: str) -> LLMSelection:
   """read a `--llm` value: `provider:model:effort`, any slot left empty, with an
-  optional `+fast` suffix (`:fable5`, `::high`, `openai:sol:max+fast`)."""
-  body = value
-  fast = body.endswith(FAST_SUFFIX)
-  if fast:
-    body = body[: -len(FAST_SUFFIX)]
-  if '+' in body:
+  optional `+fast` and `+passthrough` suffixes, once each in either order."""
+  body, *suffixes = value.split('+')
+  if any(name not in SELECTION_FLAGS for name in suffixes) or len(set(suffixes)) != len(suffixes):
     raise LLMSelectionError(
-      f'malformed --llm value {value!r}: the only supported suffix is {FAST_SUFFIX!r}'
+      f'malformed --llm value {value!r}: supported suffixes are '
+      + ', '.join('+' + name for name in SELECTION_FLAGS)
+      + ', each at most once'
     )
   slots = body.split(_SEPARATOR)
   if len(slots) > _SLOTS:
@@ -293,7 +312,12 @@ def parse(value: str) -> LLMSelection:
     )
   slots += [''] * (_SLOTS - len(slots))
   provider, model, effort = (slot.strip() or None for slot in slots)
-  selection = LLMSelection(provider=provider, model=model, effort=effort, fast=fast)
+  selection = LLMSelection(
+    provider=provider,
+    model=model,
+    effort=effort,
+    **{name: name in suffixes for name in SELECTION_FLAGS},
+  )
   if selection.is_empty():
     raise LLMSelectionError(f'--llm value {value!r} names nothing')
   return selection
@@ -340,4 +364,15 @@ def resolve(base: LLMSpec | None, selection: LLMSelection, among: Collection[str
       log.verbose('%s has no fast mode; running with the plain recipe', spec.TYPE)
   if selection.effort is not None:
     spec = spec.with_effort(selection.effort)
+  if selection.passthrough:
+    spec = dataclasses.replace(spec, passthrough=True)
   return spec
+
+
+def require_admitted(recipe: LLMSpec) -> None:
+  if not recipe.admitted():
+    raise LLMSelectionError(
+      f'model {recipe.selection()["model"]!r} is not listed by provider {recipe.TYPE!r}; '
+      f'choose one of: {", ".join(models(recipe.TYPE))}; '
+      'or add +passthrough to send the model and content unchecked'
+    )

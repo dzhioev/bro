@@ -49,7 +49,8 @@ Uncommitted host changes never transfer.
 A session runs with what its bro declares and ride's own flags set:
 neither mode verb forwards arguments to the harness program, on either harness, and a launch carrying a `--` tail fails before any workspace exists.
 
-Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--limit`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set (`--provider`, `--model`, `--effort`, `--fast`, `--llm`).
+Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--limit`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set.
+The LLM selection flags are `--provider`, `--model`, `--effort`, `--fast`, `--passthrough`, and `--llm`.
 `--cred KIND+INSTANCE` selects an instance and holds that kind.
 `--grant`, `--revoke`, and `--limit` shape authority, while bare kinds in grants/revokes add or drop session credentials.
 The [permission reference](permissions.md) defines the grammar, checks, and shipped worker options.
@@ -126,8 +127,15 @@ A managed native launch layers the launch's selection over the first entry of `p
 `default` in that list means the persona's declaration; it supplies nothing for a persona with none.
 An in-process `bro run` or `bro chat` has no host list: its flags lay over the persona's declaration.
 Naming a provider selects its default recipe with the named knobs, independent of lower layers.
-Model-only, effort-only and fast-only selections inherit the provider and require a base recipe.
+Model-only, effort-only and flag-only selections inherit the provider and require a base recipe.
 Without a complete recipe, a native launch is refused before starting, naming `--llm provider:model` and, for managed launches, the host per-bro list as ways to supply one.
+
+`--llm` takes `provider:model:effort`, with any slot empty, and optional `+fast` and `+passthrough` suffixes, once each in either order.
+Canonical output places `+fast` first; a suffix alone applies to the standing recipe.
+`--passthrough` is its piece-flag spelling, excluded with `--llm` like the other pieces.
+A driven recipe must name a listed model or defer it to the harness, unless it carries passthrough.
+Passthrough bypasses admission and the model-input gate, not wire protocol constraints; a provider-naming selection resets the flag, while other selections inherit it.
+An unlisted declaration can be overridden by a listed selection or host-list entry, or by `+passthrough`.
 
 Recipe parsing checks grammar, not the installed roster.
 A host list may name providers another installation carries; unavailable entries are skipped with a verbose diagnostic, and an exhausted list refuses the launch naming the missing plug-in.
@@ -315,6 +323,8 @@ the native runner publishes when its trail opens, and the Claude recorder republ
 `ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`;
 it does not use the globally newest call or the bro class's current recipe.
 A session with trail recording disabled publishes no pointer and cannot be resumed.
+A resume resolves the recorded selection under the current runtime, which refuses an unlisted model without `passthrough`.
+`ride resume` takes no `--llm` override: continue such a trail with `bro chat <bro> --fork <trail>` under the persona’s declaration, select a listed model or the recorded model with `+passthrough` there, or start a new session.
 
 Each session also names its agent's cumulative LLM usage to the commands it runs, in the usage file `BRO_USAGE_FILE` points at (`bro.llm.usage`), which the commit footer reads:
 the native LLM loop writes a file of its own process after every API call,

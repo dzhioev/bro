@@ -213,6 +213,7 @@ PYTEST_FILES = [
   'bro/llm/mcp_test.py',
   'bro/llm/providers_test.py',
   'bro/llm/mu_test.py',
+  'bro/llm/wire_test.py',
   'bro/llm/observer_test.py',
   'bro/llm/retry_test.py',
   'bro/llm/tracker_test.py',
@@ -245,6 +246,7 @@ PYTEST_FILES = [
   'harnesses/native/harness/bro/native/llm_test.py',
   'harnesses/native/harness/bro/native/loop_test.py',
   'harnesses/native/harness/bro/native/wire_test.py',
+  'harnesses/native/harness/bro/native/model_inputs_test.py',
   'harnesses/native/harness/bro/native/wire_routes_test.py',
   'harnesses/native/harness/bro/native/runner_test.py',
   'harnesses/native/harness/bro/native/dev_mcp_test.py',
@@ -497,6 +499,7 @@ BENCHMARK_E2E_PYTEST_FILES = [
 # live-LLM behavior probes: each runs a real bro against the configured provider
 # and spends real tokens, so the stage naming them runs only when asked for
 LLM_PYTEST_FILES = [
+  'harnesses/native/harness/bro/native/model_inputs_llm_test.py',
   'bro/spells_llm_test.py',
   'browser/bros/browser/reader_llm_test.py',
   'dev/bros/dev/commit_llm_test.py',

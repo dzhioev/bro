@@ -78,7 +78,7 @@ def recipe(
     provider=cast(str | None, values.get('provider')),
     model=cast(str | None, values.get('model')) if values.get('model') != DEFAULT else None,
     effort=cast(str, values['effort']) if values.get('effort') in EFFORT_LEVELS else None,
-    fast=values.get('fast') is True,
+    **{name: values.get(name) is True for name in providers.SELECTION_FLAGS},
   )
   selection = None
   missing = []
@@ -120,7 +120,9 @@ def recipe(
     effective['model'] = None
   if 'effort' in values:
     effective['effort'] = None if values['effort'] == DEFAULT else cast(str, values['effort'])
-  return spec.with_selection(effective)
+  spec = spec.with_selection(effective)
+  providers.require_admitted(spec)
+  return spec
 
 
 def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
@@ -143,8 +145,14 @@ def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
     ):
       raise ValueError(f'bro.model must use its canonical model id {selected["model"]!r}')
     result.update({name: DEFAULT if value is None else value for name, value in selected.items()})
-    if data.get('fast_mode') or data.get('service_tier') == 'priority':
-      result['fast'] = True
+    for name in providers.SELECTION_FLAGS:
+      enabled = (
+        data.get('fast_mode') or data.get('service_tier') == 'priority'
+        if name == 'fast'
+        else getattr(spec, name)
+      )
+      if enabled:
+        result[name] = True
   return result
 
 
@@ -219,7 +227,7 @@ def declaration(kinds: frozenset[str]) -> Declaration:
       'effort': Option(
         'scalar', Scalars((finite(*providers.effort_values()), finite(DEFAULT))), open=True
       ),
-      'fast': Option('scalar', finite(True), open=True),
+      **{name: Option('scalar', finite(True), open=True) for name in providers.SELECTION_FLAGS},
       'export': Option('scalar', finite(True)),
       'hold': Option('scalar', finite(*HOLDS), open=True),
       'talk': Option('subset', Subsets(TALK_RIGHTS).universe(), open=True),
@@ -417,10 +425,7 @@ def option_values(fields: Mapping[str, object], source: object):
       'harness',
       'hold',
       'timeout',
-      'provider',
-      'model',
-      'effort',
-      'fast',
+      *providers.SELECTION_OPTIONS,
       'llm',
       'share',
     }
@@ -440,7 +445,7 @@ def option_values(fields: Mapping[str, object], source: object):
       values[name] = frozenset(members)
   if 'talk' in values:
     values['talk'] = cast(frozenset[str], values['talk']) | {'worker.say'}
-  for flag in ('fast', 'export'):
+  for flag in (*providers.SELECTION_FLAGS, 'export'):
     if flag in values:
       if type(values[flag]) is not bool:
         raise ValueError(f'{flag} must be a flag')
@@ -462,12 +467,10 @@ def option_values(fields: Mapping[str, object], source: object):
       raise ValueError('llm must be a recipe string')
     presets = {**reading.project.get('llm', {}), **reading.configuration.raw.get('llm', {})}
     selection = providers.parse_with_presets(text, presets)
-    for name in ('provider', 'model', 'effort'):
+    for name in providers.SELECTION_OPTIONS:
       value = getattr(selection, name)
-      if value is not None:
+      if value is not None and (name not in providers.SELECTION_FLAGS or value):
         values.setdefault(name, value)
-    if selection.fast and 'fast' not in fields:
-      values['fast'] = True
   if 'model' in values and values['model'] != DEFAULT:
     spec = recipe(values, reading)
     if spec is not None:

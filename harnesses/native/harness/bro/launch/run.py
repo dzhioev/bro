@@ -16,7 +16,7 @@ from bro.launch.llm_flags import (
   selection_from_args,
 )
 from bro.llm.llm import LLMSpec
-from bro.llm.providers import LLMSelectionError
+from bro.llm.providers import SELECTION_OPTIONS, LLMSelectionError, require_admitted
 from bro.mcp import HOLDS
 from bro.native.harness import resolve_native
 from bro.native.runner import Runner
@@ -42,16 +42,18 @@ def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
   bro_class = get_class(bro_name)
   if bro_class.llm_spec is None and selection.provider is None:
     raise LLMSelectionError(f'{bro_name} declares no LLM recipe: pass --llm provider:model')
-  if selection.is_empty():
+  if selection.is_empty() and bro_class.llm_spec is not None:
+    require_admitted(bro_class.llm_spec)
     return None
   spec = resolve_native(bro_class.llm_spec, selection)
+  require_admitted(spec)
   return None if spec == bro_class.llm_spec else spec
 
 
 def add_resolved_llm_flag(parser: base_args.Parser) -> None:
   """Register the suppressed exact-recipe flag, exclusive with the selection flags."""
   parser.add_argument('--resolved-llm', default=None, env=False, help=base_args.SUPPRESS)
-  parser.add_exclusive_groups(['resolved_llm'], ['llm', 'provider', 'model', 'effort', 'fast'])
+  parser.add_exclusive_groups(['resolved_llm'], ['llm', *SELECTION_OPTIONS])
 
 
 def launch_llm_spec(bro_name: str, args: dict) -> Optional[LLMSpec]:
@@ -67,6 +69,7 @@ def launch_llm_spec(bro_name: str, args: dict) -> Optional[LLMSpec]:
     raise LLMSelectionError(f'invalid --resolved-llm recipe: {error}') from error
   if spec.WIRE not in wires.client_names():
     raise LLMSelectionError(f'resolved recipe {spec.TYPE} is not runnable by the bro harness')
+  require_admitted(spec)
   return spec
 
 

@@ -125,6 +125,11 @@ def price(
 class LLMSpec(Recipe):
   TYPE: ClassVar[str] = 'deepseek'
   WIRE: ClassVar[str] = 'chat'
+  # DeepSeek models/pricing page and vision guide, read 2026-10-31.
+  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {
+    DEFAULT_MODEL: frozenset(),
+    MODELS['flash']: frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'}),
+  }
   ENDPOINT: ClassVar[str] = 'https://api.deepseek.com'
   selection_fields = MappingProxyType({'model': 'model', 'effort': 'reasoning_effort'})
   deferred_fields = frozenset({'effort'})
@@ -151,9 +156,6 @@ class LLMSpec(Recipe):
       return {'thinking': {'type': 'disabled'}}
     return {'thinking': {'type': 'enabled'}, 'reasoning_effort': self.reasoning_effort}
 
-  def accepts(self, part_kind: str) -> bool:
-    return part_kind == 'text' or (part_kind == 'image' and self.model == MODELS['flash'])
-
   def is_transient(self, error: Exception) -> bool:
     from openai import APIConnectionError, APIStatusError
 
@@ -164,7 +166,7 @@ class LLMSpec(Recipe):
   def needed_secrets(self) -> tuple[str, ...]:
     return (self.TYPE,)
 
-  def dump(self) -> dict:
+  def _dump_impl(self) -> dict:
     return {'type': self.TYPE, 'model': self.model, 'reasoning_effort': self.reasoning_effort}
 
   @classmethod

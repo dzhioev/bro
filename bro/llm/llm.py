@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import ClassVar, Self
 
@@ -73,11 +73,18 @@ class LLMSpec(ABC):
 
   # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
+  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]]
   WIRE: ClassVar[str]
   ENDPOINT: ClassVar[str | None] = None
   selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
   deferred_fields: ClassVar[frozenset[str]] = frozenset()
   effort_values: ClassVar[frozenset[str]] = frozenset()
+
+  passthrough: bool = field(default=False, kw_only=True)
+
+  def admitted(self) -> bool:
+    model = self.selection()['model']
+    return self.passthrough or model is None or model in self.MODEL_INPUTS
 
   def request_options(self) -> dict:
     return {}
@@ -85,8 +92,11 @@ class LLMSpec(ABC):
   def is_transient(self, error: Exception) -> bool:
     return False
 
-  def accepts(self, part_kind: str) -> bool:
-    return part_kind in {'text', 'image'}
+  def accepts(self, mime_type: str) -> bool:
+    model = self.selection()['model']
+    return self.passthrough or (
+      model is not None and model in self.MODEL_INPUTS and mime_type in self.MODEL_INPUTS[model]
+    )
 
   def selection(self) -> dict[str, str | None]:
     return {name: getattr(self, field) for name, field in self.selection_fields.items()}
@@ -123,17 +133,27 @@ class LLMSpec(ABC):
     """Credentials this provider needs on surfaces running it as an LLM process."""
     return ()
 
-  @abstractmethod
   def dump(self) -> dict:
     """serialize to a dict including `type` so `LLMSpec.from_dict` can round-trip."""
-    ...
+    data = self._dump_impl()
+    if self.passthrough:
+      data['passthrough'] = True
+    return data
+
+  @abstractmethod
+  def _dump_impl(self) -> dict: ...
 
   @classmethod
   def from_dict(cls, data: dict) -> 'LLMSpec':
     """Reconstruct through only the declaration named by the stored type."""
     from bro.llm import providers
 
-    return providers.declaration(data['type']).LLMSpec._from_dict_impl(data)
+    spec = providers.declaration(data['type']).LLMSpec._from_dict_impl(data)
+    if 'passthrough' in data:
+      if type(data['passthrough']) is not bool:
+        raise TypeError('passthrough must be a boolean')
+      spec = replace(spec, passthrough=data['passthrough'])
+    return spec
 
   @classmethod
   @abstractmethod

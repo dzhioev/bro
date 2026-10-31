@@ -446,7 +446,7 @@ class TestCast:
     async def fake_mu(prompt, result_class, *contents, role=None):
       captured['role'] = role
       captured['prompt'] = prompt
-      captured['request'] = contents[0].json
+      captured['request'] = json.loads(contents[0].text)
       return result_class.model_validate(
         {
           'spell': 'spell::do-work',
