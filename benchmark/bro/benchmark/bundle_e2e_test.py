@@ -63,9 +63,6 @@ def _in(container: str, *command: str) -> str:
 def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
   workspace = workspace_root()
   bundle = build(workspace, tmp_path / 'bundle')
-  from bro.claude.provisioning import claude_code_version
-
-  version = claude_code_version()
 
   with _container() as container:
     absent = _in(container, 'sh', '-c', 'command -v python3 python || true')
@@ -77,6 +74,12 @@ def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
     listed = _in(container, f'{installed}/venv/bin/bro', 'list')
     card = _in(container, f'{installed}/bin/bro', 'show', 'terminal')
     claude_version = _in(container, f'{installed}/claude/claude', '--version')
+    pinned = _in(
+      container,
+      f'{installed}/venv/bin/python3',
+      '-c',
+      'from bro.claude.provisioning import claude_code_version; print(claude_code_version())',
+    )
     # the trial's own launch, on the provider that answers without a key
     ride = ride_command(bro='terminal', instruction='say hello', harness='bro', llm='echo:')
     _in(
@@ -96,6 +99,6 @@ def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
 
   assert 'terminal: ' in listed
   assert card.startswith('# terminal')
-  assert claude_version.startswith(version)
+  assert claude_version.startswith(pinned)
   assert trails.strip() == '1'
   assert workspaces.strip() == '1'

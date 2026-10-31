@@ -18,7 +18,7 @@ A benchmark task runs in a foreign image that must not be modified,
 and several carry neither Python nor a CA store, so the agent brings its own.
 `benchmark bundle` builds a relocatable directory in the materialized-runtime layout `ride --runtime-bundle` takes:
 `venv/`, a pinned standalone CPython with the framework distributions a ride runs from
-— `bro`, `bro-native`, `bro-native-trails`, `bro-dev` and `bro-ride`, resolved from the framework's lock
+— core, ride, `bro-dev`, both harnesses with their trail formats, and the OpenAI and Anthropic plug-ins with their wires, resolved from the framework's lock
 — installed into its own site-packages, every console script relocated to find that interpreter beside itself;
 `bin/`, the shim farm over the session commands, which leads a session's `PATH` and keeps the bundled `python3` off it;
 and runtime assets provisioned by the harnesses registered inside that installation:
