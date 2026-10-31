@@ -283,14 +283,15 @@ def _validated_call(
 async def interpret(command: str, spells: list[Spell]) -> tuple[Spell, dict[str, str]] | str:
   """the spell a free-form command resolves to among `spells` and the arguments
   extracted for it, or the interpreter's reason it resolves to none."""
-  from bro.llm.mu import JSON, mu
+  from bro.llm.mu import mu
+  from bro.llm.wire import Text
   from bro.prompts import get_prompt
 
   request = {'command': command, 'spells': _cast_roster(spells)}
   interpretation = await mu.aio(
     get_prompt('spell_dispatch.prompt'),
     _Interpretation,
-    JSON(request),
+    Text(json.dumps(request, indent=4)),
     role='dispatch',
   )
   if interpretation.error is not None:

@@ -2720,7 +2720,7 @@ class ScriptedLLM(LLM):
     self.question_id = None
     self.notices = []
 
-  async def send(self, messages, *, request_timeout=None):
+  async def send(self, inputs, *, request_timeout=None):
     asked = await self.tools.call(
       'bro__quest_ask', {'quest_id': 'self', 'text': 'approve the change?'}
     )
@@ -2852,7 +2852,7 @@ class ScriptedLLM(LLM):
     self.answered = False
     self.actions = []
 
-  async def send(self, messages, *, request_timeout=None):
+  async def send(self, inputs, *, request_timeout=None):
     self.actions.append('bro__summon')
     accepted = await self.tools.call(
       'bro__summon',

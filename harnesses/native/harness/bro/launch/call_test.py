@@ -3,6 +3,7 @@ import json
 import signal
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from bro.llm.observer import (
   TurnCompletedEvent,
   TurnStartedEvent,
 )
+from bro.llm.wire import SystemPrompt, Text, UserMessage
 from bro.native.llm import LLM
 from bro.native.runner import Runner
 from bro.trails.display import (
@@ -58,12 +60,14 @@ class MockLLM(LLM):
   def __init__(self, response: str = 'mock', mcp_servers: Optional[list[MCPServer]] = None):
     super().__init__(Inbox(), mcp_servers)
     self.response = response
-    self.send_calls: list[list[dict]] = []
+    self.send_calls: list[Sequence[SystemPrompt | UserMessage]] = []
     self.wake_calls = 0
     self.woken = asyncio.Event()
 
-  async def send(self, messages: list[dict], *, request_timeout: Optional[float] = None) -> str:
-    self.send_calls.append(messages)
+  async def send(
+    self, inputs: Sequence[SystemPrompt | UserMessage], *, request_timeout: Optional[float] = None
+  ) -> str:
+    self.send_calls.append(inputs)
     return self.response
 
   async def wake(self, *, request_timeout: Optional[float] = None) -> str:
@@ -159,9 +163,9 @@ async def test_text_drives_send_until_eof(capsys):
     now=_fixed_now,
   )
   assert len(runner.mock_llm.send_calls) == 3
-  assert runner.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'first'}
-  assert runner.mock_llm.send_calls[1] == [{'role': 'user', 'content': 'second'}]
-  assert runner.mock_llm.send_calls[2] == [{'role': 'user', 'content': 'third'}]
+  assert runner.mock_llm.send_calls[0][-1] == UserMessage((Text('first'),))
+  assert runner.mock_llm.send_calls[1] == [UserMessage((Text('second'),))]
+  assert runner.mock_llm.send_calls[2] == [UserMessage((Text('third'),))]
   out = capsys.readouterr().out
   # each reply line is `[HH:MM:SS] <bro-name>: <reply>`
   assert out.count('[12:34:56] record: reply') == 3
@@ -193,8 +197,8 @@ async def test_text_skips_empty_input(capsys):
   )
   # empty string skipped; whitespace-only is sent through (boundary belongs upstream)
   assert len(runner.mock_llm.send_calls) == 3  # first + '   ' + 'real'
-  assert runner.mock_llm.send_calls[1] == [{'role': 'user', 'content': '   '}]
-  assert runner.mock_llm.send_calls[2] == [{'role': 'user', 'content': 'real'}]
+  assert runner.mock_llm.send_calls[1] == [UserMessage((Text('   '),))]
+  assert runner.mock_llm.send_calls[2] == [UserMessage((Text('real'),))]
 
 
 @pytest.mark.asyncio
@@ -202,7 +206,7 @@ async def test_text_returns_on_immediate_eof(capsys):
   runner = _MockRunner(response='reply')
   await call_text(runner, 'only', read_line=_ScriptedLines([]), now=_fixed_now)
   assert len(runner.mock_llm.send_calls) == 1
-  assert runner.mock_llm.send_calls[0][-1] == {'role': 'user', 'content': 'only'}
+  assert runner.mock_llm.send_calls[0][-1] == UserMessage((Text('only'),))
 
 
 @pytest.mark.asyncio
@@ -242,9 +246,9 @@ async def test_text_notification_wins_while_a_line_remains_for_the_next_turn(cap
     reader.release.set()
     await asyncio.wait_for(conversation, timeout=10)
 
-    assert [call[-1]['content'] for call in runner.mock_llm.send_calls] == [
-      'first',
-      'human next',
+    assert [call[-1] for call in runner.mock_llm.send_calls] == [
+      UserMessage((Text('first'),)),
+      UserMessage((Text('human next'),)),
     ]
 
 

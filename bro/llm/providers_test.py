@@ -17,7 +17,13 @@ def shared_short_name(monkeypatch):
   tables['openai']['shared'] = 'gpt-shared'
   tables['anthropic']['shared'] = 'claude-shared'
   for name, table in tables.items():
-    monkeypatch.setattr(providers.declaration(name), 'MODELS', table)
+    declaration = providers.declaration(name)
+    monkeypatch.setattr(declaration, 'MODELS', table)
+    monkeypatch.setattr(
+      declaration.LLMSpec,
+      'MODEL_INPUTS',
+      {**declaration.LLMSpec.MODEL_INPUTS, **dict.fromkeys(table.values(), frozenset())},
+    )
 
 
 class TestRoster:
@@ -420,3 +426,34 @@ def test_selection_parsing_does_not_consult_the_installation(monkeypatch):
   assert providers.parse('future-provider:future-model:high').provider == 'future-provider'
   assert providers.parse(':future-model').model == 'future-model'
   assert providers.LLMSelection(provider='future-provider').format() == 'future-provider'
+
+
+@pytest.mark.parametrize('name', ALL)
+def test_model_inputs_gate_each_declared_model_and_unlisted_models(name):
+  declaration = providers.declaration(name)
+  recipe = declaration.LLMSpec()
+  for model, inputs in recipe.MODEL_INPUTS.items():
+    selected = recipe.with_selection({**recipe.selection(), 'model': model})
+    for mime_type in inputs:
+      assert selected.accepts(mime_type)
+    assert not selected.accepts('application/x-unlisted-test')
+  unlisted = recipe.with_selection({**recipe.selection(), 'model': name + '-unlisted'})
+  assert not unlisted.accepts('image/png')
+
+
+@pytest.mark.parametrize(
+  'table,error',
+  [
+    ([], 'map model ids'),
+    ({1: frozenset()}, 'map model ids'),
+    ({'model': {'application/pdf'}}, 'map model ids'),
+    ({'model': frozenset({1})}, 'map model ids'),
+    ({'model': frozenset({'Application/PDF'})}, 'map model ids'),
+    ({'model': frozenset({'text/plain; charset=utf-8'})}, 'map model ids'),
+    ({}, 'cover DEFAULT_MODEL'),
+  ],
+)
+def test_malformed_model_inputs_make_the_declaration_unavailable(monkeypatch, table, error):
+  monkeypatch.setattr(openai_llm.LLMSpec, 'MODEL_INPUTS', table)
+  with pytest.raises(providers.LLMSelectionError, match=error):
+    providers.declaration('openai')

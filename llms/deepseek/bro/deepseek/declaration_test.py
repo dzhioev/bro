@@ -35,10 +35,9 @@ def test_deferred_and_disabled_thinking_and_content_capabilities():
   assert LLMSpec().request_options() == {}
   assert LLMSpec(reasoning_effort='none').request_options() == {'thinking': {'type': 'disabled'}}
   assert LLMSpec().needed_secrets() == ('deepseek',)
-  assert LLMSpec().accepts('text')
-  assert not LLMSpec().accepts('image')
-  assert LLMSpec(model=MODELS['flash']).accepts('image')
-  assert not LLMSpec(model=MODELS['flash']).accepts('audio')
+  assert not LLMSpec().accepts('image/png')
+  assert LLMSpec(model=MODELS['flash']).accepts('image/png')
+  assert not LLMSpec(model=MODELS['flash']).accepts('application/pdf')
   with pytest.raises(ValueError, match='reasoning_effort'):
     LLMSpec(reasoning_effort='medium')
   with pytest.raises(ValueError, match='model'):

@@ -1,6 +1,7 @@
 import bros.eyebro as eyebro
 from bro.datasources.references import (
   llm_providers,
+  mu,
   permission_model,
   permissions,
   permissions_cheatsheet,
@@ -54,6 +55,7 @@ class Eyebro(Bro):
     source(references.dev_style),
     *(man(guide) for guide in references.guides),
     man(llm_providers),
+    man(mu),
     man(permission_model),
     man(permissions),
     man(permissions_cheatsheet),

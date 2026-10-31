@@ -1,33 +1,24 @@
-from __future__ import annotations
-
-import base64
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-  from openai.types.responses.response_input_image_param import ResponseInputImageParam
-  from openai.types.responses.response_input_text_param import ResponseInputTextParam
+from bro.llm.llm import LLMSpec
+from bro.llm.wire import Content, File, Text, require_accepted
 
 
-def image_to_content(data: bytes, mime_type: str) -> ResponseInputImageParam:
-  from openai.types.responses.response_input_image_param import ResponseInputImageParam
-
-  encoded = base64.b64encode(data).decode('utf-8')
-  image_url = f'data:{mime_type};base64,{encoded}'
-  return ResponseInputImageParam(type='input_image', image_url=image_url, detail='high')
-
-
-def png_to_content(data: bytes) -> ResponseInputImageParam:
-  return image_to_content(data, 'image/png')
+def encode_content(recipe: LLMSpec, content: tuple[Content, ...]) -> str | list[dict]:
+  require_accepted(recipe, content)
+  if len(content) == 1 and isinstance(content[0], Text):
+    return content[0].text
+  return [encode_item(item) for item in content]
 
 
-def image_file_to_content(image_path: str) -> ResponseInputImageParam:
-  if not image_path.endswith('.png'):
-    raise NotImplementedError('only PNG images supported')
-  with open(image_path, 'rb') as image_file:
-    return png_to_content(image_file.read())
-
-
-def text_to_content(text: str) -> ResponseInputTextParam:
-  from openai.types.responses.response_input_text_param import ResponseInputTextParam
-
-  return ResponseInputTextParam(type='input_text', text=text)
+def encode_item(item: Content) -> dict:
+  if isinstance(item, Text):
+    return {'type': 'input_text', 'text': item.text}
+  if isinstance(item, File):
+    if item.mime_type.startswith('image/'):
+      return {'type': 'input_image', 'image_url': item.data_url(), 'detail': 'auto'}
+    return {
+      'type': 'input_file',
+      'file_data': item.data_url(),
+      'filename': item.filename or 'file',
+      'detail': 'auto',
+    }
+  raise TypeError(f'unsupported content item: {type(item).__name__}')

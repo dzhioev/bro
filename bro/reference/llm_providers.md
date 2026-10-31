@@ -20,7 +20,12 @@ The shared interfaces are [LLMSpec](../llm/llm.py) and the [provider roster](../
   Map the neutral levels of `with_effort()` onto the provider's documented scale;
   implement `fast()` only when supported.
   A client-driven recipe supplies `WIRE`, `ENDPOINT` when needed, `request_options()`,
-  `needed_secrets()`, `is_transient(error)` and `accepts(part_kind)`.
+  `needed_secrets()` and `is_transient(error)`.
+  Every recipe class defines `MODEL_INPUTS`, mapping listed model ids to `frozenset`s of lowercase MIME types without parameters, copied from the vendor’s model and input-format guides.
+  `DEFAULT_MODEL` and every `MODELS` value must occur in the table;
+  declaration loading validates the table and its MIME types.
+  The base `accepts(mime_type)` checks the selected model’s row; do not override it.
+  Text is always accepted and is not listed in the table.
   Options must not overlap the wire client's `OWNED` fields; unsupported input raises `UnsupportedContent` before sending.
 - Export `DEFAULT_MODEL`, `MODELS` (short names to full ids), and `MODEL_ID` when verbatim model ids need a pattern.
   The table is a convenience, not a whitelist: resolution tries a short name, then a full id, then a verbatim id.
@@ -94,7 +99,14 @@ A new protocol needs a distribution under `wires/<name>/`, with an import-free p
   `counts()` maps billing onto the four classes of [usage](../llm/usage.py).
 - **Client:** register a class implementing [Wire](../llm/wire.py), with its SDK in the distribution's `client` extra.
   It accepts the recipe and credential material, encodes neutral inputs and tools, owns `OWNED` request fields,
-  and implements `exchange`, `restore`, and `structured` for auxiliary one-shot calls.
+  and implements `exchange`, `restore`, and `structured(instructions, result, content, request_timeout)` for auxiliary one-shot calls.
+  User content is a nonempty tuple of `Text` and `File` from `bro.llm.wire`.
+  Call `require_accepted(recipe, content)` before encoding any item, then refuse any model-accepted type the protocol cannot carry with `UnsupportedContent`.
+  One `Text` encodes as string content;
+  multiple items or a file encode as a list.
+  Read no file in a wire;
+  `File` carries bytes and a declared MIME type.
+  Replay recorded user and notification text through the same encoder as `UserMessage((Text(body),))`.
   A server-chained client may implement `seed_chain`; a client-chained wire must reject it.
   Build each `Leg` from the same raw JSON passed to decode and counts, retaining the raw response, nulls included.
   A wire's decode and client sides share a version.
@@ -193,7 +205,9 @@ an unknown wire degrades to a forensic event without losing its record.
 
 ## Adding a model to an existing provider
 
-Use the existing declaration: add a `MODELS` alias and a price row, and check `MODEL_ID` admits the vendor's full and returned snapshot ids.
+Use the existing declaration: add a `MODELS` alias, a `MODEL_INPUTS` row copied from the vendor’s input-format documentation, and a price row, and check `MODEL_ID` admits the vendor's full and returned snapshot ids.
+Add newly documented filename suffixes to `EXTENSION_TYPES` in `bro.llm.wire`, choosing a MIME type every vendor accepting that format lists.
+When no single type serves them all, leave the suffix out and require callers to pass `mime_type` explicitly.
 Test knob defaults, effort mapping, content support, usage and pricing for any model-specific differences.
 A new model need not require a new wire, credential or provider distribution.
 Update and run the provider's live probe, refresh captured fixtures, and adjust presets and operator recipes that select the model.

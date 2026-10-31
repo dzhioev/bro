@@ -14,7 +14,7 @@ from bro.launch.resume import resume
 from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMStopped
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
-from bro.llm.wire import Leg, SystemPrompt, UserMessage, Wire
+from bro.llm.wire import Leg, SystemPrompt, Text, UserMessage, Wire
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.echo_declaration import LLMSpec as EchoSpec
 from bro.native.runner import Runner
@@ -194,10 +194,15 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
     items = []
     for item in inputs:
       assert isinstance(item, (SystemPrompt, UserMessage))
+      if isinstance(item, SystemPrompt):
+        text = item.text
+      else:
+        assert len(item.content) == 1 and isinstance(item.content[0], Text)
+        text = item.content[0].text
       items.append(
         {
           'role': 'system' if isinstance(item, SystemPrompt) else 'user',
-          'content': item.text if isinstance(item, SystemPrompt) else item.content,
+          'content': text,
         }
       )
     decoded = decode(raw)

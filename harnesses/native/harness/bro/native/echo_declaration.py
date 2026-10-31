@@ -36,11 +36,9 @@ class LLMSpec(llm_llm.LLMSpec):
 
   TYPE: ClassVar[str] = 'echo'
   WIRE: ClassVar[str] = 'echo'
+  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {DEFAULT_MODEL: frozenset()}
 
   model: str = DEFAULT_MODEL
-
-  def accepts(self, part_kind: str) -> bool:
-    return part_kind == 'text'
 
   def dump(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}

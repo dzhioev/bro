@@ -162,7 +162,8 @@ def _reader_prompt(question: str) -> str:
 
 
 def _read_page(prompt: str, content: str) -> _ReaderResult:
-  from bro.llm.mu import Text, mu
+  from bro.llm.mu import mu
+  from bro.llm.wire import Text
 
   return mu(
     prompt,

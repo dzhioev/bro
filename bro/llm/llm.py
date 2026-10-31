@@ -73,6 +73,7 @@ class LLMSpec(ABC):
 
   # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
+  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]]
   WIRE: ClassVar[str]
   ENDPOINT: ClassVar[str | None] = None
   selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
@@ -85,8 +86,11 @@ class LLMSpec(ABC):
   def is_transient(self, error: Exception) -> bool:
     return False
 
-  def accepts(self, part_kind: str) -> bool:
-    return part_kind in {'text', 'image'}
+  def accepts(self, mime_type: str) -> bool:
+    model = self.selection()['model']
+    return (
+      model is not None and model in self.MODEL_INPUTS and mime_type in self.MODEL_INPUTS[model]
+    )
 
   def selection(self) -> dict[str, str | None]:
     return {name: getattr(self, field) for name, field in self.selection_fields.items()}

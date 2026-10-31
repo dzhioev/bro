@@ -6,22 +6,24 @@ from openai import AsyncOpenAI, pydantic_function_tool
 from pydantic import BaseModel
 
 from bro.base import log
-from bro.llm.llm import LLMSpec, LLMStopped, UnsupportedContent
+from bro.llm.llm import LLMSpec, LLMStopped
 from bro.llm.mcp import Tool, encode_tool_result
 from bro.llm.records import Chaining, DecodedCall, Unknown
 from bro.llm.retry import retry_llm
 from bro.llm.wire import (
+  Content,
   Input,
   Leg,
   Notification,
   Prefix,
   SystemPrompt,
+  Text,
   ToolOutput,
   UnusableResponse,
   UserMessage,
   Wire,
 )
-from bro.wire_responses.content import image_file_to_content, text_to_content
+from bro.wire_responses.content import encode_content
 from bro.wire_responses.decode import CHAINING, NAME, counts, decode
 
 if TYPE_CHECKING:
@@ -29,8 +31,6 @@ if TYPE_CHECKING:
     Response,
     ToolParam,
   )
-  from openai.types.responses.easy_input_message_param import EasyInputMessageParam
-  from openai.types.responses.response_input_content_param import ResponseInputContentParam
 
 
 def parse_response(response: dict, decoded: DecodedCall | None = None) -> str:
@@ -75,32 +75,6 @@ def tools_to_openai_format(tools: list[Tool]) -> list[ToolParam]:
   return result
 
 
-def convert_content_part(part: dict) -> ResponseInputContentParam:
-  from openai.types.responses.response_input_image_param import ResponseInputImageParam
-
-  if part.get('type') == 'text':
-    return text_to_content(part['text'])
-  if part.get('type') == 'image_url':
-    url = part.get('image_url', {}).get('url', '')
-    if url.startswith('data:'):
-      return ResponseInputImageParam(type='input_image', image_url=url, detail='high')
-    return image_file_to_content(url)
-  raise UnsupportedContent(f'unsupported Responses content part {part.get("type")!r}')
-
-
-def convert_message(msg: dict) -> EasyInputMessageParam:
-  from openai.types.responses.easy_input_message_param import EasyInputMessageParam
-
-  role = msg.get('role', 'user')
-  content = msg.get('content', '')
-  if isinstance(content, list):
-    converted: list[ResponseInputContentParam] = [convert_content_part(p) for p in content]
-    return EasyInputMessageParam(role=role, content=converted)
-  return EasyInputMessageParam(
-    role=role, content=content if isinstance(content, str) else str(content)
-  )
-
-
 class Responses(Wire):
   NAME = NAME
   CHAINING: ClassVar[Chaining] = CHAINING
@@ -123,19 +97,7 @@ class Responses(Wire):
         'call_id': item.call_id,
         'output': encode_tool_result(item.output),
       }
-    content = item.content
-    if isinstance(content, list):
-      for part in content:
-        kind = 'image' if part['type'] == 'image_url' else part['type']
-        if not self.recipe.accepts(kind):
-          raise UnsupportedContent(
-            f'{kind} content is not supported by {self.recipe.selection()["model"]}'
-          )
-    elif not self.recipe.accepts('text'):
-      raise UnsupportedContent(
-        f'text content is not supported by {self.recipe.selection()["model"]}'
-      )
-    return dict(convert_message({'role': 'user', 'content': content}))
+    return {'role': 'user', 'content': encode_content(self.recipe, item.content)}
 
   async def exchange(
     self, inputs: list[Input], tools: list[Tool], request_timeout: float | None
@@ -182,7 +144,11 @@ class Responses(Wire):
     return leg
 
   async def structured[T: BaseModel](
-    self, prompt: str, result: type[T], contents: list, request_timeout: float | None
+    self,
+    instructions: str,
+    result: type[T],
+    content: tuple[Content, ...],
+    request_timeout: float | None,
   ) -> T:
     async with self.client:
       function = pydantic_function_tool(result)['function']
@@ -191,7 +157,7 @@ class Responses(Wire):
       request = {
         **self.recipe.request_options(),
         'model': self.recipe.selection()['model'],
-        'input': [self._encode(SystemPrompt(prompt)), self._encode(UserMessage(contents))],
+        'input': [self._encode(SystemPrompt(instructions)), self._encode(UserMessage(content))],
         'text': {
           'format': {
             'type': 'json_schema',
@@ -218,7 +184,7 @@ class Responses(Wire):
     items: list[dict] = [{'role': 'system', 'content': prefix.system_prompt}]
     for step in prefix.steps:
       if step.kind in {'user_input', 'notification'}:
-        items.append({'role': 'user', 'content': step.body})
+        items.append(self._encode(UserMessage((Text(step.body),))))
       elif step.kind == 'llm_call' and 'stopped' not in step.extras:
         for item in step.body['response']['output']:
           if not _is_compaction(item):

@@ -326,7 +326,7 @@ def test_read_page_chooses_the_reader_role(monkeypatch):
   def read(prompt, result, *contents, role=None):
     assert role == 'reader'
     assert prompt == 'question'
-    assert contents[0].to_text() == 'page text'
+    assert contents[0].text == 'page text'
     return result(answer='answer', elements=[])
 
   monkeypatch.setattr(mu_module, 'mu', read)

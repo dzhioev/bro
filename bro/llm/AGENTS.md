@@ -44,9 +44,9 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.
 - `mu.py` — typed one-shot calls configured by the `mu` credential.
-  `mu(prompt, result, *contents, role=None)` blocks; `mu.aio(...)` is awaitable.
+  `mu(instructions, result, *content, role=None)` blocks; `mu.aio(...)` is awaitable.
   The material's default recipe and credential, or the named role's pair, open a wire through `wires.open` and call `structured`.
-  `Text` and `JSON` reduce to neutral text parts; `Markdown` is a convenience result model.
+  Content is the wire port’s `Text` and `File`; see `bro/reference/mu.md` (man topic `mu`).
   Uncompleted replies raise `LLMStopped`.
   Operator configuration: `bro/reference/permissions.md`, "Auxiliary LLM credentials".
 - `retry.py` — `retry_llm(request, transient)`, retrying through a provider outage until `RETRY_WINDOW_SECONDS` run out,
@@ -69,6 +69,7 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   `NullObserver` is the explicit no-op.
 - `records.py` — SDK-free response meanings: ordered reasoning, messages, calls and unknown parts, with derived reply and terminal status.
 - `wire.py` — the `Wire` client port, `Leg`, replay `Prefix`, and neutral inputs (`SystemPrompt`, `UserMessage`, `Notification`, `ToolOutput`).
+  `Text` and `File` are validated content items; `EXTENSION_TYPES` types file paths and `require_accepted` enforces the model gate.
   A leg carries the recorded exchange and its decoded parts, stop, reply and billed counts.
   `UnusableResponse` retains a received leg when reply extraction fails and explicitly reports whether the wire accepted the exchange.
   A rejected exchange retains pending inputs and is recorded with `stopped: failed`; an accepted one acknowledges its inputs.
