@@ -8,6 +8,8 @@ The quest's `talk` rights decide what may travel before that result;
 
 {{iff #talk contains owner.say}}
 The session keeps a session watch, so messages from the summoner arrive as notifications.
+A message from the summoner belongs to the request in hand rather than opening a new one:
+it amends the work or points at a problem in it, so fold it into the work and carry on to the one result this run owes.
 {{when #talk contains owner.question}}
 Answer a question with `bro::quest_say` on `self`, passing its id as `reply_to`.
 {{end}}
