@@ -290,7 +290,10 @@ class TestTaskMode:
 class TestTaskSystem:
   """the prefetch backend reads `brog` through the launch's own scope binding."""
 
-  def test_real_scope_view_reads_selected_brog_and_reference_targets(self, fake_proj, monkeypatch):
+  @pytest.mark.parametrize('harness,llm', [('claude', None), ('bro', 'openai:gpt-7+passthrough')])
+  def test_real_scope_view_reads_selected_brog_and_reference_targets(
+    self, fake_proj, monkeypatch, harness, llm
+  ):
     store = fake_proj / 'store'
     material = store / credentials.MATERIAL_DIR
     material.mkdir(parents=True)
@@ -299,6 +302,7 @@ class TestTaskSystem:
     )
     (material / 'github+reviewer.cred').write_text('reviewer-token')
     (material / 'claude_code.cred').write_text('claude-token')
+    (material / 'openai.cred').write_text('{"api_key":"fixture-key"}')
     config = fake_proj / 'bro.json'
     config.write_text(
       json.dumps(
@@ -321,7 +325,7 @@ class TestTaskSystem:
 
     monkeypatch.setattr(brog_system, 'build_system', build_system)
 
-    system = dive_in._task_system(fake_proj, [], [], [], 'bro-dev', 'claude', None)
+    system = dive_in._task_system(fake_proj, [], [], [], 'bro-dev', harness, llm)
 
     assert system == 'task-system'
     assert captured == {'backend': 'github', 'token': 'reviewer-token', 'repo': 'owner/repo'}

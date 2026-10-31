@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import ClassVar, Self
 
@@ -80,6 +80,12 @@ class LLMSpec(ABC):
   deferred_fields: ClassVar[frozenset[str]] = frozenset()
   effort_values: ClassVar[frozenset[str]] = frozenset()
 
+  passthrough: bool = field(default=False, kw_only=True)
+
+  def admitted(self) -> bool:
+    model = self.selection()['model']
+    return self.passthrough or model is None or model in self.MODEL_INPUTS
+
   def request_options(self) -> dict:
     return {}
 
@@ -88,7 +94,7 @@ class LLMSpec(ABC):
 
   def accepts(self, mime_type: str) -> bool:
     model = self.selection()['model']
-    return (
+    return self.passthrough or (
       model is not None and model in self.MODEL_INPUTS and mime_type in self.MODEL_INPUTS[model]
     )
 
@@ -127,17 +133,27 @@ class LLMSpec(ABC):
     """Credentials this provider needs on surfaces running it as an LLM process."""
     return ()
 
-  @abstractmethod
   def dump(self) -> dict:
     """serialize to a dict including `type` so `LLMSpec.from_dict` can round-trip."""
-    ...
+    data = self._dump_impl()
+    if self.passthrough:
+      data['passthrough'] = True
+    return data
+
+  @abstractmethod
+  def _dump_impl(self) -> dict: ...
 
   @classmethod
   def from_dict(cls, data: dict) -> 'LLMSpec':
     """Reconstruct through only the declaration named by the stored type."""
     from bro.llm import providers
 
-    return providers.declaration(data['type']).LLMSpec._from_dict_impl(data)
+    spec = providers.declaration(data['type']).LLMSpec._from_dict_impl(data)
+    if 'passthrough' in data:
+      if type(data['passthrough']) is not bool:
+        raise TypeError('passthrough must be a boolean')
+      spec = replace(spec, passthrough=data['passthrough'])
+    return spec
 
   @classmethod
   @abstractmethod

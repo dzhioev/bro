@@ -117,6 +117,7 @@ Defaults never depend on the starter's authority.
 | `model` | Strings or `~default` | Selected recipe | Yes | No |
 | `effort` | Provider effort strings or `~default` | Selected recipe, if it has effort control | Yes | No |
 | `fast` | Flag | Set only for fast mode | Yes | No |
+| `passthrough` | Flag | Send model and content unchecked by the model-input table | Yes | No |
 | `hold` | `unattended`, `detached`, `attended`, `guided` | `unattended` | Yes | No |
 | `talk` | Subset of the four talk rights | `[worker.say]` | Yes | No |
 | `timeout` | Positive whole seconds or `none` | 1800 | Yes | No |

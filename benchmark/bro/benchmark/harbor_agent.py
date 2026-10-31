@@ -142,7 +142,7 @@ def docker_compose_missing() -> bool:
 
 
 def llm_recipe(model_name: Optional[str]) -> Optional[str]:
-  """The complete recipe carried by Harbor's `<provider>/<model>[:<effort>][+fast]`."""
+  """The complete recipe carried by Harbor's `<provider>/<model>[:<effort>][+fast][+passthrough]`."""
   if model_name is None:
     return None
   provider, separator, recipe = model_name.partition('/')

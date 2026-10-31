@@ -166,7 +166,7 @@ class LLMSpec(Recipe):
   def needed_secrets(self) -> tuple[str, ...]:
     return (self.TYPE,)
 
-  def dump(self) -> dict:
+  def _dump_impl(self) -> dict:
     return {'type': self.TYPE, 'model': self.model, 'reasoning_effort': self.reasoning_effort}
 
   @classmethod

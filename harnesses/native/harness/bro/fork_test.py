@@ -40,7 +40,9 @@ def _trail_header(
     harness=harness,
     bro=bro,
     version='1',
-    native={'llm': llm_spec if llm_spec is not None else {'type': 'openai', 'model': 'gpt-5'}},
+    native={
+      'llm': llm_spec if llm_spec is not None else {'type': 'openai', 'model': 'gpt-6.1-sol'}
+    },
     started_at='2026-06-07T00:00:00.000000Z',
     interactive=False,
     surface='ask',
@@ -77,7 +79,10 @@ def _output_function_call(name: str, *, call_id: str, arguments: str = '{}') -> 
 
 def _llm_call_body(*output_items: dict, request_input: Optional[list] = None) -> dict:
   return {
-    'request': {'model': 'gpt-5', 'input': request_input if request_input is not None else []},
+    'request': {
+      'model': 'gpt-6.1-sol',
+      'input': request_input if request_input is not None else [],
+    },
     'response': {'id': 'resp', 'output': list(output_items)},
   }
 
@@ -365,7 +370,7 @@ class TestReplayMessagesAcrossForkChain:
         harness='bro',
         bro='bro',
         version='1',
-        native={'llm': {'type': 'openai', 'model': 'gpt-5'}},
+        native={'llm': {'type': 'openai', 'model': 'gpt-6.1-sol'}},
         started_at='2026-06-08T00:00:00.000000Z',
         interactive=True,
         surface='call',
@@ -523,7 +528,7 @@ class TestLatestForkPoint:
         harness='bro',
         bro='bro',
         version='1',
-        native={'llm': {'type': 'openai', 'model': 'gpt-5'}},
+        native={'llm': {'type': 'openai', 'model': 'gpt-6.1-sol'}},
         started_at='2026-06-08T00:00:00.000000Z',
         interactive=True,
         surface='call',
@@ -590,7 +595,7 @@ def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload
     id=response_id,
     output=output,
     usage=_fake_usage(),
-    model='gpt-5',
+    model='gpt-6.1-sol',
   )
 
   def plain(value):
@@ -602,7 +607,7 @@ def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload
 
   payload = {
     'id': response_id,
-    'model': 'gpt-5',
+    'model': 'gpt-6.1-sol',
     'status': 'completed',
     'output': plain(output),
     'usage': plain(namespace.usage),
@@ -824,10 +829,10 @@ class TestForkSpec:
     )
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert created[0].wire.recipe.selection()['model'] == 'gpt-5'
+    assert created[0].wire.recipe.selection()['model'] == 'gpt-6.1-sol'
     assert tracker.headers[0]['llm_spec'] == {
       'type': 'openai',
-      'model': 'gpt-5',
+      'model': 'gpt-6.1-sol',
       'reasoning_effort': None,
       'service_tier': None,
       'compact_threshold': None,
@@ -836,15 +841,15 @@ class TestForkSpec:
   def test_cross_model_spec_override(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
-    override = OpenAISpec(model='gpt-5.4-mini', reasoning_effort='medium')
+    override = OpenAISpec(model='gpt-5.6-terra', reasoning_effort='medium')
     context, _, created = _patch_native_openai_create(
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
       fork(forked_from_trail, 2, llm_spec=override, tracker=tracker, surface='test')
-    assert created[0].wire.recipe.selection()['model'] == 'gpt-5.4-mini'
+    assert created[0].wire.recipe.selection()['model'] == 'gpt-5.6-terra'
     assert created[0].wire.recipe.request_options()['reasoning']['effort'] == 'medium'
-    assert tracker.headers[0]['llm_spec']['model'] == 'gpt-5.4-mini'
+    assert tracker.headers[0]['llm_spec']['model'] == 'gpt-5.6-terra'
     assert tracker.headers[0]['llm_spec']['reasoning_effort'] == 'medium'
 
 
@@ -1046,7 +1051,7 @@ class TestForkClientSideReplay:
     # different model on the new spec disqualifies server-side (a
     # response_id is pinned to the originating model on OpenAI's side).
     forked_from_trail = _simple_trail()
-    override = OpenAISpec(model='gpt-5.4-mini')
+    override = OpenAISpec(model='gpt-5.6-terra')
     context, captured, _ = _patch_native_openai_create(
       [_fake_response(output=[_message_item('ok')])]
     )
@@ -1205,3 +1210,13 @@ def test_explicit_fork_at_stopped_call_restores_instead_of_seeding_its_response_
       {'role': 'system', 'content': _SYS_TEXT},
       {'role': 'user', 'content': 'go'},
     ]
+
+
+def test_fork_without_an_override_refuses_a_recorded_unlisted_model(monkeypatch):
+  monkeypatch.setattr('bro.base.credentials.get_json', lambda _: {'api_key': 'fixture-key'})
+  from bro.llm.providers import LLMSelectionError
+
+  recorded = _simple_trail()
+  recorded.header.native['llm'] = OpenAISpec(model='gpt-7').dump()
+  with pytest.raises(LLMSelectionError, match='gpt-7.*passthrough'):
+    fork(recorded, 2, record=False, surface='test')

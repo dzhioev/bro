@@ -33,13 +33,14 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   `known_names()` reads sorted metadata without imports; `declaration(name)` loads and validates only the named provider.
   Searches warn and skip broken declarations; an explicit selection fails by name.
   Model resolution tries the short name, then full id, then verbatim;
-  the table is a convenience, not a whitelist, and a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
+  a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
+  `require_admitted` checks the driven recipe at authority settlement, native launch and wire opening; discovery and resolution remain unchecked.
   `carriers` and `provider_of_model` search model declarations among a supplied set of providers.
   Launch resolution inherits the provider of its standing recipe for a model-only selection; a named provider starts a complete recipe.
   `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
   `price` prices one call from the provider's raw usage record and effective service tier.
   `price_table` exposes the current provider-owned table and its provenance.
-  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` suffix, and `over` lays one selection over another
+  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` and `+passthrough` suffixes, and `over` lays one selection over another
   — a launch's flags over a configured default.
   `LLMSelectionError` is the operator-facing failure.
   The flags themselves are `bro/launch/llm_flags.py`.

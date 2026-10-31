@@ -457,3 +457,64 @@ def test_malformed_model_inputs_make_the_declaration_unavailable(monkeypatch, ta
   monkeypatch.setattr(openai_llm.LLMSpec, 'MODEL_INPUTS', table)
   with pytest.raises(providers.LLMSelectionError, match=error):
     providers.declaration('openai')
+
+
+@pytest.mark.parametrize('provider', ALL)
+@pytest.mark.parametrize('passthrough', [False, True])
+def test_recipe_passthrough_round_trip_and_missing_key(provider, passthrough):
+  from dataclasses import replace
+
+  plain = providers.default_spec(provider)
+  spec = replace(plain, passthrough=passthrough)
+  dumped = spec.dump()
+  assert ('passthrough' in dumped) is passthrough
+  assert LLMSpec.from_dict(dumped) == spec
+  assert LLMSpec.from_dict(plain.dump()).passthrough is False
+  assert LLMSpec.from_dict({**plain.dump(), 'passthrough': False}) == plain
+
+
+@pytest.mark.parametrize('value', [None, 0, 1, 'true', [], {}])
+def test_recipe_dump_requires_a_boolean_passthrough(value):
+  with pytest.raises(TypeError, match='passthrough.*boolean'):
+    LLMSpec.from_dict({**echo.LLMSpec().dump(), 'passthrough': value})
+
+
+@pytest.mark.parametrize('suffix', ['+passthrough', '+fast+passthrough', '+passthrough+fast'])
+def test_passthrough_suffixes_canonicalize_and_admit_after_resolution(suffix):
+  selection = providers.parse('openai:gpt-7:high' + suffix)
+  assert selection.passthrough
+  assert (
+    selection.format() == 'openai:gpt-7:high' + ('+fast' if selection.fast else '') + '+passthrough'
+  )
+  recipe = providers.resolve(None, selection, ALL)
+  providers.require_admitted(recipe)
+  assert recipe.accepts('image/tiff')
+
+
+@pytest.mark.parametrize('value', ['+passthrough+passthrough', '+passthrough+slow', '+fast+'])
+def test_duplicate_or_unknown_suffixes_are_refused(value):
+  with pytest.raises(providers.LLMSelectionError):
+    providers.parse(value)
+
+
+def test_passthrough_inherits_except_when_a_provider_is_named():
+  from dataclasses import replace
+
+  base = replace(openai_llm.LLMSpec(), passthrough=True)
+  for text in (':terra', '::high', '+fast', '+passthrough'):
+    selection = providers.parse(text)
+    assert selection.over(providers.LLMSelection(passthrough=True)).passthrough
+    assert providers.resolve(base, selection, ALL).passthrough
+  assert not providers.parse('openai').over(providers.parse('+passthrough')).passthrough
+  assert not providers.resolve(base, providers.parse('openai'), ALL).passthrough
+
+
+def test_resolution_and_reading_preserve_an_unlisted_model_until_it_drives_a_run():
+  recipe = providers.resolve(None, providers.parse('openai:gpt-7:high'), ALL)
+  assert LLMSpec.from_dict(recipe.dump()) == recipe
+  assert not recipe.admitted()
+  with pytest.raises(providers.LLMSelectionError, match='gpt-7.*openai.*sol.*\\+passthrough'):
+    providers.require_admitted(recipe)
+  assert anthropic.LLMSpec(model=None).admitted()
+  for provider in ALL:
+    providers.require_admitted(providers.default_spec(provider))

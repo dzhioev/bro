@@ -31,7 +31,7 @@ class _EchoOnlySpec(LLMSpec):
 
   model: str = 'mock'
 
-  def dump(self) -> dict:
+  def _dump_impl(self) -> dict:
     return {'type': self.TYPE, 'model': self.model}
 
   @classmethod

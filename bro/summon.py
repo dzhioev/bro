@@ -33,6 +33,7 @@ from bro.launch.llm_flags import (
   FAST_HELP,
   add_llm_flags,
 )
+from bro.llm import providers
 from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.quest import BRO, LAUNCH, QuestError
@@ -212,6 +213,7 @@ def _payload(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -241,13 +243,9 @@ def _payload(
     payload['share'] = list(share)
   if llm is not None:
     payload['llm'] = llm
-  for name, value in (
-    ('provider', provider),
-    ('model', model),
-    ('effort', effort),
-    ('fast', fast),
-    ('export', export),
-  ):
+  options = locals()
+  for name in (*providers.SELECTION_OPTIONS, 'export'):
+    value = options[name]
     if value is not None:
       payload[name] = value
   if harness is not None:
@@ -345,6 +343,7 @@ def summon_and_wait(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -374,6 +373,7 @@ def summon_and_wait(
     model=model,
     effort=effort,
     fast=fast,
+    passthrough=passthrough,
     export=export,
     harness=harness,
     placement=placement,
@@ -427,6 +427,7 @@ def summon_detached(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -453,6 +454,7 @@ def summon_detached(
     model=model,
     effort=effort,
     fast=fast,
+    passthrough=passthrough,
     export=export,
     harness=harness,
     placement=placement,
@@ -514,6 +516,7 @@ def relay_summon(
   model: Optional[str] = None,
   effort: Optional[str] = None,
   fast: Optional[bool] = None,
+  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -542,6 +545,7 @@ def relay_summon(
     model=model,
     effort=effort,
     fast=fast,
+    passthrough=passthrough,
     export=export,
     harness=harness,
     placement=placement,
@@ -672,9 +676,7 @@ def main(argv: list[str]) -> Optional[int]:
   except (LLMSelectionError, ValueError) as error:
     log.error('%s', error)
     return 1
-  recipe_options = {
-    name: args[name] for name in ('provider', 'model', 'effort', 'fast') if args.get(name)
-  }
+  recipe_options = {name: args[name] for name in providers.SELECTION_OPTIONS if args.get(name)}
   if args['placement'] == 'join' and args['into'] is not None:
     log.error('--join shares the summoner’s tree; drop --into')
     return 1

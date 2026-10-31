@@ -1957,3 +1957,58 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
   assert (
     executed['recipe'] == ride_session.checked_recipe(host.request, host.descriptor, source).dump()
   )
+
+
+def test_resume_refuses_a_recorded_unlisted_selection_under_the_new_reading(tmp_path, caplog):
+  recorded = _spec(bro='dev')
+  recorded = replace(
+    recorded,
+    harness='bro',
+    llm='openai:gpt-7',
+    authority_request={
+      **recorded.authority_request,
+      'values': {
+        **recorded.authority_request['values'],
+        'harness': 'bro',
+        'provider': 'openai',
+        'model': 'gpt-7',
+      },
+    },
+  )
+  ride_session.record_resume_spec(_workspace(tmp_path), recorded)
+  with _ContainerHarness() as host:
+    assert _resume() == 1
+    host.run_started_party.assert_not_called()
+  assert 'gpt-7' in caplog.text and '+passthrough' in caplog.text
+
+
+def test_session_piece_flags_reconstruct_as_flags():
+  spec = replace(
+    _spec(), recipe_options={'provider': 'openai', 'model': 'gpt-7', 'passthrough': True}
+  )
+  argv = spec.to_command_argv()
+  assert '--passthrough' in argv and 'True' not in argv
+
+
+@pytest.mark.parametrize('pieces', [False, True])
+@pytest.mark.parametrize('passthrough', [False, True])
+def test_root_launch_admits_the_final_recipe_before_starting_a_party(pieces, passthrough, caplog):
+  spec = replace(
+    _spec(bro='dev'),
+    harness='bro',
+    authority_request={},
+    llm=None if pieces else 'openai:gpt-7:high' + ('+passthrough' if passthrough else ''),
+    recipe_options={
+      'provider': 'openai',
+      'model': 'gpt-7',
+      'effort': 'high',
+      **({'passthrough': True} if passthrough else {}),
+    }
+    if pieces
+    else {},
+  )
+  with _ContainerHarness() as host:
+    assert ride_session.start_session(spec) == (0 if passthrough else 1)
+    assert host.run_started_party.called is passthrough
+  if not passthrough:
+    assert 'gpt-7' in caplog.text and '+passthrough' in caplog.text
