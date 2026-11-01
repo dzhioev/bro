@@ -28,7 +28,7 @@ A subpackage with a map of its own is pointed at, not described here.
   and the `page` and `results` service tools reading kept results back ("Kept results" below).
 - `procedures.py` — `parse_frontmatter`, the flat frontmatter grammar a spell file opens with (`bro/reference/extending.md`, "Declaring a bro").
 - `registry.py` — process-wide registry of bro classes:
-  `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
+  `register(cls)`, `get_class(name)`, `create_bro(name)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
   A name is 1 to `MAX_NAME_LENGTH` characters.
   `create_bro` returns a fresh instance every call.
   `lineage(name)` is the names a bro answers to — its own plus every registered bro on its MRO, which is what `#may_summon`'s is-a membership tests against.
@@ -226,7 +226,7 @@ the union of `needed_secrets` over the components that harness mounts for the br
 which are the servers it serves the bro's tool groups with and the bro's own declared servers and data sources (matching what `bro.claude.assembly.persona_servers()` mounts for `claude`);
 the MRO-collected `extra_secrets`;
 and the credentials of its pinned-on features.
-It excludes the LLM key (`llm_spec.needed_secrets()` when a recipe is declared):
+It excludes the run's LLM key (`recipe.needed_secrets()`):
 surfaces that run the bro as an LLM process add it, while a claude-code session authenticates on its own.
 `missing_secrets()` is the manifest plus the LLM key, checked against the process's store;
 `Runner.run()` refuses to start on any missing name, raising `BroRaised` with them all listed, and interactive surfaces reply with the report.

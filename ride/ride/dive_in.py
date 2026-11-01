@@ -13,7 +13,6 @@ from bro.base.args import Parser
 from bro.launch.llm_flags import selection_from_args
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
-from bro.workspace.project import project_config
 from ride.authority_reading import Reading
 from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv
@@ -140,7 +139,7 @@ def dive_in(
   try:
     reading = Reading.take(as_repository(repo))
     bro_name = bro if bro is not None else reading.default_bro
-    harness = reading.resolve_harness(harness)
+    harness = reading.resolve_harness(harness, target=bro_name)
     get_harness(harness)
   except ValueError as error:
     log.error('%s', error)
@@ -234,9 +233,8 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  config = project_config(repo)
   try:
-    selection = selection_from_args(args, project=config)
+    selection = selection_from_args(args)
   except ValueError as error:
     parser.error(str(error))
   scope_args = {key: args[key] for key in ('cred', 'grant', 'revoke', 'bro', 'harness')}

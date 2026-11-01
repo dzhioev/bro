@@ -12,26 +12,25 @@ from ride.bro_worker import BroType
 
 
 def reading(*, declarations=None, config=None) -> Reading:
-  from bro.openai.declaration import Recipe
-
+  config = config or {}
   installed = Installation.take()
-  installed = replace(
-    installed,
-    harnesses={
-      name: replace(
-        driver,
-        recipes={
-          target: Recipe(reasoning_effort='medium') if recipe is None else recipe
-          for target, recipe in driver.recipes.items()
-        },
-      )
-      for name, driver in installed.harnesses.items()
-    },
-  )
   if declarations is not None:
     installed = replace(installed, declarations={**installed.declarations, **declarations})
   return Reading(
-    Configuration.parse({'harness': 'claude', 'summon-harness': 'bro', **(config or {})}),
+    Configuration.parse(
+      {
+        'defaults': {
+          'harness': 'claude',
+          'summon-harness': 'bro',
+          'llm': {
+            'bro': 'openai:gpt-5.6-terra,reasoning_effort=medium',
+            'claude': 'anthropic:claude-opus-5',
+          },
+          **config.get('defaults', {}),
+        },
+        **{key: value for key, value in config.items() if key != 'defaults'},
+      }
+    ),
     {},
     installed,
   )

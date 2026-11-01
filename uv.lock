@@ -387,7 +387,6 @@ source = { editable = "browser" }
 dependencies = [
     { name = "anyio" },
     { name = "bro" },
-    { name = "bro-openai" },
     { name = "bro-ride" },
     { name = "mcp" },
     { name = "pydantic" },
@@ -397,7 +396,6 @@ dependencies = [
 requires-dist = [
     { name = "anyio" },
     { name = "bro", editable = "." },
-    { name = "bro-openai", editable = "llms/openai" },
     { name = "bro-ride", editable = "ride" },
     { name = "mcp", specifier = "==2.3.0" },
     { name = "pydantic" },
@@ -471,7 +469,6 @@ version = "0.1.0"
 source = { editable = "dev" }
 dependencies = [
     { name = "bro" },
-    { name = "bro-openai" },
     { name = "markdown-it-py" },
     { name = "pytest" },
 ]
@@ -479,7 +476,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
-    { name = "bro-openai", editable = "llms/openai" },
     { name = "markdown-it-py" },
     { name = "pytest" },
 ]
@@ -510,7 +506,6 @@ dependencies = [
     { name = "bro-deepseek" },
     { name = "bro-dev" },
     { name = "bro-filetypes" },
-    { name = "bro-openai" },
     { name = "requests" },
     { name = "rich" },
     { name = "tiktoken" },
@@ -522,7 +517,6 @@ requires-dist = [
     { name = "bro-deepseek", editable = "llms/deepseek" },
     { name = "bro-dev", editable = "dev" },
     { name = "bro-filetypes", editable = "filetypes" },
-    { name = "bro-openai", editable = "llms/openai" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "rich" },
     { name = "tiktoken", specifier = ">=0.14.0" },
@@ -579,14 +573,12 @@ source = { editable = "oops" }
 dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
-    { name = "bro-openai" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-dev", editable = "dev" },
-    { name = "bro-openai", editable = "llms/openai" },
 ]
 
 [[package]]

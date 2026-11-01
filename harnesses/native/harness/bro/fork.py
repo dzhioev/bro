@@ -149,7 +149,6 @@ def fork(
           f'select a recipe on recorded wire {recorded_wire!r}'
         )
   bro = create_bro(bro_name)
-  bro.llm_spec = spec
 
   fork_step = _find_step(forked_from_trail, up_to_step_id)
   forked_from_system_prompt = _extract_system_prompt(forked_from_trail)
@@ -171,7 +170,7 @@ def fork(
   # pre-assigning it bypasses the runner's fresh-run fragment append.
   bro._system_prompt_override = effective_system_prompt
 
-  runner = Runner(bro, activity_file=activity_file)
+  runner = Runner(bro, spec, activity_file=activity_file)
   runner._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else runner._make_tracker())
   )

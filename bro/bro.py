@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
+from typing import Any, ClassVar, Literal, Optional, Protocol, cast
 
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
@@ -965,7 +965,6 @@ class CredentialManifest:
 class BaseBro(ABC):
   name: str
   description: str
-  llm_spec: Recipe | None = None
   # the bro's tool reach: tool groups, mounts, `cli` tools, data sources, and
   # reference pages, each entry keyed by its kind and a name. entries may be
   # wrapped with `bro.base.condition.when(...)` / grouped with `iff(...)` to gate
@@ -1350,25 +1349,9 @@ class BaseBro(ABC):
       names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
-  def missing_secrets(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
-    # every required name — the component manifest plus the LLM key, since
-    # run()/send() execute the bro as an LLM process — that does not resolve in
-    # this process's credential store. the optional tier is never gated.
-    required = set(self.needed_secrets(harness))
-    if self.llm_spec is not None:
-      required.update(self.llm_spec.needed_secrets())
+  def missing_secrets(self, harness: mcp.HarnessLike, recipe: Recipe) -> tuple[str, ...]:
+    required = set(self.needed_secrets(harness)) | set(recipe.needed_secrets())
     return tuple(sorted(name for name in required if not credentials.available(name)))
-
-  @classmethod
-  def create(cls, llm_spec: Recipe) -> Self:
-    # factory for a construction-time Recipe override — applied after the bro's
-    # own __init__, so subclass constructors never need to know about it. the
-    # spec replaces the class default in full; build a new spec (or call
-    # `spec.fast()`) if you want to tweak a single knob on top of the bro's
-    # defaults.
-    bro = cls()
-    bro.llm_spec = llm_spec
-    return bro
 
   def _servers_with_spell_tools(
     self, servers: list[llm_mcp.MCPServer], *, harness: mcp.HarnessLike, hold: str

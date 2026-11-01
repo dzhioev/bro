@@ -127,8 +127,8 @@ Defaults never depend on the starter's authority.
 
 The four talk rights are `owner.say`, `owner.question`, `worker.say`, and `worker.question`.
 The wire mapping adds `worker.say` to requested talk.
-Recipe selection follows [ride's layering and preset rules](ride.md#recipe-selection).
-The host's per-bro list applies to managed starts, including summons; an earlier reader with no recipe includes no LLM key.
+Recipe selection follows [ride's home-layer rules](ride.md#recipe-selection).
+The child's home-layer stack supplies its configured recipe and credential picks.
 A requested recipe the harness cannot run fails rather than switching harnesses.
 
 A start holds the configured kinds for its target, harness, and provider, plus `add`, minus `drop`.
@@ -140,7 +140,7 @@ An optional kind is skipped only when unpicked and its empty instance is absent.
 An explicit `cred.<kind>` holds that kind at that instance without requiring `add`.
 A kind cannot be both explicitly set and dropped.
 
-The pick order is host project URL, project path, URL-bro, then path-bro `creds`, over store `defaults`, over the empty instance.
+Credential picks follow the home-layer stack, over store `defaults`, over the empty instance.
 An explicit request or operator pick overrides those defaults.
 A configuration pick selects an instance without adding a kind; a request's `--cred` or `--pass` both selects and holds it.
 `prompt`, `into`, `share`, `step_id`, and `index` are ungoverned content.
@@ -171,13 +171,12 @@ The base is empty and no option is overridable.
 ## Readings, bases, and configuration
 
 A root takes one reading after runtime re-exec and attachment resolution.
-It includes the whole parsed host config, store default picks, attachment identities and project configuration, and the installed bros, types, kinds, harnesses, and providers in its frozen runtime.
+It includes the installation's home and settings, applicable host home layers, store defaults, attached-tree sections, and installed bros, types, kinds, harnesses and providers.
 Path attachments read the working-tree `pyproject.toml`; URL attachments read it at the resolved commit.
 Every descendant and manual commit uses this reading.
 Editing configuration cannot change a live tree or break its next summon with a malformed edit.
 A resume takes a new reading.
 Instance existence, credential material, and minting-source annotations stay live, outside the reading.
-LLM presets are expanded by the host under the reading, including tool summons and in-session CLI requests.
 
 A bro's base folds these layers in order:
 
@@ -186,7 +185,7 @@ A bro's base folds these layers in order:
    There is one entry per configured kind and instance, whose use pattern carries a `configured=<kind>+<instance>` condition decided against the concrete start;
    the family is fixed by the reading, independent of `add` and `drop`, and does not grow with targets, harnesses, or providers.
 2. The persona's `may_summon` entries as `@<bro>`, and its `may_launch` entries as type start permissions, with full use and give.
-3. Installation home settings, host `defaults`, matching project URL, project path, URL `bros.<target>`, then path `bros.<target>`.
+3. Installation home settings, host `defaults`, `homes.<installation home>`, the target's foreign home bro entry when applicable, then the installation home's bro entry.
 
 Each configuration layer applies `revoke` and `limit` caps first, then its `grant` entries.
 A later layer can therefore restore an earlier removed right.
@@ -198,16 +197,17 @@ On a summon, a plain grant instead forwards full use with the starter's own reci
 Bare credential kinds in grants/revokes become `add`/`drop`, not gifts/caps over credential option atoms.
 
 Home settings cannot choose host instances: they refuse credential-instance permissions and picks.
-Host project and bro entries may contain `creds`; host `defaults` may not.
-A bro-specific pick must name a configured kind still held after its policy layers; a later request grant cannot validate an otherwise invalid bro-specific pick.
-Unknown types, options, and kinds fail only launches whose applicable layers name them; syntax is checked throughout the host config.
-A shared dotfile may therefore contain valid names belonging to another installation in unrelated entries.
+Host home and bro entries may contain `creds`; host `defaults` may not.
+Owned configuration validates fully at root start, even bro layers not used by that root.
+Installed foreign bro entries are shape-checked at root start and bound when used;
+a winning scalar, recipe or pick shadows an earlier foreign value, while authority folds every layer.
+Other homes' unrelated entries are never read.
 Authority may name absent instances without failing a launch that does not use them.
 
 The host-only `operator` object accepts `revoke` and `limit`, capping the operator's initially unrestricted authority O.
 Every root start, manual commit, override, and resume is checked against O.
 It guards the operator against mistakes; it does not introduce multiple operators or ownership boundaries.
-Configuration schema and project identity matching are in `bro/setup/AGENTS.md`, "Host config".
+The host configuration schema are in `bro/setup/AGENTS.md`, "Host config".
 
 ### Auxiliary LLM credentials
 

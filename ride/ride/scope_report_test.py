@@ -4,21 +4,21 @@ import pytest
 
 from bro.base import credentials, host_config
 from bro.bro import BaseBro
-from bro.native.echo_declaration import Recipe
 from ride.scope_report import report_scope
 
 
 class ReportBro(BaseBro):
   name = 'report-test'
   extra_secrets = ('github',)
-  may_summon = ('reviewer',)
-  llm_spec = Recipe()
+  may_summon = ('bro-eyebro',)
 
 
 @pytest.fixture
 def report_environment(tmp_path, monkeypatch, register_test_bros, home_settings_file):
   register_test_bros(ReportBro)
-  home_settings_file.write_text('default-bro = "report-test"\n')
+  home_settings_file.write_text(
+    'default-bro = "report-test"\n[llm]\nclaude = "anthropic:claude-opus-5"\nbro = "echo:echo"\n'
+  )
   (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "ignored-tree-bro"\n')
   store = tmp_path / 'store'
   material = store / credentials.MATERIAL_DIR
@@ -37,7 +37,7 @@ def test_report_shows_descriptor_usable_give_only_and_presence(report_environmen
       {
         'defaults': {
           'grant': [
-            'webview.cred=cookies+absent to @reviewer',
+            'webview.cred=cookies+absent to @bro-eyebro',
           ]
         }
       }
@@ -45,10 +45,14 @@ def test_report_shows_descriptor_usable_give_only_and_presence(report_environmen
   )
   assert report_scope(repository, None, 'claude') == 0
   output = capsys.readouterr().out
-  descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
+  descriptor = json.loads(
+    next(line for line in output.splitlines() if line.startswith('descriptor: ')).removeprefix(
+      'descriptor: '
+    )
+  )
   assert descriptor['target'] == 'report-test'
   assert descriptor['cred.github'] == 'reviewer'
-  assert 'summon_entries: @reviewer for *' in output
+  assert 'summon_entries: @bro-eyebro for *' in output
   assert 'permits: ' in output and 'bro.placement=boxed for *' in output
   assert 'may_give: webview.cred=cookies+absent to ' in output
   assert 'github+reviewer: PRESENT' in output
@@ -70,8 +74,8 @@ def test_explicit_pick_of_optional_kind_is_missing_not_skipped(report_environmen
   (repository / 'host.json').write_text(
     json.dumps(
       {
-        'projects': {
-          str(repository): {'creds': ['trails+absent']},
+        'homes': {
+          'test-home': {'creds': ['trails+absent']},
         }
       }
     )
@@ -88,7 +92,7 @@ def test_authority_instance_presence_is_independent_of_kind_hold(report_environm
       {
         'defaults': {
           'grant': [
-            'webview.cred=cookies+reviewer to @reviewer',
+            'webview.cred=cookies+reviewer to @bro-eyebro',
           ]
         }
       }
@@ -114,7 +118,7 @@ def test_unknown_target_is_reported_as_an_existence_error(report_environment, ca
   [
     {'grant': [':launch.bro']},
     {'grant': ['unknown']},
-    {'limit': ['@reviewer']},
+    {'limit': ['@bro-eyebro']},
   ],
 )
 def test_invalid_policy_is_reported_without_escaping(report_environment, capsys, policy):
@@ -140,21 +144,21 @@ def test_scope_llm_override_reports_selected_provider_key(report_environment, ca
     (material / 'openai.cred').write_text('{}')
   assert report_scope(repository, 'report-test', 'bro', 'openai:terra:high') == 0
   output = capsys.readouterr().out
-  descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
+  descriptor = json.loads(
+    next(line for line in output.splitlines() if line.startswith('descriptor: ')).removeprefix(
+      'descriptor: '
+    )
+  )
   assert descriptor['provider'] == 'openai'
   assert f'openai+: {"PRESENT" if present else "MISSING"}' in output
 
 
-def test_scope_of_absent_recipe_has_no_provider_key(report_environment, capsys, monkeypatch):
+def test_scope_without_a_configured_recipe_refuses(report_environment, capsys, home_settings_file):
   repository, _, _ = report_environment
-  monkeypatch.setattr(ReportBro, 'llm_spec', None)
-  assert report_scope(repository, 'report-test', 'bro') == 0
-  output = capsys.readouterr().out
-  descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
-  assert 'provider' not in descriptor
-  assert 'cred.openai' not in descriptor
+  home_settings_file.write_text('default-bro = "report-test"\n')
+  assert report_scope(repository, 'report-test', 'bro') == 1
+  assert 'has no recipe for harness bro' in capsys.readouterr().out
   assert report_scope(repository, 'report-test', 'bro', 'openai:terra') == 0
-  assert 'openai+: MISSING' in capsys.readouterr().out
 
 
 def test_detached_scope_uses_the_installation_default(report_environment, capsys):

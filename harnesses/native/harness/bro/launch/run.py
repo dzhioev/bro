@@ -35,19 +35,22 @@ HOLD_HELP = (
 )
 
 
-def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[Recipe]:
-  """Resolve an explicit selection over the bro's declared native recipe."""
-  from bro.registry import get_class
+def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Recipe:
+  from ride.authority_reading import Reading
+  from ride.authority_scope import resolve_recipe
 
-  bro_class = get_class(bro_name)
-  if bro_class.llm_spec is None and selection.provider is None:
-    raise LLMSelectionError(f'{bro_name} declares no LLM recipe: pass --llm provider:model')
-  if selection.is_empty() and bro_class.llm_spec is not None:
-    require_admitted(bro_class.llm_spec)
-    return None
-  spec = resolve_native(bro_class.llm_spec, selection)
+  reading = Reading.take()
+  configured = any('bro' in policy.config.llm for policy in reading.layers(bro_name))
+  base = (
+    resolve_recipe(reading, bro_name, 'bro').recipe
+    if configured and selection.provider is None
+    else None
+  )
+  if selection.is_empty() or (base is None and selection.provider is None):
+    return resolve_recipe(reading, bro_name, 'bro').recipe
+  spec = resolve_native(base, selection)
   require_admitted(spec)
-  return None if spec == bro_class.llm_spec else spec
+  return spec
 
 
 def add_resolved_llm_flag(parser: base_args.Parser) -> None:
@@ -56,13 +59,9 @@ def add_resolved_llm_flag(parser: base_args.Parser) -> None:
   parser.add_exclusive_groups(['resolved_llm'], ['llm', *SELECTION_OPTIONS])
 
 
-def launch_llm_spec(bro_name: str, args: dict) -> Optional[Recipe]:
-  """The run's recipe override: `--resolved-llm` verbatim, else the selection over the declaration."""
+def launch_llm_spec(bro_name: str, args: dict) -> Recipe:
+  """The managed recipe verbatim, otherwise the live installation's stack."""
   from bro.llm import wires
-  from bro.workspace.installation import installation_home
-  from bro.workspace.settings import home_settings
-
-  home_settings(installation_home())
 
   encoded = args['resolved_llm']
   if encoded is None:
@@ -99,7 +98,8 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   from bro.registry import create_bro
 
   try:
-    bro = create_bro(args['bro'], launch_llm_spec(args['bro'], args))
+    recipe = launch_llm_spec(args['bro'], args)
+    bro = create_bro(args['bro'])
   except (KeyError, NotImplementedError, ValueError) as error:
     log.error('%s', error)
     return 1
@@ -111,7 +111,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     observer = _ask_observer(bro.name)
     hold = args['hold'] if args['hold'] is not None else 'unattended'
     try:
-      runner = Runner(bro, activity_file=args['activity_file'])
+      runner = Runner(bro, recipe, activity_file=args['activity_file'])
       asyncio.run(runner.run(args['input'], observer=observer, surface='ask', hold=hold))
     except BroRaised:
       return RAISE_EXIT_STATUS

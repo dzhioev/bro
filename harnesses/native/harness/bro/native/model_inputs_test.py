@@ -232,16 +232,25 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
 
   class Reader(Bro):
     name = 'admission-reader'
-    llm_spec = ResponsesRecipe()
+
+    def __init__(self, **kwargs):
+      super().__init__(**kwargs)
+      self.recipe = ResponsesRecipe()
 
   register_test_bros(Reader)
+  from bro.base import host_config
+
+  (tmp_path / 'bro-config.json').write_text(
+    json.dumps({'defaults': {'llm': {'bro': 'openai:gpt-5.6-terra'}}})
+  )
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', tmp_path / 'bro-config.json')
   configure(monkeypatch, 'openai:sol')
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   monkeypatch.setattr('bro.trails.store.default_store', lambda: store)
   monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
   recorded_runner = Runner(
-    create_bro(Reader.name, ResponsesRecipe(model='gpt-7', passthrough=True))
+    create_bro(Reader.name), ResponsesRecipe(model='gpt-7', passthrough=True)
   )
   asyncio.run(recorded_runner.run('start', surface='test', hold='guided'))
   assert recorded_runner.trail_id is not None
@@ -255,7 +264,7 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
     chat_main(['bro', Reader.name, '--fork', recorded_runner.trail_id], program=['bro', 'chat'])
     is None
   )
-  declared = Reader.llm_spec
+  declared = Reader().recipe
   assert declared is not None
   assert endpoint[-1][1]['model'] == declared.selection()['model']
   assert endpoint[0][1]['model'] == 'gpt-7'

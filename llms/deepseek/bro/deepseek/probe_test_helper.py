@@ -16,7 +16,7 @@ async def managed_roster(monkeypatch, recipe: Recipe) -> list[dict]:
     surface.setenv(BROKER_CHANNEL, 'offline-probe-channel')
     surface.setenv(SUMMONED_ENV, '1')
     publish(surface, targets=('bro-eyebro',))
-    with Runner(create_bro('bro-dev', llm_spec=recipe)) as runner:
+    with Runner(create_bro('bro-dev'), recipe) as runner:
       return tools_to_chat_format(
         await ToolRegistry(
           runner.bro.assemble(harness=BRO, hold='unattended', live_run=runner)

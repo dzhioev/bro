@@ -143,7 +143,7 @@ The operator group must still install `bro-ride`, `bro-native`, and `bro-claude`
 `ride` spawns the native loop as the `bro` command of the environment it froze, so a native launch or summon fails in a workspace whose environment lacks `bro-native`.
 `bro-claude` supplies the Claude Code harness and its credential kind; `bro-ride` itself installs no harness.
 `bro-dev` remains a runtime dependency because the consumer class imports `bros.dev.Dev`.
-A persona pinning a provider recipe depends directly on that provider distribution, pinned to the same framework commit.
+An installation's configured recipes require their provider distributions, pinned to the same framework commit.
 A consumer installation that drives a provider natively or through `mu` installs `<provider>[client]` (`bro-openai[client]` in this example);
 the bare provider installs only declarations and pricing, without its wire's SDK.
 A consumer mounting the `file` toolset also installs `bro-filetypes` as a runtime dependency, with a Git source pointing at `subdirectory = "filetypes"`.
@@ -252,10 +252,10 @@ Ask before local Docker image writes, show the image tag and temporary paths, re
    A preserved default requires `--bro <developer-name>` on default-dependent `ride scope` and `dive-in` commands.
 3. Explain the two harness keys from the pinned home settings:
    `harness` drives every launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness.
-   There is no framework harness default: each key must be declared in home settings, supplied as a top-level key of the same name in `~/.bro.json`, or selected for the launch.
-   A home settings key overrides the host's value.
+   There is no framework harness default: each key must come from home settings, a host layer (`defaults`, `homes.<home>` or a bro entry), or the launch itself.
+   Host layers override home settings, with the last setting in the bro's stack winning.
    Claude Code runs on the `claude_code` setup token, which section 5 always wires;
-   the native loop runs the developer's `llm_spec` recipe on its provider key, the `openai` credential.
+   the native loop runs the home-layer `llm.bro` recipe on its provider key, the `openai` credential.
 4. Ask whether the user has an OpenAI API key and wants section 5 to wire it.
    Without one, both keys are `claude`, the native loop stays installed but unusable, and the user changes the keys once a key is wired later;
    skip the next question.
@@ -265,8 +265,8 @@ Ask before local Docker image writes, show the image tag and temporary paths, re
    - native everywhere: both keys `bro`, not recommended because the interactive native harness is early, working but well behind Claude Code's own session;
    - the remaining pair, `harness = "bro"` with `summon-harness = "claude"`, when the user wants it.
 6. If an already bro-enabled repository carries intentional `harness` or `summon-harness` values, present them as its current configuration and ask whether to preserve or replace them.
-7. Ask whether the pinned Claude Code model and effort defaults are acceptable.
-   Explain that a non-default recipe is an opt-in named preset, not an automatic project scalar.
+7. Select a complete Claude recipe with the user: a full listed model id and any provider-native effort or fast-mode fields, validated against the pinned Anthropic declaration.
+   Explain that `llm.claude` supplies this recipe to roots and summons on that harness; there is no implicit model choice.
 
 ### Act
 
@@ -301,20 +301,28 @@ The attached tree's `[tool.bro]` reads only `build-context-command` and sub-tabl
 `--harness` on a `ride` or `dive-in` command and `harness` on a summon request override the keys for one launch;
 do not add them to ordinary commands.
 
-If the user rejects the framework's current Claude defaults, choose a project-specific key that does not collide with host `~/.bro.json` and write:
+Merge the selected recipes into the installation home's host configuration, preserving unrelated entries:
 
-```toml
-[tool.bro.llm]
-<project-slug>-developer = "anthropic:<model>:<effort>"
+```json
+{
+  "homes": {
+    "<home>": {
+      "llm": {
+        "claude": "anthropic:<full-model-id>,effort=<selected-effort>",
+        "bro": "openai:<full-model-id>,reasoning_effort=<selected-effort>"
+      }
+    }
+  }
+}
 ```
 
-Validate the model name and effort against the pinned Anthropic recipe source.
-The current neutral effort vocabulary is read from the pinned source rather than assumed.
-Add `--llm <project-slug>-developer` to ordinary `ride` and `dive-in` commands only.
-Do not add it to the exact acceptance command, which must continue to test the framework default.
+Use only fields the pinned provider declares, omitting an unset field rather than inventing a default.
+Confirm the native recipe in section 4 even when its key will be wired later.
+When host `defaults` override a chosen shipped harness setting, put the selected harness keys in `homes.<home>` as well.
+Ordinary commands use these configured choices without model flags.
+The acceptance command tests this same stack, not a separate framework default.
 
-**Checkpoint 3:** report the effective default, the harness pair and the configuration it is, whether an OpenAI key will be wired, the installation home and marker,
-whether commands need `--bro`, and the optional named preset and its explicit-use rule.
+**Checkpoint 3:** report the effective default bro, harness pair, selected recipes and their source layers, whether an OpenAI key will be wired, the installation home and marker, and whether commands need `--bro`.
 
 ## 4. Define and package the developer bro
 
@@ -338,17 +346,16 @@ Read the pinned generic and framework-project developer declarations before writ
 1. Confirm the short system-prompt addition that names the project and its durable constraints.
 2. Confirm whether the developer will use GitHub for pushes and pull requests.
 3. Confirm whether GitHub brog will be configured.
-4. Explain that `llm_spec` is the recipe the native loop runs the developer on, every launch and summon under the `bro` harness, while a Claude Code session ignores it.
-   Ask whether to use the pinned framework developer's current OpenAI model and high reasoning effort or another valid pinned native recipe.
-   Declare it even when no OpenAI key is wired yet, so the native loop needs only the key.
-   An inherited persona may declare no recipe: native launches then need a provider-naming `--llm` selection or the managed host per-bro list (`bro/reference/ride.md`, “Recipe selection”).
+4. Explain that `llm.bro` and `llm.claude` in the host configuration select the recipes for each harness, for roots and summons alike.
+   Choose a full listed OpenAI model id and any provider-native knobs from the pinned declaration.
+   Configure `llm.bro` even when no OpenAI key is wired yet, so the native loop needs only the key.
+   Personas declare no recipe: native launches need `llm.bro` in the home-layer stack or a provider-naming `--llm` selection (`bro/reference/ride.md`, “Recipe selection”).
 
 ### Act
 
 Create the selected module with this shape, adapting names, project text, and conditional lines:
 
 ```python
-import bro.openai.declaration as llm_llms_openai
 from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.mcp import man
 from bros.dev import Dev
@@ -366,7 +373,6 @@ Follow the repository's own formatter, test, and build instructions.
 class MyDev(Dev):
   name = 'my-dev'
   description = '<project> development: task → implement → verify → land'
-  llm_spec = llm_llms_openai.Recipe(model='<model from the pinned source>', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
   tools = [
@@ -489,13 +495,13 @@ The `repo` value is `owner/name`, not a Git URL.
 Omit it only when `origin` is unambiguous and GitHub-shaped.
 
 Show an exact non-secret merge into `~/.bro.json` before writing it atomically.
-Preserve every unrelated top-level field, default, user layer, project, bro, and LLM preset.
-A representative URL-keyed project layer is:
+Preserve unrelated defaults, homes, bros, user and operator entries.
+A representative home layer is:
 
 ```json
 {
-  "projects": {
-    "https://github.com/owner/name.git": {
+  "homes": {
+    "<home>": {
       "creds": [
         "brog+<project-slug>",
         "github+<instance>"
@@ -505,13 +511,11 @@ A representative URL-keyed project layer is:
 }
 ```
 
-Replace the representative key with the exact portable Git URL selected above;
-do not change SSH to HTTPS, drop `.git`, or substitute a local-path origin.
-When no portable URL identity exists, use the exact canonical checkout path.
+Use the installation's home name, the same name its setup writes in `bro-installation-home`.
+Set `llm` under the harnesses the installation runs, using complete recipe text with full model ids and provider-native fields.
 Add named `claude_code` or `openai` instances only when selected.
 Do not redundantly copy a choice already supplied correctly by `defaults`.
 Do not put session credentials under `user`, because that branch affects host CLIs rather than managed launches.
-Keep only machine-specific differences under the path identity.
 
 No `anthropic` credential is needed.
 No `trails` credential is needed because absence selects local recording.
@@ -525,12 +529,12 @@ From the target checkout and intended activated environment, run:
 ```console
 command -v ride
 command -v dive-in
-ride scope --repo . --bro <developer-name>
+ride scope --bro <developer-name>
 ```
 
 Both executables must belong to the selected repository or sidecar environment, not a global tool, stale framework checkout, or another consumer.
-If the developer became the default, also run `ride scope --repo .`.
-When an OpenAI key was wired, also run the scope report with `--harness` naming the harness the project `harness` does not select, so both harnesses' scopes are checked.
+If the developer became the default, also run `ride scope`.
+When an OpenAI key was wired, also run the scope report with `--harness` naming the other installed harness, so both harnesses' scopes are checked.
 Every required row must report `PRESENT`, the intended instance, and the intended selection layer.
 Only a declined unpicked `openai` row and the unpicked `trails` row may report `SKIPPED`;
 no row may report `MISSING`.
@@ -604,10 +608,10 @@ ride solo my-dev "sup?" --repo .
 
 Substitute only the selected public name when it differs.
 Do not add `--unboxed`, `--grant`, `--no-trails`, or `--llm`, and add `--harness` only on the second run below.
-Success means exit status zero and a coherent reply from the harness the project `harness` selects.
+Success means exit status zero and a coherent reply from the harness the installation stack selects.
 The first run may build runtime and project images, so inspect active output before calling ordinary build latency a hang.
 
-When an OpenAI key was wired, run the same command again with `--harness` naming the harness the project `harness` does not select, so both installed harnesses are proven;
+When an OpenAI key was wired, run the same command again with `--harness` naming the other installed harness, so both installed harnesses are proven;
 without one, report the native harness as installed but unproven.
 
 Diagnose failures from the earliest failing layer:
@@ -690,7 +694,6 @@ Before creating anything:
 After the identity and repository preflight from checkpoint 6 succeeds, run the configured developer in a managed session with a quoted heredoc or equivalent safe multiline input.
 Instruct it to perform the exhaustive read above, use brog to validate or create exactly one marked task, not start the task, and return canonical id, URL, and status.
 Pass the full approved title and body.
-Add the selected ordinary `--llm <preset>` when applicable.
 Do not use `gh issue create`, because creation through brog and later brog prefetch are part of the acceptance contract.
 
 If the managed reconciliation fails, diagnose brog and retry only after its cause is fixed.
@@ -708,7 +711,7 @@ Prepare a bare `dive-in` prompt containing the same roster-design request plus o
 
 ### Check
 
-Confirm the setup commit base, selected environment, effective home default, optional preset, and task status.
+Confirm the setup commit base, selected environment, effective home default, configured recipes and their sources, and task status.
 Do not hand off a terminal task.
 
 ### Ask
@@ -727,7 +730,6 @@ dive-in --task <canonical-task-id-or-url>
 
 Use `source bro_project/.venv/bin/activate` for a sidecar.
 Add `--bro <developer-name>` when an intentional existing home default was preserved.
-Add `--llm <project-slug>-developer` when the user chose a named Claude preset.
 Add `--into <setup-commit-sha>` while the setup commit is not reachable from origin's default branch, and explain when that modifier becomes unnecessary.
 
 Without brog, use the approved multiline roster prompt in bare mode:
@@ -737,7 +739,7 @@ dive-in '<approved roster-design prompt>'
 ```
 
 Use a quoted heredoc or equivalent safe multiline form in the actual command.
-Apply the same `--bro`, `--llm`, and `--into` modifiers when required.
+Apply the same `--bro` and `--into` modifiers when required.
 
 Finish with a concise inventory of repository files changed, active developer and harness configuration, framework SHA, and credential instance names plus selection layers without values.
 Also report brog state, setup commit and reachability, successful acceptance command, roster task state, and the exact next command.

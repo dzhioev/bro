@@ -1,4 +1,3 @@
-import bro.openai.declaration as llm_llms_openai
 from bro.datasources.references import conditions, environment, extending, ride, template
 from bro.local.prompts import FRAMEWORK_PROJECT
 from bro.mcp import man
@@ -8,7 +7,6 @@ from bros.eyebro import Eyebro
 class BroEyebro(Eyebro):
   name = 'bro-eyebro'
   description = 'bro framework code review: standards, guides, and quality'
-  llm_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='xhigh')
   features = {'github': True}
   tools = [
     man(environment),

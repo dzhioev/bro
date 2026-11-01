@@ -73,7 +73,7 @@ def server(monkeypatch, replies):
 async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path):
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=recipe))
+  runner = Runner(create_bro('bro'), recipe)
   assert await runner.run('reply', surface='test') == 'reply'
   assert runner.trail_id is not None
   recorded = fetch_recorded_trail(store, runner.trail_id)
@@ -136,7 +136,7 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
   replies.append(stopped)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='gpt-6.1-sol')))
+  runner = Runner(create_bro('bro'), ResponsesSpec(model='gpt-6.1-sol'))
   with pytest.raises(LLMStopped, match='max_output_tokens'):
     await runner.run('original', surface='test')
   assert runner.trail_id is not None
@@ -221,7 +221,7 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
   monkeypatch.setattr(
     native_loop, 'create', lambda spec, inbox, **kwargs: native_loop.Loop(wire, inbox, **kwargs)
   )
-  runner = Runner(create_bro('bro', llm_spec=EchoSpec()))
+  runner = Runner(create_bro('bro'), EchoSpec())
   if refusals == 3:
     assert await runner.run('original', surface='test') == 'reply'
   else:
@@ -267,7 +267,7 @@ async def test_interrupt_received_calls_records_answers_and_continues_the_same_c
   replies.append(response(call('{}'), id='with-calls'))
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=ResponsesSpec(model='gpt-6.1-sol')))
+  runner = Runner(create_bro('bro'), ResponsesSpec(model='gpt-6.1-sol'))
   with runner:
     turn = asyncio.create_task(runner.send('original', surface='test'))
     await entered.wait()
@@ -305,7 +305,7 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   )
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(ShellBro.create(ResponsesSpec(model='gpt-6.1-sol')))
+  runner = Runner(ShellBro(), ResponsesSpec(model='gpt-6.1-sol'))
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
   assert server[2]['previous_response_id'] == 'silent'

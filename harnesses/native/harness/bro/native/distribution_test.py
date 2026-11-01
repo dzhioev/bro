@@ -232,14 +232,12 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',
-    'bro-openai',
     'markdown-it-py',
     'pytest',
   }
   assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {
     'bro',
     'bro-dev',
-    'bro-openai',
   }
   assert _project_dependencies(_ROOT / 'oops' / 'cdk' / 'pyproject.toml') >= {
     'aws-cdk-lib',

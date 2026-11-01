@@ -143,7 +143,7 @@ this spell only says how a phase differs from a one-shot ask.
   Give only what it needs beyond its base and what your recipient restrictions allow:
   `@<bro>` for onward delegation, or `bro.placement=unboxed` / `bro.placement=join` for non-default placement.
   When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator may use the matching `bro.cred=<kind>+<instance>` permission.
-  Otherwise the kind and instance must come from `projects.<identity>.bros.<phase-bro>` in the host configuration;
+  Otherwise the kind and instance must come from `homes.<installation home>.bros.<phase-bro>` in the host configuration;
   do not broaden every run of that bro when an authorized per-phase pass is available.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
@@ -409,7 +409,7 @@ every step's check passed and recorded on the page, or a failed step rolled back
 
 ### 6 — verify
 
-**Summon:** `into` `master`, which the work is on by then · pass a phase-only credential when authorized, otherwise take credentials from `projects.<identity>.bros.<the phase bro>` in the host config
+**Summon:** `into` `master`, which the work is on by then · pass a phase-only credential when authorized, otherwise take credentials from `homes.<installation home>.bros.<the phase bro>` in the host config
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:

@@ -851,7 +851,9 @@ def _prepare_session(
 
         fields = {
           'target': spec.bro,
-          'harness': reading.resolve_harness(spec.harness if spec.harness_set else None),
+          'harness': reading.resolve_harness(
+            spec.harness if spec.harness_set else None, target=spec.bro
+          ),
           'hold': spec.hold,
           'placement': spec.isolation.value,
           'timeout': None,

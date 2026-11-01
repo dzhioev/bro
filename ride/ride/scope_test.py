@@ -7,13 +7,11 @@ import pytest
 
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
-from bro.authority.syntax import parse_layer
 from bro.base import credentials, host_config
 from bro.base.condition import when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
 from bro.mcp import MCPServerSpec, ToolLayer, creds
-from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
 from bro.workspace.settings import HomeSettings
 from ride import scope
@@ -64,18 +62,17 @@ def scoped_installation(monkeypatch, tmp_path):
   installation = Installation(
     {
       bro.name: bro(credential_presence=kinds, credential_kinds=kinds)
-      for bro in (ScopedBro, GatedBro)
+      for bro in (ScopedBro, GatedBro, type('Reviewer', (BaseBro,), {'name': 'reviewer'}))
     },
-    {
-      'test': HarnessReading(
-        harness, {'scoped': Recipe(), 'gated': Recipe()}, auth_kind='auth', llm_key=True
-      )
-    },
+    {'test': HarnessReading(harness, auth_kind='auth', llm_key=True)},
     kinds,
     {'echo': frozenset({'provider_key'})},
     {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
   )
   monkeypatch.setattr(Installation, 'take', lambda: installation)
+  Path(host_config.HOST_CONFIG_FILE).write_text(
+    json.dumps({'defaults': {'llm': {'test': 'echo:echo'}}})
+  )
   return installation
 
 
@@ -85,7 +82,7 @@ def _recipe(installation):
 
 def _reading(installation, configuration=None, project=None):
   return Reading(
-    Configuration.parse(configuration or {}),
+    Configuration.parse({'defaults': {'llm': {'test': 'echo:echo'}}, **(configuration or {})}),
     {},
     installation,
     settings=HomeSettings(summon_harness='test'),
@@ -181,7 +178,7 @@ class TestAuthorityLayers:
     reading = _reading(
       scoped_installation,
       {'defaults': {'grant': ['webview']}},
-      Policy(parse_layer(revoke=['webview'])),
+      Policy(HomeSettings(revoke=('webview',))),
     )
     assert not _pair(reading, Atom('webview')).use.is_empty
     reading = _reading(scoped_installation, {'defaults': {'revoke': ['webview']}})
@@ -218,24 +215,17 @@ class TestAuthorityLayers:
     assert not pair.give.matches(Descriptor('bro', {'target': 'reviewer', 'placement': 'join'}))
 
   def test_unknown_names_fail_only_when_their_layer_applies(self, scoped_installation):
-    reading = _reading(scoped_installation, {'projects': {'/other': {'grant': ['unknown']}}})
+    reading = _reading(scoped_installation, {'homes': {'other': {'grant': ['unknown']}}})
     assert not _pair(reading, Atom('bro')).use.is_empty
-    reading = _reading(scoped_installation, {'defaults': {'grant': ['unknown']}})
     with pytest.raises(ValueError, match='unknown mission type'):
-      _pair(reading, Atom('bro'))
+      _reading(scoped_installation, {'defaults': {'grant': ['unknown']}})
 
-  def test_overlapping_grant_and_revoke_are_refused_on_resolution(self, scoped_installation):
-    reading = _reading(
-      scoped_installation,
-      {
-        'defaults': {
-          'grant': ['bro.placement=*'],
-          'revoke': ['bro.placement=join'],
-        }
-      },
-    )
+  def test_overlapping_grant_and_revoke_are_refused_on_reading(self, scoped_installation):
     with pytest.raises(ValueError, match='cannot grant and revoke'):
-      _pair(reading, Atom('bro'))
+      _reading(
+        scoped_installation,
+        {'defaults': {'grant': ['bro.placement=*'], 'revoke': ['bro.placement=join']}},
+      )
 
 
 class TestLaunchViewStore:

@@ -30,7 +30,7 @@ def token_totals(store_root: Path) -> Optional[Counts]:
   totals = usage.zero()
   with LocalStore(store_root) as store:
     for header in store.iter_trails():
-      wire = providers.default_spec(header['native']['llm']['type']).WIRE
+      wire = providers.declaration(header['native']['llm']['type']).Recipe.WIRE
       for message in store.iter_messages(header['id'], types={'llm_call'}):
         raw_usage = message.get('usage')
         if not isinstance(raw_usage, dict):

@@ -92,7 +92,7 @@ A retired recipe still has canonical text, but binding it without `+passthrough`
 A provider depends on its wire distribution **bare** and, when client-driven, offers its own `client` extra requesting the wire's `client` extra.
 Only the wire's `client` extra carries the SDK dependencies.
 An installation driving the provider, whether through the native harness or `mu`, installs `<provider-distribution>[client]`.
-An installation only reading declarations, prices or trails, and a persona distribution pinning a recipe, takes the bare provider.
+An installation only reading declarations, prices or trails takes the bare provider.
 For example, `bro-deepseek[client]` requests `bro-wire-chat[client]`;
 `bro-deepseek` alone can resolve and price recipes and decode their records without an SDK.
 `wires.open()` reports the missing wire extra when the SDK is absent.
@@ -109,8 +109,7 @@ and holds no literal equal to a provider name without a direct dependency on the
 Resolve providers through `bro.llm.providers`, wires through `bro.llm.wires`, and harnesses through `bro.harnesses`.
 
 A distribution may name a plug-in it directly depends on:
-its own provider package, a provider's wire, a persona's pinned recipe, or a harness's supported provider.
-Persona dependencies remain bare even when the installation running them needs the client extra.
+its own provider package, a provider's wire, or a harness's supported provider.
 Core depends on no workspace member.
 Tests and documentation may name examples.
 
@@ -217,7 +216,7 @@ an unknown wire degrades to a forensic event without losing its record.
    otherwise write fixtures from the vendor's documented shapes and identify that provenance.
    Test decode, usage and prices, a multi-leg tool loop and required history pass-back, terminal and transient HTTP errors,
    capacity retries, projection, fork/resume and `ride scope` selection.
-   Also summon a persona that declares another provider's recipe onto this provider, from a host that holds the other provider's key,
+   Also summon a persona configured on another provider onto this provider, from a host that holds the other provider's key,
    and run it with the real credential gate:
    it must start without that key.
    For a provider that can serve auxiliary roles, hydrate a `mu` entry naming it into that stage and call it:
@@ -257,7 +256,7 @@ Models outside both tables can run under `+passthrough` but remain unpriced.
 
 ## Operator adoption
 
-Before re-syncing an installation, move configured unlisted models to listed ones in host and repository presets, per-bro lists and `mu` materials.
+Before re-syncing an installation, move configured unlisted models to listed ones in host home layers and `mu` materials.
 A kept workspace whose recorded selection names an unlisted model cannot resume after the re-sync; see [ride](ride.md#bro-harness) for continuation.
 End or cancel running Harbor jobs before re-syncing, and start none until the benchmark bundle is rebuilt.
 Re-sync every installation reading the shared configuration, rebuild the benchmark bundle, and start fresh roots; move consumer repositories’ framework pins when they adopt the content routes.
@@ -274,14 +273,9 @@ An older installation refuses that suffix; a root and all its children retain th
    Credential selection arguments name instances, never secret values.
 3. Choose a recipe and harness explicitly, through launch flags or configured selections.
    There is no framework default recipe or harness.
-   A managed launch layers its selection over the first runnable host per-bro list entry, then the persona's declaration;
-   an in-process `bro run` or `bro chat` has no host list.
-   The list lives at `projects.<repo>.bros.<bro>.llm` in `~/.bro.json`, and `default` refers only to the persona's declaration, which may be absent.
-   Naming a provider starts its complete default recipe; a model-only or effort-only selection needs a standing provider.
-   Parsing checks grammar only; resolution happens when a launch reaches the selection.
-   A host-list entry for an uninstalled provider is skipped with verbose diagnostics, while an explicit unavailable provider fails by name.
-   A one-word `--llm` value naming an installed provider selects it;
-   otherwise it is a preset, with host presets overriding project presets.
+   Managed launches and in-process `bro run` and `bro chat` resolve through the installation's home-layer stack.
+   The configured recipe is the winning `llm.<harness>` entry, with its source layer.
+   An unsupported foreign value fails only the starts that use it, naming the plug-in to install and the installation's own bro layer as an override.
    See [ride](ride.md#recipe-selection) for flags and harness selection.
 4. Check without starting a session:
    `ride scope --bro bro-dev --harness bro --llm deepseek:pro:high` must show the selected provider and key presence.

@@ -1,6 +1,5 @@
 from bro.bro import BaseBro
 from bro.mcp import ANY, brash, files
-from bro.openai import declaration as openai
 
 
 class Terminal(BaseBro):
@@ -8,7 +7,6 @@ class Terminal(BaseBro):
   description = 'software developer working alone inside a container'
   tools = [files(), brash(ANY)]
   may_summon = ('terminal',)
-  llm_spec = openai.Recipe(compact_threshold=200_000)
   system_prompt = """\
 You are a software developer working alone inside a container, with tools to read,
 search, edit files, and run shell commands. Use them to complete the user's task.

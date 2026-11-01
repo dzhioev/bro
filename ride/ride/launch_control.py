@@ -306,7 +306,9 @@ class LaunchControl:
       if not isinstance(message.args['fields'], Mapping):
         raise ValueError('commit check: fields: expected an object')
       fields = dict(message.args['fields'])
-      fields['harness'] = self.reading.resolve_harness(fields.get('harness'))
+      fields['harness'] = self.reading.resolve_harness(
+        fields.get('harness'), target=cast(str, prepared.request.values['target'])
+      )
       mapped, _ = authority_request(
         type(self._types[prepared.request.type]),
         fields,

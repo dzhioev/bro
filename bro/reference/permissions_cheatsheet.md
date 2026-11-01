@@ -27,12 +27,12 @@ Inside the first session:
 summon browser 'Find the current release notes.'
 ```
 
-To make that choice persistent for assistant on one project:
+To make that choice persistent for assistant in one home:
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {"assistant": {"grant": ["@browser"]}}
     }
   }
@@ -59,12 +59,12 @@ The third removes it.
 These flags affect what the session reads; they do not authorize passing that instance to another mission.
 `--cred github+` selects the empty instance explicitly.
 
-To give assistant that instance on this project by default:
+To give assistant that instance in this home by default:
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {
         "assistant": {"grant": ["github"], "creds": ["github+reviewer"]}
       }
@@ -128,8 +128,8 @@ Host configuration:
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {
         "assistant": {
           "grant": ["@browser", "webview.cred=cookies+assistant to @browser"]
@@ -165,8 +165,8 @@ For assistant to hand the same right through helper to browser, both possible re
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {
         "assistant": {
           "grant": ["@helper", "webview.cred=cookies+assistant to @helper @browser"]
@@ -347,7 +347,7 @@ It is a guard against mistakes under your host account, not protection from anot
 On the host:
 
 ```sh
-ride scope --repo /home/me/project --bro assistant
+ride scope --bro assistant
 ride missions my-session
 ```
 

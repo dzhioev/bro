@@ -98,12 +98,6 @@ class TestRegister:
     b = create_bro('alpha')
     assert a is not b
 
-  def test_create_with_llm_spec_routes_through_create_factory(self):
-    register(AlphaBro)
-    spec = _EchoOnlySpec(model='custom-model')
-    bro = create_bro('alpha', llm_spec=spec)
-    assert bro.llm_spec is spec
-
   def test_get_class_returns_the_registered_class(self):
     register(AlphaBro)
     assert get_class('alpha') is AlphaBro

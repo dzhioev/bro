@@ -25,6 +25,7 @@ import ride.workspace.host_docker_test_helper as host_docker
 from bro.base import credentials
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.webview.profile import PLAYWRIGHT_MCP_PROFILE_VERSIONS, PROFILE_VERSION
+from bro.workspace.installation import installation_home
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.artifacts import view_mount
 from ride.e2e_test import (
@@ -298,7 +299,7 @@ class ScriptedRunner(Runner):
 
 
 asyncio.run(
-  ScriptedRunner(Browser.create(EchoSpec())).run(
+  ScriptedRunner(Browser(), EchoSpec()).run(
     'Open the request page and report how to complete it.',
     surface='webview-e2e',
     tracker=NullTracker(),
@@ -573,7 +574,7 @@ class ScriptedRunner(Runner):
 
 
 asyncio.run(
-  ScriptedRunner(Browser.create(EchoSpec())).run(
+  ScriptedRunner(Browser(), EchoSpec()).run(
     '[[browse]]', surface='webview-e2e', tracker=NullTracker()
   )
 )
@@ -1481,8 +1482,8 @@ def test_cookies_pass_loads_profile_without_entering_the_owner_store(
   config.write_text(
     json.dumps(
       {
-        'projects': {
-          str(isolated_env.project): {
+        'homes': {
+          installation_home(): {
             'bros': {
               ProfileGiver.name: {'grant': ['@browser', 'webview.cred=cookies+e2e to @browser']},
             },

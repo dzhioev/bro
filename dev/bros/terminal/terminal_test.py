@@ -1,6 +1,4 @@
 from bro.bro import BaseBro
-from bro.llm import providers
-from bro.openai import declaration as openai
 from bros.bro import Bro
 from bros.terminal import Terminal
 
@@ -12,13 +10,3 @@ def test_terminal_opts_out_of_the_shared_bro_defaults():
   assert terminal.reach().sources == ()
   assert terminal._features == {}
   assert terminal.spell_descriptions() == []
-
-
-def test_llm_model_selection_preserves_terminal_compaction():
-  declared = Terminal.llm_spec
-  assert isinstance(declared, openai.Recipe)
-  assert declared.compact_threshold is not None
-  spec = providers.resolve(declared, providers.parse(':sol'), ('openai',))
-  assert isinstance(spec, openai.Recipe)
-  assert spec.model == openai.MODELS['sol']
-  assert spec.compact_threshold == declared.compact_threshold

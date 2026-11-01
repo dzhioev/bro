@@ -51,7 +51,6 @@ from bro.base.condition import when
 from bro.bro import feature
 from bro.datasources.references import environment
 from bro.datasources.web_search import WebSearch
-from bro.openai import declaration as openai
 from bro.mcp import cli, creds, files, man, mount, source
 from bros.bro import Bro
 from bros.triage import spells
@@ -78,7 +77,6 @@ issue number, what you read, and the task.
 class Triage(Bro):
   name = 'triage'
   description = 'reads and labels incoming issues, hands confirmed bugs on'
-  llm_spec = openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high')
   features = {'brog': creds.contains('brog')}
   may_summon = ('browser', 'devoops')
   tools = [
@@ -173,7 +171,7 @@ Read the class line by line and nothing is left to configure elsewhere:
   the card of a bro it is about to hand work to, and the run a report cites.
   How a command becomes a tool is below.
 - `source(WebSearch())` and `man(environment)` are read-only connectors whose summaries land in the prompt: web search and the reference manual.
-- `llm_spec` optionally declares its model recipe; a native launch without one must name a provider;
+- model recipes live in host home layers, keyed by harness;
   any launch may name another.
 - `may_summon = ('browser', 'devoops')` is whom it may summon on its own authority:
   the built-in browser, which reproduces a report on the live page, and devoops, which probes the deployed service.
@@ -299,14 +297,12 @@ the whole of `dev` and `eyebro`
 
 ```python
 # bros/fixer/__init__.py
-from bro.openai import declaration as openai
 from bros.dev import Dev
 
 
 class Fixer(Dev):
   name = 'fixer'
   description = 'fixes a confirmed bug and opens the pull request'
-  llm_spec = openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
   system_prompt = 'Work from the task you were handed, and open the pull request with [[run pr]].'
@@ -347,7 +343,7 @@ The card above lists the tools and the secrets;
 the scope names which stored instance backs each secret for this checkout and this bro, and whether it resolves:
 
 ```console
-ride scope --repo ~/acme --bro triage
+ride scope --bro triage
 ```
 
 Which instance that is stays out of the repository.
@@ -357,12 +353,12 @@ The host store keeps shared defaults in `~/.bro/creds.json`:
 {"defaults": ["github+me"]}
 ```
 
-Project and per-bro overrides live in `~/.bro.json`:
+Home and per-bro overrides live in `~/.bro.json`:
 
 ```json
 {
-  "projects": {
-    "https://github.com/acme/acme": {
+  "homes": {
+    "acme": {
       "creds": ["brog+github", "github+bot"],
       "bros": {"reviewer": {"creds": ["github+reviewer"]}}
     }

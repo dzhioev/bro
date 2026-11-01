@@ -19,6 +19,7 @@ for the bundle itself to check.
 
 import asyncio
 import contextlib
+import json
 import os
 import shlex
 import subprocess
@@ -49,7 +50,7 @@ from bro.base import credentials
 from bro.benchmark.bundle import Bundle, built, default_root, workspace_root
 from bro.benchmark.trial_store import TRAILS_DIRECTORY, token_totals
 from bro.llm.llm import FAILURE_CATEGORIES
-from bro.llm.providers import declarations, known_names, parse
+from bro.llm.providers import declarations, parse_recipe
 from ride.workspace.spawn import PROCESS_TERM_GRACE
 
 AGENT_NAME = 'bro'
@@ -141,17 +142,19 @@ def docker_compose_missing() -> bool:
     return True
 
 
-def llm_recipe(model_name: Optional[str]) -> Optional[str]:
-  """The complete recipe carried by Harbor's `<provider>/<model>[:<effort>][+fast][+passthrough]`."""
+def llm_recipe(model_name: Optional[str]) -> str:
   if model_name is None:
-    return None
-  provider, separator, recipe = model_name.partition('/')
-  if separator == '' or recipe == '' or provider not in known_names():
-    raise ValueError(
-      f'model {model_name!r} is not of the form <provider>/<recipe> with a '
-      f'registered provider ({", ".join(known_names())})'
-    )
-  return parse(f'{provider}:{recipe}').format()
+    raise ValueError('a benchmark preset must name model_name')
+  provider, separator, rest = model_name.partition('/')
+  if not separator or not rest:
+    raise ValueError(f'model {model_name!r} is not of the form <provider>/<recipe>')
+  text = f'{provider}:{rest}'
+  parse_recipe(text)
+  return text
+
+
+def trial_host_config(harness: str, recipe: str) -> dict:
+  return {'defaults': {'harness': harness, 'summon-harness': harness, 'llm': {harness: recipe}}}
 
 
 def harness_name(value: str) -> str:
@@ -212,14 +215,13 @@ def scoped_store(names: list[str]) -> Generator[Path]:
     yield directory
 
 
-def ride_command(*, bro: str, instruction: str, harness: str, llm: Optional[str]) -> str:
+def ride_command(*, bro: str, instruction: str) -> str:
   """the launch a trial's agent phase runs, for a shell in the task's directory.
 
   An unboxed root in that directory (`--tree "$PWD"`, the shell's own), on the
   bundle as its runtime, kept after a clean exit so its records stay for
   collection, permitted to have its summons join its party and nothing else,
   and declared a sandbox to the harness it rides.
-  `llm` is the `--llm` selection as the launch takes it.
   """
   launch = [str(BUNDLE.script('ride')), 'solo', '--unboxed', '--tree']
   placement = [
@@ -235,17 +237,11 @@ def ride_command(*, bro: str, instruction: str, harness: str, llm: Optional[str]
     '--env',
     'IS_SANDBOX=1',
     '--keep',
-    '--harness',
-    harness,
   ]
-  if llm is not None:
-    placement += ['--llm', llm]
   return f'{shlex.join(launch)} "$PWD" {shlex.join([*placement, bro, instruction])}'
 
 
-def run_command(
-  *, bro: str, instruction: str, harness: str, llm: Optional[str], timeout_sec: Optional[int]
-) -> str:
+def run_command(*, bro: str, instruction: str, timeout_sec: Optional[int]) -> str:
   """the one command a trial's agent phase runs.
 
   The ride's activity log goes to a file rather than to harbor, which buffers the
@@ -257,7 +253,7 @@ def run_command(
   teardown, joined members in their own sessions included.
   The runtime selects the checksum-recorded Claude binary carried beside its own installation.
   """
-  launch = ride_command(bro=bro, instruction=instruction, harness=harness, llm=llm)
+  launch = ride_command(bro=bro, instruction=instruction)
   if timeout_sec is not None:
     launch = f'timeout --signal=TERM --kill-after={TERM_GRACE_SEC} {timeout_sec} {launch}'
   session = '; '.join(
@@ -343,9 +339,9 @@ class BroAgent(BaseInstalledAgent):
     ):
       raise ValueError('credentials must be a non-empty list of credential names')
     self._credentials = credentials
+    self._llm = llm_recipe(self.model_name)
     self._harness = harness_name(harness)
     self._run_timeout_sec = run_timeout(run_timeout_sec)
-    self._llm = llm_recipe(self.model_name)
     if docker_compose_missing():
       self.logger.warning(
         'no docker compose plugin on this host: a job on the docker environment cannot '
@@ -397,6 +393,10 @@ class BroAgent(BaseInstalledAgent):
     # the agent phase runs as root in every task of this dataset, so the store
     # needs no chown — only the private mode the upload does not carry over
     await self.exec_as_root(environment, command=f'chmod 600 {STORE_DIR}/*')
+    configuration = json.dumps(trial_host_config(self._harness, self._llm))
+    await self.exec_as_agent(
+      environment, command=f'printf %s {shlex.quote(configuration)} > "$HOME/.bro.json"'
+    )
     await self.exec_as_agent(
       environment, command=shlex.join([str(BUNDLE.script('bro')), 'show', self._bro])
     )
@@ -421,8 +421,6 @@ class BroAgent(BaseInstalledAgent):
     command = run_command(
       bro=self._bro,
       instruction=instruction,
-      harness=self._harness,
-      llm=self._llm,
       timeout_sec=self._run_timeout_sec,
     )
     try:

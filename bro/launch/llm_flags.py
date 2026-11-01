@@ -1,5 +1,4 @@
-"""the LLM-selection flags every launch surface registers, and the preset store
-behind `--llm`.
+"""The LLM-selection flags shared by launch surfaces.
 
 `--provider` / `--model` / `--effort` / `--fast` / `--passthrough` name the pieces of a recipe;
 `--llm` names the whole thing at once and excludes them. A surface registers the
@@ -12,18 +11,14 @@ Kept apart from the launcher modules so a surface that only registers the flags
 roster is likewise imported at call time, not at load.
 """
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from bro.base import host_config
 from bro.base.args import Parser
 
 if TYPE_CHECKING:
   from bro.llm.providers import LLMSelection
 
 from bro.llm.providers import SELECTION_FLAGS, SELECTION_OPTIONS
-
-_CURRENT_PROJECT = object()
 
 PROVIDER_HELP = 'the provider that answers; selects its default model unless --model names one'
 MODEL_HELP = (
@@ -33,8 +28,7 @@ MODEL_HELP = (
 LLM_HELP = (
   'the whole recipe in one value: `provider:model:effort` with optional `+fast` and '
   '`+passthrough` suffixes, once each in either order, and '
-  'any field left empty (`:fable5`, `::high`, `openai:sol:max+fast`), or a preset name from the '
-  "project's [tool.bro.llm] table or the host's ~/.bro.json. excludes the piece flags"
+  'any field left empty (`:fable5`, `::high`, `openai:sol:max+fast`). excludes the piece flags'
 )
 FAST_HELP = (
   "run with the provider-specific fast-mode knob of the run's LLM recipe; "
@@ -75,38 +69,9 @@ def add_llm_flags(parser: Parser, *, effort_help: str, fast_help: str) -> None:
   parser.add_exclusive_groups(['llm'], list(SELECTION_OPTIONS))
 
 
-def presets(project: object = _CURRENT_PROJECT) -> dict[str, str]:
-  """the project and host `--llm` presets for an explicit attachment.
-
-  An omitted attachment preserves the cwd-aware behavior of non-ride launchers;
-  explicit `None` is detached and reads host presets only.
-  """
-  from bro.workspace.project import project_sections, project_sections_at
-
-  if project is _CURRENT_PROJECT:
-    sections = project_sections()
-  else:
-    from bro.workspace.project import ProjectConfig
-
-    if isinstance(project, ProjectConfig):
-      sections = project.sections
-    else:
-      if project is not None and not isinstance(project, Path):
-        raise TypeError(
-          f'project must be a Path, ProjectConfig, or None, not {type(project).__name__}'
-        )
-      sections = project_sections_at(project)
-  merged = dict(sections.get('llm', {}))
-  for name, value in merged.items():
-    if not isinstance(value, str) or value == '':
-      raise ValueError(f'[tool.bro.llm] preset {name!r} must be a non-empty string')
-  merged.update(host_config.llm_presets())
-  return merged
-
-
-def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'LLMSelection':
-  """Read the flags, expanding an uninstalled provider word through the preset table."""
-  from bro.llm.providers import LLMSelection, is_preset, parse_with_presets
+def selection_from_args(args: dict) -> 'LLMSelection':
+  """Read the explicit selection flags."""
+  from bro.llm.providers import LLMSelection, parse_with_presets
 
   value = args.get('llm')
   if value is None:
@@ -116,7 +81,7 @@ def selection_from_args(args: dict, *, project: object = _CURRENT_PROJECT) -> 'L
         for name in SELECTION_OPTIONS
       },
     )
-  return parse_with_presets(value, presets(project) if is_preset(value) else {})
+  return parse_with_presets(value, {})
 
 
 def canonicalize(args: dict, selection: 'LLMSelection') -> Optional[str]:

@@ -83,7 +83,7 @@ def _metrics(
 ) -> tuple[Metrics, Decimal | None]:
   if not isinstance(raw, dict):
     raise ValueError('llm_call usage must be an object')
-  counts = from_wire_counts(providers.default_spec(provider).WIRE, raw)
+  counts = from_wire_counts(providers.declaration(provider).Recipe.WIRE, raw)
   table = price_tables.get(provider)
   cost = None if table is None else providers.price(provider, model, raw, service_tier, table)
   return (

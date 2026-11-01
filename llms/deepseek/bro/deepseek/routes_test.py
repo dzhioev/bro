@@ -26,7 +26,7 @@ from bro.llm.wire import Text
 from bro.native import loop as native_loop, runner as native_runner
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
-from bro.registry import create_bro, get_class
+from bro.registry import create_bro
 from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder
 from bro.trails.store import fetch_recorded_trail
@@ -113,7 +113,7 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   monkeypatch.setattr(native_loop, 'create', with_tools)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=Recipe(reasoning_effort='high')))
+  runner = Runner(create_bro('bro'), Recipe(reasoning_effort='high'))
   assert await runner.run('start', surface='test') == 'answer'
   assert called == [True]
   assert requests[1]['messages'][2] == {
@@ -182,7 +182,7 @@ async def test_http_errors_follow_provider_retry_policy(server, monkeypatch, sta
     waits.append(seconds)
 
   monkeypatch.setattr('bro.base.retry.asyncio_sleep', wait)
-  runner = Runner(create_bro('bro', llm_spec=Recipe()))
+  runner = Runner(create_bro('bro'), Recipe())
   if status == 402:
     with pytest.raises(openai.APIStatusError) as caught:
       await runner.run('go', surface='test')
@@ -211,7 +211,7 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
   monkeypatch.setattr('bro.llm.retry.asyncio_sleep', wait)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=Recipe()))
+  runner = Runner(create_bro('bro'), Recipe())
   assert await runner.run('go', surface='test') == 'reply'
   assert waits == [10]
   assert requests[0] == requests[1]
@@ -245,10 +245,6 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
   installation = replace(
     installation,
     bros={**installation.bros, 'child': Child()},
-    harnesses={
-      name: replace(harness, recipes={**harness.recipes, 'child': None})
-      for name, harness in installation.harnesses.items()
-    },
   )
   reading = Reading(
     Configuration.parse({}), {}, installation, settings=HomeSettings(summon_harness='bro')
@@ -359,8 +355,6 @@ def test_a_stage_summoned_onto_deepseek_starts_without_the_openai_key(
   endpoint, tmp_path, monkeypatch, backing
 ):
   requests, _, authorizations = endpoint
-  declared = get_class('bro-dev').llm_spec
-  assert declared is not None and 'openai' in declared.needed_secrets()
   stage = summoned_stage(tmp_path, monkeypatch, backing)
   assert stage.session.available('deepseek') and not stage.session.available('openai')
   monkeypatch.setattr(
@@ -399,7 +393,7 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
   )
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=Recipe()))
+  runner = Runner(create_bro('bro'), Recipe())
   runner.inbox.post('notice')
   events = []
 
@@ -446,7 +440,7 @@ async def test_live_probe_roster_includes_the_managed_summoned_service_schemas(m
   monkeypatch.setattr(credentials, 'get_json', lambda kind: pytest.fail('credential material read'))
   monkeypatch.setattr(Client, 'from_env', lambda: pytest.fail('broker connection'))
   standalone = None
-  with Runner(create_bro('bro-dev', llm_spec=Recipe())) as runner:
+  with Runner(create_bro('bro-dev'), Recipe()) as runner:
     standalone = tools_to_chat_format(
       await ToolRegistry(
         runner.bro.assemble(harness=BRO, hold='unattended', live_run=runner)
@@ -498,7 +492,7 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   )
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(ShellBro.create(Recipe()))
+  runner = Runner(ShellBro(), Recipe())
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
   *history, notification = requests[2]['messages']

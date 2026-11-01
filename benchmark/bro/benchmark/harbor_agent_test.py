@@ -134,6 +134,7 @@ class FakeEnvironment:
 
 def agent(tmp_path: Path, **kwargs: Any) -> BroAgent:
   kwargs.setdefault('credentials', ['openai'])
+  kwargs.setdefault('model_name', 'openai/gpt-5.6-terra')
   return BroAgent(logs_dir=tmp_path, **kwargs)
 
 
@@ -141,8 +142,6 @@ def _run_command(**overrides: Any) -> str:
   arguments: dict[str, Any] = {
     'bro': 'terminal',
     'instruction': 'do it',
-    'harness': 'bro',
-    'llm': None,
     'timeout_sec': None,
   }
   arguments.update(overrides)
@@ -155,29 +154,30 @@ def _session(command: str) -> str:
   return shlex.split(launch)[shlex.split(launch).index('-c') + 1]
 
 
-def test_a_recipe_is_named_within_a_registered_provider():
-  assert llm_recipe('openai/gpt-5.6-terra') == 'openai:gpt-5.6-terra'
-  assert llm_recipe('openai/gpt-5.6-terra:high') == 'openai:gpt-5.6-terra:high'
-  assert llm_recipe('openai/gpt-5.6-terra:high+fast') == 'openai:gpt-5.6-terra:high+fast'
-  assert llm_recipe('anthropic/opus5') == 'anthropic:opus5'
-  assert llm_recipe(None) is None
+@pytest.mark.parametrize(
+  'text',
+  [
+    'openai/gpt-5.6-terra,reasoning_effort=high,compact_threshold=200000',
+    'anthropic/claude-opus-5,effort=high,fast_mode=true',
+    'foreign/model+passthrough',
+  ],
+)
+def test_harbor_model_text_preserves_recipe_fields(text):
+  provider, rest = text.split('/', 1)
+  assert llm_recipe(text) == provider + ':' + rest
 
 
-@pytest.mark.parametrize('model_name', ['mistral/large', 'gpt-5.6-terra', 'openai/'])
-def test_a_recipe_outside_that_form_is_refused(model_name):
-  with pytest.raises(ValueError, match='registered provider'):
-    llm_recipe(model_name)
-
-
-@pytest.mark.parametrize('model_name', ['openai/a:b:c:d', 'openai/gpt+turbo', 'openai/gpt:sprint'])
-def test_a_recipe_off_the_llm_grammar_is_refused(model_name):
+@pytest.mark.parametrize(
+  'text', ['missing-slash', 'openai/', 'openai/model+unknown', 'openai/model,a=b,a=c']
+)
+def test_bad_recipe_grammar_refuses_agent_construction(tmp_path, text):
   with pytest.raises(ValueError):
-    llm_recipe(model_name)
+    agent(tmp_path, bro='terminal', model_name=text)
 
 
-def test_a_bad_model_fails_before_any_trial_runs(tmp_path):
-  with pytest.raises(ValueError, match='registered provider'):
-    agent(tmp_path, bro='terminal', model_name='mistral/large')
+def test_a_preset_without_model_name_is_refused(tmp_path):
+  with pytest.raises(ValueError, match='model_name'):
+    agent(tmp_path, bro='terminal', model_name=None)
 
 
 def test_a_harness_is_registered_in_the_bundle(monkeypatch):
@@ -208,41 +208,36 @@ def test_the_error_patterns_are_the_roster_providers_signatures():
 
 
 def test_the_trial_rides_the_bundle_as_an_unboxed_root_in_the_tasks_directory():
-  command = ride_command(bro='terminal', instruction='do it', harness='bro', llm=None)
+  command = ride_command(bro='terminal', instruction='do it')
 
   assert command.startswith(f'{BUNDLE.script("ride")} solo --unboxed --tree "$PWD" ')
   assert f'--runtime-bundle {BUNDLE.root} ' in command
   assert '--keep' in command
-  assert command.endswith(" --harness bro terminal 'do it'")
+  assert command.endswith(" terminal 'do it'")
 
 
 def test_the_rides_summons_may_join_its_party_and_start_nothing():
-  command = ride_command(bro='terminal', instruction='do it', harness='bro', llm=None)
+  command = ride_command(bro='terminal', instruction='do it')
 
   assert '--revoke bro.placement=boxed --grant bro.placement=join' in command
 
 
 def test_the_harness_reaches_the_launch():
-  command = ride_command(bro='terminal', instruction='do it', harness='claude', llm=None)
+  command = ride_command(bro='terminal', instruction='do it')
 
-  assert '--harness claude terminal' in command
+  assert '--harness' not in command and '--llm' not in command
 
 
 def test_the_trial_declares_the_task_container_a_sandbox():
-  command = ride_command(bro='terminal', instruction='do it', harness='claude', llm=None)
+  command = ride_command(bro='terminal', instruction='do it')
 
   # pins the variable claude consults before running as root with permissions skipped
   assert '--env IS_SANDBOX=1' in command
 
 
-def test_the_complete_recipe_reaches_the_run():
-  command = _run_command(llm='openai:gpt-5.6-terra:high')
-
-  assert '--llm openai:gpt-5.6-terra:high' in command
-
-
-def test_no_recipe_leaves_the_bros_own():
-  assert '--llm' not in _run_command()
+def test_launch_leaves_harness_and_recipe_to_trial_configuration():
+  command = _run_command()
+  assert '--llm' not in command and '--harness' not in command
 
 
 def test_the_instruction_is_one_argument_however_it_is_written():
@@ -603,7 +598,7 @@ assert 'faulty' in providers.known_names()
 healthy = providers.declaration('openai')
 patterns = {pattern.pattern for pattern in BroAgent.ERROR_PATTERNS}
 assert {signature.pattern for signature in healthy.FAILURE_SIGNATURES} <= patterns
-assert llm_recipe('openai/terra') == 'openai:terra'
+assert llm_recipe('openai/gpt-5.6-terra') == 'openai:gpt-5.6-terra'
 try:
   providers.default_spec('faulty')
 except providers.LLMSelectionError as error:
@@ -619,18 +614,76 @@ else:
   assert 'faulty' in result.stderr
 
 
-def test_dev_preset_supplies_a_complete_recipe_without_a_persona_default():
+def _agent_presets():
+  from bro.benchmark.bundle import workspace_root
+
+  directory = workspace_root() / 'benchmark' / 'agents'
+  presets = sorted(path.stem for path in directory.glob('*.json'))
+  assert presets, f'no agent presets found in {directory}'
+  return presets
+
+
+@pytest.mark.parametrize('preset_name', _agent_presets())
+def test_trial_configuration_resolves_the_preset_for_root_and_summon(preset_name):
+  from bro.authority.authority import Authority
+  from bro.authority.rules import Request
   from bro.bench.presets import compose
   from bro.benchmark.bundle import workspace_root
-  from bro.llm.providers import parse, resolve
+  from bro.benchmark.harbor_agent import trial_host_config
+  from bro.bro import BaseBro
+  from bro.harness import Harness
+  from bro.llm.providers import bind_recipe
+  from bro.worker_types import installed_types
+  from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
+  from ride.authority_scope import checked_recipe, resolve_recipe
 
-  preset = compose(
-    workspace_root(), agents='dev-bro-gpt-5.6-terra-high', settings='smoke', tasks='smoke'
-  )['agents'][0]
-  bro = preset['kwargs']['bro']
-  llm = llm_recipe(preset['model_name'])
-  assert llm is not None
-  spec = resolve(None, parse(llm), harbor_agent.known_names())
-  assert spec.TYPE == preset['model_name'].split('/')[0]
-  assert spec.selection()['effort'] == parse(llm).effort
-  assert f'--llm {llm}' in _run_command(bro=bro, llm=llm)
+  preset = compose(workspace_root(), agents=preset_name, settings='smoke', tasks='smoke')['agents'][
+    0
+  ]
+  harness = preset['kwargs']['harness']
+  text = llm_recipe(preset['model_name'])
+  expected = bind_recipe(text)
+  driver = Harness(harness)
+  driver._llm_providers = (expected.TYPE,)
+  kinds = frozenset(credentials.default_registry())
+  bro = type('TrialBro', (BaseBro,), {'name': preset['kwargs']['bro']})()
+  installation = Installation(
+    {bro.name: bro},
+    {harness: HarnessReading(driver)},
+    kinds,
+    {expected.TYPE: frozenset(expected.needed_secrets())},
+    {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
+  )
+  configuration = trial_host_config(harness, text)
+  reading = Reading(
+    Configuration.parse(configuration, home='benchmark'), {}, installation, home='benchmark'
+  )
+  root_harness = reading.resolve_harness(target=bro.name)
+  root = resolve_recipe(reading, bro.name, root_harness)
+  requested = Request('bro', {'target': bro.name})
+  child = reading.rules.start(requested, Authority.top(), reading)
+  assert checked_recipe(requested, child.descriptor, reading) == root.recipe == expected
+  assert (
+    resolve_recipe(reading, bro.name, cast(str, child.descriptor.values['harness'])).source
+    == root.source
+    == 'defaults'
+  )
+
+
+async def test_install_writes_trial_configuration_in_the_task_home(monkeypatch, tmp_path, store):
+  interpreter = tmp_path / 'venv' / 'bin' / 'python3'
+  _write_interpreter(interpreter)
+  monkeypatch.setattr(
+    harbor_agent,
+    'benchmark_bundle',
+    lambda: SimpleNamespace(root=tmp_path, interpreter=interpreter, harnesses=('bro',)),
+  )
+  environment = FakeEnvironment()
+  trial = agent(tmp_path, bro='terminal', credentials=[INSTANCE])
+  await trial.install(environment.as_environment())
+  command = next(command for command in environment.commands if '.bro.json' in command)
+  home = tmp_path / 'task-home'
+  home.mkdir()
+  subprocess.run(['bash', '-c', command], check=True, env={'HOME': str(home)})
+  config = json.loads((home / '.bro.json').read_text())
+  assert config == harbor_agent.trial_host_config(trial._harness, trial._llm)

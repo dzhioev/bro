@@ -56,15 +56,9 @@ They add no implied `--fast` or other defaults.
 ## Naming the LLM
 
 Every native run and every managed mode registers one flag set from `llm_flags.py`.
-`--llm` takes the recipe grammar in `bro/reference/ride.md`, “Recipe selection”, or a preset from the project's `[tool.bro.llm]` table / host `~/.bro.json`.
-Managed launches carry recipe inputs to the host, which expands presets and resolves them under the root reading.
-The admitted recipe reaches the inner session through its resolved environment.
-Native in-process surfaces canonicalize their selection before launching.
-
-Each harness resolves the selection through `bro.harness.Harness.resolve_recipe`, among the providers it declares in `llm_providers`;
-`harnesses/native/harness/bro/native/harness.py:resolve_native` is that resolution over the bro's optional declared `llm_spec`.
-In-process launches have no host recipe list; managed starts follow `bro/reference/ride.md`, “Recipe selection”.
-Parsing validates grammar only; preset expansion recognizes a bare word that names no installed provider, with host presets overriding the project's.
+`--llm` takes the explicit-selection grammar in `bro/reference/ride.md`, “Recipe selection”.
+Managed and in-process launches resolve their configured recipe through the installation's home-layer stack.
+The managed launch passes its admitted recipe to the inner session verbatim.
 A recipe for a provider the harness does not serve is refused, naming the installed harnesses that serve it.
 Harness flags choose a recipe within the selected harness and never silently switch execution shape.
 
