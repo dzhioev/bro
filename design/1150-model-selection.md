@@ -662,21 +662,22 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
 ### 12.3 Rollout order
 
 1. The landing merges.
-2. The interactive configuration step (§12.4) writes `~/.bro.json.next` and the new `mu` material beside the current files, and validates them with the landed code.
-3. Every other root on the host ends.
+2. The interactive configuration step (§12.4) writes `~/.bro.json.next` and the new material of every `mu` instance beside the current files, and validates them with the landed code.
+3. Every other root on the host ends, and no benchmark job runs.
 4. The host's installation re-syncs to the landed commit, which writes its marker;
-   the two new files replace the current ones, with backups kept.
+   the new host configuration and the new material of every `mu` instance replace the current ones, with backups kept.
 5. Fresh roots start.
 6. ppp, then kap, moves (§12.2).
    A `bro-dev` session of this host's re-synced installation, attached to the consumer's repository by its URL, carries the move as a pull request through `bump-bro`;
    it can attach the unmigrated tree, since a ride reads none of that tree's launch keys (P1).
    Once the pull request merges, the consumer's checkout pulls it and runs its own `./setup.sh`, which re-syncs its installation and writes its marker,
    and `ride scope` from that installation checks each of its bros on each harness.
-7. The owner moves the second host:
-   each checkout there pulls the merged commits, its own moves of step 6 included, and runs its `./setup.sh`,
-   and `ride scope` from each installation checks its bros.
+7. The owner moves the second host, which receives the new host configuration through the shared file but keeps a credential store of its own.
+   With its roots ended and no benchmark job running, each checkout there pulls the merged commits, its own moves of step 6 included, and runs its `./setup.sh`;
+   every `mu` instance of that store is replaced by material in recipe text, the material validated here for an instance of the same name, with backups kept;
+   and, before fresh roots start there, `ride scope` and the `mu` checks of §12.4's step 5 run from each installation against that store.
 
-Rollback before step 6 restores the two backups and re-syncs the previous commit.
+Rollback before step 6 restores every backup and re-syncs the previous commit.
 
 ### 12.4 The interactive configuration step
 
