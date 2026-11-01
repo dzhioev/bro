@@ -33,6 +33,7 @@ from bro.bro import BaseBro
 from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
+from bro.llm.providers import bind_recipe
 from bro.monitor import (
   SESSION_DIR_ENV,
   party_member_dir,
@@ -49,7 +50,7 @@ from bro.workspace.paths import (
 )
 from ride.authority_launch import credentials_for
 from ride.authority_reading import Reading
-from ride.authority_scope import checked_recipe
+from ride.authority_scope import checked_recipe, resolve_recipe
 from ride.authority_test_helper import mission, reading
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.metadata import Isolation
@@ -95,8 +96,8 @@ def _do_ride_environment(
   assert workspace.metadata.branch is not None
   return {
     ride.do_ride.INSTALL_DIRECTORY_ENV: ride.do_ride.CONTAINER_INSTALL_DIRECTORY,
-    ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(
-      checked_recipe(record.request, record.descriptor, record.reading).dump()
+    ride.do_ride.RESOLVED_RECIPE_ENV: ride.do_ride.encode_resolved_recipe(
+      checked_recipe(record.descriptor, record.reading).dump()
     ),
     'RIDE_ISOLATION': 'boxed',
     'RIDE_BRANCH': workspace.metadata.branch,
@@ -154,7 +155,8 @@ def _launch(**fields) -> ride.bro_worker.SummonLaunchSpec:
   owned = {
     name: value
     for name, value in fields.items()
-    if name in {'prompt', 'parent', 'parent_tree', 'summoner', 'repo', 'into', 'share', 'env'}
+    if name
+    in {'prompt', 'llm', 'parent', 'parent_tree', 'summoner', 'repo', 'into', 'share', 'env'}
   }
   return ride.bro_worker.SummonLaunchSpec(record=record, **owned)
 
@@ -190,11 +192,9 @@ def _facts_expecting(quest: str) -> ride.peer_facts.PeerFacts:
 
 @pytest.fixture
 def lowering_harness(monkeypatch, tmp_path, register_test_bros):
-  from bro.openai.declaration import LLMSpec
 
   class Dev(BaseBro):
     name = 'dev'
-    llm_spec = LLMSpec(reasoning_effort='medium')
 
   register_test_bros(Dev)
 
@@ -314,7 +314,9 @@ class TestSummonLowering:
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.command[-5:] == ['--hold', 'attended', '--', 'dev', 'deploy the thing']
 
-  def test_the_llm_recipe_reaches_the_childs_resolved_environment(self, lowering_harness):
+  def test_the_llm_recipe_reaches_the_childs_resolved_environment(
+    self, lowering_harness, monkeypatch
+  ):
     launch = _launch(
       target='dev',
       prompt='deploy the thing',
@@ -323,21 +325,41 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       harness='bro',
-      llm='openai:sol:high+fast',
+      llm='openai:gpt-6.1-sol,reasoning_effort=high,service_tier=priority',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert (
-      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
+      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV])
       == checked_recipe(
-        launch.record.request, launch.record.descriptor, cast(Reading, launch.record.reading)
+        launch.record.descriptor,
+        cast(Reading, launch.record.reading),
+        None if launch.llm is None else (launch.llm, 'summon llm'),
       ).dump()
+    )
+
+    from bro.llm.providers import format_recipe
+    from bro.workspace.banner import render_banner
+
+    encoded = lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV]
+    monkeypatch.setenv('RIDE_RESOLVED_RECIPE', encoded)
+    assert launch.llm is not None
+    assert f'llm: {format_recipe(bind_recipe(launch.llm))} (summon llm)' in render_banner(
+      plain=True
     )
 
   def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
     self, lowering_harness, monkeypatch, tmp_path
   ):
     source = replace(
-      reading(config={'projects': {'/proj': {'bros': {'dev': {'llm': ['openai:sol:xhigh']}}}}}),
+      reading(
+        config={
+          'homes': {
+            'test-home': {
+              'bros': {'dev': {'llm': {'bro': 'openai:gpt-6.1-sol,reasoning_effort=xhigh'}}}
+            }
+          }
+        }
+      ),
       attachment=Attachment(path='/proj'),
     )
     monkeypatch.setattr('bro.base.host_config._read', lambda: pytest.fail('launch reread policy'))
@@ -349,12 +371,15 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       harness='bro',
-      llm='::low',
+      llm='openai:gpt-6.1-sol,reasoning_effort=low',
       source=source,
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
-    assert resolved == native_harness.BRO.resolve_llm('openai:sol:low', 'dev').dump()
+    resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV])
+    assert resolved == {
+      'recipe': bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low').dump(),
+      'source': 'summon llm',
+    }
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
@@ -372,7 +397,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       harness='bro',
-      llm='echo',
+      llm='echo:echo',
     )
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert captured == [launch.record]
@@ -388,7 +413,7 @@ class TestSummonLowering:
       summoner=SUMMONER,
       harness='bro',
       hold='guided',
-      llm='openai:sol:high',
+      llm='openai:gpt-6.1-sol,reasoning_effort=high',
       grant=('@reviewer',),
       passes=('github+passed',),
     )
@@ -679,7 +704,7 @@ class TestSummonLowering:
         'work beside me',
       ]
     )
-    resolved = ride.harness.get_harness('bro').resolve_llm(None, 'dev')
+    resolved = resolve_recipe(reading(), 'dev', 'bro')
     assert member.env == {
       **workspace_docker.MEMBER_BASELINE_ENV,
       'RIDE_BRO': 'dev',
@@ -687,7 +712,7 @@ class TestSummonLowering:
       'RIDE_HOST_WORKSPACE': str(workspace.tree),
       'RIDE_HOST': socket.gethostname(),
       'RIDE_ISOLATION': 'boxed',
-      ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(resolved.dump()),
+      ride.do_ride.RESOLVED_RECIPE_ENV: ride.do_ride.encode_resolved_recipe(resolved.dump()),
       ride.do_ride.INSTALL_DIRECTORY_ENV: '/home/ride/.bro-party/broker-CH/environment',
       SESSION_DIR_ENV: '/var/ride/party/broker-CH/session',
       'RIDE_TRAILS_ROOT': '/var/ride/party/broker-CH/trails',
@@ -1204,7 +1229,7 @@ class TestClaudeSummonLowering:
     assert lowered.launch.tty is False
 
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
-    launch = self._launch(llm=':fable5', summon_depth=5, summon_harness='claude')
+    launch = self._launch(llm='anthropic:claude-fable-5')
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
     assert spec is not None
@@ -1242,18 +1267,22 @@ class TestClaudeSummonLowering:
       Workspace.open('broker-CH')
 
   def test_a_native_recipe_fails_the_claude_spawn(self, claude_harness, tmp_path):
-    with pytest.raises(ValueError, match="the claude harness cannot run recipe 'openai:sol'"):
-      _lower_boxed(self._launch(llm='openai:sol'), 'broker-CH', _container_runtime(), _artifacts())
+    with pytest.raises(ValueError, match="the claude harness cannot run provider 'openai'"):
+      _lower_boxed(
+        self._launch(llm='openai:gpt-6.1-sol'), 'broker-CH', _container_runtime(), _artifacts()
+      )
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
 
   def test_a_claude_recipe_reaches_the_resolved_environment(self, claude_harness):
-    launch = self._launch(llm=':fable5:high')
+    launch = self._launch(llm='anthropic:claude-fable-5,effort=high')
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert (
-      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
+      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV])
       == checked_recipe(
-        launch.record.request, launch.record.descriptor, cast(Reading, launch.record.reading)
+        launch.record.descriptor,
+        cast(Reading, launch.record.reading),
+        None if launch.llm is None else (launch.llm, 'summon llm'),
       ).dump()
     )
 

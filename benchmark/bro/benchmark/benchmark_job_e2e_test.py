@@ -194,7 +194,13 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   )
   mission = reading.rules.start(requested, operator, reading)
   facts = PeerFacts(
-    WorkerFacts(type='bro', workspace='benchmark-e2e', tree=tree, record=mission),
+    WorkerFacts(
+      type='bro',
+      workspace='benchmark-e2e',
+      tree=tree,
+      record=mission,
+      allowance=reading.root_allowance('bro'),
+    ),
     root_tree=tree,
     root_path=tmp_path / 'root',
   )

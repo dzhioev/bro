@@ -13,7 +13,7 @@ from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.harness import Harness
-  from bro.llm.llm import LLMSpec
+  from bro.llm.llm import Recipe
   from ride.harness import SessionHarness
   from ride.repository import Repository
 
@@ -38,9 +38,9 @@ class ScopeRecipe:
   llm_key: bool
 
 
-def launch_llm_spec(
+def launch_recipe(
   driver: SessionHarness, attachment: str | None, bro_name: str, llm: str | None
-) -> LLMSpec:
+) -> Recipe:
   from ride.authority_launch import request
   from ride.authority_reading import Reading
   from ride.authority_scope import checked_recipe
@@ -54,16 +54,16 @@ def launch_llm_spec(
       fields['llm'] = llm
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     descriptor = reading.rules.normalize(requested, reading)
-    return checked_recipe(requested, descriptor, reading)
+    return checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm')).recipe
 
 
 def scoped_secrets(
   bro_name: str,
-  recipe: ScopeRecipe,
+  scope: ScopeRecipe,
   *,
   attachment: str | None = None,
   attachment_repository: Repository | None = None,
-  llm_spec: LLMSpec | None = None,
+  recipe: Recipe | None = None,
   cred: Sequence[str] = (),
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
@@ -81,21 +81,13 @@ def scoped_secrets(
     reading = Reading.take(repository)
     fields = {
       'target': bro_name,
-      'harness': recipe.harness.name,
+      'harness': scope.harness.name,
       'pass': list(cred),
       'grant': list(grant),
       'revoke': list(revoke),
     }
-    if llm_spec is not None:
-      fields.update(provider=llm_spec.TYPE, **llm_spec.selection())
-      fields.update(
-        {
-          name: True
-          for name in providers.SELECTION_FLAGS
-          if name != 'fast' and getattr(llm_spec, name)
-        }
-      )
-      fields = {name: value for name, value in fields.items() if value is not None}
+    if recipe is not None:
+      fields['llm'] = providers.format_recipe(recipe)
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     return credentials_for(
       reading.rules.start(requested, reading.operator(), reading), recording=recording

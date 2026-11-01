@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Protocol, Self, cast
+from typing import Any, ClassVar, Literal, Optional, Protocol, cast
 
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
@@ -31,7 +31,8 @@ from bro.datasources.file import FileSource
 from bro.datasources.man import manual
 from bro.harness import Harness, get_harness
 from bro.launch.hold import UNATTENDED
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
+from bro.llm.resolved import ResolvedRecipe
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
@@ -103,6 +104,9 @@ class LiveRun(Protocol):
   call, and the result store lives as long as the run. A process that assembles
   a bro without running one has none, and keeps its results in the session's
   store."""
+
+  @property
+  def resolved_recipe(self) -> ResolvedRecipe | None: ...
 
   @property
   def trail_id(self) -> Optional[str]: ...
@@ -188,14 +192,14 @@ def _answer_tool(harness: Harness, variables: Variables) -> llm_mcp.Tool:
 _SUMMON_DESCRIPTION = (
   'summon another bro with a self-contained `prompt`, returning its quest id after host '
   'acceptance. `target` names the bro; the host checks the use rule for the start and '
-  'every option, the gift rule, and the depth cap. The banner reports your live authority. '
+  'every option, the gift rule, and the summon allowance. The banner reports your live authority. '
   f'`timeout` bounds the run in whole seconds (default {summon.DEFAULT_TIMEOUT}); size it '
   'in hours for a long-running review or deployment. `into` bases a new workspace on '
   'a git ref instead of your current HEAD; uncommitted changes never transfer. `hold` '
   'sets the child’s user-involvement level. `harness` selects its installed driving loop, '
-  'defaulting to the root reading’s summon harness. `llm` accepts a host preset or a '
-  '`provider:model:effort` recipe with optional `+fast` and `+passthrough` suffixes '
-  'and empty fields that retain the configured selection; an unsupported recipe fails '
+  'defaulting to the root reading’s summon harness. `llm` accepts complete '
+  '`provider:model[+passthrough][,field=value]...` recipe text that replaces the configured '
+  'recipe whole; an unsupported recipe fails '
   'rather than switching harness. '
   '`placement` is `boxed` (the default), `unboxed`, or `join`. A join shares your tree '
   'and refuses `into` and `manual`. '
@@ -289,15 +293,16 @@ _BANNER_DESCRIPTION = (
 
 
 def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variables) -> llm_mcp.Tool:
-  # the same facts `ride banner --llm` prints, rendered in-process. the bro name is
-  # passed explicitly because an in-process run's environment carries the
-  # launcher's RIDE_BRO (or none), not this bro's. the workspace import stays
-  # function-local so `import bro` stays cheap.
   def _banner() -> str:
     from bro.workspace.banner import render_banner
 
     trail_id = None if live_run is None else live_run.trail_id
-    return render_banner(llm=True, bro=bro.name, trail_id=trail_id)
+    return render_banner(
+      plain=True,
+      bro=bro.name,
+      trail_id=trail_id,
+      resolved_recipe=None if live_run is None else live_run.resolved_recipe,
+    )
 
   return llm_mcp.FunctionTool(
     _banner, name='banner', description=_BANNER_DESCRIPTION, variables=variables
@@ -965,7 +970,6 @@ class CredentialManifest:
 class BaseBro(ABC):
   name: str
   description: str
-  llm_spec: LLMSpec | None = None
   # the bro's tool reach: tool groups, mounts, `cli` tools, data sources, and
   # reference pages, each entry keyed by its kind and a name. entries may be
   # wrapped with `bro.base.condition.when(...)` / grouped with `iff(...)` to gate
@@ -1350,25 +1354,9 @@ class BaseBro(ABC):
       names.add(spell_store.CAST_SECRET)
     return tuple(sorted(names - set(self.needed_secrets(harness))))
 
-  def missing_secrets(self, harness: mcp.HarnessLike) -> tuple[str, ...]:
-    # every required name — the component manifest plus the LLM key, since
-    # run()/send() execute the bro as an LLM process — that does not resolve in
-    # this process's credential store. the optional tier is never gated.
-    required = set(self.needed_secrets(harness))
-    if self.llm_spec is not None:
-      required.update(self.llm_spec.needed_secrets())
+  def missing_secrets(self, harness: mcp.HarnessLike, recipe: Recipe) -> tuple[str, ...]:
+    required = set(self.needed_secrets(harness)) | set(recipe.needed_secrets())
     return tuple(sorted(name for name in required if not credentials.available(name)))
-
-  @classmethod
-  def create(cls, llm_spec: LLMSpec) -> Self:
-    # factory for a construction-time LLMSpec override — applied after the bro's
-    # own __init__, so subclass constructors never need to know about it. the
-    # spec replaces the class default in full; build a new spec (or call
-    # `spec.fast()`) if you want to tweak a single knob on top of the bro's
-    # defaults.
-    bro = cls()
-    bro.llm_spec = llm_spec
-    return bro
 
   def _servers_with_spell_tools(
     self, servers: list[llm_mcp.MCPServer], *, harness: mcp.HarnessLike, hold: str

@@ -117,111 +117,67 @@ Every string is a template (`bro/reference/template.md`) rendered with `#name` b
 
 ### Host config (`~/.bro.json`)
 
-The optional host config selects stored credential instances and layers session scope policy per consumer:
+The optional file configures installations by home, independently of the attached repository:
 
 ```json
 {
   "defaults": {
-    "grant": ["bro.placement=join"]
+    "harness": "claude",
+    "summon-harness": "bro",
+    "llm": {
+      "bro": "openai:gpt-5.6-terra,reasoning_effort=medium",
+      "claude": "anthropic:claude-opus-5-5,effort=xhigh"
+    }
   },
-  "projects": {
-    "https://github.com/me/bro": {
+  "homes": {
+    "bro": {
       "creds": ["brog+github", "github+dev"],
-      "grant": ["@reviewer"],
       "bros": {
-        "bro-eyebro": {"creds": ["github+reviewer"], "grant": ["bro.cred=github+reviewer"], "revoke": ["bro.placement=join"]},
-        "eyebro": {"creds": ["github+reviewer"], "grant": ["github"], "llm": ["anthropic:opus55:high", "openai:sol:xhigh", "default"]}
+        "bro-eyebro": {
+          "creds": ["github+reviewer"],
+          "llm": {"bro": "openai:gpt-6.1-sol,reasoning_effort=xhigh"}
+        }
       }
-    },
-    "/home/me/projects/bro": {
-      "creds": ["aws+laptop"],
-      "grant": ["bro.placement=unboxed"],
-      "revoke": ["bro.placement=boxed"]
     }
   },
   "user": {
     "creds": ["github+me"],
     "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
-  },
-  "llm": {"sharp": "openai:sol:max"},
-  "summon-depth": 4
+  }
 }
 ```
 
-Every host-config selection list is named `creds`.
-An entry is `kind+instance`, its instance left empty (`kind+`) to select the kind's empty instance;
-one list may name a kind once.
-Project entries and `bros.<bro>` entries may carry `creds`, while `defaults` does not:
-the host store's `creds.json` `defaults` is the common base pick for managed sessions and operator commands alike.
-`defaults`, project entries, and bro entries take `grant`, `revoke`, and `limit` lists in the authority syntax.
-A bare credential kind holds or drops the kind;
-`creds` selects its instance without holding it.
-A permission names a mission type (`webview`), an option (`bro.placement=unboxed`), a flag (`webview.vnc`), a bro target (`@reviewer`), or a credential option (`webview.cred=cookies+assistant`).
-A plain grant gives full use and give;
-`for` and `to` clauses restrict use and recipients, such as `webview.cred=cookies+assistant to @browser` for give-only authority.
-`revoke` takes plain permissions, and `limit` takes qualified entries.
-A layer cannot grant and revoke overlapping permissions.
-The host-only `operator` object takes `revoke` and `limit`, restricting the operator's authority from its unrestricted default.
-The parser validates syntax without consulting installation registries;
-launches resolve only applicable layers, so shared dotfiles may name another installation's types or kinds in unrelated entries.
-A `bros` entry may also carry `llm`, the recipes the bro runs on this project: an ordered preference list in the `--llm` grammar.
-A launch runs the first entry its harness serves (`bro/reference/ride.md`, "Harness selection"), so one list can cover a bro launched on `claude` and summoned on `bro`.
-`default` stands for the harness's own recipe, the one a launch selecting nothing runs (`bro/reference/ride.md`, "Harness selection"), and may only come last, since it always runs.
-A list naming nothing the harness serves fails the launch, naming the entry, and so does a malformed recipe anywhere in it.
-The path entry's list replaces the URL entry's whole, and no list at all reads as `["default"]`.
-The launch's own `--llm` or a summon's `llm` then fills over the picked recipe:
-naming a provider or a model keeps its own pair, and an effort or `+fast` it does not name is read from the pick;
-a result the harness does not serve fails the launch.
-The admitted recipe is what the session runs and forwards; the resume record keeps set values and reapplies defaults.
-Thus a summon of the bro in the project and `ride scope` read the same entry, while `bro run` and `bro chat` attach to no project and read none.
-The retired `instances` field is rejected with `creds` named as its replacement.
-Each launch requires every credential name in its applicable layers to be registered.
-Authority may name absent instances;
-existence is checked only for the instances a start uses.
-A recipe is carried as written for the launch to parse.
+One schema serves home settings, `defaults`, home entries and bro entries:
+`harness`, `summon-harness`, non-negative `summon-depth`, `llm` keyed by harness, and authority lists `grant`, `revoke`, `limit`.
+`default-bro` belongs only in home settings or `homes.<home>`.
+`creds` belongs only in host home and bro entries;
+`bros` belongs only in a home entry.
+A recipe uses complete provider-native text, `provider:model[+passthrough][,field=value]...`.
+The top level accepts only `defaults`, `homes`, `user` and `operator`.
 
-The store's `defaults` is the pick base both branches extend.
-`user.creds` covers every command the operator runs outside a session, and `user.tools.<command>.creds` narrows that to one of them;
-a session instead takes the matching project URL, project path, URL-bro, and path-bro layers in that order.
-The project layers' `grant`, `revoke`, and `limit` lists follow the same order after the repository's own `[tool.bro]` layer and the host's `defaults` scope layer.
-Each layer caps the preceding authority, then adds its grants.
-A root takes one reading of these sources for its whole mission tree;
-a resume takes a new reading.
-The user and session branches are disjoint, so a `user` entry never reaches a session.
-A kind no layer selects reads the store's default, then its empty instance.
-The retired `defaults.creds` field fails with the store's `defaults` named as its replacement.
+For a bro B of home H, in an installation of home I, layers apply least specific first:
+I's home settings, `defaults`, `homes.I`, `homes.H.bros.B` when H differs from I, and `homes.I.bros.B`.
+Scalar keys take the last value;
+recipes take the last entry per harness, and credential picks the last per kind.
+Authority folds each layer's caps before its grants.
+A root takes one reading for its whole mission tree;
+a resume takes a fresh reading.
+[Ride's configuration reference](../reference/ride.md#home-settings) describes resolution and validation.
 
-A session against a checkout carries two identities:
-the checkout's path, and its `origin` remote when that remote is a git URL.
-Every entry either one names applies, the path entry layering over the URL entry at each of the two project ranks
-— so the URL entry holds what follows the repository from machine to machine, and the path entry names only the kinds one machine selects differently.
-A `projects` key is therefore portable across the dotfiles a host config is shared through, without a per-machine copy of the selection beside it.
-An `origin` naming a local path contributes no identity:
-it names the checkout this one was cloned from.
-A github.com repository is one identity in every spelling:
-scp, `ssh://`, and https keys, with or without `.git`, match each other, case-insensitively as GitHub resolves names.
-A URL on any other host keeps its transport, so its scp key does not match its https URL.
+Every `creds` entry is `kind+instance`, with `kind+` selecting the empty instance.
+One list may name a kind once.
+Picks select without holding a kind;
+a bare kind in `grant` or `revoke` holds or drops it.
+Store `creds.json` defaults sit beneath both the session stack and the independent `user` branch.
+A kind no layer picks uses its empty instance.
+The host-only `operator` takes only `revoke` and `limit`, restricting operator starts.
 
-A `user.tools` key is the command's canonical console-script name — its import path with the underscores dashed (`bro.trails.rewind`), the name `sync-scripts` publishes every CLI under beside its bare alias.
-The alias is what any distribution may claim, so keying on it would let two commands answer to one entry;
-an entry keyed by the alias of the running command fails the read rather than sitting inert.
-
-A launch whose attachment no project entry names simply reads the layers that do apply, ending at the kind's own stored material.
-A launch can select and hold a kind with `--cred kind+instance`, overriding its default pick.
-
-Every console script names its module to `bro.base.args.run_cli`, which records the canonical name of the command the process is.
-On first credential access, an ambient resolver reads the store's defaults and applies the host config's `user` and that command's own layer.
-Parsing a CLI that never accesses a credential does not read the host config.
-When `BRO_STORE` is set, the resolver does not consult the host config at all:
-a session or service store is already the product of a selection.
-
-The `llm` table remains the host-wide recipe presets layered over project defaults.
-`harness` and `summon-harness` are optional host-wide selections beneath project and launch values ([harness selection](../reference/ride.md#harness-selection));
-a launch is refused when no layer supplies a harness.
-`summon-depth` is a host-wide positive integer overriding the attached repository's `[tool.bro] summon-depth` value.
-When both omit it, launches use the framework default;
-detached launches have no project value and therefore use the host value or that default.
-`bro/base/host_config.py` owns and validates the schema.
+`user.creds` applies to commands outside sessions;
+`user.tools.<command>.creds` overrides it for one canonical console-script name, its import path with underscores dashed.
+An entry keyed by the running command's bare alias is refused.
+Every console script identifies itself through `bro.base.args.run_cli`.
+The ambient credential resolver reads this branch lazily, on first credential access.
+When `BRO_STORE` names a synthesized session or service store, the resolver bypasses the host file.
 
 A JSON credential may reference another credential:
 `{"$cred": "<name>"}` resolves to its value, and `{"$cred": "<name>", "field": "<key>"}` selects one top-level field.

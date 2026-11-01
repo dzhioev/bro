@@ -148,7 +148,7 @@ def test_names_outside_the_override_surface_are_refused(running, changes):
 
 
 def test_operator_gift_rule_is_checked_before_existence(running):
-  source = reading(config={'operator': {'revoke': ['@missing-target']}})
+  source = reading(config={'operator': {'revoke': ['@*']}})
   running.source = source
   running.facts.record = replace(running.original, reading=source)
   with pytest.raises(ValueError, match='gift rule.*@missing-target'):

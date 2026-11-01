@@ -14,6 +14,7 @@ import bro.workspace.paths as workspace_paths
 import ride.cli as ride_cli
 import ride.dive_in as dive_in
 from bro.base import credentials
+from bro.llm.providers import bind_recipe
 from ride.harness import get_harness
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
@@ -45,10 +46,15 @@ def _brog_task(name: str = 'my task'):
 
 
 @pytest.fixture
-def fake_proj(monkeypatch, tmp_path):
+def fake_proj(monkeypatch, tmp_path, home_settings_file):
+  home_settings_file.write_text(
+    'default-bro = "bro-dev"\nharness = "claude"\n[llm]\nbro = "openai:gpt-5.6-terra"\nclaude = "anthropic:claude-opus-5"\n'
+  )
   monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
   monkeypatch.setattr(dive_in, 'project_root', lambda: tmp_path)
-  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\nharness = "claude"\n')
+  (tmp_path / 'pyproject.toml').write_text(
+    '[tool.bro]\ndefault = "ignored-tree-bro"\nharness = "not-installed"\n'
+  )
   monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: FRESH_SHA)
   workspaces = workspace_paths.workspaces_dir()
   workspaces.mkdir(parents=True)
@@ -218,7 +224,16 @@ class TestTaskMode:
 
     monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    argv = ['dive-in', '-n', '-t', UUID, '--cred', 'brog+github', '--effort', 'high']
+    argv = [
+      'dive-in',
+      '-n',
+      '-t',
+      UUID,
+      '--cred',
+      'brog+github',
+      '--llm',
+      'anthropic:claude-opus-5-5,effort=high',
+    ]
     rc = dive_in.main([*argv, '--bro', 'dev'])
     assert rc == 0
     assert captured == {
@@ -227,22 +242,21 @@ class TestTaskMode:
       'revoke': [],
       'bro': 'dev',
       'harness': 'claude',
-      'llm': '::high',
+      'llm': 'anthropic:claude-opus-5-5,effort=high',
     }
     # the flags still ride into the forwarded `ride along` untouched
     args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['cred'] == ['brog+github']
     assert args['grant'] is None
     assert args['revoke'] is None
-    assert args['effort'] == 'high'
-    assert args['llm'] is None
+    assert args['llm'] == 'anthropic:claude-opus-5-5,effort=high'
 
   def test_a_malformed_llm_selection_is_a_cli_error(self, fake_proj, capsys):
     with pytest.raises(SystemExit):
       dive_in.main(['dive-in', '-n', '-t', UUID, '--llm', '::ludicrous'])
     assert 'ludicrous' in capsys.readouterr().err
 
-  def test_a_malformed_host_preset_is_a_cli_error(self, fake_proj, monkeypatch, capsys):
+  def test_a_preset_name_is_refused(self, fake_proj, monkeypatch, capsys):
     import json
 
     config = fake_proj / 'bro.json'
@@ -250,7 +264,7 @@ class TestTaskMode:
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     with pytest.raises(SystemExit):
       dive_in.main(['dive-in', '-n', '-t', UUID, '--llm', 'broken'])
-    assert "preset 'broken' must be a non-empty string" in capsys.readouterr().err
+    assert 'broken' in capsys.readouterr().err
 
   def test_a_scope_failure_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from ride.scope import LaunchScopeError
@@ -288,6 +302,12 @@ class TestTaskMode:
 
 
 class TestTaskSystem:
+  @pytest.fixture(autouse=True)
+  def default_bro(self, home_settings_file):
+    home_settings_file.write_text(
+      'default-bro = "bro-dev"\n[llm]\nbro = "openai:gpt-5.6-terra"\nclaude = "anthropic:claude-opus-5"\n'
+    )
+
   """the prefetch backend reads `brog` through the launch's own scope binding."""
 
   @pytest.mark.parametrize('harness,llm', [('claude', None), ('bro', 'openai:gpt-7+passthrough')])
@@ -307,8 +327,8 @@ class TestTaskSystem:
     config.write_text(
       json.dumps(
         {
-          'projects': {
-            str(fake_proj): {
+          'homes': {
+            'test-home': {
               'creds': ['brog+github', 'github+reviewer'],
             }
           }
@@ -353,8 +373,6 @@ class TestTaskSystem:
       )
 
   def _fake_wiring(self, monkeypatch, calls: dict, read=None):
-    from types import SimpleNamespace
-
     class FakeStore:
       def get_json(self, name):
         calls['read'] = name
@@ -362,18 +380,18 @@ class TestTaskSystem:
           return read()
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
 
-    monkeypatch.setattr(
-      dive_in, 'project_config', lambda _repo: SimpleNamespace(default_bro='bro-dev')
-    )
-
-    def fake_scoped_secrets(bro_name, surface, *, attachment, llm_spec, cred, grant, revoke):
+    def fake_scoped_secrets(bro_name, surface, *, attachment, recipe, cred, grant, revoke):
       calls['scoped'] = (bro_name, surface, cred, grant, revoke)
-      calls['llm_spec'] = llm_spec
+      calls['recipe'] = recipe
       return 'base-scope'
 
     monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
     monkeypatch.setattr(
-      dive_in, 'launch_llm_spec', lambda driver, attachment, bro, llm: driver.resolve_llm(llm, bro)
+      dive_in,
+      'launch_recipe',
+      lambda driver, attachment, bro, llm: bind_recipe(
+        llm or ('openai:gpt-5.6-terra' if driver.name == 'bro' else 'anthropic:claude-opus-5')
+      ),
     )
 
     def fake_view(scoped):
@@ -422,17 +440,25 @@ class TestTaskSystem:
     config = tmp_path / 'bro.json'
     config.write_text(
       json.dumps(
-        {'projects': {str(tmp_path): {'bros': {'bro-dev': {'llm': ['openai:sol:xhigh']}}}}}
+        {
+          'homes': {
+            'test-home': {
+              'bros': {'bro-dev': {'llm': {'bro': 'openai:gpt-6.1-sol,reasoning_effort=xhigh'}}}
+            }
+          }
+        }
       )
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     calls: dict = {}
-    from ride.scope import launch_llm_spec
+    from ride.scope import launch_recipe
 
     self._fake_wiring(monkeypatch, calls)
-    monkeypatch.setattr(dive_in, 'launch_llm_spec', launch_llm_spec)
-    dive_in._task_system(tmp_path, [], [], [], None, 'bro', '::low')
-    assert calls['llm_spec'] == get_harness('bro').resolve_llm('openai:sol:low', 'bro-dev')
+    monkeypatch.setattr(dive_in, 'launch_recipe', launch_recipe)
+    dive_in._task_system(
+      tmp_path, [], [], [], None, 'bro', 'openai:gpt-6.1-sol,reasoning_effort=low'
+    )
+    assert calls['recipe'] == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError
@@ -527,20 +553,21 @@ class TestPrefetchTask:
 
 
 @pytest.mark.parametrize('layer', ['launch', 'project', 'host', 'absent'])
-def test_harness_resolution_precedes_task_prefetch(fake_proj, monkeypatch, caplog, capsys, layer):
+def test_harness_resolution_precedes_task_prefetch(
+  fake_proj, monkeypatch, caplog, capsys, layer, home_settings_file
+):
   from bro.base import host_config
 
+  home_settings_file.write_text(
+    'default-bro = "bro-dev"\n' + ('harness = "bro"\n' if layer == 'project' else '')
+  )
   project = fake_proj / 'pyproject.toml'
   project.write_text(
     '[tool.bro]\ndefault = "bro-dev"\n' + ('harness = "bro"\n' if layer == 'project' else '')
   )
   host = fake_proj / 'host.json'
   host.write_text(
-    json.dumps(
-      {'harness': 'bro' if layer == 'host' else 'not-installed'}
-      if layer in ('project', 'host')
-      else {}
-    )
+    json.dumps({'defaults': {'harness': 'bro'}} if layer in ('project', 'host') else {})
   )
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(host))
   seen = []
@@ -552,10 +579,7 @@ def test_harness_resolution_precedes_task_prefetch(fake_proj, monkeypatch, caplo
     assert result == 1
     assert seen == []
     assert capsys.readouterr().out == ''
-    assert (
-      'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
-      in caplog.text
-    )
+    assert 'no harness for bro-dev: pass --harness' in caplog.text
   else:
     assert result == 0
     assert seen == ['bro']

@@ -1,127 +1,36 @@
-"""The host's launch policy (`~/.bro.json`).
+"""The optional host configuration, shared by installations of several homes.
 
-One host may serve several projects, bros, and command-line tools that read
-separate stored instances of one credential kind.
-Selections live outside repositories and merge from general to specific:
-
-    {
-      "defaults": {"grant": ["webview"]},
-      "user": {
-        "creds": ["github+dev"],
-        "tools": {"bro.trails.rewind": {"creds": ["trails+analyst"]}}
-      },
-      "projects": {
-        "https://github.com/foo/api.git": {
-          "creds": ["brog+github", "github+dev"],
-          "bros": {
-            "eyebro": {
-              "creds": ["trails+review", "github+reviewer"],
-              "grant": ["github"],
-              "llm": ["anthropic:opus55:high", "openai:sol:xhigh", "default"]
-            }
-          }
-        },
-        "/home/foo/projects/api": {"creds": ["aws+laptop"]}
-      },
-      "llm": {"sharp": "openai:sol:max"},
-      "summon-depth": 4
-    }
-
-Every `creds` entry is `kind+instance`, the instance left empty (`kind+`) to
-select the kind's empty instance.
-A list may name each kind once.
-`defaults`, project entries, and `bros` entries may carry unified `grant`,
-`revoke`, and `limit` lists in the authority syntax.
-A bare credential kind in `grant` or `revoke` holds or drops that kind.
-`creds` picks without adding a kind, so one entry may pick and grant the same kind.
-A `bros` entry may also carry `llm`: the recipes the bro runs on this project,
-an ordered preference list in the `--llm` grammar, beneath the launch's own
-flags. A launch runs the first its harness runs; a last `DEFAULT_RECIPE` entry
-stands for the harness's own recipe.
-The grammar is installation-independent, so unknown credential and bro names
-remain valid until a launch resolves them against its installation, and a
-recipe is carried as written for the launch to parse.
-
-`operator` takes only `revoke` and `limit`, restricting operator starts.
-`defaults` is the root of the policy every managed session extends.
-The store's own `creds.json` defaults are the base credential picks beneath
-`user` for an operator command and `projects` for a managed session.
-A project key is an identity a session names the repository by: the filesystem
-path of its root (`~` and symlinks resolved before matching), or a normalized
-git URL, every spelling of one github.com repository reducing to the same key.
-A launch carries both where it has both — a checkout's path and the origin URL
-naming it portably — and every entry either one matches applies, so the URL
-entry holds what follows the repository across machines and the path entry
-names only what one machine changes.
-A `user.tools` key is one CLI's canonical console-script name — its import path
-with the underscores dashed — rather than the bare alias, which several
-distributions may each publish.
-Launch selection and scope precedence runs defaults, the URL entry, the path entry,
-then each of their `bros` layers in that same order.
-A command's credential selection applies `user`, then its `user.tools` entry,
-over the store's defaults.
-A kind no layer selects reads its empty instance.
-The returned layer map attributes every explicit selection, and the ordered scope
-layers retain each pick, grant, revoke, and limit for the launch fold.
-`launch_llm` returns the list of the most specific matching `bros` entry naming
-one, with its layer: a more specific list replaces a less specific one whole.
-
-The file is optional.
-`llm` remains the host-wide table of `--llm` preset names.
-`harness` and `summon-harness` supply launch and summon harness names beneath
-the corresponding `[tool.bro]` keys and the launch's own selection.
-Absent all three, the launch is refused; a selected harness must be installed.
-`summon-depth` overrides the repository's summon depth for every launch.
+`defaults` and `homes.<home>` layer over packaged home settings; each home may
+hold `bros.<bro>` layers. Recipes are `llm` maps keyed by harness. A reading
+parses its own home in full and only the foreign bro entries it installs.
+`user.creds` and `user.tools.<canonical command>.creds` select credentials for
+ambient commands, independently of session policy. `operator` restricts starts.
 """
 
 from __future__ import annotations
 
 import json
-import os
-from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+import re
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Optional
 
 from bro.authority.syntax import Layer, parse_layer
 from bro.base import configs, credentials
 from bro.base.args import CLIError
-from bro.base.git_url import canonical_github_url, is_git_url, normalize_git_url
-from bro.harness import harness_name
+from bro.base.git_url import is_git_url
+from bro.llm.providers import parse_recipe
 
-# Module-level so tests can point it at a fixture path; read at call time.
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
-
-DEFAULTS_LAYER = 'defaults'
 USER_LAYER = 'user'
-PROJECT_URL_LAYER = 'project-url'
-PROJECT_PATH_LAYER = 'project-path'
-PROJECT_URL_BRO_LAYER = 'project-url-bro'
-PROJECT_PATH_BRO_LAYER = 'project-path-bro'
 TOOL_LAYER = 'user.tools'
-BRO_LAYERS = frozenset({PROJECT_URL_BRO_LAYER, PROJECT_PATH_BRO_LAYER})
-
-_DEFAULTS_KEY = 'defaults'
-_USER_KEY = 'user'
-_PROJECTS_KEY = 'projects'
-_TOOLS_KEY = 'tools'
-_CREDS_KEY = 'creds'
-_GRANT_KEY = 'grant'
-_REVOKE_KEY = 'revoke'
-_LIMIT_KEY = 'limit'
-_OPERATOR_KEY = 'operator'
-_BROS_KEY = 'bros'
-_LLM_KEY = 'llm'
-_SUMMON_DEPTH_KEY = 'summon-depth'
-_RETIRED_INSTANCES_KEY = 'instances'
-
-DEFAULT_RECIPE = 'default'
 
 
 @dataclass(frozen=True)
 class Attachment:
-  """The identities a launch matches `projects` entries by: the operated
-  repository's checkout path, the git URL it is reachable at, or both."""
+  """An attached repository's checkout path, git URL, or both."""
 
   path: Optional[str] = None
   url: Optional[str] = None
@@ -136,58 +45,38 @@ class Attachment:
 
 
 @dataclass(frozen=True)
-class ScopeLayer:
-  """One attributed host policy layer with credential selections."""
-
+class ConfigLayer:
+  default_bro: str | None = None
+  harness: str | None = None
+  summon_harness: str | None = None
+  summon_depth: int | None = None
+  llm: Mapping[str, str] = field(default_factory=dict)
   grant: tuple[str, ...] = ()
   revoke: tuple[str, ...] = ()
-  creds: tuple[str, ...] = ()
-  source: str = field(default='', compare=False)
   limit: tuple[str, ...] = ()
+  creds: tuple[str, ...] = ()
+
+  def __post_init__(self) -> None:
+    object.__setattr__(self, 'llm', MappingProxyType(dict(self.llm)))
+
+  @property
+  def selection(self) -> dict[str, str]:
+    return credentials.parse_picks(list(self.creds), where='configuration', field='creds')
+
+
+@dataclass(frozen=True)
+class Home:
+  layer: ConfigLayer
+  bros: Mapping[str, ConfigLayer]
+
+  def __post_init__(self) -> None:
+    object.__setattr__(self, 'bros', MappingProxyType(dict(self.bros)))
 
 
 @dataclass(frozen=True)
 class CredentialSelection:
-  """A merged selection, its provenance, and its ordered scope layers."""
-
   instances: dict[str, str]
   layers: dict[str, str]
-  scope_layers: tuple[ScopeLayer, ...] = ()
-
-
-@dataclass(frozen=True)
-class LLMDefault:
-  """The recipes one `bros` entry lists, in preference order, and the layer
-  listing them."""
-
-  layer: str
-  recipes: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class ScopeEntry:
-  selection: dict[str, str]
-  scope: ScopeLayer
-
-
-@dataclass(frozen=True)
-class BroEntry(ScopeEntry):
-  """A `bros` entry: a scope entry plus the recipes it lists."""
-
-  llm: Optional[tuple[str, ...]]
-
-
-@dataclass(frozen=True)
-class ProjectEntry:
-  entry: ScopeEntry
-  bros: dict[str, BroEntry]
-
-
-@dataclass(frozen=True)
-class _Match:
-  layer: str
-  bro_layer: str
-  project: ProjectEntry
 
 
 @dataclass(frozen=True)
@@ -198,355 +87,197 @@ class _User:
 
 @dataclass(frozen=True)
 class Configuration:
-  defaults: ScopeEntry
+  defaults: ConfigLayer
+  homes: Mapping[str, Home]
   user: _User
-  projects: dict[str, ProjectEntry]
-  llm: dict[str, str]
-  summon_depth: Optional[int]
   operator: Layer
-  harness: Optional[str] = None
-  summon_harness: Optional[str] = None
+
+
+def name(value: object, where: str) -> str:
+  if not isinstance(value, str) or re.fullmatch(r'[a-z][a-z0-9-]*', value) is None:
+    raise ValueError(f'{where}: invalid name {value!r}; expected [a-z][a-z0-9-]*')
+  return value
+
+
+def _object(value: object, where: str) -> dict:
+  if not isinstance(value, dict):
+    raise ValueError(f'{where} must be an object')
+  return value
+
+
+def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:
+  if unknown := value.keys() - allowed:
+    raise ValueError(f'{where}: unknown key(s): {", ".join(sorted(unknown))}')
+
+
+def _scope_values(where: str, values: object, key: str) -> tuple[str, ...]:
+  if not isinstance(values, list) or any(not isinstance(item, str) or not item for item in values):
+    raise ValueError(f'{where}.{key} must be a list of non-empty strings')
+  return tuple(values)
+
+
+def parse_layer_config(value: object, *, source: str, level: str) -> ConfigLayer:
+  table = _object(value, source)
+  allowed = {'harness', 'summon-harness', 'summon-depth', 'llm', 'grant', 'revoke', 'limit'}
+  if level in {'settings', 'home'}:
+    allowed.add('default-bro')
+  if level in {'home', 'bro'}:
+    allowed.add('creds')
+  _reject_unknown_fields(table, allowed, source)
+  names = {
+    key.replace('-', '_'): name(table[key], f'{source}.{key}')
+    for key in ('default-bro', 'harness', 'summon-harness')
+    if key in table
+  }
+  depth = table.get('summon-depth')
+  if 'summon-depth' in table and (type(depth) is not int or depth < 0):
+    raise ValueError(f'{source}.summon-depth must be a non-negative integer')
+  recipes = _object(table.get('llm', {}), f'{source}.llm')
+  for harness, text in recipes.items():
+    name(harness, f'{source}.llm')
+    try:
+      if not isinstance(text, str):
+        raise ValueError('recipe must be a string')
+      parse_recipe(text)
+    except (TypeError, ValueError) as error:
+      raise ValueError(f'{source}.llm.{harness}: {error}') from error
+  scope = {
+    key: _scope_values(source, table.get(key, []), key)
+    for key in ('grant', 'revoke', 'limit', 'creds')
+  }
+  try:
+    parse_layer(grant=scope['grant'], revoke=scope['revoke'], limit=scope['limit'])
+    credentials.parse_picks(list(scope['creds']), where=source, field='creds')
+  except ValueError as error:
+    raise ValueError(f'{source}: {error}') from error
+  return ConfigLayer(
+    default_bro=names.get('default_bro'),
+    harness=names.get('harness'),
+    summon_harness=names.get('summon_harness'),
+    summon_depth=depth,
+    llm=dict(recipes),
+    grant=scope['grant'],
+    revoke=scope['revoke'],
+    limit=scope['limit'],
+    creds=scope['creds'],
+  )
+
+
+def parse(
+  value: object,
+  *,
+  source: str = '~/.bro.json',
+  home: str | None = None,
+  bro_homes: Mapping[str, str] | None = None,
+) -> Configuration:
+  bro_homes = {} if bro_homes is None else bro_homes
+  table = _object(value, source)
+  _reject_unknown_fields(table, {'defaults', 'homes', 'user', 'operator'}, source)
+  defaults = parse_layer_config(
+    table.get('defaults', {}), source=f'{source}: defaults', level='defaults'
+  )
+  raw_homes = _object(table.get('homes', {}), f'{source}: homes')
+  for key in raw_homes:
+    name(key, f'{source}: homes')
+  homes = {}
+  if home is not None and home in raw_homes:
+    where = f'{source}: homes.{home}'
+    owned = _object(raw_homes[home], where)
+    layer = parse_layer_config(
+      {key: entry for key, entry in owned.items() if key != 'bros'}, source=where, level='home'
+    )
+    bros = _object(owned.get('bros', {}), f'{where}.bros')
+    homes[home] = Home(
+      layer,
+      {
+        name(bro, f'{where}.bros'): parse_layer_config(
+          entry, source=f'{where}.bros.{bro}', level='bro'
+        )
+        for bro, entry in bros.items()
+      },
+    )
+  for bro, foreign in bro_homes.items():
+    if foreign == home or foreign not in raw_homes:
+      continue
+    section = _object(raw_homes[foreign], f'{source}: homes.{foreign}')
+    bros = _object(section.get('bros', {}), f'{source}: homes.{foreign}.bros')
+    if bro in bros:
+      parsed = parse_layer_config(
+        bros[bro], source=f'{source}: homes.{foreign}.bros.{bro}', level='bro'
+      )
+      previous = homes.get(foreign, Home(ConfigLayer(), {}))
+      homes[foreign] = Home(previous.layer, {**previous.bros, bro: parsed})
+  operator = _object(table.get('operator', {}), f'{source}: operator')
+  _reject_unknown_fields(operator, {'revoke', 'limit'}, f'{source}: operator')
+  return Configuration(
+    defaults,
+    homes,
+    _user(Path(source), table.get('user', {})),
+    parse_layer(
+      revoke=_scope_values(f'{source}: operator', operator.get('revoke', []), 'revoke'),
+      limit=_scope_values(f'{source}: operator', operator.get('limit', []), 'limit'),
+      operator=True,
+    ),
+  )
 
 
 def _read() -> Configuration:
-  try:
-    return _read_unchecked()
-  except ValueError as error:
-    raise CLIError(str(error)) from error
-
-
-def _read_unchecked() -> Configuration:
   path = Path(HOST_CONFIG_FILE)
-  if not path.is_file():
-    return Configuration(ScopeEntry({}, ScopeLayer()), _User({}, {}), {}, {}, None, Layer())
   try:
-    data = json.loads(path.read_text())
+    return parse(json.loads(path.read_text()) if path.is_file() else {}, source=str(path))
   except json.JSONDecodeError as error:
-    raise ValueError(f'{path} is not valid json') from error
-  return parse(data, source=str(path))
-
-
-def parse(value: object, *, source: str = '~/.bro.json') -> Configuration:
-  path = Path(source)
-  data = value
-  if not isinstance(data, dict):
-    raise ValueError(f'{path} must hold a json object')
-  unknown = sorted(
-    set(data)
-    - {
-      _DEFAULTS_KEY,
-      _USER_KEY,
-      _PROJECTS_KEY,
-      _LLM_KEY,
-      _SUMMON_DEPTH_KEY,
-      _OPERATOR_KEY,
-      'harness',
-      'summon-harness',
-    }
-  )
-  if _TOOLS_KEY in unknown:
-    raise ValueError(f'{path}: top-level {_TOOLS_KEY!r} is retired; nest it under {_USER_KEY!r}')
-  if len(unknown) > 0:
-    raise ValueError(f'unknown key(s) in {path}: {", ".join(unknown)}')
-  defaults = _defaults_entry(path, data.get(_DEFAULTS_KEY, {}))
-  user = _user(path, data.get(_USER_KEY, {}))
-  projects = _projects(path, data.get(_PROJECTS_KEY, {}))
-  llm = _llm(path, data.get(_LLM_KEY, {}))
-  summon_depth = (
-    _positive_integer(path, _SUMMON_DEPTH_KEY, data[_SUMMON_DEPTH_KEY])
-    if _SUMMON_DEPTH_KEY in data
-    else None
-  )
-  return Configuration(
-    defaults,
-    user,
-    projects,
-    llm,
-    summon_depth,
-    _operator(path, data.get(_OPERATOR_KEY, {})),
-    harness_name(data['harness']) if 'harness' in data else None,
-    harness_name(data['summon-harness']) if 'summon-harness' in data else None,
-  )
-
-
-def llm_presets() -> dict[str, str]:
-  """The host's `--llm` preset names, mapped to the values they stand for."""
-  config = _read()
-  return dict(config.llm)
-
-
-def summon_depth(project_depth: Optional[int] = None) -> int:
-  """The host override, then the project value, then the framework default."""
-  config = _read()
-  if config.summon_depth is not None:
-    return config.summon_depth
-  if project_depth is None:
-    return configs.DEFAULT_SUMMON_DEPTH
-  if not isinstance(project_depth, int) or isinstance(project_depth, bool) or project_depth <= 0:
-    raise ValueError('project summon depth must be a positive integer')
-  return project_depth
-
-
-def launch_selection(attachment: Optional[Attachment], bro: str) -> CredentialSelection:
-  """Merge the default scope and matching project and `bro` layers."""
-  _require_bro_name(bro)
-  config = _read()
-  matches = _matches(config, attachment)
-  entries = [(DEFAULTS_LAYER, config.defaults)]
-  entries.extend((match.layer, match.project.entry) for match in matches)
-  entries.extend(
-    (match.bro_layer, match.project.bros[bro]) for match in matches if bro in match.project.bros
-  )
-  return _merged(entries)
-
-
-def launch_llm(attachment: Optional[Attachment], bro: str) -> Optional[LLMDefault]:
-  """The recipes the most specific matching `bros` entry lists for `bro`, each
-  carried as written; None when no matching entry lists any."""
-  _require_bro_name(bro)
-  config = _read()
-  listed: Optional[LLMDefault] = None
-  for match in _matches(config, attachment):
-    entry = match.project.bros.get(bro)
-    if entry is not None and entry.llm is not None:
-      listed = LLMDefault(match.bro_layer, entry.llm)
-  return listed
-
-
-def _require_bro_name(bro: str) -> None:
-  if not isinstance(bro, str) or bro == '':
-    raise ValueError('bro name must be a non-empty string')
+    raise CLIError(f'{path} is not valid json') from error
+  except (TypeError, ValueError) as error:
+    raise CLIError(f'{path}: {error}') from error
 
 
 def tool_selection(
   command: Optional[str], *, invoked_as: Optional[str] = None
 ) -> CredentialSelection:
-  """Merge the user layer and the entry for `command`.
-
-  `command` is the canonical console-script name of the running CLI, None for a
-  process that is none. `invoked_as` is the name it was started under, and a
-  `user.tools` entry keyed by that alias instead of by `command` fails the read.
-  """
-  if command is not None and (not isinstance(command, str) or command == ''):
-    raise ValueError('command name must be a non-empty string')
   config = _read()
-  layers = [(USER_LAYER, config.user.credentials)]
-  if command is not None:
-    if invoked_as is not None and invoked_as != command and invoked_as in config.user.tools:
-      raise ValueError(
-        f'{HOST_CONFIG_FILE}: {_USER_KEY}.{_TOOLS_KEY} names {invoked_as!r}, an alias of '
-        f'{command!r}; key it by the canonical name'
-      )
-    tool_credentials = config.user.tools.get(command)
-    if tool_credentials is not None:
-      layers.append((TOOL_LAYER, tool_credentials))
-  return _merged(layers)
-
-
-def _matches(config: Configuration, attachment: Optional[Attachment]) -> list[_Match]:
-  """The entries the attachment's identities name, least specific first."""
-  if attachment is None:
-    return []
-  identities = [
-    (attachment.url, PROJECT_URL_LAYER, PROJECT_URL_BRO_LAYER, _url_key),
-    (attachment.path, PROJECT_PATH_LAYER, PROJECT_PATH_BRO_LAYER, _path_key),
-  ]
-  matches = []
-  for identity, layer, bro_layer, reduce_key in identities:
-    project = None if identity is None else config.projects.get(reduce_key(identity))
-    if project is not None:
-      matches.append(_Match(layer, bro_layer, project))
-  return matches
-
-
-def _merged(
-  layers: Sequence[tuple[str, dict[str, str] | ScopeEntry]],
-) -> CredentialSelection:
-  instances: dict[str, str] = {}
-  sources: dict[str, str] = {}
-  scope_layers: list[ScopeLayer] = []
-  for layer, entry in layers:
-    selection = entry.selection if isinstance(entry, ScopeEntry) else entry
-    instances.update(selection)
-    sources.update(dict.fromkeys(selection, layer))
-    if isinstance(entry, ScopeEntry) and entry.scope != ScopeLayer():
-      scope_layers.append(replace(entry.scope, source=layer))
-  return CredentialSelection(instances, sources, tuple(scope_layers))
-
-
-def _projects(path: Path, value: object) -> dict[str, ProjectEntry]:
-  if not isinstance(value, dict):
-    raise ValueError(f'{path}: {_PROJECTS_KEY} must be a json object')
-  projects: dict[str, ProjectEntry] = {}
-  for key, entry in value.items():
-    identity = project_identity(key)
-    if identity in projects:
-      raise ValueError(f'{path}: two project keys name the same identity {identity}')
-    projects[identity] = _project(path, key, entry)
-  return projects
-
-
-def _project(path: Path, project: str, value: object) -> ProjectEntry:
-  where = f'{path}: project {project!r}'
-  if not isinstance(value, dict):
-    raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _LIMIT_KEY, _BROS_KEY}, where)
-  project_entry = _scope_entry(
-    where, {key: entry for key, entry in value.items() if key != _BROS_KEY}
-  )
-  bros = value.get(_BROS_KEY, {})
-  if not isinstance(bros, dict):
-    raise ValueError(f'{where}: {_BROS_KEY} must be a json object')
-  parsed_bros: dict[str, BroEntry] = {}
-  for bro, bro_entry in bros.items():
-    if bro == '':
-      raise ValueError(f'{where}: bro name must not be empty')
-    parsed_bros[bro] = _bro_entry(f'{where}: bro {bro!r}', bro_entry)
-  return ProjectEntry(project_entry, parsed_bros)
-
-
-def _defaults_entry(path: Path, value: object) -> ScopeEntry:
-  where = f'{path}: {_DEFAULTS_KEY}'
-  if not isinstance(value, dict):
-    raise ValueError(f'{where} must hold a json object')
-  if _CREDS_KEY in value:
-    store_defaults = Path(credentials.STORE_DIR) / credentials.STORE_FILE
-    raise ValueError(
-      f'{where}.{_CREDS_KEY} is retired; move those picks to {store_defaults}: defaults'
-    )
-  return _scope_entry(where, value)
-
-
-def _scope_entry(where: str, value: object) -> ScopeEntry:
-  if not isinstance(value, dict):
-    raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _GRANT_KEY, _REVOKE_KEY, _LIMIT_KEY}, where)
-  credential_names = _scope_values(where, value.get(_CREDS_KEY, []), _CREDS_KEY)
-  selection = _selection_entries(where, list(credential_names))
-  grant = _scope_values(where, value.get(_GRANT_KEY, []), _GRANT_KEY)
-  revoke = _scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY)
-  limit = _scope_values(where, value.get(_LIMIT_KEY, []), _LIMIT_KEY)
-  scope = ScopeLayer(grant, revoke, credential_names, limit=limit)
-  try:
-    parse_layer(grant=grant, revoke=revoke, limit=limit)
-  except ValueError as error:
-    raise ValueError(f'{where}: {error}') from error
-  return ScopeEntry(selection, scope)
-
-
-def _operator(path: Path, value: object) -> Layer:
-  where = f'{path}: {_OPERATOR_KEY}'
-  if not isinstance(value, dict):
-    raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_REVOKE_KEY, _LIMIT_KEY}, where)
-  try:
-    return parse_layer(
-      revoke=_scope_values(where, value.get(_REVOKE_KEY, []), _REVOKE_KEY),
-      limit=_scope_values(where, value.get(_LIMIT_KEY, []), _LIMIT_KEY),
-      operator=True,
-    )
-  except ValueError as error:
-    raise ValueError(f'{where}: {error}') from error
-
-
-def _bro_entry(where: str, value: object) -> BroEntry:
-  if not isinstance(value, dict):
-    raise ValueError(f'{where} must hold a json object')
-  llm = None if _LLM_KEY not in value else _recipes(where, value[_LLM_KEY])
-  entry = _scope_entry(where, {key: field for key, field in value.items() if key != _LLM_KEY})
-  return BroEntry(entry.selection, entry.scope, llm)
-
-
-def _recipes(where: str, value: object) -> tuple[str, ...]:
+  if command is not None and (not isinstance(command, str) or not command):
+    raise ValueError('command name must be a non-empty string')
   if (
-    not isinstance(value, list)
-    or len(value) == 0
-    or not all(isinstance(recipe, str) and recipe != '' for recipe in value)
+    command is not None
+    and invoked_as is not None
+    and invoked_as != command
+    and invoked_as in config.user.tools
   ):
     raise ValueError(
-      f'{where}: {_LLM_KEY} must be a non-empty list of recipes, '
-      f'e.g. ["openai:sol:xhigh", "{DEFAULT_RECIPE}"]'
+      f'{HOST_CONFIG_FILE}: user.tools names {invoked_as!r}, an alias of {command!r}; key it by the canonical name'
     )
-  if DEFAULT_RECIPE in value[:-1]:
-    raise ValueError(
-      f'{where}: {_LLM_KEY} lists recipes after {DEFAULT_RECIPE!r}, which always runs; move it last'
-    )
-  return tuple(value)
-
-
-def _scope_values(where: str, values: object, key: str) -> tuple[str, ...]:
-  if not isinstance(values, list):
-    raise ValueError(f'{where}: {key} must be a list')
-  for value in values:
-    if not isinstance(value, str):
-      raise ValueError(f'{where}: {key} {value!r} must be a string')
-    if value == '':
-      raise ValueError(f'{where}: {key} must not contain an empty string')
-  return tuple(values)
+  instances = dict(config.user.credentials)
+  layers = dict.fromkeys(instances, USER_LAYER)
+  if command is not None:
+    picked = config.user.tools.get(command, {})
+    instances.update(picked)
+    layers.update(dict.fromkeys(picked, TOOL_LAYER))
+  return CredentialSelection(instances, layers)
 
 
 def _user(path: Path, value: object) -> _User:
-  where = f'{path}: {_USER_KEY}'
+  where = f'{path}: {"user"}'
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY, _TOOLS_KEY}, where)
-  tools = value.get(_TOOLS_KEY, {})
+  _reject_unknown_fields(value, {'creds', 'tools'}, where)
+  tools = value.get('tools', {})
   if not isinstance(tools, dict):
-    raise ValueError(f'{where}: {_TOOLS_KEY} must be a json object')
+    raise ValueError(f'{where}: {"tools"} must be a json object')
   parsed_tools: dict[str, dict[str, str]] = {}
   for name, entry in tools.items():
     if name == '':
       raise ValueError(f'{where}: command name must not be empty')
     parsed_tools[name] = _selection_object(path, f'{where}: command {name!r}', entry)
-  return _User(_selection_entries(where, value.get(_CREDS_KEY, [])), parsed_tools)
+  return _User(_selection_entries(where, value.get('creds', [])), parsed_tools)
 
 
 def _selection_object(path: Path, subject: str, value: object) -> dict[str, str]:
   where = f'{path}: {subject}' if not subject.startswith(f'{path}:') else subject
   if not isinstance(value, dict):
     raise ValueError(f'{where} must hold a json object')
-  _reject_unknown_fields(value, {_CREDS_KEY}, where)
-  return _selection_entries(where, value.get(_CREDS_KEY, []))
-
-
-def _positive_integer(path: Path, name: str, value: object) -> int:
-  if type(value) is not int or value <= 0:
-    raise ValueError(f'{path}: {name} must be a positive integer')
-  return value
-
-
-def _reject_unknown_fields(value: dict, allowed: set[str], where: str) -> None:
-  unknown = sorted(set(value) - allowed)
-  if _RETIRED_INSTANCES_KEY in unknown:
-    raise ValueError(f'{where}: {_RETIRED_INSTANCES_KEY!r} is retired; use {_CREDS_KEY!r}')
-  if len(unknown) > 0:
-    raise ValueError(f'{where} has unknown field(s): {", ".join(unknown)}')
+  _reject_unknown_fields(value, {'creds'}, where)
+  return _selection_entries(where, value.get('creds', []))
 
 
 def _selection_entries(where: str, entries: object) -> dict[str, str]:
-  return credentials.parse_picks(entries, where=where, field=_CREDS_KEY)
-
-
-def project_identity(key: str) -> str:
-  """Reduce a `projects` key to the identity an attachment matches it on."""
-  if not isinstance(key, str) or key == '':
-    raise ValueError('project key must be a non-empty string')
-  return _url_key(key) if is_git_url(key) else _path_key(key)
-
-
-def _url_key(url: str) -> str:
-  github_url = canonical_github_url(url)
-  return normalize_git_url(url) if github_url is None else github_url.lower()
-
-
-def _path_key(path: str) -> str:
-  return str(Path(os.path.expanduser(path)).resolve())
-
-
-def _llm(path: Path, value: object) -> dict[str, str]:
-  if not isinstance(value, dict):
-    raise ValueError(f'{path}: {_LLM_KEY} must be a json object')
-  for name, recipe in value.items():
-    if not isinstance(recipe, str) or recipe == '':
-      raise ValueError(f'{path}: {_LLM_KEY} preset {name!r} must be a non-empty string')
-  return dict(value)
+  return credentials.parse_picks(entries, where=where, field='creds')

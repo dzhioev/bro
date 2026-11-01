@@ -232,14 +232,12 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
   }
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',
-    'bro-openai',
     'markdown-it-py',
     'pytest',
   }
   assert _project_dependencies(_ROOT / 'oops' / 'pyproject.toml') == {
     'bro',
     'bro-dev',
-    'bro-openai',
     'packaging',
     'pydantic',
   }
@@ -575,9 +573,9 @@ def test_deepseek_provider_wheel_loads_without_the_client_extra(wheels, tmp_path
   probe = """
 import sys
 from bro.llm import providers, wires
-from bro.llm.llm import LLMSpec
-recipe = providers.resolve(None, providers.parse('deepseek:pro:high'), ('deepseek',))
-assert LLMSpec.from_dict(recipe.dump()) == recipe
+from bro.llm.llm import Recipe
+recipe = providers.bind_recipe('deepseek:deepseek-v4-pro,reasoning_effort=high')
+assert Recipe.from_dict(recipe.dump()) == recipe
 assert recipe.WIRE in wires.client_names()
 assert providers.price_table(recipe.TYPE).models
 assert wires.decode(recipe.WIRE, {'choices': [{'finish_reason': 'stop', 'message': {'content': 'reply'}}]}).reply == 'reply'

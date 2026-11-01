@@ -64,7 +64,7 @@ def test_core_github_client_does_not_move_with_poll_pr(wheel_files):
 
 
 def test_development_personas_are_declared_by_bro_dev(entry_points):
-  assert set(entry_points['bro']) == {'dev', 'eyebro', 'lead', 'terminal'}
+  assert set(entry_points['bro.bros.bro']) == {'dev', 'eyebro', 'lead', 'terminal'}
 
 
 def test_development_scripts_are_declared_by_bro_dev(entry_points):

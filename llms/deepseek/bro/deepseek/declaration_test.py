@@ -5,45 +5,35 @@ import httpx2
 import openai
 import pytest
 
-from bro.deepseek.declaration import MODELS, PRICE_TABLE, LLMSpec, price, price_table_from_content
-from bro.llm import providers
-from bro.llm.llm import LLMSpec as Recipe
-
-
-@pytest.mark.parametrize(
-  'value', ['deepseek:pro:high', 'deepseek:flash:low', 'deepseek:deepseek-v4-flash:max']
-)
-def test_recipe_resolution_round_trip_and_fast_fallback(value):
-  recipe = providers.resolve(None, providers.parse(value), ('deepseek',))
-  assert isinstance(recipe, LLMSpec)
-  assert Recipe.from_dict(recipe.dump()) == recipe
-  assert providers.resolve(None, providers.parse(value + '+fast'), ('deepseek',)) == recipe
+from bro.deepseek.declaration import PRICE_TABLE, Recipe, price, price_table_from_content
+from bro.llm.llm import Recipe as BaseRecipe
 
 
 @pytest.mark.parametrize(
   'effort,expected',
-  [('low', 'low'), ('medium', 'high'), ('high', 'high'), ('xhigh', 'high'), ('max', 'max')],
+  [('low', 'low'), ('high', 'high'), ('max', 'max')],
 )
-def test_neutral_effort_drives_thinking_request(effort, expected):
-  assert LLMSpec().with_effort(effort).request_options() == {
+def test_native_effort_drives_thinking_request(effort, expected):
+  assert Recipe(model='deepseek-v4-pro', reasoning_effort=effort).request_options() == {
     'thinking': {'type': 'enabled'},
     'reasoning_effort': expected,
   }
 
 
 def test_deferred_and_disabled_thinking_and_content_capabilities():
-  assert LLMSpec().request_options() == {}
-  assert LLMSpec(reasoning_effort='none').request_options() == {'thinking': {'type': 'disabled'}}
-  assert LLMSpec().needed_secrets() == ('deepseek',)
-  assert not LLMSpec().accepts('image/png')
-  assert LLMSpec(model=MODELS['flash']).accepts('image/png')
-  assert not LLMSpec(model=MODELS['flash']).accepts('application/pdf')
+  assert Recipe(model='deepseek-v4-pro').request_options() == {}
+  assert Recipe(model='deepseek-v4-pro', reasoning_effort='none').request_options() == {
+    'thinking': {'type': 'disabled'}
+  }
+  assert Recipe(model='deepseek-v4-pro').needed_secrets() == ('deepseek',)
+  assert not Recipe(model='deepseek-v4-pro').accepts('image/png')
+  assert Recipe(model='deepseek-flash').accepts('image/png')
+  assert not Recipe(model='deepseek-flash').accepts('application/pdf')
   with pytest.raises(ValueError, match='reasoning_effort'):
-    LLMSpec(reasoning_effort='medium')
-  with pytest.raises(ValueError, match='model'):
-    LLMSpec(model='invalid')
-  with pytest.raises(ValueError, match='effort'):
-    LLMSpec().with_effort('none')
+    BaseRecipe.from_dict(
+      {'type': 'deepseek', 'model': 'deepseek-v4-pro', 'reasoning_effort': 'medium'}
+    )
+  assert Recipe(model='opaque-model', passthrough=True).admitted()
 
 
 @pytest.mark.parametrize(
@@ -53,14 +43,14 @@ def test_deferred_and_disabled_thinking_and_content_capabilities():
 def test_retry_classifies_http_errors(status, expected):
   response = httpx2.Response(status, request=httpx2.Request('POST', 'https://fixture'))
   error = openai.APIStatusError('fixture error', response=response, body=None)
-  assert LLMSpec().is_transient(error) is expected
+  assert Recipe(model='deepseek-v4-pro').is_transient(error) is expected
 
 
 def test_connection_and_timeout_errors_are_transient_and_application_errors_are_not():
   request = httpx2.Request('POST', 'https://fixture')
-  assert LLMSpec().is_transient(openai.APIConnectionError(request=request))
-  assert LLMSpec().is_transient(openai.APITimeoutError(request=request))
-  assert not LLMSpec().is_transient(ValueError('bad recipe'))
+  assert Recipe(model='deepseek-v4-pro').is_transient(openai.APIConnectionError(request=request))
+  assert Recipe(model='deepseek-v4-pro').is_transient(openai.APITimeoutError(request=request))
+  assert not Recipe(model='deepseek-v4-pro').is_transient(ValueError('bad recipe'))
 
 
 def test_price_uses_cache_partition_and_output_including_reasoning():
@@ -95,7 +85,7 @@ def test_price_table_round_trip_and_provenance_are_immutable():
   assert table == PRICE_TABLE
   assert table.sha256 == PRICE_TABLE.sha256
   assert isinstance(table.models, MappingProxyType)
-  assert set(MODELS.values()) <= table.models.keys()
+  assert Recipe.MODEL_INPUTS.keys() <= table.models.keys()
   assert table.source.startswith('https://')
 
 

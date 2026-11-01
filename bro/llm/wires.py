@@ -4,7 +4,7 @@ import importlib.metadata
 import re
 from typing import Protocol, cast
 
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.records import Chaining, DecodedCall
 from bro.llm.wire import Wire
 
@@ -137,7 +137,7 @@ def load_client(name: str) -> type[Wire]:
   return client
 
 
-def open(recipe: LLMSpec, secrets: dict) -> Wire:
+def open(recipe: Recipe, secrets: dict) -> Wire:
   from bro.llm.providers import require_admitted
 
   require_admitted(recipe)

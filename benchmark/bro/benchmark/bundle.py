@@ -29,6 +29,7 @@ from typing import Optional
 from bro.base import log, spawn
 from bro.base.args import Parser
 from bro.base.source_root import SOURCE_ROOT
+from bro.workspace.installation import MARKER, installation_home
 from ride.provisioning import bundle_asset, bundle_file
 from ride.runtime_bundle import link_session_commands, validate_materialized_runtime
 
@@ -47,7 +48,8 @@ WHEEL_PACKAGES = (
   'bro-wire-messages',
 )
 TARGET = ('linux', 'x86_64', 'glibc')
-MANIFEST_FORMAT = 6
+MANIFEST_FORMAT = 7
+HOME = 'benchmark'
 
 # a console script that finds its interpreter beside itself wherever the bundle
 # is copied: sh reads the second line as an `exec`, python as a string
@@ -116,6 +118,7 @@ def _load_manifest(path: Path) -> dict[str, object]:
     )
   if set(manifest) != {
     'format',
+    'home',
     'harness_files',
     'cpython',
     'harnesses',
@@ -129,7 +132,8 @@ def _load_manifest(path: Path) -> dict[str, object]:
   target = manifest['target']
   wheels = manifest['wheels']
   if (
-    not _harness_files_valid(manifest['harness_files'], harnesses)
+    manifest['home'] != HOME
+    or not _harness_files_valid(manifest['harness_files'], harnesses)
     or not isinstance(manifest['cpython'], str)
     or manifest['cpython'] == ''
     or not isinstance(harnesses, list)
@@ -201,6 +205,7 @@ class Bundle:
 
   def missing(self) -> tuple[Path, ...]:
     parts = (
+      self.venv / MARKER,
       self.interpreter,
       self.script('ride'),
       self.shims,
@@ -237,6 +242,7 @@ def _bundle_manifest(
 ) -> dict[str, object]:
   return {
     'format': MANIFEST_FORMAT,
+    'home': HOME,
     'harness_files': harness_files,
     'cpython': CPYTHON_VERSION,
     'harnesses': list(harnesses),
@@ -259,6 +265,10 @@ def built(root: Path) -> Bundle:
       f'incomplete bundle at {root} ({absent} absent); rebuild it with benchmark bundle'
     )
   manifest = _load_manifest(bundle.manifest)
+  if installation_home(bundle.venv) != manifest['home']:
+    raise ValueError(
+      f'installation home disagrees with {bundle.manifest}; rebuild with benchmark bundle'
+    )
   files = manifest['harness_files']
   assert isinstance(files, dict)
   for assets in files.values():
@@ -511,6 +521,7 @@ def build(workspace: Path, root: Path) -> Bundle:
     _run(install_command(bundle, requirements, wheels))
     _validate_wire_clients(bundle)
     _relocate_scripts(bundle)
+    (bundle.venv / MARKER).write_text(f'{HOME}\n')
     link_session_commands(bundle.root)
     harness_files = _provision_harnesses(bundle)
     validate_materialized_runtime(bundle.root)

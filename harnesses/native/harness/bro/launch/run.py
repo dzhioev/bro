@@ -4,29 +4,20 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 import bro.base.args as base_args
 from bro.base import log
 from bro.bro import RAISE_EXIT_STATUS, BroRaised
-from bro.launch.llm_flags import (
-  EFFORT_HELP,
-  FAST_HELP,
-  add_llm_flags,
-  selection_from_args,
-)
-from bro.llm.llm import LLMSpec
-from bro.llm.providers import SELECTION_OPTIONS, LLMSelectionError, require_admitted
+from bro.launch.llm_flags import add_llm_flags
+from bro.llm.providers import RecipeError, require_admitted
+from bro.llm.resolved import ResolvedRecipe
 from bro.mcp import HOLDS
-from bro.native.harness import resolve_native
 from bro.native.runner import Runner
 from bro.trails.display.config import OutputRoute, PresetName, preset
 from bro.trails.display.core import DisplaySession
 from bro.trails.display.live import LiveDisplayObserver
 from bro.trails.display.terminal import StreamRenderer
-
-if TYPE_CHECKING:
-  from bro.llm.providers import LLMSelection
 
 HOLD_HELP = (
   "the run's hold — the user-involvement level whose fragment lands in the system prompt "
@@ -35,42 +26,32 @@ HOLD_HELP = (
 )
 
 
-def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
-  """Resolve an explicit selection over the bro's declared native recipe."""
-  from bro.registry import get_class
-
-  bro_class = get_class(bro_name)
-  if bro_class.llm_spec is None and selection.provider is None:
-    raise LLMSelectionError(f'{bro_name} declares no LLM recipe: pass --llm provider:model')
-  if selection.is_empty() and bro_class.llm_spec is not None:
-    require_admitted(bro_class.llm_spec)
-    return None
-  spec = resolve_native(bro_class.llm_spec, selection)
-  require_admitted(spec)
-  return None if spec == bro_class.llm_spec else spec
+def add_resolved_recipe_flag(parser: base_args.Parser) -> None:
+  """Register the suppressed exact-recipe flag, exclusive with --llm."""
+  parser.add_argument('--resolved-recipe', default=None, env=False, help=base_args.SUPPRESS)
+  parser.add_exclusive_groups(['resolved_recipe'], ['llm'])
 
 
-def add_resolved_llm_flag(parser: base_args.Parser) -> None:
-  """Register the suppressed exact-recipe flag, exclusive with the selection flags."""
-  parser.add_argument('--resolved-llm', default=None, env=False, help=base_args.SUPPRESS)
-  parser.add_exclusive_groups(['resolved_llm'], ['llm', *SELECTION_OPTIONS])
-
-
-def launch_llm_spec(bro_name: str, args: dict) -> Optional[LLMSpec]:
-  """The run's recipe override: `--resolved-llm` verbatim, else the selection over the declaration."""
+def launch_recipe(bro_name: str, args: dict) -> ResolvedRecipe:
+  """The managed recipe verbatim, otherwise the live installation's stack."""
   from bro.llm import wires
 
-  encoded = args['resolved_llm']
+  encoded = args['resolved_recipe']
   if encoded is None:
-    return run_llm_spec(bro_name, selection_from_args(args))
+    from ride.authority_reading import Reading
+    from ride.authority_scope import resolve_recipe
+
+    explicit = None if args['llm'] is None else (args['llm'], '--llm')
+    return resolve_recipe(Reading.take(), bro_name, 'bro', explicit)
   try:
-    spec = LLMSpec.from_dict(json.loads(encoded))
+    resolved = ResolvedRecipe.from_dict(json.loads(encoded))
+    spec = resolved.recipe
   except (KeyError, TypeError, ValueError) as error:
-    raise LLMSelectionError(f'invalid --resolved-llm recipe: {error}') from error
+    raise RecipeError(f'invalid --resolved-recipe recipe: {error}') from error
   if spec.WIRE not in wires.client_names():
-    raise LLMSelectionError(f'resolved recipe {spec.TYPE} is not runnable by the bro harness')
+    raise RecipeError(f'resolved recipe {spec.TYPE} is not runnable by the bro harness')
   require_admitted(spec)
-  return spec
+  return resolved
 
 
 def _ask_observer(bro_name: str) -> LiveDisplayObserver:
@@ -84,8 +65,8 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser = base_args.Parser(prog=' '.join(program), description='run a bro on the given input')
   parser.add_argument('bro', help='bro name')
   parser.add_argument('input', help='input to send to the bro')
-  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
-  add_resolved_llm_flag(parser)
+  add_llm_flags(parser)
+  add_resolved_recipe_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('unattended'))
   parser.add_argument(
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
@@ -95,8 +76,9 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   from bro.registry import create_bro
 
   try:
-    bro = create_bro(args['bro'], launch_llm_spec(args['bro'], args))
-  except (KeyError, NotImplementedError, LLMSelectionError) as error:
+    recipe = launch_recipe(args['bro'], args)
+    bro = create_bro(args['bro'])
+  except (KeyError, NotImplementedError, ValueError) as error:
     log.error('%s', error)
     return 1
 
@@ -107,7 +89,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     observer = _ask_observer(bro.name)
     hold = args['hold'] if args['hold'] is not None else 'unattended'
     try:
-      runner = Runner(bro, activity_file=args['activity_file'])
+      runner = Runner(bro, recipe, activity_file=args['activity_file'])
       asyncio.run(runner.run(args['input'], observer=observer, surface='ask', hold=hold))
     except BroRaised:
       return RAISE_EXIT_STATUS

@@ -288,5 +288,5 @@ def test_devoops_manifest_comes_from_its_components(monkeypatch):
 
 
 def test_devoops_is_registered_as_a_persona():
-  entries = importlib.metadata.entry_points(group='bro', name=Devoops.name)
+  entries = importlib.metadata.entry_points(group='bro.bros.bro', name=Devoops.name)
   assert [entry.load() for entry in entries] == [Devoops]

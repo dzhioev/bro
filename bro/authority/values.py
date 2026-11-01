@@ -2,22 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Self
 
-
-@dataclass(frozen=True)
-class Symbol:
-  name: str
-
-  def __post_init__(self) -> None:
-    if not isinstance(self.name, str) or re.fullmatch(r'[a-z][a-z0-9_-]*', self.name) is None:
-      raise ValueError('symbols require a lowercase name')
-
-
-type Value = str | int | bool | Symbol | frozenset[str]
+type Value = str | int | bool | frozenset[str]
 
 
 class ValueSet(ABC):
@@ -149,8 +138,8 @@ class Finite(ValueSet):
       for member in self.members
     ):
       raise ValueError('finite members outside base')
-    if any(type(value) not in (str, int, bool, Symbol) for value in self.base):
-      raise ValueError('finite scalar base requires strings, integers, flags, or symbols')
+    if any(type(value) not in (str, int, bool) for value in self.base):
+      raise ValueError('finite scalar base requires strings, integers, or flags')
     if len({type(value) for value in self.base}) > 1:
       raise ValueError('finite base must have one scalar type')
 

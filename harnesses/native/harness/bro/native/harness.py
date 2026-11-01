@@ -14,8 +14,6 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.llm.llm import LLMSpec
-from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
 from bro.native import dev_mcp, loop
 from ride.harness import ContainerExtras, RuntimeImage
@@ -28,12 +26,6 @@ if TYPE_CHECKING:
   from bro.mcp import Reach
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
-
-
-def resolve_native(base: LLMSpec | None, selection: LLMSelection) -> LLMSpec:
-  """the recipe a bro-native launcher runs: `selection` over the bro's own spec,
-  among the providers the engine has a client for."""
-  return BRO.resolve_recipe(base, selection)
 
 
 class _NativeRun(Protocol):
@@ -170,11 +162,11 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
 
 
 def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[str]:
-  from ride.do_ride import encode_resolved_llm
+  from ride.do_ride import encode_resolved_recipe
 
   options = [
-    '--resolved-llm',
-    encode_resolved_llm(spec.resolved_llm),
+    '--resolved-recipe',
+    encode_resolved_recipe(spec.resolved_recipe),
     '--hold',
     spec.hold,
     '--activity-file',
@@ -245,12 +237,6 @@ class BroHarness(Harness):
   def scope_recipe(self) -> ScopeRecipe:
     return _BRO_RUN_RECIPE
 
-  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
-    from bro.registry import get_class
-
-    selection = LLMSelection() if value is None else parse(value)
-    return resolve_native(get_class(bro_name).llm_spec, selection)
-
   def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]:
     del spec, scoped
     return None
@@ -265,10 +251,10 @@ class BroHarness(Harness):
     )
 
   def read_subject(self, workspace: Workspace) -> str | None:
-    from ride.session import load_resume_spec
+    from ride.session import resume_metadata
 
-    spec = load_resume_spec(workspace)
-    return None if spec is None else spec.subject
+    data = resume_metadata(workspace)
+    return None if data is None else data.get('subject')
 
   def prepare_session(self, run: 'SessionRun') -> None:
     del run

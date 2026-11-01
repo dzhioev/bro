@@ -1,8 +1,8 @@
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.wire import Content, File, Text, require_accepted
 
 
-def encode_content(recipe: LLMSpec, content: tuple[Content, ...]) -> str | list[dict]:
+def encode_content(recipe: Recipe, content: tuple[Content, ...]) -> str | list[dict]:
   require_accepted(recipe, content)
   if len(content) == 1 and isinstance(content[0], Text):
     return content[0].text

@@ -121,7 +121,7 @@ class TestManagedMirror:
     assert first.is_url
     assert first.default_base == first_commit
     assert first.read_file('value.txt') == b'one\n'
-    assert first.project_config().default_bro == 'bro-dev'
+    assert first.project_config().sections == {}
     assert _git(first.git_dir, 'config', '--get', 'gc.auto') == '0'
     assert _git(first.git_dir, 'config', '--get', 'remote.origin.url') == url
     assert _git(first.git_dir, 'symbolic-ref', 'refs/remotes/origin/HEAD') == (

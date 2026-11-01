@@ -16,14 +16,6 @@ from ride.workspace.model import Workspace
 
 
 @pytest.fixture(autouse=True)
-def native_persona_recipe(monkeypatch):
-  from bro.openai.declaration import LLMSpec
-  from bros.dev import Dev
-
-  monkeypatch.setattr(Dev, 'llm_spec', LLMSpec(reasoning_effort='medium'))
-
-
-@pytest.fixture(autouse=True)
 def isolated_environ():
   with patch.dict(os.environ, {'RIDE_ISOLATION': 'boxed'}, clear=False):
     yield
@@ -31,7 +23,9 @@ def isolated_environ():
 
 @pytest.fixture(autouse=True)
 def admitted_recipe(monkeypatch):
-  monkeypatch.setenv(do_ride.RESOLVED_LLM_ENV, do_ride.encode_resolved_llm(_spec().resolved_llm))
+  monkeypatch.setenv(
+    do_ride.RESOLVED_RECIPE_ENV, do_ride.encode_resolved_recipe(_spec().resolved_recipe)
+  )
 
 
 def _command(spec) -> list[str]:
@@ -54,7 +48,7 @@ class TestCommand:
       isolation=Isolation.UNBOXED,
       hold='attended',
       drop=True,
-      llm='::xhigh+fast',
+      llm='anthropic:claude-opus-5,effort=xhigh,fast_mode=true',
       bro='dev',
       grant=['aws'],
       revoke=['brog'],
@@ -74,16 +68,16 @@ class TestCommand:
     ]  # fmt: skip
 
   def test_recorded_recipe_crosses_the_launcher_boundary(self, monkeypatch):
-    from bro.anthropic.declaration import LLMSpec
+    from bro.anthropic.declaration import Recipe
 
-    recorded = LLMSpec(model='recorded-model').dump()
-    spec = dataclasses.replace(_spec(), resolved_llm=recorded)
-    monkeypatch.setenv(do_ride.RESOLVED_LLM_ENV, do_ride.encode_resolved_llm(recorded))
-    assert _parsed_run(_command(spec)).resolved_llm == recorded
+    recorded = {'recipe': Recipe(model='recorded-model').dump(), 'source': 'defaults'}
+    spec = dataclasses.replace(_spec(), resolved_recipe=recorded)
+    monkeypatch.setenv(do_ride.RESOLVED_RECIPE_ENV, do_ride.encode_resolved_recipe(recorded))
+    assert _parsed_run(_command(spec)).resolved_recipe == recorded
 
   def test_a_run_without_the_admitted_recipe_is_refused(self, monkeypatch):
-    monkeypatch.delenv(do_ride.RESOLVED_LLM_ENV)
-    with pytest.raises(RuntimeError, match=do_ride.RESOLVED_LLM_ENV):
+    monkeypatch.delenv(do_ride.RESOLVED_RECIPE_ENV)
+    with pytest.raises(RuntimeError, match=do_ride.RESOLVED_RECIPE_ENV):
       _parsed_run(_command(_spec()))
 
   def test_the_bro_harness_uses_the_same_executable(self):
@@ -194,7 +188,7 @@ class TestRunSession:
       repo='/repo' if repo else None,
       harness='bro',
       hold='attended',
-      resolved_llm=_spec().resolved_llm,
+      resolved_recipe=_spec().resolved_recipe,
       solo=False,
       resume=False,
       bro='dev',

@@ -27,12 +27,12 @@ Inside the first session:
 summon browser 'Find the current release notes.'
 ```
 
-To make that choice persistent for assistant on one project:
+To make that choice persistent for assistant in one home:
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {"assistant": {"grant": ["@browser"]}}
     }
   }
@@ -42,6 +42,31 @@ To make that choice persistent for assistant on one project:
 A plain grant also lets assistant give that permission to its children.
 To allow summoning without allowing it to hand the permission onward, use `"@browser for *"` instead.
 To allow any bro target, use `"@*"`; it includes future installed names, not just today's roster.
+
+## Limit how far a session can delegate
+
+```json
+{
+  "defaults": {"summon-depth": 2},
+  "homes": {
+    "my-home": {
+      "bros": {"reviewer": {"summon-depth": 0}}
+    }
+  }
+}
+```
+
+A root assistant receives two generations, its child helper one, and that helper's children zero.
+Reviewer receives zero wherever it starts, whether as a root or a child.
+It cannot summon or open a webview even if its permissions allow those operations.
+
+General layers set a root's allowance;
+bro layers set a cap that can only lower what that bro receives.
+A cap above the inherited allowance does not grant extra generations.
+Every worker type consumes one generation, including joined bros, webviews and benchmarks.
+A manual summon may be prepared with no allowance, but its commit is refused.
+Resume starts a fresh root allowance from the new configuration.
+See [summon allowance](ride.md#summon-allowance) for the resolution rules.
 
 ## Give a session a credential, or choose an instance
 
@@ -59,12 +84,12 @@ The third removes it.
 These flags affect what the session reads; they do not authorize passing that instance to another mission.
 `--cred github+` selects the empty instance explicitly.
 
-To give assistant that instance on this project by default:
+To give assistant that instance in this home by default:
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {
         "assistant": {"grant": ["github"], "creds": ["github+reviewer"]}
       }
@@ -128,8 +153,8 @@ Host configuration:
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {
         "assistant": {
           "grant": ["@browser", "webview.cred=cookies+assistant to @browser"]
@@ -165,8 +190,8 @@ For assistant to hand the same right through helper to browser, both possible re
 
 ```json
 {
-  "projects": {
-    "https://github.com/me/project": {
+  "homes": {
+    "my-home": {
       "bros": {
         "assistant": {
           "grant": ["@helper", "webview.cred=cookies+assistant to @helper @browser"]
@@ -201,18 +226,18 @@ Install `bro-deepseek[client]` in the runtime and place the `deepseek` credentia
 Check the prospective recipe on the host:
 
 ```sh
-ride scope --bro bro-dev --harness bro --llm deepseek:pro:high
+ride scope --bro bro-dev --harness bro --llm deepseek:deepseek-v4-pro,reasoning_effort=high
 ```
 
 The descriptor names `provider: deepseek`, and the credentials show `deepseek+: PRESENT` or `MISSING`.
 Inside a coordinator allowed to summon `bro-dev`:
 
 ```sh
-summon --harness bro --llm deepseek:pro:high bro-dev 'Work on the repository-local task.'
+summon --harness bro --llm deepseek:deepseek-v4-pro,reasoning_effort=high bro-dev 'Work on the repository-local task.'
 ```
 
-Or call `bro::summon(target='bro-dev', harness='bro', llm='deepseek:pro:high', prompt='Work on the repository-local task.')`.
-No new persona or provider grant is needed: provider, model and effort are open launch options.
+Or call `bro::summon(target='bro-dev', harness='bro', llm='deepseek:deepseek-v4-pro,reasoning_effort=high', prompt='Work on the repository-local task.')`.
+No new persona or provider grant is needed: provider, model and passthrough are open launch options.
 The selected provider's LLM credential is held automatically at the configured pick;
 `--pass deepseek+work` selects a different stored instance, and a missing key refuses the start.
 A running root uses its frozen installation, so restart it after installing the plug-in.
@@ -312,7 +337,10 @@ On the host:
 ride resume my-session --cred github+reviewer --grant @browser
 ```
 
-Resume starts a new root using current configuration and installation, reapplying defaults such as unpinned credential picks and the default recipe.
+Resume starts a new root using current configuration and installation, reapplying defaults such as unpinned credential picks.
+It runs the recorded recipe and source;
+use `ride resume my-session --llm <recipe>` to replace them on the recorded harness.
+A native replacement must use the recorded wire.
 It keeps explicit recorded values and gifts/caps unless the resume flags replace them.
 Former children do not survive a resume, and a resumed child becomes its own root.
 Use override rather than resume when a running session only needs a new target or credential and should keep its current tree alive.
@@ -347,7 +375,7 @@ It is a guard against mistakes under your host account, not protection from anot
 On the host:
 
 ```sh
-ride scope --repo /home/me/project --bro assistant
+ride scope --bro assistant
 ride missions my-session
 ```
 
@@ -357,7 +385,7 @@ An instance named only by permission may be absent without making scope inspecti
 Inside a session, call `bro::banner` or run:
 
 ```sh
-ride banner --llm
+ride banner --plain
 ```
 
 `may_summon` names usable bro targets, `permits` other usable permissions, and `may_give` rights you can hand out but not use.

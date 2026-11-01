@@ -18,6 +18,7 @@ from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL, BROKER_TALK
 from bro.broker.transport import ClientTransport
 from bro.inbox import Inbox
+from bro.llm.llm import Recipe
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -33,10 +34,10 @@ from bro.llm.tracker import NullTracker, Tracker
 from bro.llm.wire import SystemPrompt, Text, UserMessage
 from bro.mcp import MCPServerSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
-from bro.openai.declaration import LLMSpec as OpenAISpec
+from bro.openai.declaration import Recipe as OpenAISpec
 from bro.run_lifecycle import RunLifecycle
 
 
@@ -72,11 +73,11 @@ class Declared(BaseBro):
   test that asserts on the recorded bro name or prompt needs no subclass."""
 
   description = 'd'
-  llm_spec = EchoSpec()
 
   def __init__(self, name: str = 'runner-bro', system_prompt: str = ''):
     self.name = name
     super().__init__(system_prompt=system_prompt)
+    self.recipe = EchoSpec(model='echo')
 
 
 class StubRunner(Runner):
@@ -87,10 +88,14 @@ class StubRunner(Runner):
     llm: Optional[LLM] = None,
     *,
     bro: Optional[BaseBro] = None,
+    recipe: Recipe | None = None,
     name: str = 'runner-bro',
     system_prompt: str = '',
   ):
-    super().__init__(bro if bro is not None else Declared(name=name, system_prompt=system_prompt))
+    super().__init__(
+      bro if bro is not None else Declared(name=name, system_prompt=system_prompt),
+      recipe if recipe is not None else EchoSpec(model='echo'),
+    )
     self.llm = llm if llm is not None else MockLLM()
 
   def _create_llm(self, *, hold: str) -> LLM:
@@ -198,7 +203,7 @@ class TestRun:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -211,7 +216,7 @@ class TestRun:
             'start',
             {
               'bro': bro,
-              'llm_spec': llm_spec,
+              'recipe': recipe,
               'system_prompt': system_prompt,
               'interactive': interactive,
               'surface': surface,
@@ -245,7 +250,7 @@ class TestRun:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -624,7 +629,7 @@ class TestSend:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -658,7 +663,7 @@ class TestSend:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -977,23 +982,23 @@ class TestNativeTurnEnd:
 
 
 class _GatedBro(BaseBro):
-  llm_spec = OpenAISpec()
   name = 'gated'
   description = 'declares secrets for credential-gate tests'
   extra_secrets = ('alpha', 'beta')
 
   def __init__(self):
     super().__init__(system_prompt='gated')
+    self.recipe = OpenAISpec(model='gpt-5.6-terra')
 
 
 @pytest.mark.credential_gate
 class TestCredentialGate:
   """the run-start credential gate: every name in `needed_secrets()` plus
-  `llm_spec.needed_secrets()` must resolve before any machinery runs."""
+  `recipe.needed_secrets()` must resolve before any machinery runs."""
 
   def _gated(self) -> tuple[StubRunner, MockLLM]:
     llm = MockLLM(response='ran')
-    return StubRunner(llm, bro=_GatedBro()), llm
+    return StubRunner(llm, bro=_GatedBro(), recipe=OpenAISpec(model='gpt-5.6-terra')), llm
 
   @pytest.mark.asyncio
   async def test_run_refuses_listing_every_missing_name(self, monkeypatch):
@@ -1078,7 +1083,7 @@ class _TrailIDTracker(NullTracker):
   def start_trail(
     self,
     bro,
-    llm_spec,
+    recipe,
     system_prompt,
     forked_from,
     interactive,
@@ -1139,7 +1144,7 @@ class TestRunLifecycle:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -1216,9 +1221,14 @@ class TestRunLifecycle:
 
 class TestAgentIdentity:
   def test_create_llm_threads_the_agent_identity(self):
-    from bro.native.echo_declaration import LLMSpec as EchoSpec
+    from bro.native.echo_declaration import Recipe as EchoSpec
 
     class PlainBro(Declared):
-      llm_spec = EchoSpec()
+      def __init__(self, name):
+        super().__init__(name=name)
+        self.recipe = EchoSpec(model='echo')
 
-    assert Runner(PlainBro(name='plain'))._create_llm(hold='unattended').agent == 'bro//plain'
+    assert (
+      Runner(PlainBro(name='plain'), EchoSpec(model='echo'))._create_llm(hold='unattended').agent
+      == 'bro//plain'
+    )

@@ -67,12 +67,6 @@ Scalar families include finite/cofinite strings, whole-number interval unions, a
 For example, `bro.timeout=1..3600|none` includes both seconds and the literal sentinel `none`; a range alone excludes the sentinel.
 Names must satisfy their option's base grammar even when written as quoted strings.
 
-`~default` is a typed symbol for a deferred model or effort, not a model ID.
-`default` and `"~default"` are literal model strings.
-A recipe's deferred value is authorized as this symbol before it becomes an omitted provider argument.
-When a provider has no effort control, effort stays unset; concrete provider effort strings, including OpenAI `none` and `minimal`, remain distinct and round-trip exactly.
-The neutral `--llm` recipe grammar is unchanged; `~default` belongs to permission syntax, not that recipe grammar.
-
 ### Patterns and qualified entries
 
 A pattern is `type{conditions}`.
@@ -113,10 +107,8 @@ Defaults never depend on the starter's authority.
 | `target` | Bro names `[a-z][a-z0-9-]*` | Required | No | No |
 | `placement` | `boxed`, `unboxed`, `join` | `boxed` | No | No |
 | `harness` | Harness names | Reading's summon harness | Yes | No |
-| `provider` | Provider names | Selected recipe | Yes | No |
-| `model` | Strings or `~default` | Selected recipe | Yes | No |
-| `effort` | Provider effort strings or `~default` | Selected recipe, if it has effort control | Yes | No |
-| `fast` | Flag | Set only for fast mode | Yes | No |
+| `provider` | Provider names | Resolved recipe | Yes | No |
+| `model` | Strings | Resolved recipe | Yes | No |
 | `passthrough` | Flag | Send model and content unchecked by the model-input table | Yes | No |
 | `hold` | `unattended`, `detached`, `attended`, `guided` | `unattended` | Yes | No |
 | `talk` | Subset of the four talk rights | `[worker.say]` | Yes | No |
@@ -127,8 +119,11 @@ Defaults never depend on the starter's authority.
 
 The four talk rights are `owner.say`, `owner.question`, `worker.say`, and `worker.question`.
 The wire mapping adds `worker.say` to requested talk.
-Recipe selection follows [ride's layering and preset rules](ride.md#recipe-selection).
-The host's per-bro list applies to managed starts, including summons; an earlier reader with no recipe includes no LLM key.
+Recipe selection follows [ride's home-layer rules](ride.md#recipe-selection).
+The child's home-layer stack supplies its configured recipe and credential picks.
+The ungoverned `llm` field, when present, replaces that recipe whole with complete recipe text.
+The descriptor's `provider`, `model` and `passthrough` describe the resolved recipe, including a configured one.
+Caps refuse that recipe rather than changing it, and admission refuses a descriptor that differs from it.
 A requested recipe the harness cannot run fails rather than switching harnesses.
 
 A start holds the configured kinds for its target, harness, and provider, plus `add`, minus `drop`.
@@ -140,7 +135,7 @@ An optional kind is skipped only when unpicked and its empty instance is absent.
 An explicit `cred.<kind>` holds that kind at that instance without requiring `add`.
 A kind cannot be both explicitly set and dropped.
 
-The pick order is host project URL, project path, URL-bro, then path-bro `creds`, over store `defaults`, over the empty instance.
+Credential picks follow the home-layer stack, over store `defaults`, over the empty instance.
 An explicit request or operator pick overrides those defaults.
 A configuration pick selects an instance without adding a kind; a request's `--cred` or `--pass` both selects and holds it.
 `prompt`, `into`, `share`, `step_id`, and `index` are ungoverned content.
@@ -171,13 +166,12 @@ The base is empty and no option is overridable.
 ## Readings, bases, and configuration
 
 A root takes one reading after runtime re-exec and attachment resolution.
-It includes the whole parsed host config, store default picks, attachment identities and project configuration, and the installed bros, types, kinds, harnesses, and providers in its frozen runtime.
+It includes the installation's home and settings, applicable host home layers, store defaults, attached-tree sections, and installed bros, types, kinds, harnesses and providers.
 Path attachments read the working-tree `pyproject.toml`; URL attachments read it at the resolved commit.
 Every descendant and manual commit uses this reading.
 Editing configuration cannot change a live tree or break its next summon with a malformed edit.
 A resume takes a new reading.
 Instance existence, credential material, and minting-source annotations stay live, outside the reading.
-LLM presets are expanded by the host under the reading, including tool summons and in-session CLI requests.
 
 A bro's base folds these layers in order:
 
@@ -186,7 +180,7 @@ A bro's base folds these layers in order:
    There is one entry per configured kind and instance, whose use pattern carries a `configured=<kind>+<instance>` condition decided against the concrete start;
    the family is fixed by the reading, independent of `add` and `drop`, and does not grow with targets, harnesses, or providers.
 2. The persona's `may_summon` entries as `@<bro>`, and its `may_launch` entries as type start permissions, with full use and give.
-3. Repository `[tool.bro]`, host `defaults`, matching project URL, project path, URL `bros.<target>`, then path `bros.<target>`.
+3. Installation home settings, host `defaults`, `homes.<installation home>`, the target's foreign home bro entry when applicable, then the installation home's bro entry.
 
 Each configuration layer applies `revoke` and `limit` caps first, then its `grant` entries.
 A later layer can therefore restore an earlier removed right.
@@ -197,17 +191,18 @@ A plain grant in a base gives full use and give.
 On a summon, a plain grant instead forwards full use with the starter's own recipients for that permission; a qualified grant supplies exactly its clauses, bounded by the gift rule.
 Bare credential kinds in grants/revokes become `add`/`drop`, not gifts/caps over credential option atoms.
 
-Repository policy cannot choose host instances: `[tool.bro]` refuses credential-instance permissions and picks.
-Host project and bro entries may contain `creds`; host `defaults` may not.
-A bro-specific pick must name a configured kind still held after its policy layers; a later request grant cannot validate an otherwise invalid bro-specific pick.
-Unknown types, options, and kinds fail only launches whose applicable layers name them; syntax is checked throughout the host config.
-A shared dotfile may therefore contain valid names belonging to another installation in unrelated entries.
+Home settings cannot choose host instances: they refuse credential-instance permissions and picks.
+Host home and bro entries may contain `creds`; host `defaults` may not.
+Owned configuration validates fully at root start, even bro layers not used by that root.
+Installed foreign bro entries are shape-checked at root start and bound when used;
+a winning scalar, recipe or pick shadows an earlier foreign value, while authority folds every layer.
+Other homes' unrelated entries are never read.
 Authority may name absent instances without failing a launch that does not use them.
 
 The host-only `operator` object accepts `revoke` and `limit`, capping the operator's initially unrestricted authority O.
 Every root start, manual commit, override, and resume is checked against O.
 It guards the operator against mistakes; it does not introduce multiple operators or ownership boundaries.
-Configuration schema and project identity matching are in `bro/setup/AGENTS.md`, "Host config".
+The host configuration schema are in `bro/setup/AGENTS.md`, "Host config".
 
 ### Auxiliary LLM credentials
 
@@ -224,11 +219,11 @@ For example:
 
 ```json
 {
-  "llm": "openai:terra:low",
+  "llm": "openai:gpt-5.6-terra,reasoning_effort=low",
   "credential": {"$cred": "openai+"},
   "roles": {
-    "summary": {"llm": "openai:luna5.6:low", "credential": {"$cred": "openai+"}},
-    "reader": {"llm": "openai:luna5.6", "credential": {"$cred": "openai+"}}
+    "summary": {"llm": "openai:gpt-5.6-luna,reasoning_effort=low", "credential": {"$cred": "openai+"}},
+    "reader": {"llm": "openai:gpt-5.6-luna", "credential": {"$cred": "openai+"}}
   }
 }
 ```
@@ -244,8 +239,8 @@ Drop `mu` to disable these auxiliary routes, or select an instance whose entries
 
 | Surface | Values | Gift and cap |
 |---|---|---|
-| `ride along`, `ride solo` | Mode flags, LLM/harness flags, `--cred`, credential `--grant`/`--revoke` | Permission `--grant`, `--revoke`, `--limit` |
-| `summon` | Target, placement flags, `--pass`, credential `--grant`/`--revoke`, driving-loop flags | `--grant`, `--revoke`, `--limit` |
+| `ride along`, `ride solo` | Mode flags, `--llm`, `--harness`, `--cred`, credential `--grant`/`--revoke` | Permission `--grant`, `--revoke`, `--limit` |
+| `summon` | Target, placement flags, `--pass`, credential `--grant`/`--revoke`, `--harness`, `--llm` | `--grant`, `--revoke`, `--limit` |
 | `bro::summon` | `target`, `placement`, `passes`, `harness`, `llm`, `hold`, `timeout`, `talk` | `grant`, `revoke`, `limit` lists |
 | `launch {type: …}` | Type's wire fields | `grant`, `revoke`, `limit` lists |
 | `webview open` / `webview::open` | VNC, port, downloads, cookies, timeout | Checked as a webview start |
@@ -257,12 +252,19 @@ The CLI's `--join`, `--boxed`, and `--unboxed` map to `placement=join`, `boxed`,
 `--start` selects a separate party; an otherwise unmarked summon always defaults boxed, never falls back to unboxed, and never implicitly joins.
 A join refuses `into` and `manual` and inherits its party's isolation.
 
-For each start the host resolves the starter's mission record, maps the request, normalizes it under the reading, runs use and gift rules, runs admission checks such as summon depth, records its authority, then checks existence and runs the worker.
+For each start the host resolves the starter's mission record, maps the request, and normalizes it under the reading.
+It runs use, gift and admission checks, including the summon allowance, before recording authority, checking existence and running the worker.
 Only a starter authorized to name an item learns that it is missing.
 A cap on configured credentials may refuse starting the bro unless the request drops that kind.
 Artifacts are outside this model except for publishing to the host:
 a mission can share only refs it can already read, and `bro.export` is the one permission a session needs to publish a ref it can read to the operator, who reads it with `ride artifact get`.
 The operator needs no permission to hand a host file or an exported ref to any live mission.
+
+The [summon allowance](ride.md#summon-allowance) is separate from authority and applies to every worker type.
+Each mission receives its launcher's allowance minus one;
+a bro's configured `summon-depth` cap can only lower it.
+An allowance of 0 refuses any launch even when use and gift checks pass.
+Refusals identify the allowance and the layers that set it.
 
 ## Manual children: joint starts
 
@@ -277,6 +279,7 @@ The operator supplies placement, hold, recipe, harness, and credential flags, re
 The host recomputes defaults under the root reading, validates the final descriptor, and repeats authorization against current authorities.
 Starter values and defaults are checked against the starter, operator values against O, with all patterns matched against the final descriptor.
 The gift rule runs on that final descriptor too.
+The summoner's allowance is checked at commit, not preparation.
 The launcher hydrates exactly the admitted descriptor's picks, including authentication and LLM credentials, without rereading host policy.
 
 The CLI exposes less than the abstract joint-start model: the target positional must match; changing talk, prompt, `into`, `--env`, or authority entries at commit is refused.
@@ -352,7 +355,8 @@ Credential-derived caches refresh on store generation; resource-owning toolsets 
 
 `ride resume <workspace>` is a new operator root start with a new reading.
 It carries recorded set values (all attributed to the operator), gift, cap, and operator layer, then applies defaults again.
-Thus default picks and an unnamed recipe follow current configuration instead of freezing the first launch's resolved descriptor.
+Default credential picks follow current configuration;
+the resolved-recipe record keeps the recipe and source the session ran, unless `--llm` replaces them.
 `--cred` and credential grants/revokes replace per-kind values; permission flags replace per-name operator-layer entries; `--limit` applies caps.
 All start checks run against O.
 A resumed child is a root; its former descendants do not survive.
@@ -361,10 +365,11 @@ A resumed manual child's runtime is frozen from the invoking installation rather
 
 The host record keeps type, set values with principal attribution, normalized descriptor, gift, cap, operator gift/cap, and effective authority.
 The reading belongs to the root tree.
-Resume records keep set values, not resolved defaults, and retain pending credential operations until settled.
+Resume records keep set values and the resolved-recipe record, not other resolved defaults, and retain pending credential operations until settled.
 Summon depth and summon harness come from the new reading on resume.
 The launch audit records descriptor, gift/cap, and refusals with their rule and atom.
-Old unreadable resume records are refused, not migrated.
+Records without a resolved-recipe record are refused, not migrated, and `ride list` still lists them.
+The refusal names the workspace and recovery routes: fork its native trail with `bro chat <bro> --fork <trail>`, or start a new session.
 
 ## Visibility and refusals
 

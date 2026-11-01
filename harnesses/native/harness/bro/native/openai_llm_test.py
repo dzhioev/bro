@@ -10,7 +10,6 @@ from openai.types.responses.function_tool_param import FunctionToolParam
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
-from bro.openai.declaration import DEFAULT_MODEL
 
 
 def _host_holds_the_openai_key() -> bool:
@@ -36,7 +35,7 @@ async def test_user_notification_after_function_output_is_accepted():
     strict=False,
   )
   first = await client.responses.create(
-    model=DEFAULT_MODEL,
+    model='gpt-5.6-terra',
     input='Call the probe tool.',
     tools=[tool],
     tool_choice={'type': 'function', 'name': 'probe'},
@@ -46,7 +45,7 @@ async def test_user_notification_after_function_output_is_accepted():
   assert len(calls) == 1, first.output
 
   second = await client.responses.create(
-    model=DEFAULT_MODEL,
+    model='gpt-5.6-terra',
     previous_response_id=first.id,
     input=[
       {

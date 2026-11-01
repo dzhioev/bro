@@ -8,7 +8,7 @@ The package `bro.claude` imports nothing from its `__init__.py`.
 ## Modules
 
 - `harness.py`
-  — `ClaudeHarness`, its prompt facts, private `ScopeRecipe`, auth preflight, Claude LLM resolution, terminal service-tool delivery and managed-session termination, and host-cache cleanup.
+  — `ClaudeHarness`, its prompt facts, private `ScopeRecipe`, auth preflight, Claude recipe delivery, terminal service-tool delivery and managed-session termination, and host-cache cleanup.
   Its workspace session reads and launch hooks supply the runner, Claude state mounts and env for a container, and the private state dir and auth for a host runner.
   Its `serve` mounts nothing, since Claude's own tools serve every group.
 - `credentials.py` — the literal `claude_code` credential kind and its install hook.
@@ -28,7 +28,7 @@ The package `bro.claude` imports nothing from its `__init__.py`.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, and the append prompt;
   the `--tools` allowlist, the command gate on a finite command list, and the read gate without files;
-  and model/effort/fast selection, prompt, and the resumed session.
+  and model/effort/fast delivery, prompt, and the resumed session.
 - `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, the gated `Read` of a persona without files, and the command tools a finite command list gates;
   `native_tools_llm_test.py` holds them against that release (`bro/reference/ride.md`, "The claude argv").
 - `claude_auth.py` — the setup-token environment.

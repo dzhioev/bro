@@ -6,7 +6,7 @@ from typing import ClassVar
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from bro.llm.llm import LLMSpec, LLMStopped, UnsupportedContent
+from bro.llm.llm import LLMStopped, Recipe, UnsupportedContent
 from bro.llm.mcp import Tool, encode_tool_result
 from bro.llm.records import Chaining, Unknown
 from bro.llm.retry import retry_llm
@@ -67,7 +67,7 @@ class Chat(Wire):
   CHAINING: ClassVar[Chaining] = CHAINING
   OWNED = frozenset({'model', 'messages', 'tools'})
 
-  def __init__(self, recipe: LLMSpec, secrets: dict):
+  def __init__(self, recipe: Recipe, secrets: dict):
     self.recipe = recipe
     self.client = AsyncOpenAI(api_key=secrets['api_key'], base_url=recipe.ENDPOINT, max_retries=0)
     self._history: list[dict] = []
@@ -120,7 +120,7 @@ class Chat(Wire):
       ]
     request = {
       **self.recipe.request_options(),
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'messages': self._history + new_items,
       'tools': tools_to_chat_format(tools),
     }
@@ -166,7 +166,7 @@ class Chat(Wire):
     schema = json.dumps(result.model_json_schema(), ensure_ascii=False)
     request = {
       **self.recipe.request_options(),
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'messages': [
         self._encode(SystemPrompt(f'{instructions}\nReturn JSON matching this schema:\n{schema}')),
         self._encode(UserMessage(content)),

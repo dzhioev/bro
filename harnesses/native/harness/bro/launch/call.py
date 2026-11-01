@@ -15,11 +15,10 @@ import bro.base.args as base_args
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
-from bro.launch.llm_flags import EFFORT_HELP, FAST_HELP, add_llm_flags
+from bro.launch.llm_flags import add_llm_flags
 from bro.launch.resume import RESUME_LATEST
-from bro.launch.run import HOLD_HELP, add_resolved_llm_flag, launch_llm_spec
+from bro.launch.run import HOLD_HELP, add_resolved_recipe_flag, launch_recipe
 from bro.llm.observer import Observer
-from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.native.runner import Runner
 from bro.run_lifecycle import RunLifecycle
@@ -37,7 +36,7 @@ from bro.trails.display import (
 FORK_HELP = (
   'fork a recorded conversation into a new trail: pass any trail id, or omit the value to fork '
   "the bro's newest recorded call. prior exchanges are rendered as history and the fork uses "
-  "the bro class's current LLM recipe"
+  "the installation's configured LLM recipe"
 )
 
 INTERRUPTED_NOTICE = '⨯ interrupted'
@@ -199,7 +198,7 @@ async def call_text(
     session.consume(
       _surface_notice(
         'surface:banner',
-        render_banner(llm=False, bro=runner.bro.name),
+        render_banner(plain=False, bro=runner.bro.name, resolved_recipe=runner.resolved_recipe),
         now(),
         trusted_visual=True,
       )
@@ -285,14 +284,14 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     metavar='STEP_ID',
     help='with --fork: fork the conversation at this step instead of the latest consistent point',
   )
-  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
-  add_resolved_llm_flag(parser)
+  add_llm_flags(parser)
+  add_resolved_recipe_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
   args = parser.parse(argv)
 
   continuing = args['continue_trail'] is not None
-  if continuing and args['resolved_llm'] is None:
-    log.error('--continue-trail requires --resolved-llm')
+  if continuing and args['resolved_recipe'] is None:
+    log.error('--continue-trail requires --resolved-recipe')
     return 1
   if continuing and (args['fork'] is not None or args['what'] is not None):
     log.error('--continue-trail cannot be combined with --fork or an initial message')
@@ -302,8 +301,14 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     return 1
 
   try:
-    run_spec = launch_llm_spec(args['bro'], args)
-  except (KeyError, NotImplementedError, LLMSelectionError) as error:
+    if args['fork'] is not None and args['llm'] is None and args['resolved_recipe'] is None:
+      from ride.authority_reading import Reading
+
+      Reading.take()
+      resolved_recipe = None
+    else:
+      resolved_recipe = launch_recipe(args['bro'], args)
+  except (KeyError, NotImplementedError, ValueError) as error:
     log.error('%s', error)
     return 1
   hold = args['hold'] if args['hold'] is not None else 'guided'
@@ -314,16 +319,14 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     history: Optional[list[DisplayRecord]] = None
     if args['fork'] is not None or continuing:
       from bro.launch.resume import resume
-      from bro.registry import get_class
       from bro.trails.store import default_store
 
       trail_ref = args['continue_trail'] if continuing else args['fork']
       assert trail_ref is not None
-      fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
       with default_store() as client:
         try:
           fork_arguments = {
-            'llm_spec': fork_spec,
+            'recipe': resolved_recipe,
             'at': args['at'],
             'activity_file': args['activity_file'],
           }
@@ -340,7 +343,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       from bro.registry import create_bro
 
       log.verbose('creating bro %s', args['bro'])
-      runner = Runner(create_bro(args['bro'], run_spec), activity_file=args['activity_file'])
+      assert resolved_recipe is not None
+      runner = Runner(create_bro(args['bro']), resolved_recipe, activity_file=args['activity_file'])
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 

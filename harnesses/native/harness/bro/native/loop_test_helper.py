@@ -6,7 +6,7 @@ from bro.llm.mcp import MCPServer
 from bro.llm.observer import Observer
 from bro.llm.tracker import Tracker
 from bro.native.loop import Loop
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 from bro.wire_responses.client import Responses
 
 
@@ -28,10 +28,9 @@ def make_loop(
   agent: Optional[str] = None,
   activity_file: Optional[Path] = None,
 ) -> ResponsesLoop:
-  from bro.openai.declaration import DEFAULT_MODEL
 
-  recipe = LLMSpec(
-    model=model if model is not None else DEFAULT_MODEL,
+  recipe = Recipe(
+    model=model if model is not None else 'gpt-5.6-terra',
     reasoning_effort=reasoning_effort,
     service_tier=service_tier,
     compact_threshold=compact_threshold,

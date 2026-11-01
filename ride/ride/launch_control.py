@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from bro.artifact import is_ref
-from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_authority, dump_request, dump_values
 from bro.authority.rules import Admission, Mission, Prepared
 from bro.base import credentials, log
@@ -31,7 +30,7 @@ from bro.worker_types import (
 from bro.workspace.paths import is_workspace_name
 from ride import pending_launch
 from ride.authority_launch import mission_view, request as authority_request
-from ride.authority_reading import Reading
+from ride.authority_reading import Reading, SummonAllowance
 from ride.peer_facts import WorkerFacts
 from ride.worker_container import WorkerContainerLaunch
 
@@ -109,7 +108,15 @@ class LaunchControl:
       if isinstance(request.record, Prepared):
         self._prepared[request.id] = request.record
       facts = WorkerFacts(
-        type=request.type, workspace=None, record=request.record, expected=request.manual
+        type=request.type,
+        workspace=None,
+        record=request.record,
+        expected=request.manual,
+        allowance=(
+          self.reading.child_allowance(self._allowance(owner.mission), request.record.descriptor)
+          if isinstance(request.record, Mission)
+          else None
+        ),
       )
       self._peers.add(request.id, facts)
       run = worker_type.launch(request)
@@ -235,13 +242,11 @@ class LaunchControl:
         record = self.reading.rules.prepare(requested, owner.mission_record.authority, self.reading)
         values = requested.values
       else:
-
-        def depth(descriptor: Descriptor) -> None:
-          if owner.depth + 1 > self.reading.summon_depth:
-            raise ValueError(f'chain exceeds {self.reading.summon_depth}')
-
         record = self.reading.rules.start(
-          requested, owner.mission_record.authority, self.reading, (Admission('depth cap', depth),)
+          requested,
+          owner.mission_record.authority,
+          self.reading,
+          (Admission('summon allowance', self._allowance(owner.mission).check),),
         )
         values = record.descriptor.values
     except ValueError as error:
@@ -273,6 +278,12 @@ class LaunchControl:
       worker_type,
     )
 
+  def _allowance(self, mission: str) -> SummonAllowance:
+    allowance = self._peers.for_mission(mission).allowance
+    if allowance is None:
+      raise ValueError('summon allowance check: requesting mission has no allowance record')
+    return allowance
+
   def authority(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     try:
       owner = self._peers.resolve(context, peer)
@@ -300,13 +311,18 @@ class LaunchControl:
       journal_record = context.journal.records[token]
       if journal_record.state != 'accepted' or pending_launch.claimed_workspace(token) is not None:
         raise ValueError('commit check: token is not pending')
+      if journal_record.parent is None:
+        raise ValueError('commit check: starter mission missing')
       starter = self._peers.for_mission(journal_record.parent).record
       if not isinstance(starter, Mission):
         raise ValueError('commit check: starter record missing')
       if not isinstance(message.args['fields'], Mapping):
         raise ValueError('commit check: fields: expected an object')
       fields = dict(message.args['fields'])
-      fields['harness'] = self.reading.resolve_harness(fields.get('harness'))
+      fields['target'] = prepared.request.values['target']
+      fields['harness'] = self.reading.resolve_harness(
+        fields.get('harness'), target=cast(str, prepared.request.values['target'])
+      )
       mapped, _ = authority_request(
         type(self._types[prepared.request.type]),
         fields,
@@ -316,10 +332,6 @@ class LaunchControl:
       )
       if mapped.gift.permissions() or mapped.cap.permissions():
         raise ValueError('commit check: authority entries belong to the prepared request')
-
-      def depth(descriptor: Descriptor) -> None:
-        if len(context.journal.ancestry(token)) > self.reading.summon_depth:
-          raise ValueError(f'chain exceeds {self.reading.summon_depth}')
 
       from ride.authority_launch import credential_values
 
@@ -346,19 +358,24 @@ class LaunchControl:
         operator_values,
         starter.authority,
         self.reading.operator(),
-        (Admission('depth cap', depth),),
+        (Admission('summon allowance', self._allowance(journal_record.parent).check),),
       )
       if mission.descriptor.values['timeout'] != 'none':
         raise ValueError(
           'execution check: bro.timeout: finite manual deadlines require a supervised start'
         )
+      resolved = checked_recipe(
+        mission.descriptor,
+        self.reading,
+        None if fields.get('llm') is None else (fields['llm'], '--llm'),
+      )
       scoped = credentials_for(mission)
       value = {
         **mission_view(mission),
         'request': dump_request(mission.request, mission.descriptor),
         'required': sorted(scoped.required),
         'optional': sorted(scoped.optional),
-        'resolved_llm': checked_recipe(mission.request, mission.descriptor, self.reading).dump(),
+        'resolved_recipe': resolved.dump(),
       }
       previous = self._commits.get(token)
       value['commit'] = (
@@ -369,6 +386,9 @@ class LaunchControl:
       )
       self._commits[token] = value
       facts.record = mission
+      facts.allowance = self.reading.child_allowance(
+        self._allowance(journal_record.parent), mission.descriptor
+      )
       context.reply(peer, {'outcome': 'ok', 'value': value})
     except (ValueError, KeyError, UnattributablePeer, credentials.SecretNotFound) as error:
       context.reply(peer, {'outcome': 'denied', 'error': str(error)})

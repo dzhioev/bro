@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "the bro framework checkout's own persona and scripts"
 requires-python = ">=3.12"
 dependencies = [
-  "bro-openai",
   "bro-deepseek",
   "bro",
   "bro-dev",
@@ -28,20 +27,18 @@ dependencies = [
 "syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
 
 [tool.uv.sources]
-bro-openai = { workspace = true }
 bro-deepseek = { workspace = true }
 bro = { workspace = true }
 bro-dev = { workspace = true }
 bro-filetypes = { workspace = true }
 
-[project.entry-points.bro]
+[project.entry-points."bro.bros.bro"]
 bro-dev = "bros.bro_dev:BroDev"
 bro-eyebro = "bros.bro_eyebro:BroEyebro"
 bro-watch-probe = "bros.bro_watch_probe:BroWatchProbe"
 bro-file-probe = "bros.bro_file_probe:BroFileProbe"
 
 [tool.deptry.package_module_name_map]
-bro-openai = ["bro"]
 bro-deepseek = ["bro"]
 bro = ["bro", "bros"]
 bro-dev = ["bro", "bros"]
@@ -60,3 +57,6 @@ wheel-exclude = [
   "**/AGENTS.md",
   "**/*.egg-info",
 ]
+
+[project.entry-points."bro.settings"]
+bro = "bro.local"

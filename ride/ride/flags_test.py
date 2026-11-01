@@ -50,17 +50,11 @@ class TestForwardedFlags:
     args = vars(parser.parse_args(['--harness', 'bro']))
     assert ride_flags.extract_forwarded_argv(args) == ['--harness', 'bro']
 
-  def test_llm_flags_default_to_none_for_the_harness_to_supply(self):
+  def test_llm_defaults_to_none_for_configuration_to_supply(self):
     parser = Parser(add_help=False)
     ride_flags.add_forwarded_flags(parser)
     args = parser.parse_args([])
-    assert (args.llm, args.provider, args.model, args.effort, args.fast) == (
-      None,
-      None,
-      None,
-      None,
-      False,
-    )
+    assert args.llm is None
 
   def test_hold_defaults_to_none_for_the_wrapper_to_resolve(self):
     parser = Parser(add_help=False)

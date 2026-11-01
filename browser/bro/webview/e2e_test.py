@@ -25,6 +25,7 @@ import ride.workspace.host_docker_test_helper as host_docker
 from bro.base import credentials
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.webview.profile import PLAYWRIGHT_MCP_PROFILE_VERSIONS, PROFILE_VERSION
+from bro.workspace.installation import installation_home
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.artifacts import view_mount
 from ride.e2e_test import (
@@ -67,7 +68,7 @@ refused = subprocess.run(['webview', 'open', '--cookies', 'e2e'], capture_output
 assert refused.returncode == 1, refused
 assert 'use rule: webview:' in refused.stderr, refused.stderr
 launched = subprocess.run(
-  ['summon', '--grant', 'webview.cred=cookies+e2e', '--llm', 'echo', '--harness', 'bro',
+  ['summon', '--grant', 'webview.cred=cookies+e2e', '--llm', 'echo:echo', '--harness', 'bro',
    'browser', 'Open the authenticated page and report its profile state.'],
   capture_output=True, text=True,
 )
@@ -85,7 +86,7 @@ answer = summon_and_wait(
   'bro',
   'open the granted webview',
   grant=['webview'],
-  llm='echo',
+  llm='echo:echo',
   harness='bro',
   timeout=300,
 )
@@ -206,7 +207,7 @@ try:
   answer = summon_and_wait(
     'browser',
     'Open the request page and report how to complete it.',
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=600,
   )
@@ -223,7 +224,7 @@ import asyncio
 import re
 import urllib.parse
 
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.llm.tracker import NullTracker
 from bro.native.llm import LLM
 from bro.native.runner import Runner
@@ -298,7 +299,7 @@ class ScriptedRunner(Runner):
 
 
 asyncio.run(
-  ScriptedRunner(Browser.create(EchoSpec())).run(
+  ScriptedRunner(Browser(), EchoSpec(model='echo')).run(
     'Open the request page and report how to complete it.',
     surface='webview-e2e',
     tracker=NullTracker(),
@@ -332,7 +333,7 @@ try:
   quest_id = summon_detached(
     'browser',
     '[[browse]]',
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=600,
     talk=['owner.question', 'worker.question'],
@@ -399,7 +400,7 @@ import urllib.parse
 from contextlib import contextmanager
 
 from bro import quest
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.llm.tracker import NullTracker
 from bro.native.llm import LLM
 from bro.native.runner import Runner
@@ -573,7 +574,7 @@ class ScriptedRunner(Runner):
 
 
 asyncio.run(
-  ScriptedRunner(Browser.create(EchoSpec())).run(
+  ScriptedRunner(Browser(), EchoSpec(model='echo')).run(
     '[[browse]]', surface='webview-e2e', tracker=NullTracker()
   )
 )
@@ -1481,8 +1482,8 @@ def test_cookies_pass_loads_profile_without_entering_the_owner_store(
   config.write_text(
     json.dumps(
       {
-        'projects': {
-          str(isolated_env.project): {
+        'homes': {
+          installation_home(): {
             'bros': {
               ProfileGiver.name: {'grant': ['@browser', 'webview.cred=cookies+e2e to @browser']},
             },

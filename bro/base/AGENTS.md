@@ -54,14 +54,10 @@ run those with `--help` for flags.
   the record its wheel carries in `.dist-info`, else the commit its version-control installation resolved, else the live checkout its editable installation runs from;
   `checkout_commit(directory)` reads a checkout's `HEAD` and whether its tree under `directory` differs from it.
 - `host_config.py` — the host's launch policy (`~/.bro.json`):
-  `launch_selection(attachment, bro)` merges matching project and per-bro credential selections and attributed policy layers,
-  and `tool_selection(command)` merges `user` and the `user.tools` entry for one command's canonical console-script name.
-  An `Attachment` carries a checkout path, a git URL, or both;
-  every matching entry applies, with path entries over URL entries.
-  `parse` validates configuration content through the installation-independent authority syntax; file reads and root readings share it.
-  `llm_presets()` reads host-wide `--llm` presets,
-  `launch_llm(attachment, bro)` returns the most specific matching per-bro recipe list,
-  and `summon_depth(project_depth)` resolves the host override over the project value and framework default.
+  `ConfigLayer` is the shared schema for home settings, defaults, homes and bro entries.
+  `parse` reads the installation's own layers and installed foreign bro entries, leaving unrelated homes unread.
+  `tool_selection(command)` merges `user` and the canonical `user.tools` command entry for ambient credentials.
+  Session stack composition and binding live in `ride/authority_reading.py`.
   The schema is `bro/setup/AGENTS.md`, "Host config".
 - `git_url.py` — git remote URL grammar:
   `is_git_url`, `is_network_git_url`, `normalize_git_url` (the canonical spelling two spellings of one remote compare on), `sanitize_git_url` (the credential-free recorded spelling), and `git_url_path`,

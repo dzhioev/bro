@@ -82,7 +82,7 @@ class Repository:
       return project_config(self.git_dir)
     content = self.read_file('pyproject.toml')
     if content is None:
-      raise ValueError(f'missing pyproject.toml in {self.identity} at {self.tree_ref}')
+      return ProjectConfig()
     return project_config_from_text(
       content.decode(), f'{self.identity}:{self.tree_ref}:pyproject.toml'
     )

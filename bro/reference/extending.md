@@ -9,7 +9,8 @@ conditions on them follow `conditions.md`, and the text they carry follows `temp
 
 A distribution contributes through these `[project.entry-points]` groups of its `pyproject.toml`:
 
-- `bro` — personas, `<name> = "<module>:<ClassName>"` ("Registering a bro" below)
+- `bro.bros.<home>` — personas belonging to `<home>`, `<name> = "<module>:<ClassName>"` ("Registering a bro" below)
+- `bro.settings` — home settings, `<home> = "<package>"`, read as that package's `bro-settings.toml` resource ("Home settings" below)
 - `bro.toolsets` — standalone MCP toolsets, each entry named after its namespace and targeting its module's `toolset` object ("Adding a toolset" below)
 - `bro.mcp.targets` — assembled target prefixes;
   each resolver accepts the value after `<prefix>:` and returns live MCP servers
@@ -24,7 +25,7 @@ A distribution contributes through these `[project.entry-points]` groups of its 
 - `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
   each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
 - `bro.llm.providers` — provider declaration modules, `<name> = "bro.<name>.declaration"`;
-  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `LLMSpec`, `DEFAULT_MODEL`, `MODELS`, failure signatures and pricing.
+  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `Recipe`, failure signatures and pricing.
   A provider contributes its credential kind separately through `bro.credentials` from an import-free literal module.
   Provider package hubs import nothing, and declarations import no SDK at module level and no harness.
   Explicit selection loads only that declaration; searches warn and skip a broken declaration.
@@ -109,14 +110,12 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   See `bro/reference/conditions.md`.
   Declarations skip the `ClassVar` annotation, since BaseBro's class-level declarations carry the types;
   a ruff configuration selecting RUF012 ignores it for persona modules.
-- `llm_spec = openai.LLMSpec(...)` (imported from `bro.openai.declaration`, with a dependency on `bro-openai`) declares the recipe the native engine runs the bro under;
-  a Claude Code session runs under the recipe its own launch names.
-  A persona may omit it; a native launch then needs an explicit provider recipe.
-  Per-instance overrides go through `YourBro.create(spec)`.
+- Model recipes live in configuration, not persona declarations.
+  The native launcher passes the resolved run recipe explicitly to the runner.
 - `extra_secrets = ('github',)` declares credentials no component expresses (a bro's environment needs).
   MRO-walked and unioned;
   folded into `bro.needed_secrets()`, which the host hydrates into the scoped container store.
-  Most secrets come from the declared MCP servers / data sources / `llm_spec` and need no entry here
+  Most secrets come from the declared MCP servers / data sources and need no entry here
   — see `bro/AGENTS.md`, "Credential manifest".
 - `features = {'brog': creds.contains('brog')}` declares named optional capabilities
   — feature name → the gate deciding whether it's on:
@@ -127,7 +126,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 - `may_summon = ('reviewer',)` seeds `@reviewer` with full use and give before configuration layers apply.
   The child's base is independent of its starter; request gifts and caps add or restrict authority under the use/give checks.
   The declaration is MRO-walked and unioned like `extra_secrets`.
-  The host's depth cap separately bounds the tree.
+  The host's [summon allowance](ride.md#summon-allowance) separately bounds the tree.
 - `may_launch = ('webview',)` seeds the type's start permission with full use and give.
   The declaration is MRO-walked and unioned like `may_summon`.
   Guarded option values, such as profiles, VNC, or downloads, need their own grants.
@@ -199,12 +198,41 @@ here-documents, here-strings, descriptor duplication and closure, and `/dev/null
 
 ## Registering a bro
 
-Register the class under the distribution's `bro` entry-point group, `your-name = "your.module:YourBro"`, and sync ("Entry-point groups" above).
+Register the class under the distribution's `bro.bros.<home>` entry-point group, `your-name = "your.module:YourBro"`, and sync ("Entry-point groups" above).
 There is no auto-discovery:
 the entry is what makes `create_bro('your-name')` resolve wherever the distribution is installed, and its key must equal the class's `name`, which the registry validates when it lazily imports the module.
-Two installed distributions claiming one name fail the registry rather than letting import order decide.
+The group names the bro's home; a distribution may contribute bros to several homes.
+Two entries claiming one bro name, even across homes, fail the registry naming both distributions rather than letting import order decide.
 Package-relative spells and MRO-resolved `tools` declarations work across distributions.
-Project launch defaults (`[tool.bro] default`, image repository) are documented in `bro/reference/ride.md`, "Per-project defaults".
+`bro show` reports the bro's home.
+
+## Home settings
+
+A home may ship settings without registering bros, and register bros without shipping settings.
+Register one settings package for a home:
+
+```toml
+[project.entry-points."bro.settings"]
+my-home = "my_project"
+```
+
+Include `my_project/bro-settings.toml` in the wheel as package data.
+Its launch keys are documented in [ride](ride.md#home-settings).
+A home without an entry ships no settings.
+Two installed entries for the same home's settings refuse every launch, naming both distributions.
+Only the installation's home settings are read.
+
+An installation names its home in `<environment>/bro-installation-home`, at `sys.prefix`, holding a `[a-z][a-z0-9-]*` name and a final newline.
+The home need not declare any bros or settings.
+The environment's setup writes the marker after syncing; for example:
+
+```bash
+printf 'my-home\n' > .venv/bro-installation-home
+```
+
+A missing or malformed marker refuses a launch, naming the path and the command to write it.
+Frozen runtime bundles carry the home in their manifest and write the marker into both host and container environments.
+An in-process `bro run` or `bro chat` reads its live environment's marker.
 
 ## Adding a data source
 

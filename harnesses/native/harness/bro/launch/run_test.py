@@ -12,9 +12,9 @@ def in_process_run(monkeypatch):
   bro.name = 'dev'
   runner = MagicMock(name='runner')
   runner.run = AsyncMock(return_value='done')
-  monkeypatch.setattr('bro.launch.run.launch_llm_spec', lambda name, args: None)
-  monkeypatch.setattr('bro.registry.create_bro', lambda name, llm_spec: bro)
-  monkeypatch.setattr('bro.launch.run.Runner', lambda declared, activity_file: runner)
+  monkeypatch.setattr('bro.launch.run.launch_recipe', lambda name, args: None)
+  monkeypatch.setattr('bro.registry.create_bro', lambda name: bro)
+  monkeypatch.setattr('bro.launch.run.Runner', lambda declared, recipe, activity_file: runner)
   monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: MagicMock())
   monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
   return runner
@@ -30,9 +30,9 @@ def test_runs_in_the_calling_process(in_process_run):
 
 def test_a_malformed_resolved_recipe_is_refused(monkeypatch, caplog):
   monkeypatch.setattr('bro.launch.run.Runner', lambda *args, **kwargs: pytest.fail('started'))
-  argv = ['bro', 'dev', 'hello', '--resolved-llm', '{"type":']
+  argv = ['bro', 'dev', 'hello', '--resolved-recipe', '{"type":']
   assert run_main(argv, program=['bro', 'run']) == 1
-  assert 'invalid --resolved-llm recipe' in caplog.text
+  assert 'invalid --resolved-recipe recipe' in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -65,76 +65,37 @@ def test_native_surfaces_refuse_an_absent_or_incomplete_recipe(
   arguments = ['bro', 'recipe-less', 'hello'] + ([] if recipe is None else ['--llm', recipe])
   main = run_main if surface == 'run' else chat_main
   assert main(arguments, program=['bro', surface]) == 1
-  assert 'recipe-less declares no LLM recipe: pass --llm provider:model' in caplog.text
-  assert '~/.bro.json' not in caplog.text
+  if recipe is None:
+    assert 'recipe-less has no recipe for harness bro' in caplog.text
+    assert '~/.bro.json' in caplog.text
+  else:
+    assert 'recipe' in caplog.text
 
 
-def test_in_process_selection_does_not_read_the_managed_host_list(register_test_bros, monkeypatch):
-  from bro.bro import BaseBro
-  from bro.launch.run import run_llm_spec
-  from bro.llm.providers import LLMSelection, parse
-  from bro.native.echo_declaration import LLMSpec
-  from ride.authority_reading import Reading
-
-  class RecipeLess(BaseBro):
-    name = 'recipe-less'
-
-  register_test_bros(RecipeLess)
-  monkeypatch.setattr(Reading, 'take', lambda *_: pytest.fail('read managed configuration'))
-  assert run_llm_spec('recipe-less', parse('echo:chosen+passthrough')) == LLMSpec(
-    model='chosen', passthrough=True
-  )
-  with pytest.raises(ValueError, match='declares no LLM recipe'):
-    run_llm_spec('recipe-less', LLMSelection())
-
-
-@pytest.mark.parametrize('surface', ['run', 'chat'])
-@pytest.mark.parametrize('encoded', [False, True])
-def test_native_launch_refuses_an_unlisted_driven_recipe_before_the_runner(
-  surface, encoded, monkeypatch, register_test_bros, caplog
-):
-  import json
-
-  from bro.bro import BaseBro
-  from bro.launch.call import chat_main
-  from bro.openai.declaration import LLMSpec
-
-  class Reader(BaseBro):
-    name = 'unlisted-reader'
-    llm_spec = LLMSpec(model='gpt-7')
-
-  register_test_bros(Reader)
-  monkeypatch.setattr('bro.launch.run.Runner', lambda *args, **kwargs: pytest.fail('started'))
-  monkeypatch.setattr('bro.launch.call.Runner', lambda *args, **kwargs: pytest.fail('started'))
-  main = run_main if surface == 'run' else chat_main
-  arguments = ['bro', Reader.name, 'read']
-  if encoded:
-    declared = Reader.llm_spec
-    assert declared is not None
-    arguments += ['--resolved-llm', json.dumps(declared.dump())]
-  assert main(arguments, program=['bro', surface]) == 1
-  assert 'gpt-7' in caplog.text and '+passthrough' in caplog.text
-
-
-def test_native_unlisted_declaration_accepts_a_listed_override_or_flag(register_test_bros):
-  from bro.bro import BaseBro
-  from bro.launch.run import run_llm_spec
-  from bro.llm.providers import parse
-  from bro.openai.declaration import LLMSpec
-
-  class Reader(BaseBro):
-    name = 'unlisted-reader'
-    llm_spec = LLMSpec(model='gpt-7')
-
-  register_test_bros(Reader)
-  spec = run_llm_spec(Reader.name, parse(':sol'))
-  assert spec is not None and spec.admitted() and not spec.passthrough
-  spec = run_llm_spec(Reader.name, parse('+passthrough'))
-  assert spec is not None and spec.passthrough and spec.selection()['model'] == 'gpt-7'
-
-
-def test_resolved_recipe_excludes_passthrough_piece_flag():
+def test_resolved_and_explicit_recipes_are_exclusive(capsys):
   with pytest.raises(SystemExit):
     run_main(
-      ['bro', 'dev', 'read', '--resolved-llm', '{}', '--passthrough'], program=['bro', 'run']
+      ['bro', 'dev', 'read', '--resolved-recipe', '{}', '--llm', 'openai:gpt-6.1-sol'],
+      program=['bro', 'run'],
     )
+
+  assert 'arguments --resolved-recipe and --llm are mutually exclusive' in capsys.readouterr().err
+
+
+def test_bro_run_uses_the_live_installation_stack(monkeypatch, tmp_path, home_settings_file):
+  import json
+
+  from bro.base import host_config
+  from bro.launch.run import launch_recipe
+  from bro.llm.providers import bind_recipe
+
+  home_settings_file.write_text('[llm]\nbro = "openai:gpt-5.6-terra"\n')
+  text = 'openai:gpt-6.1-sol,reasoning_effort=high,compact_threshold=12345'
+  path = tmp_path / 'host.json'
+  path.write_text(json.dumps({'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': text}}}}}}))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', path)
+  recipe = launch_recipe('dev', {'llm': None, 'resolved_recipe': None})
+  assert recipe.recipe == bind_recipe(text)
+  assert launch_recipe('eyebro', {'llm': None, 'resolved_recipe': None}).recipe == bind_recipe(
+    'openai:gpt-5.6-terra'
+  )

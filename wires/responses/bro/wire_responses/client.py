@@ -6,7 +6,7 @@ from openai import AsyncOpenAI, pydantic_function_tool
 from pydantic import BaseModel
 
 from bro.base import log
-from bro.llm.llm import LLMSpec, LLMStopped
+from bro.llm.llm import LLMStopped, Recipe
 from bro.llm.mcp import Tool, encode_tool_result
 from bro.llm.records import Chaining, DecodedCall, Unknown
 from bro.llm.retry import retry_llm
@@ -80,7 +80,7 @@ class Responses(Wire):
   CHAINING: ClassVar[Chaining] = CHAINING
   OWNED = frozenset({'model', 'input', 'tools', 'previous_response_id'})
 
-  def __init__(self, recipe: LLMSpec, secrets: dict):
+  def __init__(self, recipe: Recipe, secrets: dict):
     self.recipe = recipe
     self.client = AsyncOpenAI(api_key=secrets['api_key'], base_url=recipe.ENDPOINT)
     self._last_response_id: str | None = None
@@ -104,7 +104,7 @@ class Responses(Wire):
   ) -> Leg:
     new_items = [self._encode(item) for item in inputs]
     request: dict = {
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'input': self._input_prefix + new_items,
       'tools': tools_to_openai_format(tools),
       **self.recipe.request_options(),
@@ -156,7 +156,7 @@ class Responses(Wire):
       assert schema is not None
       request = {
         **self.recipe.request_options(),
-        'model': self.recipe.selection()['model'],
+        'model': self.recipe.model,
         'input': [self._encode(SystemPrompt(instructions)), self._encode(UserMessage(content))],
         'text': {
           'format': {

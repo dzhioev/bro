@@ -25,6 +25,8 @@ if ! manifests_match; then
   uv sync --all-packages --all-groups --all-extras
 fi
 
+printf 'bro\n' > .venv/bro-installation-home
+
 # shellcheck source=/dev/null
 source "$DIR/.venv/bin/activate"
 python -m ride.provisioning

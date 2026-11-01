@@ -10,8 +10,7 @@ import pytest
 import ride.cli as ride_cli
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
-from bro.base import configs, credentials, host_config
-from bro.native.echo_declaration import LLMSpec as EchoLLMSpec
+from bro.base import credentials, host_config
 from bro.workspace.paths import workspace_dir
 from bros.bro import Bro
 from ride import pending_launch
@@ -24,7 +23,6 @@ class HydrationBro(Bro):
   name = 'hydration-test'
   description = 'credential hydration route fixture'
   extra_secrets = ('github',)
-  llm_spec = EchoLLMSpec()
 
 
 @pytest.fixture(autouse=True)
@@ -167,7 +165,6 @@ class TestAttachment:
         default_bro='bro-dev',
         harness='claude',
         summon_harness=None,
-        summon_depth=configs.DEFAULT_SUMMON_DEPTH,
         sections={},
       ),
     )
@@ -210,32 +207,43 @@ class TestAttachment:
     assert start.call_args.args[0].runtime_bundle == str(runtime.resolve())
 
 
-class TestHostLLMDefault:
+class TestConfiguredRecipe:
   @pytest.fixture(autouse=True)
   def _checkout(self, monkeypatch, tmp_path):
     monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
     self.config = tmp_path / 'bro.json'
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(self.config))
 
-  def _entry(self, llm: list[str]) -> None:
-    self.config.write_text(json.dumps({'projects': {'/repo': {'bros': {'dev': {'llm': llm}}}}}))
+  def _entry(self, llm: str) -> None:
+    self.config.write_text(
+      json.dumps({'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': llm}}}}}})
+    )
 
   def test_cli_forwards_explicit_recipe_fields_for_host_normalization(self):
-    self._entry(['openai:sol:xhigh'])
+    self._entry('openai:gpt-6.1-sol,reasoning_effort=xhigh')
     with patch('ride.cli.start_session', return_value=0) as start:
       assert (
         ride_cli.main(
-          ['ride', 'along', '--repo', '/repo', '--harness', 'bro', '--effort', 'low', 'dev']
+          [
+            'ride',
+            'along',
+            '--repo',
+            '/repo',
+            '--harness',
+            'bro',
+            '--llm',
+            'openai:gpt-6.1-sol,reasoning_effort=low',
+            'dev',
+          ]
         )
         == 0
       )
     spec = start.call_args.args[0]
-    assert spec.llm is None
-    assert spec.recipe_options == {'effort': 'low'}
-    assert spec.resolved_llm == {}
+    assert spec.llm == 'openai:gpt-6.1-sol,reasoning_effort=low'
+    assert spec.resolved_recipe == {}
 
   def test_cli_does_not_parse_host_policy_before_the_runtime_start(self):
-    self._entry(['::ludicrous'])
+    self._entry('::ludicrous')
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--repo', '/repo', 'dev']) == 0
     assert start.call_args.args[0].llm is None
@@ -243,7 +251,10 @@ class TestHostLLMDefault:
 
 class TestCredentialHydrationRoutes:
   @pytest.fixture
-  def route(self, tmp_path, monkeypatch, register_test_bros):
+  def route(self, tmp_path, monkeypatch, register_test_bros, home_settings_file):
+    home_settings_file.write_text(
+      'grant = ["aws"]\nrevoke = ["openai"]\n[llm]\nbro = "echo:echo"\n'
+    )
     register_test_bros(HydrationBro)
     repository = tmp_path / 'repo'
     repository.mkdir()
@@ -293,8 +304,8 @@ class TestCredentialHydrationRoutes:
       json.dumps(
         {
           'defaults': {'grant': ['brog', 'harbor']},
-          'projects': {
-            str(repository): {
+          'homes': {
+            'test-home': {
               'creds': ['github+project', 'aws+project'],
               'revoke': ['brog'],
               'bros': {
@@ -354,6 +365,32 @@ class TestCredentialHydrationRoutes:
     return SimpleNamespace(
       material=material, captures=captures, launch=launch, repository=repository, config=config
     )
+
+  @pytest.mark.parametrize(
+    'text',
+    [
+      'openai:gpt-6.1-sol,reasoning_effort=high',
+      'openai:gpt-7+passthrough,reasoning_effort=high',
+      'openai:gpt-5.5+passthrough',
+    ],
+  )
+  def test_along_runs_the_explicit_recipe_whole(self, route, text):
+    from bro.llm.providers import bind_recipe
+
+    (route.material / 'openai.cred').write_text('{"api_key":"fixture"}')
+    assert (
+      route.launch('--llm', text, '--grant', 'openai', '--cred', 'harbor+launch', mode='along') == 0
+    )
+    spec, _ = route.captures[-1]
+    assert spec.recipe == bind_recipe(text)
+
+  @pytest.mark.parametrize('text', [':sol', 'openai', 'openai:gpt-7', 'openai:gpt-5.5'])
+  def test_along_refuses_incomplete_unlisted_and_retired_recipes(self, route, text, caplog):
+    assert route.launch('--llm', text, mode='along') == 1
+    assert route.captures == []
+    assert text in caplog.text
+    if text == 'openai:gpt-5.5':
+      assert 'retired on' in caplog.text
 
   def test_root_launch_folds_every_layer_and_hydrates_by_selected_name(self, route):
     assert (
@@ -433,7 +470,7 @@ class TestCredentialHydrationRoutes:
     assert route.launch('--cred', 'harbor+launch') == 0
     host = Path(host_config.HOST_CONFIG_FILE)
     configuration = json.loads(host.read_text())
-    project = next(iter(configuration['projects'].values()))
+    project = next(iter(configuration['homes'].values()))
     project['creds'] = ['github+resume', 'aws+project']
     host.write_text(json.dumps(configuration))
     assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
@@ -537,21 +574,21 @@ class TestCredentialHydrationRoutes:
   @pytest.mark.parametrize(
     ('selected', 'project', 'host'),
     [
-      ('bro', 'not-installed', 'not-installed'),
-      (None, 'bro', 'not-installed'),
-      (None, None, 'bro'),
+      ('bro', 'claude', 'claude'),
+      (None, 'claude', 'bro'),
+      (None, 'bro', None),
     ],
     ids=['launch', 'project', 'host'],
   )
   def test_harness_precedence_reaches_the_started_session(
-    self, route, mode, selected, project, host
+    self, route, mode, selected, project, host, home_settings_file
   ):
     configuration = json.loads(route.config.read_text())
-    configuration['harness'] = host
+    if host is not None:
+      configuration['defaults']['harness'] = host
     route.config.write_text(json.dumps(configuration))
     if project is not None:
-      with (route.repository / 'pyproject.toml').open('a') as output:
-        output.write(f'harness = "{project}"\n')
+      home_settings_file.write_text(f'harness = "{project}"\n' + home_settings_file.read_text())
     assert route.launch('--cred', 'harbor+launch', harness=selected, mode=mode) == 0
     spec, scope = route.captures[-1]
     assert spec.harness == 'bro'
@@ -562,42 +599,40 @@ class TestCredentialHydrationRoutes:
     assert route.launch(harness=None, mode=mode) == 1
     assert route.captures == []
     assert not (workspace_dir('hydration-route') / 'workspace.json').exists()
-    assert (
-      'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
-      in caplog.text
-    )
+    assert 'no harness for hydration-test: pass --harness' in caplog.text
 
   @pytest.mark.parametrize('layer', ['launch', 'project', 'host'])
-  def test_uninstalled_harness_is_refused_without_falling_back(self, route, layer, caplog):
+  def test_uninstalled_harness_is_refused_without_falling_back(
+    self, route, layer, caplog, home_settings_file
+  ):
     configuration = json.loads(route.config.read_text())
-    configuration['harness'] = 'not-installed' if layer == 'host' else 'bro'
+    configuration['defaults']['harness'] = 'not-installed' if layer == 'host' else 'bro'
     route.config.write_text(json.dumps(configuration))
     if layer == 'project':
-      with (route.repository / 'pyproject.toml').open('a') as output:
-        output.write('harness = "not-installed"\n')
+      home_settings_file.write_text('harness = "not-installed"\n' + home_settings_file.read_text())
     assert route.launch(harness='not-installed' if layer == 'launch' else None) == 1
     assert route.captures == []
     assert "harness 'not-installed' is not installed" in caplog.text
 
-  def test_resume_keeps_the_harness_after_project_and_host_changes(self, route):
+  def test_resume_keeps_the_harness_after_home_and_host_changes(self, route, home_settings_file):
     assert route.launch('--cred', 'harbor+launch') == 0
     configuration = json.loads(route.config.read_text())
-    configuration['harness'] = 'not-installed'
-    configuration['summon-harness'] = 'not-installed'
+    configuration['defaults']['harness'] = 'claude'
+    configuration['defaults']['summon-harness'] = 'claude'
     route.config.write_text(json.dumps(configuration))
-    with (route.repository / 'pyproject.toml').open('a') as output:
-      output.write('harness = "not-installed"\nsummon-harness = "not-installed"\n')
+    home_settings_file.write_text(
+      'harness = "claude"\nsummon-harness = "claude"\n' + home_settings_file.read_text()
+    )
     assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
     assert route.captures[-1][0].harness == 'bro'
 
   @pytest.mark.parametrize('layer', ['launch', 'project', 'host', 'absent'])
-  def test_scope_resolves_the_same_harness_layers(self, route, layer, capsys):
+  def test_scope_resolves_the_same_harness_layers(self, route, layer, capsys, home_settings_file):
     if layer == 'project':
-      with (route.repository / 'pyproject.toml').open('a') as output:
-        output.write('harness = "bro"\n')
+      home_settings_file.write_text('harness = "bro"\n' + home_settings_file.read_text())
     configuration = json.loads(route.config.read_text())
     if layer in ('project', 'host'):
-      configuration['harness'] = 'bro' if layer == 'host' else 'not-installed'
+      configuration['defaults']['harness'] = 'bro'
     route.config.write_text(json.dumps(configuration))
     flags = ['--harness', 'bro'] if layer == 'launch' else []
     result = ride_cli.main(
@@ -606,14 +641,43 @@ class TestCredentialHydrationRoutes:
     output = capsys.readouterr().out
     if layer == 'absent':
       assert result == 1
-      assert (
-        'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
-        in output
-      )
+      assert 'no harness for hydration-test: pass --harness' in output
     else:
       assert result == 0
       descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
       assert descriptor['harness'] == 'bro'
+
+  @pytest.mark.parametrize('content', [None, 'not a home\n'])
+  def test_bad_installation_marker_refuses_before_start(
+    self, route, installation_environment, caplog, content
+  ):
+    marker = installation_environment / 'bro-installation-home'
+    if content is None:
+      marker.unlink()
+    else:
+      marker.write_text(content)
+    assert route.launch() == 1
+    assert route.captures == []
+    assert str(marker) in caplog.text
+    assert "printf '<home>\\n' >" in caplog.text
+
+  def test_along_into_an_old_tree_keeps_installation_configuration(self, route, home_settings_file):
+    home_settings_file.write_text(
+      'harness = "bro"\nsummon-harness = "bro"\n[llm]\nbro = "echo:echo"\n'
+    )
+    (route.repository / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "unknown-old-bro"\nharness = "old-harness"\n'
+      'summon-harness = "old-summon-harness"\ngrant = ["unknown-old-grant"]\n'
+    )
+    subprocess.run(
+      ['git', '-C', str(route.repository), 'commit', '-am', 'old tree', '-q'], check=True
+    )
+    assert (
+      route.launch('--into', 'HEAD', '--cred', 'harbor+launch', harness=None, mode='along') == 0
+    )
+    spec, launch_scope = route.captures[-1]
+    assert spec.harness == 'bro'
+    assert launch_scope.mission.descriptor.values['harness'] == 'bro'
 
 
 class TestAlong:
@@ -656,8 +720,8 @@ class TestAlong:
 
   def test_cli_defers_provider_compatibility_to_normalization(self):
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev']) == 0
-    assert start.call_args.args[0].recipe_options == {'provider': 'openai'}
+      assert ride_cli.main(['ride', 'along', '--llm', 'openai:gpt-6.1-sol', 'dev']) == 0
+    assert start.call_args.args[0].llm == 'openai:gpt-6.1-sol'
 
   def test_cli_defers_target_existence_to_the_authorized_start(self):
     for harness in ('claude', 'bro'):
@@ -740,6 +804,7 @@ class TestLifecycle:
       'grant': ['@dev'],
       'revoke': [],
       'limit': ['@dev for *'],
+      'llm': None,
     }
 
   def test_check_harness_starts_its_runtime_probe(self):
@@ -757,10 +822,10 @@ class TestLifecycle:
       'bro': 'dev',
       'harness': 'claude',
       'llm': None,
-      'recipe_options': {},
     }
 
-  def test_scope_reports_a_malformed_project_config(self, tmp_path, capsys):
+  def test_scope_reports_malformed_home_settings(self, tmp_path, capsys, home_settings_file):
+    home_settings_file.write_text('harness = 5\n')
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = 5\n')
     with patch.object(ride_cli, '_resolve_repository_argument') as resolve:
       from ride.repository import Repository
@@ -936,24 +1001,13 @@ class TestSummonedLaunch:
     assert 'requires a prompt unless --summoned supplies it' in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-  'flags, llm, options',
-  [
-    (['--llm', 'uninstalled:future:high'], 'uninstalled:future:high', {}),
-    (
-      ['--provider', 'uninstalled', '--model', 'future', '--effort', 'high', '--fast'],
-      None,
-      {'provider': 'uninstalled', 'model': 'future', 'effort': 'high', 'fast': True},
-    ),
-  ],
-)
-def test_scope_forwards_llm_flags_to_the_prospective_reading(flags, llm, options):
+def test_scope_forwards_recipe_text_to_the_prospective_reading():
+  text = 'uninstalled:future,native_field=high'
   with patch('ride.scope_report.report_scope', return_value=0) as report:
-    assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', *flags]) == 0
-  assert report.call_args.kwargs['llm'] == llm
-  assert report.call_args.kwargs['recipe_options'] == options
+    assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', '--llm', text]) == 0
+  assert report.call_args.kwargs['llm'] == text
 
 
 def test_scope_llm_excludes_piece_flags():
   with pytest.raises(SystemExit):
-    ride_cli.main(['ride', 'scope', '--bro', 'dev', '--llm', 'echo', '--fast'])
+    ride_cli.main(['ride', 'scope', '--bro', 'dev', '--llm', 'echo:echo', '--fast'])

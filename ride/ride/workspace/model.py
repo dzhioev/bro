@@ -74,7 +74,7 @@ def _cleanup_image(repository: Optional[Repository]) -> Optional[str]:
   """a locally-present session image usable to delete root-owned container files.
 
   prefers the current image tag, then any other locally-present image of the
-  project's repository. returns None when none exist (nothing to escalate the
+  attachment. returns None when none exist (nothing to escalate the
   removal with).
   """
   runtime = runtime_image_tag()
@@ -83,7 +83,18 @@ def _cleanup_image(repository: Optional[Repository]) -> Optional[str]:
   if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
     return tag
   listed = subprocess.run(
-    ['docker', 'images', '--format', '{{.Repository}}:{{.Tag}}', tag.split(':')[0]],
+    [
+      'docker',
+      'images',
+      tag.split(':')[0],
+      '--format',
+      '{{.Repository}}:{{.Tag}}',
+      *(
+        ['--filter', f'label=ride-attachment={repository.identity}']
+        if repository is not None and tag != runtime
+        else []
+      ),
+    ],
     capture_output=True,
     text=True,
   )

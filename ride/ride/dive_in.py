@@ -10,10 +10,8 @@ import bro.brog.model as brog_model
 import bro.brog.system as brog_system
 from bro.base import log
 from bro.base.args import Parser
-from bro.launch.llm_flags import selection_from_args
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
-from bro.workspace.project import project_config
 from ride.authority_reading import Reading
 from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv
@@ -21,7 +19,7 @@ from ride.harness import get_harness
 from ride.repository import as_repository
 from ride.scope import (
   LaunchScopeError,
-  launch_llm_spec,
+  launch_recipe,
   launch_scope_errors,
   launch_view_store,
   scoped_secrets,
@@ -94,8 +92,8 @@ def _task_system(
   LLM selection shape the same scope the session's store hydrates. every read
   carries the launch's error surface (`launch_scope_errors`), the deferred ones
   included: the backend re-reads the config per operation, past this call."""
-  project = project_config(repo)
-  bro_name = bro if bro is not None else project.default_bro
+  reading = Reading.take(as_repository(repo))
+  bro_name = bro if bro is not None else reading.default_bro
   driver = get_harness(harness)
 
   with launch_scope_errors():
@@ -104,7 +102,7 @@ def _task_system(
         bro_name,
         driver.scope_recipe(),
         attachment=str(repo),
-        llm_spec=launch_llm_spec(driver, str(repo), bro_name, llm),
+        recipe=launch_recipe(driver, str(repo), bro_name, llm),
         cred=cred,
         grant=grant,
         revoke=revoke,
@@ -133,12 +131,14 @@ def dive_in(
   repo: Optional[Path] = None,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, spells, MCP
-  namespaces) selected by `--bro` or the project default, and the harness —
+  namespaces) selected by `--bro` or the installation's default bro, and the harness —
   rides the forwarded flags; dive-in adds nothing of its own beyond binding the
   task prefetch to the same scope (`_task_system`)."""
   repo = project_root() if repo is None else repo
   try:
-    harness = Reading.take(as_repository(repo)).resolve_harness(harness)
+    reading = Reading.take(as_repository(repo))
+    bro_name = bro if bro is not None else reading.default_bro
+    harness = reading.resolve_harness(harness, target=bro_name)
     get_harness(harness)
   except ValueError as error:
     log.error('%s', error)
@@ -183,7 +183,6 @@ def dive_in(
     name = fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
-  bro_name = bro if bro is not None else project_config(repo).default_bro
   ride_command = [
     'ride',
     'along',
@@ -233,13 +232,15 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  config = project_config(repo)
-  try:
-    selection = selection_from_args(args, project=config)
-  except ValueError as error:
-    parser.error(str(error))
+  if args['llm'] is not None:
+    from bro.llm.providers import parse_recipe
+
+    try:
+      parse_recipe(args['llm'])
+    except ValueError as error:
+      parser.error(str(error))
   scope_args = {key: args[key] for key in ('cred', 'grant', 'revoke', 'bro', 'harness')}
-  scope_args['llm'] = None if selection.is_empty() else selection.format()
+  scope_args['llm'] = args['llm']
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)
   return dive_in(

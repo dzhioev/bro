@@ -19,7 +19,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   the seam owns file opens and authorizes search roots.
   It also owns the `bro run|chat …` spawn on the session's admitted recipe, its continuation, and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
-  `runner.py`'s `Runner(bro)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel, trail, and an in-process run's temporary watch store and, outside a managed session, its temporary result store;
+  `runner.py`'s `Runner(bro, recipe)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel and trail;
+  it also owns an in-process run's temporary watch store and, outside a managed session, its temporary result store;
   it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and `BaseBro.system_prompt_for`.
   `bro/jobs.py` and `bro/inbox.py` are native-owned modules under their public namespace paths:
   jobs supervise process groups through core's `bro.job_supervisor`, spool bounded output, and live in a lifetime-scoped registry, while the inbox wakes the model on job news and framework notices and drains their bounded notification slices.
@@ -32,7 +33,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   At each one-shot turn end, `Runner` applies the shared `bro.turn_end` rule:
   it reports running jobs as harness background work, posts notices through the inbox, ends by returning the last reply, and otherwise idles on the inbox until job or watch news, or a job's silence notice, wakes the next turn.
   `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/reference/ride.md`, "Bro harness").
-  `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires `--provider`.
+  `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires complete recipe text in `--llm`.
   `loop.py` opens the recipe's wire through core's roster and owns the provider-neutral loop:
   tool execution, inbox drains, observer events, recorded steps, interrupted inputs and cumulative usage.
   Cancellation after a leg arrives completes its recording and answers every unanswered call with an interrupted error result.
