@@ -447,10 +447,8 @@ With the file of §5.5, a root of any bro has the allowance 2, its children 1, a
 A ride follows its installation's configuration (§5.2);
 of the attached repository it reads only what describes the tree.
 
-- **P1.** The attached tree's `[tool.bro]` takes `build-context-command` and sub-tables such as `[tool.bro.devoops]`, whose keys belong to whoever declares them.
-  Any other key is refused at the start, naming where it lives now:
-  `default` as `default-bro`, and `harness`, `summon-harness`, `summon-depth`, `grant`, `revoke` and `limit`, in home settings or the host configuration;
-  `image-repository` and `[tool.bro.llm]` nowhere.
+- **P1.** Of the attached tree's `[tool.bro]`, a ride reads `build-context-command` and sub-tables such as `[tool.bro.devoops]`, whose keys belong to whoever declares them.
+  It reads no other key, so a tree from another home, or from a commit before this design, attaches with whatever else its `[tool.bro]` holds.
 - **P2.** A boxed session on an attached tree with a `uv.lock` runs in the tree's project image, tagged `bro/ride-project:<hash>`, where the hash covers the runtime image and the tree's manifests as today.
   The image carries the label `ride-attachment=<the attachment's identity>`, its path or URL.
 - **P3.** After building a project image, ride untags the other unlocked project images labeled with the same attachment, and the cleanup that removes root-owned files looks up a present image of the tree by that label;
@@ -571,7 +569,6 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
 | two `bro.settings` entries for one home | the reading (G3) | both distributions | every launch |
 | a malformed part the installation owns | the reading (V7) | the layer and key | every launch |
 | a foreign entry's value the installation cannot honor | the start using it (V4) | the layer, what to install, the override to add | that start |
-| a key of the attached tree's `[tool.bro]` that lives elsewhere now | the start (P1) | the key and where it lives | the start |
 | two entries claiming one bro name | the registry (H3) | both distributions | the registry is read |
 | a declaration breaking R2, R3 or R5 | `providers.declaration` | the model or field | the provider is used |
 | a launch beyond its launcher's allowance | launch control (D6) | the allowance and the layers that set it | the launch |
@@ -732,8 +729,9 @@ The examples read the file of §5.5 from this repository's installation (`I` = `
     it runs that recipe, with the source `trail <id>` (S3).
 16. An installation whose marker is missing:
     every launch is refused, naming `<environment>/bro-installation-home` and the line to write (I4).
-17. A launch attached to a tree whose `[tool.bro]` still holds `default = "ppp-dev"`:
-    refused at the start, naming `default-bro` in the home settings or the host configuration as its place (P1).
+17. `ride along --into <a commit before this design> bro-dev`:
+    that commit's root `[tool.bro]` still holds `default`, `harness` and `summon-harness`, which the launch does not read (P1),
+    so it runs on the installation's configuration like any other launch.
 18. The benchmark preset `terminal-bro-gpt-5.6-terra-high`, whose `model_name` is `openai/gpt-5.6-terra,reasoning_effort=high,compact_threshold=200000`:
     the trial's host configuration sets `defaults.harness` and `defaults.summon-harness` to `bro` and `defaults.llm.bro` to `openai:gpt-5.6-terra,reasoning_effort=high,compact_threshold=200000`,
     so the root `terminal` and a `terminal` it summons both run it, from `defaults` (S6).
