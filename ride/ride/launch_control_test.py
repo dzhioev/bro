@@ -33,6 +33,7 @@ from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride import pending_launch
 from ride.authority_test_helper import mission, reading
 from ride.launch_control import LaunchControl
+from ride.peer_facts import WorkerFacts
 
 ROOT = 'ROOT'
 
@@ -218,11 +219,18 @@ def owner(tmp_path):
   )
 
 
-def _control(tmp_path, owner, run, *, type_class=SampleType, worker_container_spawner=None):
-  source = reading(declarations={'test': type_class.authority_declaration(frozenset({'github'}))})
+def _control(
+  tmp_path, owner, run, *, type_class=SampleType, worker_container_spawner=None, source=None
+):
+  source = source or reading(
+    declarations={'test': type_class.authority_declaration(frozenset({'github'}))}
+  )
   host = Host()
   worker_type = type_class(host, run)
   peers = Peers(owner)
+  peers.facts[owner.mission] = WorkerFacts(
+    owner.type, owner.workspace, allowance=source.root_allowance(owner.bro or '')
+  )
   runtime = SimpleNamespace(reference='/runtime')
   control = LaunchControl(
     ride='ride',
@@ -588,3 +596,126 @@ def test_audit_fields_and_passes_are_snapshotted_at_acceptance(tmp_path, owner):
     'transition': 'type-owned',
   }
   assert peers.facts[message.request_id].type == 'test'
+
+
+@pytest.fixture
+def allowance_control(tmp_path, owner):
+  from ride.bro_worker import BroType
+
+  source = reading(
+    config={
+      'defaults': {'summon-depth': 2, 'grant': ['@*', 'webview']},
+      'homes': {'test-home': {'bros': {'bro-eyebro': {'summon-depth': 0}}}},
+    }
+  )
+  owner = replace(owner, bro='lead', mission_record=mission(target='lead', source=source, top=True))
+  control, _, peers, host = _control(tmp_path, owner, Spawn(object(), object()), source=source)
+  host = SimpleNamespace(
+    artifacts=host.artifacts,
+    peers=peers,
+    journal=object(),
+    workspace=SimpleNamespace(name='ws', repository=None, metadata=SimpleNamespace(repo=None)),
+    summon_spawner=object(),
+    session_env={},
+  )
+  control._types['bro'] = BroType(cast(Any, host))
+  control._types['webview'] = installed_types()['webview'](host)
+  return control, peers
+
+
+def _summon(control, target, **fields):
+  message = request('launch', {'type': 'bro', 'target': target, 'prompt': 'work', **fields})
+  context = _handle(control, message)
+  return message.request_id, context
+
+
+def _undertake(peers, identifier, target):
+  facts = peers.for_mission(identifier)
+  peers.owner = replace(
+    peers.owner,
+    mission=identifier,
+    bro=target,
+    mission_record=facts.record,
+    extension=facts.extension,
+  )
+
+
+@pytest.mark.parametrize('placement', ['boxed', 'unboxed', 'join'])
+def test_allowance_chain_refuses_both_summons_and_webviews(allowance_control, placement):
+  control, peers = allowance_control
+  assert peers.for_mission('root').allowance.value == 2
+  developer, context = _summon(control, 'bro-dev', placement=placement)
+  assert context.denied == []
+  assert peers.for_mission(developer).allowance.value == 1
+  _undertake(peers, developer, 'bro-dev')
+  reviewer, context = _summon(control, 'bro-eyebro')
+  assert context.denied == []
+  assert peers.for_mission(reviewer).allowance.value == 0
+  _undertake(peers, reviewer, 'bro-eyebro')
+
+  for message in (
+    request('launch', {'type': 'bro', 'target': 'bro-dev', 'prompt': 'work'}),
+    request('launch', {'type': 'webview'}),
+  ):
+    context = _handle(control, message)
+    [(_, error, _)] = context.denied
+    assert 'allowance 0' in error
+    assert 'defaults.summon-depth=2' in error
+    assert 'homes.test-home.bros.bro-eyebro.summon-depth=0' in error
+    assert not context.spawned
+
+
+def test_non_bro_mission_inherits_and_consumes_allowance(tmp_path, owner):
+  class DelegatingType(SampleType):
+    @classmethod
+    def authority_declaration(cls, credential_kinds):
+      return replace(
+        super().authority_declaration(credential_kinds),
+        base=lambda descriptor, reading: Authority.top(),
+      )
+
+  control, _, peers, _ = _control(
+    tmp_path, owner, Spawn(object(), object()), type_class=DelegatingType
+  )
+  first = _message()
+  assert not _handle(control, first).denied
+  child = peers.for_mission(first.request_id)
+  assert child.allowance.value == 1
+  peers.owner = replace(
+    owner, mission=first.request_id, type='test', bro=None, mission_record=child.record
+  )
+  second = _message()
+  assert not _handle(control, second).denied
+  grandchild = peers.for_mission(second.request_id)
+  assert grandchild.allowance.value == 0
+  peers.owner = replace(peers.owner, mission=second.request_id, mission_record=grandchild.record)
+  [(_, error, _)] = _handle(control, _message()).denied
+  assert 'allowance 0' in error
+
+
+def test_manual_prepare_defers_exhausted_allowance_check_to_commit(allowance_control, monkeypatch):
+  control, peers = allowance_control
+  identifier, context = _summon(control, 'bro-eyebro')
+  assert not context.denied
+  _undertake(peers, identifier, 'bro-eyebro')
+  token, context = _summon(control, 'bro-dev', manual=True)
+  assert not context.denied
+  assert context.expected
+  assert peers.for_mission(token).allowance is None
+
+  monkeypatch.setattr(pending_launch, 'claimed_workspace', lambda token: None)
+  replies = []
+  context = SimpleNamespace(
+    journal=SimpleNamespace(records={token: SimpleNamespace(parent=identifier, state='accepted')}),
+    reply=lambda peer, result: replies.append(result),
+  )
+  control.commit(
+    context,
+    'operator',
+    request('operator.commit', {'token': token, 'fields': {'timeout': None}}),
+  )
+  [reply] = replies
+  assert reply['outcome'] == 'denied'
+  assert 'allowance 0' in reply['error']
+  assert 'homes.test-home.bros.bro-eyebro.summon-depth=0' in reply['error']
+  assert peers.for_mission(token).allowance is None

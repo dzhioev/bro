@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import dataclasses
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Self, cast, get_args
+from typing import Any, ClassVar, Literal, Optional, get_args
 
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
@@ -19,17 +18,6 @@ _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 # sync test asserts the values against the SDK's type.
 ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
-
-DEFAULT_MODEL = 'gpt-5.6-terra'
-
-# `--model` short names for this provider's models.
-MODELS: dict[str, str] = {
-  'sol': 'gpt-6.1-sol',
-  'luna': 'gpt-6-luna',
-  'astra': 'gpt-6-astra',
-  'terra': 'gpt-5.6-terra',
-  'luna5.6': 'gpt-5.6-luna',
-}
 
 # how this provider's client failures read in a run's error output
 FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = (
@@ -777,23 +765,12 @@ def price(
   ) / _ONE_MILLION
 
 
-# neutral effort level (`LLMSpec.with_effort`) → Responses API reasoning_effort.
-_EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
-  'low': 'low',
-  'medium': 'medium',
-  'high': 'high',
-  'xhigh': 'xhigh',
-  'max': 'max',
-}
-
-
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.LLMSpec):
+class Recipe(llm_llm.Recipe):
   """spec for the OpenAI Responses API.
 
   service_tier='priority' is the analog of Claude Code's /fast — same model
   and quality, higher per-token price, faster and more consistent generation.
-  Toggle it through `.fast()` rather than constructing a new spec by hand.
 
   compact_threshold (opt-in) bounds context growth in long runs: the native
   client passes it as server-side context-management policy. None (the default)
@@ -810,7 +787,7 @@ class LLMSpec(llm_llm.LLMSpec):
   # OpenAI model pages, images guide and file-inputs guide, read 2026-10-31.
   # https://developers.openai.com/api/docs/guides/file-inputs
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = dict.fromkeys(
-    MODELS.values(),
+    ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna'],
     frozenset(
       [
         'application/csv',
@@ -946,41 +923,64 @@ class LLMSpec(llm_llm.LLMSpec):
       ]
     ),
   )
-  selection_fields = MappingProxyType({'model': 'model', 'effort': 'reasoning_effort'})
-  deferred_fields = frozenset({'effort'})
-  effort_values = _VALID_REASONING_EFFORTS
+  RETIRED_MODELS: ClassVar[Mapping[str, date]] = dict.fromkeys(
+    [
+      'babbage-002',
+      'chat-latest',
+      'davinci-002',
+      'gpt-3.5-turbo',
+      'gpt-3.5-turbo-0125',
+      'gpt-3.5-turbo-1106',
+      'gpt-3.5-turbo-instruct',
+      'gpt-4-0613',
+      'gpt-4-turbo-2024-04-09',
+      'gpt-4.1',
+      'gpt-4.1-mini',
+      'gpt-4.1-nano',
+      'gpt-4o',
+      'gpt-4o-2024-05-13',
+      'gpt-4o-mini',
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5-nano',
+      'gpt-5-pro',
+      'gpt-5-search-api',
+      'gpt-5.1',
+      'gpt-5.2',
+      'gpt-5.2-pro',
+      'gpt-5.3-codex',
+      'gpt-5.4',
+      'gpt-5.4-mini',
+      'gpt-5.4-nano',
+      'gpt-5.4-pro',
+      'gpt-5.5',
+      'gpt-5.5-cyber',
+      'gpt-5.5-pro',
+      'gpt-5.6-cyber',
+      'gpt-5.6-sol',
+      'gpt-6-sol',
+      'gpt-rosalind-discovery',
+      'gpt-rosalind-research',
+      'o1',
+      'o1-pro',
+      'o3',
+      'o3-mini',
+      'o3-pro',
+      'o4-mini',
+    ],
+    date(2026, 11, 1),
+  )
 
-  model: str = DEFAULT_MODEL
   reasoning_effort: Optional[ReasoningEffort] = None
   service_tier: Optional[ServiceTier] = None
   compact_threshold: Optional[int] = None
 
   def __post_init__(self):
-    if self.service_tier is not None and self.service_tier not in _VALID_SERVICE_TIERS:
-      raise ValueError(
-        f'invalid service_tier {self.service_tier!r}; expected one of '
-        f'{sorted(_VALID_SERVICE_TIERS)} or None'
-      )
-    if self.reasoning_effort is not None and self.reasoning_effort not in _VALID_REASONING_EFFORTS:
-      raise ValueError(
-        f'invalid reasoning_effort {self.reasoning_effort!r}; expected one of '
-        f'{sorted(_VALID_REASONING_EFFORTS)} or None'
-      )
+    super().__post_init__()
     if self.compact_threshold is not None and self.compact_threshold <= 0:
       raise ValueError(
         f'invalid compact_threshold {self.compact_threshold!r}; expected a positive int or None'
       )
-
-  def fast(self) -> Self:
-    return dataclasses.replace(self, service_tier='priority')
-
-  def with_effort(self, effort: str) -> Self:
-    reasoning_effort = _EFFORT_TO_REASONING_EFFORT.get(effort)
-    if reasoning_effort is None:
-      raise ValueError(
-        f'unknown effort level {effort!r}; expected one of {list(_EFFORT_TO_REASONING_EFFORT)}'
-      )
-    return dataclasses.replace(self, reasoning_effort=reasoning_effort)
 
   def request_options(self) -> dict:
     options: dict = {}
@@ -1004,26 +1004,6 @@ class LLMSpec(llm_llm.LLMSpec):
       isinstance(error, APIStatusError) and error.status_code >= 500
     )
 
-  def needed_secrets(self) -> tuple[str, ...]:
-    return ('openai',)
-
-  def _dump_impl(self) -> dict:
-    return {
-      'type': self.TYPE,
-      'model': self.model,
-      'reasoning_effort': self.reasoning_effort,
-      'service_tier': self.service_tier,
-      'compact_threshold': self.compact_threshold,
-    }
-
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> LLMSpec:
-    # __post_init__ revalidates these against the Literal types; the cast keeps
-    # the static checker happy on the JSON-derived path where pyright sees
-    # `str | None`.
-    return cls(
-      model=data['model'],
-      reasoning_effort=cast(Optional[ReasoningEffort], data.get('reasoning_effort')),
-      service_tier=cast(Optional[ServiceTier], data.get('service_tier')),
-      compact_threshold=data.get('compact_threshold'),
-    )
+  def needed_secrets(cls) -> tuple[str, ...]:
+    return ('openai',)

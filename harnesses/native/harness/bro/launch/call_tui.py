@@ -178,7 +178,9 @@ class ChatApp(App):
       key=self._surface_key('banner'),
       origin=Origin.SURFACE,
       timestamp=datetime.now().astimezone().isoformat(),
-      content=render_banner(llm=False, bro=self._runner.bro.name),
+      content=render_banner(
+        plain=False, bro=self._runner.bro.name, resolved_recipe=self._runner.resolved_recipe
+      ),
       trusted_visual=True,
     )
 

@@ -56,7 +56,8 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   every console script relocated to find the interpreter beside itself,
   ride's shim farm over the session commands,
   and runtime assets installed by the bundle’s own registered harnesses.
-  Its manifest records those inputs plus each harness’s files and checksums and gives the bundle a content-derived identity.
+  Its manifest records the `benchmark` installation home and those inputs plus each harness’s files and checksums and gives the bundle a content-derived identity.
+  The bundle writes its installation-home marker beside the interpreter's environment.
   `Bundle` is the layout a consumer addresses — interpreter, scripts, shim farm, manifest, and identity;
   `built(root)` reports a stale, incomplete, or malformed bundle rather than building one behind the caller's back;
   `cached(workspace, root)` builds a stale one first and refuses the rest
@@ -73,7 +74,9 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   a join-only ride in the task's directory whose records land under the collected agent directory,
   reaped through a fresh root exec when harbor cancels the phase.
   The root revokes `bro.placement=boxed` and grants `bro.placement=join`, so its summons may join the task tree and start no new party (`bro/reference/permissions.md`, "Start surfaces").
-  Harbor's `model_name` carries `<provider>/<model>[:<effort>][+fast][+passthrough]`, mapped onto a complete `--llm` recipe;
+  Harbor's `model_name` carries `<provider>/<rest of recipe text>`, required by every preset.
+  The trial writes a host configuration whose `defaults` select its harness and recipe for roots and summons;
+  `ride solo` passes neither `--harness` nor `--llm`;
   the retry classification is the roster providers' declared failure signatures;
   the token counters harbor keeps are summed from the trial's trail store
 - `bro/benchmark/trial_store.py` — the trail store a trial's run leaves under its collected agent directory:

@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "browser persona and webview worker for bro"
 requires-python = ">=3.12"
 dependencies = [
-  "bro-openai",
   "anyio",
   "bro",
   "bro-ride",
@@ -21,7 +20,7 @@ dependencies = [
 "bro.webview.cli" = "bro.webview._entrypoints:bro_webview_cli"
 "webview" = "bro.webview._entrypoints:bro_webview_cli"
 
-[project.entry-points."bro"]
+[project.entry-points."bro.bros.bro"]
 browser = "bros.browser:Browser"
 
 [project.entry-points."bro.worker_types"]
@@ -37,12 +36,10 @@ cookies = "bro.webview.credentials:COOKIES"
 webview = "bro.webview._entrypoints:bro_webview_cli"
 
 [tool.uv.sources]
-bro-openai = { workspace = true }
 bro = { workspace = true }
 bro-ride = { workspace = true }
 
 [tool.deptry.package_module_name_map]
-bro-openai = ["bro"]
 bro = ["bro", "bros"]
 bro-ride = ["ride"]
 

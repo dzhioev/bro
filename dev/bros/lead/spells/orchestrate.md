@@ -143,7 +143,7 @@ this spell only says how a phase differs from a one-shot ask.
   Give only what it needs beyond its base and what your recipient restrictions allow:
   `@<bro>` for onward delegation, or `bro.placement=unboxed` / `bro.placement=join` for non-default placement.
   When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator may use the matching `bro.cred=<kind>+<instance>` permission.
-  Otherwise the kind and instance must come from `projects.<identity>.bros.<phase-bro>` in the host configuration;
+  Otherwise the kind and instance must come from `homes.<installation home>.bros.<phase-bro>` in the host configuration;
   do not broaden every run of that bro when an authorized per-phase pass is available.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
@@ -164,14 +164,14 @@ Do not let this session end with a phase in flight;
 These want the user in the session rather than a one-shot run, so they go out as manual summons
 — the host registers the phase on a token, and the user launches the session against it.
 The mechanics are [[ask]]'s;
-the summon carries the phase prompt and any authorized credential pass, but none of the launch line, since hold, effort, and harness belong to the launch.
+the summon carries the phase prompt and any authorized credential pass, but none of the launch line, since hold, recipe, and harness belong to the launch.
 Relay the token as the command the user pastes, the launch line appended and `--harness` selecting Claude Code or the bro's native chat loop:
 
 ```
 ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
 ```
 
-- The launch line's `--hold` and `--effort` carry the same meaning under either harness.
+- The launch line's `--hold` has the same meaning under either harness; `--llm` takes complete recipe text served by the selected harness.
 - The phase prompt becomes the session's first message, so the session starts on it directly instead of through [[fix]].
   It is as self-contained as any summon's
   — the session shares no context with you either.
@@ -202,7 +202,7 @@ verification comes after the last.
 
 ### 1 — design
 
-**Manual summon:** launched `--hold attended --effort max`
+**Manual summon:** launched `--hold attended --llm <complete recipe with maximum effort>`
 
 Attended because this is where the human's input is worth the most:
 the session brings each pivotal decision to them as it comes up.
@@ -232,7 +232,7 @@ the design file on its pull request, `## Design` on the page linking it, and an 
 
 ### 2 — review and plan
 
-**Manual summon:** launched `--hold attended --effort max`{{when #may_summon contains eyebro}}, requested with `grant` `@<the eyebro>`{{end}}
+**Manual summon:** launched `--hold attended --llm <complete recipe with maximum effort>`{{when #may_summon contains eyebro}}, requested with `grant` `@<the eyebro>`{{end}}
 
 A fresh session supplies independent eyes.
 Attended hold lets it bring material objections and open design decisions to the user before finalizing the design.{{when #may_summon contains eyebro}}
@@ -409,7 +409,7 @@ every step's check passed and recorded on the page, or a failed step rolled back
 
 ### 6 — verify
 
-**Summon:** `into` `master`, which the work is on by then · pass a phase-only credential when authorized, otherwise take credentials from `projects.<identity>.bros.<the phase bro>` in the host config
+**Summon:** `into` `master`, which the work is on by then · pass a phase-only credential when authorized, otherwise take credentials from `homes.<installation home>.bros.<the phase bro>` in the host config
 
 Once the work is live
 — merged, and rolled out if it needed a rollout:

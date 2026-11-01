@@ -2,12 +2,13 @@ import importlib.metadata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar, Optional
+from unittest.mock import Mock
 
 import pytest
 
 import bro.registry
 from bro.inbox import Inbox
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.mcp import MCPServer
 from bro.llm.wire import SystemPrompt, UserMessage
 from bro.native.llm import LLM
@@ -26,17 +27,10 @@ class MockLLM(LLM):
 
 
 @dataclass(frozen=True)
-class _EchoOnlySpec(LLMSpec):
+class _EchoOnlySpec(Recipe):
   TYPE: ClassVar[str] = 'mock'
 
   model: str = 'mock'
-
-  def _dump_impl(self) -> dict:
-    return {'type': self.TYPE, 'model': self.model}
-
-  @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    return cls(model=data['model'])
 
 
 class AlphaBro(Bro):
@@ -104,12 +98,6 @@ class TestRegister:
     b = create_bro('alpha')
     assert a is not b
 
-  def test_create_with_llm_spec_routes_through_create_factory(self):
-    register(AlphaBro)
-    spec = _EchoOnlySpec(model='custom-model')
-    bro = create_bro('alpha', llm_spec=spec)
-    assert bro.llm_spec is spec
-
   def test_get_class_returns_the_registered_class(self):
     register(AlphaBro)
     assert get_class('alpha') is AlphaBro
@@ -174,8 +162,12 @@ class TestAutoload:
       get_class('dev')
 
 
-def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
-  return importlib.metadata.EntryPoint(name, value, bro.registry._ENTRY_POINT_GROUP)
+def _entry_point(
+  name: str, value: str, home: str = 'example', distribution: str = 'example-distribution'
+) -> importlib.metadata.EntryPoint:
+  entry = importlib.metadata.EntryPoint(name, value, f'bro.bros.{home}')
+  object.__setattr__(entry, 'dist', Mock(metadata={'Name': distribution}))
+  return entry
 
 
 class TestDeclaredSpecs:
@@ -185,16 +177,16 @@ class TestDeclaredSpecs:
   def enable_autoload(self):
     bro.registry._autoload = True
 
-  def test_entry_points_use_the_bro_group(self, monkeypatch):
-    calls: list[dict] = []
-
-    def entry_points(**kwargs):
-      calls.append(kwargs)
-      return ()
-
-    monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
-    assert bro.registry._entry_points() == ()
-    assert calls == [{'group': 'bro'}]
+  def test_entry_points_read_all_home_groups_without_loading_modules(self, monkeypatch):
+    first = _entry_point('first', 'unimportable:First', 'one')
+    second = _entry_point('second', 'unimportable:Second', 'two')
+    entries = importlib.metadata.EntryPoints(
+      [first, second, importlib.metadata.EntryPoint('old', 'unimportable:Old', 'bro')]
+    )
+    monkeypatch.setattr(importlib.metadata, 'entry_points', lambda: entries)
+    assert bro.registry.declared_specs() == {'first': first.value, 'second': second.value}
+    assert bro.registry.home('first') == 'one'
+    assert bro.registry.home('second') == 'two'
 
   def test_get_class_resolves_a_declared_entry_point(self, monkeypatch):
     monkeypatch.setattr(
@@ -220,10 +212,12 @@ class TestDeclaredSpecs:
       '_entry_points',
       lambda: (
         _entry_point('external', 'bro.registry_test:ExternalBro'),
-        _entry_point('external', 'other.module:Other'),
+        _entry_point('external', 'other.module:Other', 'another', 'second-distribution'),
       ),
     )
-    with pytest.raises(ValueError, match='duplicate bro'):
+    with pytest.raises(
+      ValueError, match='duplicate bro.*example-distribution.*second-distribution'
+    ):
       bro.registry.known_names()
 
   def test_a_declared_name_over_the_length_bound_raises_before_import(self, monkeypatch):

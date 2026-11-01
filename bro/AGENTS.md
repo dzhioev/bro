@@ -28,12 +28,12 @@ A subpackage with a map of its own is pointed at, not described here.
   and the `page` and `results` service tools reading kept results back ("Kept results" below).
 - `procedures.py` — `parse_frontmatter`, the flat frontmatter grammar a spell file opens with (`bro/reference/extending.md`, "Declaring a bro").
 - `registry.py` — process-wide registry of bro classes:
-  `register(cls)`, `get_class(name)`, `create_bro(name, llm_spec=None)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
+  `register(cls)`, `get_class(name)`, `create_bro(name)`, `list_classes()`, `known_names()` (every resolvable name, read without importing any bro module — what `ride/ride/bro_worker.py` validates summon targets against).
   A name is 1 to `MAX_NAME_LENGTH` characters.
   `create_bro` returns a fresh instance every call.
   `lineage(name)` is the names a bro answers to — its own plus every registered bro on its MRO, which is what `#may_summon`'s is-a membership tests against.
   `declared_specs()` is the one name source:
-  `name -> "module:ClassName"` read from every installed distribution's `bro` entry points, metadata only, importing nothing
+  `name -> "module:ClassName"` read from every installed distribution's `bro.bros.<home>` entry points, metadata only, importing nothing
   — two distributions claiming one name raise rather than letting import order decide.
   Lookup is lazy:
   a miss imports only the single module that declaration names, so resolving one bro never pulls in another's dependency graph;
@@ -111,7 +111,7 @@ A subpackage with a map of its own is pointed at, not described here.
   Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
   `owned_environment()` names the environment variables carrying its session state.
   `llm_providers` exposes the providers whose recipes it runs, computed from the installed roster for wire-driven harnesses;
-  `resolve_recipe` lays an LLM selection over a standing recipe among them and refuses one it does not serve, naming the installed harnesses that do.
+  `check_recipe` refuses a provider it does not serve, naming the installed harnesses that do.
   `Harness.serve(reach)` returns a `Service`:
   the server specs the harness mounts for the reach's tool groups, and the groups it leaves unserved, which `bro show` marks.
   The tools a harness serves a group with on its own, Claude's natives or the bro harness's job tools, are its own code, built from the same reach.
@@ -121,7 +121,7 @@ A subpackage with a map of its own is pointed at, not described here.
   The directories are portions of the shared `bro.launch` namespace;
   see `launch/AGENTS.md`
 - `llm/` — the provider-neutral declaration and shared-contract layer:
-  `LLMSpec` recipes and provider selection, the live MCP tool/server seam engines consume, observers and trackers, token-usage accounting, and `mu`, the typed one-shot call helper an extension calls directly;
+  `Recipe` recipes and provider selection, the live MCP tool/server seam engines consume, observers and trackers, token-usage accounting, and `mu`, the typed one-shot call helper an extension calls directly;
   see `llm/AGENTS.md`
 - `monitor/` — session-local monitoring paths and signals shared across package boundaries:
   the recording health file (`health.py`) and a managed session's current-trail pointer (`trail_pointer.py`)
@@ -136,7 +136,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `trails/` — the recording pipeline;
   see `trails/AGENTS.md`
 - `workspace/` — the dependency-light workspace contracts core services read;
-  see `workspace/AGENTS.md` and `reference/ride.md`, "Per-project defaults", for project and host harness selections
+  see `workspace/AGENTS.md` and `reference/ride.md`, "Home settings", for installation and host harness selections
 - `bros/bro/` — the core distribution's sole concrete persona, inside the shared PEP 420 `bros` namespace.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.
   Bros normally inherit from this `Bro`, so they pick up the shared defaults via the MRO walk;
@@ -148,7 +148,7 @@ A subpackage with a map of its own is pointed at, not described here.
   — and `spell::watch` — keeping an admitted command's lines in view through `bro::watch`, ending turns while idle, and stopping it through `bro::unwatch`.
   Development personas ship from `bro-dev`;
   `dev/AGENTS.md` maps them.
-  Consumer personas register through the `bro` entry-point group and live in their contributing packages.
+  Consumer personas register through `bro.bros.<home>` entry-point groups and live in their contributing packages.
 
 ## Running a declaration
 
@@ -189,7 +189,7 @@ the spell tools and `cast` render spell bodies under that hold.
 `_build_service_server` decides core's roster from the surface and the process environment, then appends `Harness.own_tools` and renders the combined roster as the `#tools` universe:
 
 - `banner`, always:
-  the session facts of `ride banner --llm` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly since an in-process run's environment carries the launcher's;
+  the session facts of `ride banner --plain` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name, resolved recipe and trail id passed explicitly since an in-process run's environment carries the launcher's;
   the playbook is `bro/prompts/environment.md`.
 - `page` and `results`, always:
   `page` returns `char_limit` characters of a kept result from `char_offset`, and `results` lists the kept results newest first, those kept before `before` when given.
@@ -226,7 +226,7 @@ the union of `needed_secrets` over the components that harness mounts for the br
 which are the servers it serves the bro's tool groups with and the bro's own declared servers and data sources (matching what `bro.claude.assembly.persona_servers()` mounts for `claude`);
 the MRO-collected `extra_secrets`;
 and the credentials of its pinned-on features.
-It excludes the LLM key (`llm_spec.needed_secrets()` when a recipe is declared):
+It excludes the run's LLM key (`recipe.needed_secrets()`):
 surfaces that run the bro as an LLM process add it, while a claude-code session authenticates on its own.
 `missing_secrets()` is the manifest plus the LLM key, checked against the process's store;
 `Runner.run()` refuses to start on any missing name, raising `BroRaised` with them all listed, and interactive surfaces reply with the report.

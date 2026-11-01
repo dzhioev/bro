@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import Optional
 
 from bro.llm import wires
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
+from bro.llm.providers import require_admitted
+from bro.llm.resolved import IN_PROCESS_SOURCE, ResolvedRecipe
 from bro.llm.tracker import NullTracker, Tracker
 from bro.llm.wire import Prefix
 from bro.native.harness import BRO
@@ -113,7 +115,7 @@ def fork(
   forked_from_trail: RecordedTrail,
   up_to_step_id: int,
   *,
-  llm_spec: Optional[LLMSpec] = None,
+  recipe: Recipe | ResolvedRecipe | None = None,
   system_prompt: Optional[str] = None,
   record: bool = True,
   tracker: Optional[Tracker] = None,
@@ -132,24 +134,32 @@ def fork(
   bro_name = forked_from_trail.header.bro
   if bro_name is None:
     raise ValueError(f'trail {forked_from_trail.header.id!r} has no bro persona')
-  spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(forked_from_trail.header.llm_spec)
-  if spec.WIRE not in wires.client_names():
+  if recipe is None:
+    resolved = ResolvedRecipe(
+      Recipe.from_dict(forked_from_trail.header.recipe), f'trail {forked_from_trail.header.id}'
+    )
+  else:
+    resolved = (
+      recipe if isinstance(recipe, ResolvedRecipe) else ResolvedRecipe(recipe, IN_PROCESS_SOURCE)
+    )
+  selected_recipe = resolved.recipe
+  require_admitted(selected_recipe)
+  if selected_recipe.WIRE not in wires.client_names():
     raise ValueError(
-      f'trail {forked_from_trail.header.id!r} was recorded under {spec.TYPE!r}, whose harness '
-      f'has no client for wire {spec.WIRE!r}; there is no bro-native conversation to continue'
+      f'trail {forked_from_trail.header.id!r} was recorded under {selected_recipe.TYPE!r}, whose harness '
+      f'has no client for wire {selected_recipe.WIRE!r}; there is no bro-native conversation to continue'
     )
   prefix = replay_prefix(forked_from_trail, up_to_step_id, fetch_forked_from=fetch_forked_from)
   for step in prefix.steps:
     if step.kind == 'llm_call':
       tag = step.extras.get('wire')
       recorded_wire = wires.registry.legacy_name() if tag is None else tag
-      if recorded_wire != spec.WIRE:
+      if recorded_wire != selected_recipe.WIRE:
         raise ValueError(
-          f'cannot fork wire {recorded_wire!r} with target wire {spec.WIRE!r}; '
+          f'cannot fork wire {recorded_wire!r} with target wire {selected_recipe.WIRE!r}; '
           f'select a recipe on recorded wire {recorded_wire!r}'
         )
   bro = create_bro(bro_name)
-  bro.llm_spec = spec
 
   fork_step = _find_step(forked_from_trail, up_to_step_id)
   forked_from_system_prompt = _extract_system_prompt(forked_from_trail)
@@ -162,8 +172,8 @@ def fork(
     effective_system_prompt = bro.system_prompt_for(hold=effective_hold, harness=BRO)
     prompt_changed = effective_system_prompt != forked_from_system_prompt
   use_server_side = _server_side_eligible(
-    forked_from_spec=forked_from_trail.header.llm_spec,
-    new_spec=spec,
+    forked_from_recipe=forked_from_trail.header.recipe,
+    recipe=selected_recipe,
     fork_step=fork_step,
     system_prompt_override=effective_system_prompt if prompt_changed else None,
   )
@@ -171,7 +181,7 @@ def fork(
   # pre-assigning it bypasses the runner's fresh-run fragment append.
   bro._system_prompt_override = effective_system_prompt
 
-  runner = Runner(bro, activity_file=activity_file)
+  runner = Runner(bro, resolved, activity_file=activity_file)
   runner._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else runner._make_tracker())
   )
@@ -188,7 +198,7 @@ def fork(
   )
   trail_id = runner._tracker.start_trail(
     bro=bro.name,
-    llm_spec=spec.dump(),
+    recipe=selected_recipe.dump(),
     system_prompt=effective_system_prompt,
     forked_from=forked_from,
     interactive=True,
@@ -201,18 +211,18 @@ def fork(
 
 def _server_side_eligible(
   *,
-  forked_from_spec: dict,
-  new_spec: LLMSpec,
+  forked_from_recipe: dict,
+  recipe: Recipe,
   fork_step: Step,
   system_prompt_override: Optional[str],
 ) -> bool:
-  if wires.registry.get(new_spec.WIRE).CHAINING != 'server':
+  if wires.registry.get(recipe.WIRE).CHAINING != 'server':
     return False
   if system_prompt_override is not None:
     return False
-  if forked_from_spec.get('type') != new_spec.TYPE:
+  if forked_from_recipe.get('type') != recipe.TYPE:
     return False
-  if forked_from_spec.get('model') != new_spec.dump()['model']:
+  if forked_from_recipe.get('model') != recipe.dump()['model']:
     return False
   if fork_step.kind != 'llm_call' or 'stopped' in fork_step.extras:
     return False

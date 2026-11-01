@@ -66,7 +66,7 @@ def test_records_and_replays_bro_trails(tmp_path):
   recorder = Recorder(store)
   trail_id = recorder.start_trail(
     bro='dev',
-    llm_spec={'type': 'echo', 'model': 'echo'},
+    recipe={'type': 'echo', 'model': 'echo'},
     system_prompt='prompt',
     forked_from=None,
     interactive=False,

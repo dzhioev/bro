@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from bro.base import configs, host_config
+from bro.base import host_config
 
 
 @pytest.fixture
@@ -15,187 +15,6 @@ def config_file(tmp_path, monkeypatch):
     return path
 
   return write
-
-
-class TestProjectSelection:
-  def test_absent_file_selects_nothing(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
-
-    assert host_config.launch_selection(
-      host_config.Attachment(path=str(tmp_path)), 'developer'
-    ) == host_config.CredentialSelection({}, {})
-
-  def test_project_picks_carry_attribution(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'creds': ['github+project', 'brog+']}}})
-
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
-
-    assert selected.instances == {'github': 'project', 'brog': ''}
-    assert selected.layers == {
-      'github': host_config.PROJECT_PATH_LAYER,
-      'brog': host_config.PROJECT_PATH_LAYER,
-    }
-
-  def test_an_unnamed_attachment_gets_no_project_picks(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path / 'api'): {
-            'creds': ['github+api', 'brog+github'],
-            'bros': {'reviewer': {'creds': ['trails+review']}},
-          }
-        }
-      }
-    )
-
-    assert (
-      host_config.launch_selection(
-        host_config.Attachment(path=str(tmp_path / 'elsewhere')), 'developer'
-      ).instances
-      == {}
-    )
-
-  def test_a_detached_launch_gets_no_project_picks(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'creds': ['brog+github']}}})
-
-    assert host_config.launch_selection(None, 'developer').instances == {}
-
-  def test_keys_expand_and_resolve_before_matching(self, config_file, tmp_path, monkeypatch):
-    monkeypatch.setenv('HOME', str(tmp_path))
-    (tmp_path / 'repo').mkdir()
-    (tmp_path / 'link').symlink_to(tmp_path / 'repo')
-    config_file({'projects': {'~/repo': {'creds': ['brog+github']}}})
-
-    assert host_config.launch_selection(
-      host_config.Attachment(path=str(tmp_path / 'link')), 'developer'
-    ).instances == {'brog': 'github'}
-
-  def test_a_url_key_matches_the_same_url_normalized(self, config_file):
-    config_file({'projects': {'HTTPS://GitHub.com/foo/api.git/': {'creds': ['brog+github']}}})
-
-    selected = host_config.launch_selection(
-      host_config.Attachment(url='https://github.com/foo/api.git'), 'developer'
-    )
-
-    assert selected.instances == {'brog': 'github'}
-
-  @pytest.mark.parametrize(
-    'url',
-    ['git@github.com:Foo/API.git', 'ssh://git@github.com/foo/api', 'https://github.com/foo/api'],
-  )
-  def test_any_spelling_of_a_github_repository_matches_its_key(self, config_file, url):
-    config_file({'projects': {'git@github.com:foo/api.git': {'creds': ['brog+github']}}})
-
-    selected = host_config.launch_selection(host_config.Attachment(url=url), 'developer')
-
-    assert selected.instances == {'brog': 'github'}
-
-  def test_a_local_file_url_spelling_github_does_not_match_it(self, config_file):
-    config_file({'projects': {'https://github.com/foo/api': {'creds': ['brog+github']}}})
-
-    selected = host_config.launch_selection(
-      host_config.Attachment(url='file://github.com/foo/api.git'), 'developer'
-    )
-
-    assert selected.instances == {}
-
-  def test_another_hosts_url_keeps_its_transport(self, config_file):
-    config_file({'projects': {'git@gitlab.com:foo/api.git': {'creds': ['brog+github']}}})
-
-    selected = host_config.launch_selection(
-      host_config.Attachment(url='https://gitlab.com/foo/api.git'), 'developer'
-    )
-
-    assert selected.instances == {}
-
-  def test_two_keys_naming_one_identity_are_rejected(self, config_file):
-    config_file(
-      {
-        'projects': {
-          'https://github.com/foo/api.git': {'creds': ['brog+github']},
-          'git@github.com:foo/api': {'creds': ['brog+flow']},
-        }
-      }
-    )
-
-    with pytest.raises(ValueError, match='name the same identity'):
-      host_config.launch_selection(
-        host_config.Attachment(url='https://github.com/foo/api.git'), 'developer'
-      )
-
-
-class TestTwoIdentities:
-  URL = 'https://github.com/foo/api.git'
-
-  def _config(self, config_file, tmp_path, path_entry, url_entry):
-    config_file({'projects': {self.URL: url_entry, str(tmp_path): path_entry}})
-    return host_config.Attachment(path=str(tmp_path), url=self.URL)
-
-  def test_the_path_entry_layers_over_the_url_entry_per_kind(self, config_file, tmp_path):
-    attachment = self._config(
-      config_file,
-      tmp_path,
-      path_entry={'creds': ['github+work', 'aws+laptop']},
-      url_entry={'creds': ['brog+github', 'github+dev']},
-    )
-
-    selected = host_config.launch_selection(attachment, 'developer')
-
-    assert selected.instances == {'brog': 'github', 'github': 'work', 'aws': 'laptop'}
-    assert selected.layers == {
-      'brog': host_config.PROJECT_URL_LAYER,
-      'github': host_config.PROJECT_PATH_LAYER,
-      'aws': host_config.PROJECT_PATH_LAYER,
-    }
-
-  def test_a_bro_layer_outranks_both_project_layers(self, config_file, tmp_path):
-    attachment = self._config(
-      config_file,
-      tmp_path,
-      path_entry={'creds': ['github+work']},
-      url_entry={'bros': {'reviewer': {'creds': ['github+reviewer']}}},
-    )
-
-    selected = host_config.launch_selection(attachment, 'reviewer')
-
-    assert selected.instances == {'github': 'reviewer'}
-    assert selected.layers == {'github': host_config.PROJECT_URL_BRO_LAYER}
-
-  def test_the_path_bro_layer_wins_the_bro_rank(self, config_file, tmp_path):
-    attachment = self._config(
-      config_file,
-      tmp_path,
-      path_entry={'bros': {'reviewer': {'creds': ['github+laptop']}}},
-      url_entry={'bros': {'reviewer': {'creds': ['github+reviewer', 'trails+review']}}},
-    )
-
-    selected = host_config.launch_selection(attachment, 'reviewer')
-
-    assert selected.instances == {'github': 'laptop', 'trails': 'review'}
-    assert selected.layers == {
-      'github': host_config.PROJECT_PATH_BRO_LAYER,
-      'trails': host_config.PROJECT_URL_BRO_LAYER,
-    }
-
-  def test_grants_merge_across_the_bro_layers(self, config_file, tmp_path):
-    attachment = self._config(
-      config_file,
-      tmp_path,
-      path_entry={'bros': {'reviewer': {'creds': ['github+laptop']}}},
-      url_entry={'bros': {'reviewer': {'creds': ['github+reviewer'], 'grant': ['github', 'aws']}}},
-    )
-
-    selected = host_config.launch_selection(attachment, 'reviewer')
-
-    assert selected.instances == {'github': 'laptop'}
-    assert selected.layers == {'github': host_config.PROJECT_PATH_BRO_LAYER}
-    assert selected.scope_layers[0].grant == ('github', 'aws')
-
-  def test_a_path_naming_no_entry_still_reads_the_url_entry(self, config_file, tmp_path):
-    config_file({'projects': {self.URL: {'creds': ['brog+github']}}})
-    attachment = host_config.Attachment(path=str(tmp_path), url=self.URL)
-
-    assert host_config.launch_selection(attachment, 'developer').instances == {'brog': 'github'}
 
 
 class TestAttachment:
@@ -213,278 +32,6 @@ class TestAttachment:
       host_config.Attachment(**fields)
 
 
-class TestLaunchSelection:
-  def test_project_bro_overrides_project_picks(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path): {
-            'creds': ['github+project', 'brog+github'],
-            'bros': {
-              'reviewer': {'creds': ['github+reviewer', 'trails+review']},
-            },
-          }
-        },
-      }
-    )
-
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'reviewer')
-
-    assert selected.instances == {
-      'github': 'reviewer',
-      'trails': 'review',
-      'brog': 'github',
-    }
-    assert selected.layers == {
-      'github': host_config.PROJECT_PATH_BRO_LAYER,
-      'trails': host_config.PROJECT_PATH_BRO_LAYER,
-      'brog': host_config.PROJECT_PATH_LAYER,
-    }
-
-  def test_an_unlisted_bro_uses_project_picks(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'creds': ['github+project']}}})
-
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
-
-    assert selected.instances == {'github': 'project'}
-
-  def test_a_bro_can_pick_and_grant_the_same_kind(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path): {
-            'creds': ['github+project'],
-            'bros': {'reviewer': {'creds': ['github+reviewer'], 'grant': ['github']}},
-          }
-        }
-      }
-    )
-
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'reviewer')
-
-    assert selected.instances == {'github': 'reviewer'}
-    assert selected.layers == {'github': host_config.PROJECT_PATH_BRO_LAYER}
-    assert selected.scope_layers[-1].grant == ('github',)
-
-  def test_a_bare_grant_reads_the_instance_the_other_layers_select(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path): {
-            'creds': ['github+project'],
-            'bros': {'reviewer': {'grant': ['github']}},
-          }
-        }
-      }
-    )
-
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'reviewer')
-
-    assert selected.instances == {'github': 'project'}
-    assert selected.layers == {'github': host_config.PROJECT_PATH_LAYER}
-    assert selected.scope_layers[-1].grant == ('github',)
-
-  def test_another_bros_grant_does_not_reach_the_launch(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path): {'bros': {'reviewer': {'creds': ['github+reviewer'], 'grant': ['github']}}}
-        }
-      }
-    )
-    attachment = host_config.Attachment(path=str(tmp_path))
-
-    assert host_config.launch_selection(attachment, 'developer').scope_layers == ()
-
-
-class TestScopeLayers:
-  def test_a_colon_permission_is_rejected(self, config_file):
-    config_file({'defaults': {'grant': [':webview.vnc']}})
-    with pytest.raises(host_config.CLIError, match="invalid name ':webview'"):
-      host_config.launch_selection(None, 'developer')
-
-  def test_limits_keep_their_layer_and_leave_credential_picks_unchanged(
-    self, config_file, tmp_path
-  ):
-    config_file(
-      {
-        'defaults': {'limit': ['@* for bro{placement=boxed}']},
-        'projects': {
-          str(tmp_path): {
-            'limit': ['webview.cred=cookies+* to @browser'],
-            'bros': {'dev': {'creds': ['github+work'], 'limit': ['@reviewer for *']}},
-          }
-        },
-      }
-    )
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'dev')
-    assert selected.instances == {'github': 'work'}
-    assert [layer.source for layer in selected.scope_layers] == [
-      host_config.DEFAULTS_LAYER,
-      host_config.PROJECT_PATH_LAYER,
-      host_config.PROJECT_PATH_BRO_LAYER,
-    ]
-    assert [layer.limit for layer in selected.scope_layers] == [
-      ('@* for bro{placement=boxed}',),
-      ('webview.cred=cookies+* to @browser',),
-      ('@reviewer for *',),
-    ]
-
-  @pytest.mark.parametrize(
-    'field, entries',
-    [
-      ('revoke', ['@reviewer to *']),
-      ('limit', ['@reviewer']),
-      ('grant', [':launch.bro']),
-    ],
-  )
-  @pytest.mark.parametrize('section', ['defaults', 'project', 'bro', 'operator'])
-  def test_every_policy_layer_is_validated_on_an_unrelated_read(
-    self, config_file, field, entries, section
-  ):
-    policy = {field: entries}
-    data = {
-      'defaults': {'defaults': policy},
-      'operator': {'operator': policy},
-      'project': {'projects': {'/other': policy}},
-      'bro': {'projects': {'/other': {'bros': {'other': policy}}}},
-    }[section]
-    config_file(data)
-    with pytest.raises(host_config.CLIError):
-      host_config.tool_selection(None)
-
-  def test_operator_caps_do_not_change_credential_selection(self, config_file):
-    config_file(
-      {
-        'operator': {'revoke': ['@uninstalled'], 'limit': ['bro.placement=* for bro{target=dev}']},
-        'user': {'creds': ['github+work']},
-      }
-    )
-    assert host_config.tool_selection(None).instances == {'github': 'work'}
-    assert host_config.launch_selection(None, 'dev').scope_layers == ()
-
-  @pytest.mark.parametrize(
-    'value', [[], {'grant': ['@dev']}, {'creds': ['github+work']}, {'limit': '@dev for *'}]
-  )
-  def test_operator_accepts_only_cap_lists(self, config_file, value):
-    config_file({'operator': value})
-    with pytest.raises(host_config.CLIError, match='operator'):
-      host_config.llm_presets()
-
-  def test_defaults_project_and_bro_layers_stay_in_precedence_order(self, config_file, tmp_path):
-    config_file(
-      {
-        'defaults': {'grant': ['bro.placement=join', '@reviewer']},
-        'projects': {
-          str(tmp_path): {
-            'revoke': ['bro.placement=join'],
-            'bros': {
-              'dev': {
-                'creds': ['github+work'],
-                'grant': ['github', 'bro.placement=unboxed'],
-                'revoke': ['@reviewer'],
-              }
-            },
-          }
-        },
-      }
-    )
-
-    selected = host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'dev')
-
-    assert selected.instances == {'github': 'work'}
-    assert selected.scope_layers == (
-      host_config.ScopeLayer(grant=('bro.placement=join', '@reviewer')),
-      host_config.ScopeLayer(revoke=('bro.placement=join',)),
-      host_config.ScopeLayer(
-        grant=('github', 'bro.placement=unboxed'),
-        revoke=('@reviewer',),
-        creds=('github+work',),
-      ),
-    )
-
-  def test_project_level_grants_reach_every_bro_but_bro_layers_are_exact(
-    self, config_file, tmp_path
-  ):
-    config_file(
-      {
-        'projects': {
-          str(tmp_path): {
-            'grant': ['bro.placement=join'],
-            'bros': {'dev': {'revoke': ['bro.placement=boxed']}},
-          }
-        }
-      }
-    )
-    attachment = host_config.Attachment(path=str(tmp_path))
-
-    assert host_config.launch_selection(attachment, 'reviewer').scope_layers == (
-      host_config.ScopeLayer(grant=('bro.placement=join',)),
-    )
-    assert host_config.launch_selection(attachment, 'dev').scope_layers == (
-      host_config.ScopeLayer(grant=('bro.placement=join',)),
-      host_config.ScopeLayer(revoke=('bro.placement=boxed',)),
-    )
-
-
-class TestLaunchLLM:
-  URL = 'https://github.com/foo/api.git'
-
-  def test_a_bro_entry_lists_its_recipes_with_its_layer(self, config_file, tmp_path):
-    config_file(
-      {'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': ['openai:sol:xhigh', 'default']}}}}}
-    )
-
-    assert host_config.launch_llm(
-      host_config.Attachment(path=str(tmp_path)), 'eyebro'
-    ) == host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, ('openai:sol:xhigh', 'default'))
-
-  def test_the_path_entry_replaces_the_url_entry_whole(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          self.URL: {'bros': {'eyebro': {'llm': ['openai:sol:xhigh', 'default']}}},
-          str(tmp_path): {'bros': {'eyebro': {'grant': ['aws'], 'llm': ['::low']}}},
-        }
-      }
-    )
-
-    assert host_config.launch_llm(
-      host_config.Attachment(path=str(tmp_path), url=self.URL), 'eyebro'
-    ) == host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, ('::low',))
-
-  def test_an_entry_listing_no_recipe_leaves_the_less_specific_list(self, config_file, tmp_path):
-    config_file(
-      {
-        'projects': {
-          self.URL: {'bros': {'eyebro': {'llm': ['openai:sol:xhigh']}}},
-          str(tmp_path): {'bros': {'eyebro': {'creds': ['github+work']}}},
-        }
-      }
-    )
-
-    assert host_config.launch_llm(
-      host_config.Attachment(path=str(tmp_path), url=self.URL), 'eyebro'
-    ) == host_config.LLMDefault(host_config.PROJECT_URL_BRO_LAYER, ('openai:sol:xhigh',))
-
-  def test_another_bros_recipes_do_not_reach_the_launch(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': ['openai:sol:xhigh']}}}}})
-
-    assert host_config.launch_llm(host_config.Attachment(path=str(tmp_path)), 'developer') is None
-
-  def test_a_detached_launch_reads_no_entry(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': ['openai:sol:xhigh']}}}}})
-
-    assert host_config.launch_llm(None, 'eyebro') is None
-
-  def test_a_recipe_is_carried_as_written(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'bros': {'eyebro': {'llm': ['not a recipe']}}}}})
-
-    assert host_config.launch_llm(
-      host_config.Attachment(path=str(tmp_path)), 'eyebro'
-    ) == host_config.LLMDefault(host_config.PROJECT_PATH_BRO_LAYER, ('not a recipe',))
-
-
 class TestToolSelection:
   def test_the_tool_layer_overrides_the_user_layer(self, config_file, tmp_path):
     config_file(
@@ -493,7 +40,7 @@ class TestToolSelection:
           'creds': ['github+me', 'brog+linear', 'trails+write'],
           'tools': {'bro.trails.rewind': {'creds': ['trails+analyst', 'openai+benchmark']}},
         },
-        'projects': {str(tmp_path): {'creds': ['brog+github']}},
+        'homes': {'test-home': {'creds': ['brog+github']}},
       }
     )
 
@@ -526,189 +73,96 @@ class TestToolSelection:
   def test_a_retired_top_level_tools_section_names_its_home(self, config_file):
     config_file({'tools': {'bro.trails.rewind': {'creds': ['trails+analyst']}}})
 
-    with pytest.raises(ValueError, match="top-level 'tools' is retired; nest it under 'user'"):
+    with pytest.raises(ValueError, match='unknown key.*tools'):
       host_config.tool_selection(None)
 
 
-class TestValidation:
-  def test_defaults_creds_names_the_store_defaults(self, config_file):
-    path = config_file({'defaults': {'creds': ['brog+']}})
+@pytest.mark.parametrize('key', ['projects', 'harness', 'summon-harness', 'summon-depth', 'llm'])
+def test_retired_top_level_keys_are_refused(key):
+  with pytest.raises(ValueError, match=key):
+    host_config.parse({key: {}})
 
-    with pytest.raises(
-      ValueError, match=rf'{path}: defaults.creds is retired.*creds.json: defaults'
-    ):
-      host_config.tool_selection(None)
 
-  def test_trailing_plus_selects_the_empty_instance(self, config_file):
-    config_file({'user': {'creds': ['brog+']}})
-
-    assert host_config.tool_selection(None).instances == {'brog': ''}
-
-  def test_unknown_kind_is_carried_without_registry_validation(self, config_file):
-    config_file({'user': {'creds': ['consumer_only+special']}})
-
-    assert host_config.tool_selection(None).instances == {'consumer_only': 'special'}
-
-  @pytest.mark.parametrize(
-    'name', [':launch.bro', ':launch.bro.party.boxed', ':launch.bro.pass.github+']
+@pytest.mark.parametrize('level', ['settings', 'defaults', 'home', 'bro'])
+def test_shared_layer_schema(level):
+  parsed = host_config.parse_layer_config(
+    {
+      'harness': 'custom',
+      'summon-harness': 'custom',
+      'summon-depth': 0,
+      'llm': {'custom': 'uninstalled:model,unknown=field'},
+      'grant': ['uninstalled'],
+    },
+    source='example',
+    level=level,
   )
-  def test_old_launch_grammar_is_rejected(self, config_file, name):
-    config_file({'defaults': {'grant': [name]}})
-    with pytest.raises(ValueError):
-      host_config.launch_selection(None, 'dev')
+  assert parsed.summon_depth == 0
+  assert parsed.llm['custom'] == 'uninstalled:model,unknown=field'
 
-  def test_unknown_option_kind_is_carried_to_the_launch(self, config_file):
-    config_file(
-      {'projects': {'/repo': {'bros': {'dev': {'grant': ['bro.cred=consumer_only+special']}}}}}
-    )
 
-    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
-    assert selected.scope_layers[-1].grant == ('bro.cred=consumer_only+special',)
+@pytest.mark.parametrize(
+  ('level', 'key'),
+  [
+    ('defaults', 'default-bro'),
+    ('bro', 'default-bro'),
+    ('settings', 'creds'),
+    ('defaults', 'creds'),
+    ('settings', 'bros'),
+    ('bro', 'bros'),
+  ],
+)
+def test_keys_are_restricted_by_layer(level, key):
+  with pytest.raises(ValueError, match=key):
+    host_config.parse_layer_config({key: []}, source='example', level=level)
 
-  def test_retired_instances_field_names_its_replacement(self, config_file, tmp_path):
-    config_file({'projects': {str(tmp_path): {'instances': ['brog+github']}}})
 
-    with pytest.raises(ValueError, match="'instances' is retired; use 'creds'"):
-      host_config.launch_selection(host_config.Attachment(path=str(tmp_path)), 'developer')
+@pytest.mark.parametrize('value', [-1, True, '2', 1.5, None])
+def test_depth_requires_a_nonnegative_integer(value):
+  with pytest.raises(ValueError, match='example.summon-depth.*non-negative'):
+    host_config.parse_layer_config({'summon-depth': value}, source='example', level='bro')
 
-  def test_selection_without_a_plus_is_rejected(self, config_file):
-    config_file({'user': {'creds': ['brog']}})
 
-    with pytest.raises(ValueError, match="selection 'brog' names no instance"):
-      host_config.tool_selection(None)
+@pytest.mark.parametrize(
+  'value', [[], {'bro': 3}, {'bro': ''}, {'Bad': 'echo:echo'}, {'bro': ':echo'}]
+)
+def test_llm_shape_and_grammar_are_checked(value):
+  with pytest.raises(ValueError, match='example.llm'):
+    host_config.parse_layer_config({'llm': value}, source='example', level='bro')
 
-  def test_malformed_instance_is_rejected(self, config_file):
-    config_file({'user': {'creds': ['brog+GitHub']}})
 
-    with pytest.raises(ValueError, match='malformed secret name'):
-      host_config.tool_selection(None)
-
-  def test_two_selections_of_one_kind_are_rejected(self, config_file):
-    config_file({'user': {'creds': ['brog+github', 'brog+flow']}})
-
-    with pytest.raises(ValueError, match="selects kind 'brog' twice"):
-      host_config.tool_selection(None)
-
-  def test_repeated_credential_grants_are_harmless(self, config_file):
-    config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['github', 'github']}}}}})
-
-    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
-
-    assert selected.scope_layers == (host_config.ScopeLayer(grant=('github', 'github')),)
-
-  def test_a_kind_may_be_selected_and_granted_by_one_bro(self, config_file):
-    config_file(
-      {'projects': {'/repo': {'bros': {'dev': {'creds': ['github+a'], 'grant': ['github']}}}}}
-    )
-
-    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
-
-    assert selected.instances == {'github': 'a'}
-    assert selected.scope_layers == (
-      host_config.ScopeLayer(grant=('github',), creds=('github+a',)),
-    )
-
-  def test_a_grant_may_name_a_summon_target(self, config_file):
-    config_file({'projects': {'/repo': {'bros': {'dev': {'grant': ['@reviewer']}}}}})
-
-    selected = host_config.launch_selection(host_config.Attachment(path='/repo'), 'dev')
-
-    assert selected.scope_layers == (host_config.ScopeLayer(grant=('@reviewer',)),)
-
-  @pytest.mark.parametrize(
-    'data, message',
-    [
-      ({'defaults': []}, 'defaults must hold a json object'),
-      ({'defaults': {'creds': 'brog+github'}}, 'defaults.creds is retired'),
-      ({'projects': []}, 'projects must be a json object'),
-      ({'projects': {'/repo': {'bros': []}}}, 'bros must be a json object'),
-      ({'projects': {'/repo': {'bros': {'dev': []}}}}, 'must hold a json object'),
-      ({'projects': {'/repo': {'bros': {'dev': {'grant': 'github'}}}}}, 'grant must be a list'),
-      ({'projects': {'/repo': {'bros': {'dev': {'grant': [7]}}}}}, 'grant 7 must be a string'),
-      ({'user': {'tools': {'bro.trails.rewind': {'grant': ['github']}}}}, 'unknown field'),
-      ({'projects': {'/repo': {'llm': 'openai:sol'}}}, 'unknown field'),
-      ({'projects': {'/repo': {'bros': {'dev': {'llm': 7}}}}}, 'llm must be a non-empty list'),
-      ({'projects': {'/repo': {'bros': {'dev': {'llm': 'openai:sol'}}}}}, 'non-empty list'),
-      ({'projects': {'/repo': {'bros': {'dev': {'llm': []}}}}}, 'llm must be a non-empty list'),
-      ({'projects': {'/repo': {'bros': {'dev': {'llm': ['']}}}}}, 'llm must be a non-empty list'),
-      ({'projects': {'/repo': {'bros': {'dev': {'llm': None}}}}}, 'llm must be a non-empty list'),
-      (
-        {'projects': {'/repo': {'bros': {'dev': {'llm': ['default', 'openai:sol']}}}}},
-        "lists recipes after 'default'",
-      ),
-      ({'user': []}, 'user must hold a json object'),
-      ({'user': {'tools': []}}, 'tools must be a json object'),
-      ({'user': {'tools': {'bro.trails.rewind': []}}}, 'must hold a json object'),
-      ({'credentials': {}}, 'unknown key'),
-    ],
+def test_unrelated_home_values_are_not_parsed():
+  parsed = host_config.parse(
+    {'homes': {'foreign': {'unknown': 1, 'bros': {'missing': None}}}},
+    home='own',
+    bro_homes={'installed': 'own'},
   )
-  def test_bad_shapes_are_rejected(self, config_file, data, message):
-    config_file(data)
-
-    with pytest.raises(ValueError, match=message):
-      host_config.tool_selection(None)
-
-  def test_every_section_is_validated_on_every_read(self, config_file):
-    config_file({'user': {'tools': {'broken.command': {'creds': ['github']}}}})
-
-    with pytest.raises(ValueError, match='names no instance'):
-      host_config.llm_presets()
-
-  def test_non_object_file_is_rejected(self, tmp_path, monkeypatch):
-    path = tmp_path / 'bro.json'
-    path.write_text('[]')
-    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(path))
-
-    with pytest.raises(ValueError, match='must hold a json object'):
-      host_config.tool_selection(None)
+  assert parsed.homes == {}
 
 
-class TestSummonDepth:
-  def test_absent_value_uses_project_then_framework_default(self, config_file):
-    config_file({})
-
-    assert host_config.summon_depth(5) == 5
-    assert host_config.summon_depth() == configs.DEFAULT_SUMMON_DEPTH
-
-  def test_host_value_overrides_the_project(self, config_file):
-    config_file({'summon-depth': 7})
-
-    assert host_config.summon_depth(5) == 7
-
-  @pytest.mark.parametrize('value', [0, -1, 2.5, True, '3'])
-  def test_value_must_be_a_positive_integer(self, config_file, value):
-    config_file({'summon-depth': value})
-
-    with pytest.raises(ValueError, match='summon-depth must be a positive integer'):
-      host_config.summon_depth()
-
-
-class TestLLMPresets:
-  def test_absent_file_declares_none(self, tmp_path, monkeypatch):
-    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(tmp_path / 'nope.json'))
-
-    assert host_config.llm_presets() == {}
-
-  def test_presets_remain_host_wide(self, config_file):
-    config_file({'llm': {'sharp': 'openai:sol:max', 'cheap': ':terra'}})
-
-    assert host_config.llm_presets() == {'sharp': 'openai:sol:max', 'cheap': ':terra'}
-
-  def test_a_non_string_recipe_is_rejected(self, config_file):
-    config_file({'llm': {'sharp': 7}})
-
-    with pytest.raises(ValueError, match="preset 'sharp'"):
-      host_config.llm_presets()
+def test_only_installed_foreign_bro_entries_are_shape_checked():
+  config = {
+    'homes': {
+      'foreign': {
+        'unknown': 1,
+        'bros': {
+          'installed': {'llm': {'missing-harness': 'missing-provider:model'}},
+          'other': None,
+        },
+      }
+    }
+  }
+  parsed = host_config.parse(config, home='own', bro_homes={'installed': 'foreign'})
+  assert tuple(parsed.homes['foreign'].bros) == ('installed',)
+  config['homes']['foreign']['bros']['installed'] = {'llm': []}
+  with pytest.raises(ValueError, match='homes.foreign.bros.installed.llm'):
+    host_config.parse(config, home='own', bro_homes={'installed': 'foreign'})
 
 
-@pytest.mark.parametrize('key', ['harness', 'summon-harness'])
-@pytest.mark.parametrize('value', ['', 'Wrong', None, 5, []])
-def test_host_harness_keys_require_well_formed_names(key, value):
-  with pytest.raises(ValueError, match='harness'):
-    host_config.parse({key: value})
+def test_ambient_picks_do_not_require_a_launch_installation_marker(
+  config_file, monkeypatch, tmp_path
+):
+  from bro.workspace import installation
 
-
-def test_host_harness_names_are_carried_without_installation_resolution():
-  configuration = host_config.parse({'harness': 'other', 'summon-harness': 'another'})
-  assert configuration.harness == 'other'
-  assert configuration.summon_harness == 'another'
+  monkeypatch.setattr(installation, 'ENVIRONMENT', tmp_path / 'credential-only-environment')
+  config_file({'user': {'creds': ['github+operator']}})
+  assert host_config.tool_selection(None).instances == {'github': 'operator'}

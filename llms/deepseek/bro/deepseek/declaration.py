@@ -1,19 +1,14 @@
 """DeepSeek recipes and peak list pricing."""
 
-import re
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Literal
 
 from bro.llm import pricing
-from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec as Recipe
-
-DEFAULT_MODEL = 'deepseek-v4-pro'
-MODELS = {'pro': DEFAULT_MODEL, 'flash': 'deepseek-flash'}
-MODEL_ID = re.compile(r'deepseek-[a-z0-9-]+')
+from bro.llm.llm import FailureSignature, Recipe as BaseRecipe
 
 FAILURE_SIGNATURES = (
   FailureSignature(r'Error code: 402', 'usage-limit'),
@@ -122,32 +117,18 @@ def price(
 
 
 @dataclass(frozen=True)
-class LLMSpec(Recipe):
+class Recipe(BaseRecipe):
   TYPE: ClassVar[str] = 'deepseek'
   WIRE: ClassVar[str] = 'chat'
   # DeepSeek models/pricing page and vision guide, read 2026-10-31.
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {
-    DEFAULT_MODEL: frozenset(),
-    MODELS['flash']: frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'}),
+    'deepseek-v4-pro': frozenset(),
+    'deepseek-flash': frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'}),
   }
+  RETIRED_MODELS: ClassVar[Mapping[str, date]] = {}
   ENDPOINT: ClassVar[str] = 'https://api.deepseek.com'
-  selection_fields = MappingProxyType({'model': 'model', 'effort': 'reasoning_effort'})
-  deferred_fields = frozenset({'effort'})
-  effort_values = frozenset({'none', 'low', 'high', 'max'})
 
-  model: str = DEFAULT_MODEL
-  reasoning_effort: str | None = None
-
-  def __post_init__(self):
-    if not isinstance(self.model, str) or MODEL_ID.fullmatch(self.model) is None:
-      raise ValueError(f'invalid DeepSeek model {self.model!r}')
-    if self.reasoning_effort is not None and self.reasoning_effort not in self.effort_values:
-      raise ValueError(f'invalid reasoning_effort {self.reasoning_effort!r}')
-
-  def with_effort(self, effort: str) -> Self:
-    if effort not in EFFORT_LEVELS:
-      raise ValueError(f'unknown effort level {effort!r}')
-    return replace(self, reasoning_effort='high' if effort in {'medium', 'xhigh'} else effort)
+  reasoning_effort: Literal['none', 'low', 'high', 'max'] | None = None
 
   def request_options(self) -> dict:
     if self.reasoning_effort is None:
@@ -163,12 +144,6 @@ class LLMSpec(Recipe):
       isinstance(error, APIStatusError) and (error.status_code == 429 or error.status_code >= 500)
     )
 
-  def needed_secrets(self) -> tuple[str, ...]:
-    return (self.TYPE,)
-
-  def _dump_impl(self) -> dict:
-    return {'type': self.TYPE, 'model': self.model, 'reasoning_effort': self.reasoning_effort}
-
   @classmethod
-  def _from_dict_impl(cls, data: dict) -> Self:
-    return cls(model=data['model'], reasoning_effort=data.get('reasoning_effort'))
+  def needed_secrets(cls) -> tuple[str, ...]:
+    return (cls.TYPE,)

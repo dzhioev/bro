@@ -1,5 +1,6 @@
 from typing import Optional
 
+from bro import registry
 from bro.base.condition import Condition
 from bro.bro import BaseBro
 from bro.harness import get_harness, installed_harness_names
@@ -10,7 +11,8 @@ async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None)
   """the bro's info card, closing on the system prompt it runs under
   `system_prompt_hold` when one is given."""
   parts = [f'# {bro.name}', '', bro.description, '']
-  parts.extend(_identity_lines(bro))
+  if (home := registry.home(bro.name)) is not None:
+    parts.append(f'Home: `{home}`')
   reach = bro.reach()
 
   parts.extend(['', '## Tool groups', ''])
@@ -33,15 +35,12 @@ async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None)
   harnesses = [get_harness(name) for name in installed_harness_names()]
   manifest = {name for harness in harnesses for name in bro.needed_secrets(harness)}
   optional = {name for harness in harnesses for name in bro.optional_secrets(harness)} - manifest
-  llm_secrets = bro.llm_spec.needed_secrets() if bro.llm_spec is not None else ()
-  if len(manifest) > 0 or len(optional) > 0 or len(llm_secrets) > 0:
+  if len(manifest) > 0 or len(optional) > 0:
     parts.extend(['', '## Secrets', ''])
     for name in sorted(manifest):
       parts.append(f'- `{name}`')
     for name in sorted(optional):
       parts.append(f'- `{name}` — optional (used if present)')
-    for name in llm_secrets:
-      parts.append(f'- `{name}` — LLM key')
     parts.append('- _session baselines (`trails`) added per-surface_')
 
   spells = bro.spell_descriptions()
@@ -88,19 +87,6 @@ def _feature_line(bro: BaseBro, name: str, gate: Condition | bool) -> str:
     return f'- **{name}** — disabled'
   state = 'on' if bro.has_feature(name) else 'off'
   return f'- **{name}** — gated on `{gate}`; {state} in this environment'
-
-
-def _identity_lines(bro: BaseBro) -> list[str]:
-  # render the bro's LLM spec generically via its `dump()` — each provider's
-  # spec carries its own knobs and we don't want this module to know about any
-  # one provider. drop the `type` discriminator and any unset (None) field.
-  lines = []
-  for key, value in (bro.llm_spec.dump() if bro.llm_spec is not None else {}).items():
-    if key == 'type' or value is None:
-      continue
-    label = key.replace('_', ' ')
-    lines.append(f'- {label}: `{value}`')
-  return lines
 
 
 async def _mcp_tool_lines(specs: list[MCPServerSpec]) -> list[str]:

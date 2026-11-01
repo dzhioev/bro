@@ -49,8 +49,7 @@ Uncommitted host changes never transfer.
 A session runs with what its bro declares and ride's own flags set:
 neither mode verb forwards arguments to the harness program, on either harness, and a launch carrying a `--` tail fails before any workspace exists.
 
-Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--limit`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set.
-The LLM selection flags are `--provider`, `--model`, `--effort`, `--fast`, `--passthrough`, and `--llm`.
+Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--limit`, `--into`, `--no-trails`, `--env`, `--session-log`, and `--llm`.
 `--cred KIND+INSTANCE` selects an instance and holds that kind.
 `--grant`, `--revoke`, and `--limit` shape authority, while bare kinds in grants/revokes add or drop session credentials.
 The [permission reference](permissions.md) defines the grammar, checks, and shipped worker options.
@@ -65,8 +64,8 @@ the launcher's own `--log` never reaches the session.
 
 ### Lifecycle verbs
 
-- `ride resume <workspace>` relaunches the recorded session recipe, with optional `--cred`, `--grant`, and `--revoke` adjustments.
-  Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
+- `ride resume <workspace> [--llm RECIPE]` runs the recorded recipe and source unless `--llm` replaces them, with optional `--cred`, `--grant`, `--revoke`, and `--limit` adjustments.
+  Resuming a solo run opens an interactive conversation in the same workspace, preserving its recorded hold.
 - `ride override <mission> --grant N` / `--revoke N` changes a running session's bro targets (`@<bro>`) or credential kinds;
   `--cred kind+instance` changes a held instance and holds its kind.
   Requests go through the root's operator channel.
@@ -88,60 +87,46 @@ the launcher's own `--log` never reaches the session.
 - `ride check-clean <workspace>` reports whether removal is safe.
 - `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--llm RECIPE]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
   `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
-  Detached scope requires `--bro`;
-  an attachment may supply the project default.
-  The shared LLM flags select the prospective recipe and its credential key; an absent recipe leaves the LLM key out.
-- `ride banner [--llm]` renders the session facts.
+  Omitting `--bro` uses the installation's `default-bro`, whether attached or detached.
+  It prints `llm: <canonical text> (<source>)`, or the refusal with a nonzero exit status.
+- `ride banner [--plain]` renders the session facts, including `llm: <canonical text> (<source>)`;
+  `--plain` selects plain `key: value` lines instead of the visual banner.
 
 ## Harness selection
 
 `--harness` selects any name registered by this installation's `bro.harnesses` entry points.
-Without an explicit selection, a launch reads the project's `[tool.bro] harness`, then the host's top-level `"harness"` in `~/.bro.json`.
-A summon naming no `harness` uses `summon-harness` from those same layers.
-The project beats the host; a detached launch reads only the host layer.
-There is no framework default.
-When none supplies a name, the launch is refused:
+A root selects `--harness`, otherwise its bro's stack's `harness`.
+A summon selects its `harness` field, otherwise the child's stack's `summon-harness`.
+A manual commit selects the operator's `--harness`, otherwise the child's stack's `harness`.
+There is no framework default;
+a missing choice refuses the start, naming the relevant key and `--harness`.
+A selected harness must be installed, and `ride resume` keeps its recorded harness.
 
-```text
-no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json
-```
-
-The summon refusal names `summon-harness` instead.
-`ride resume` keeps the recorded harness, regardless of later project or host changes.
-Project and host `harness` and `summon-harness` values may name a well-formed harness another installation carries;
-a launch or summon checks the selected name where it is used and reports the installed roster when it is absent.
-
-LLM flags resolve within the selected harness.
-They never switch the harness implicitly.
-A provider names the vendor and a harness the transport:
-each harness serves the providers its `llm_providers` names, `claude` serving `anthropic` through Claude Code and `bro` the providers the native engine has clients for.
-A model named without a provider (`:opus55`) inherits the standing recipe’s provider.
-A recipe the harness does not serve is refused with the installed harnesses that serve it, on every surface naming a harness: the `--harness` flag, a summon's `harness` field, and `bro run`, which is the bro harness.
-The claude harness passes Claude Code no `--model` or `--effort` when none is selected, so it runs its own current default.
-
-`ride check-harness <name>` starts the selected harness's runtime probe in the current installation.
+A provider names the vendor and a harness the driving loop.
+Each harness serves the providers its `llm_providers` names:
+`claude` serves `anthropic` through Claude Code and `bro` serves providers whose wires have native clients.
+Recipes never switch harnesses;
+an unsupported provider is refused with the installed harnesses that serve it.
+`ride check-harness <name>` runs that harness's runtime probe.
 
 ### Recipe selection
 
-A managed native launch layers the launch's selection over the first entry of `projects.<repo>.bros.<bro>.llm` in `~/.bro.json` that the selected harness serves, over the persona's `llm_spec` declaration.
-`default` in that list means the persona's declaration; it supplies nothing for a persona with none.
-An in-process `bro run` or `bro chat` has no host list: its flags lay over the persona's declaration.
-Naming a provider selects its default recipe with the named knobs, independent of lower layers.
-Model-only, effort-only and flag-only selections inherit the provider and require a base recipe.
-Without a complete recipe, a native launch is refused before starting, naming `--llm provider:model` and, for managed launches, the host per-bro list as ways to supply one.
+The configured recipe is the last `llm.<harness>` entry in the bro's [home-layer stack](#home-settings), with its source layer.
+Two layers never combine into one recipe, and a layer naming only `bro` leaves `claude` to earlier layers.
+Personas declare no recipe.
+In-process `bro run` and `bro chat` read the live installation's same stack on the bro harness;
+they read only its recipe, leaving credentials ambient.
+`bro chat --fork <trail>` runs the trail’s recorded recipe unless `--llm` replaces it, with source `trail <id>` when using the record.
+The fork checks admission and requires a compatible recorded wire.
+`ride scope` prints the recipe and source or the refusal a launch would meet.
+With no configured recipe or explicit recipe, a launch refuses before running, naming `--llm` and the configuration key.
 
-`--llm` takes `provider:model:effort`, with any slot empty, and optional `+fast` and `+passthrough` suffixes, once each in either order.
-Canonical output places `+fast` first; a suffix alone applies to the standing recipe.
-`--passthrough` is its piece-flag spelling, excluded with `--llm` like the other pieces.
-A driven recipe must name a listed model or defer it to the harness, unless it carries passthrough.
-Passthrough bypasses admission and the model-input gate, not wire protocol constraints; a provider-naming selection resets the flag, while other selections inherit it.
-An unlisted declaration can be overridden by a listed selection or host-list entry, or by `+passthrough`.
-
-Recipe parsing checks grammar, not the installed roster.
-A host list may name providers another installation carries; unavailable entries are skipped with a verbose diagnostic, and an exhausted list refuses the launch naming the missing plug-in.
-A one-word `--llm` value naming no installed provider is a preset from `[tool.bro.llm]` or the host's top-level `llm` table, with the host winning per name.
-Installed provider names cannot be shadowed by presets.
-A missing preset reports the installed providers and preset names.
+Configuration recipes use `provider:model[+passthrough][,field=value]...`, with provider-native fields, such as `openai:gpt-6.1-sol,reasoning_effort=high`.
+Models must be listed unless the recipe carries `+passthrough`.
+An explicit `--llm` uses the same recipe text and replaces the configured recipe whole.
+A summon's `llm` does the same, within the child's selected harness.
+Every recipe names a model id; incomplete texts such as `:sol` and `openai` are refused.
+There are no piece flags or preset tables.
 
 ### Harness seam
 
@@ -151,7 +136,7 @@ The registry reads installed names from metadata without importing their modules
 The neutral layer (`ride/ride/session.py`) owns one started-party launcher parameterized by workspace isolation.
 It prepares either a container `Launch` or an explicit process launch, and a session harness supplies what differs:
 
-- its `ScopeRecipe`, the auth preflight, and LLM resolution;
+- its `ScopeRecipe` and auth preflight;
 - session preparation and the run under `do-ride` inside the prepared workspace, consumed by both isolations;
 - a runtime probe for `ride check-harness`, host setup, runtime-image contributions, and relocatable-bundle assets;
 - session existence with its resume-refusal wording and the subject read;
@@ -320,11 +305,16 @@ Ending the run still closes every job and orphans every in-flight mission, while
 
 Each session publishes its own current-trail pointer beside the workspace's `resume.json`:
 the native runner publishes when its trail opens, and the Claude recorder republishes as segments turn over.
-`ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`;
-it does not use the globally newest call or the bro class's current recipe.
+`ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`.
 A session with trail recording disabled publishes no pointer and cannot be resumed.
-A resume resolves the recorded selection under the current runtime, which refuses an unlisted model without `passthrough`.
-`ride resume` takes no `--llm` override: continue such a trail with `bro chat <bro> --fork <trail>` under the persona’s declaration, select a listed model or the recorded model with `+passthrough` there, or start a new session.
+A resume checks the recorded recipe for admission and harness support before starting.
+`--llm` replaces it on the recorded harness, with source `--llm`;
+only the replacement is checked for admission, so a retired recorded model can resume with a listed model or with `+passthrough`.
+A native replacement on another wire is refused before the session starts.
+
+Records without a resolved-recipe record predate this format and are refused with recovery instructions, but remain visible in `ride list`.
+Continue a native trail with `bro chat <bro> --fork <trail>`, or start a new session.
+A record naming a materialized runtime bundle re-executes that bundle’s `ride` before reading the record.
 
 Each session also names its agent's cumulative LLM usage to the commands it runs, in the usage file `BRO_USAGE_FILE` points at (`bro.llm.usage`), which the commit footer reads:
 the native LLM loop writes a file of its own process after every API call,
@@ -334,7 +324,7 @@ reading on every transcript write and billing each response once.
 
 `bro run <bro> <input>` and `bro chat <bro> [what]` are in-process surfaces:
 they use ambient credentials and create no workspace or scope.
-`bro chat --fork [TRAIL_ID] [--at N]` explicitly forks recorded history under the bro class's current recipe;
+`bro chat --fork [TRAIL_ID] [--at N]` explicitly forks recorded history under the installation's configured recipe;
 an omitted trail id selects the bro's newest recorded call.
 `ask` and `call` are aliases of `ride solo` and `ride along`, with no implied flags;
 `summon` and `quest` are the self-contained peer clients.
@@ -375,7 +365,7 @@ When the directory is in a git checkout, the wheel's `.dist-info` also records t
 which is the commit `bro --version` names inside the bundle.
 Their entries are laid out in a fixed order and carry one fixed timestamp rather than the build time a backend may record,
 so an unchanged source tree at an unchanged commit keeps resolving to the bundle it already froze.
-The Python major/minor joins the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`).
+The Python major/minor and the installation's home join the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`).
 Carrying local sources keeps the snapshot self-reproducing:
 re-resolving from a materialized bundle's own venv lands on the same hash.
 A distribution that cannot be pinned reproducibly
@@ -386,6 +376,7 @@ The root holds the bundle's shared flock until its session and summoned children
 and sweeps up what a hard-killed ride can leave on the daemon:
 labeled materializer containers whose bundle is gone or reclaimable, and runtime volumes no bundle directory names.
 
+Materialization writes the manifest's home into each environment's `bro-installation-home` marker, so every session and summon sees its root's home.
 Every root materializes the bundle once as `host/venv`, checks its dependency closure, and builds `host/bin` as symlinks to console scripts declared through `bro.session_commands`,
 then re-executes `host/venv/bin/ride` before reading workspace state,
 so the launcher
@@ -607,66 +598,79 @@ The trial bundle's own framework reads the host store with its `defaults`, hydra
 The bundle therefore owns both sides of the trial-store format rather than relying on the benchmark launcher's installed framework version.
 
 
-## Per-project defaults (`[tool.bro]`)
+## Home settings
 
-Only `--repo PATH|URL` attaches a repository to `ride solo|along`;
-cwd is never an implicit attachment.
-The checkout's working-tree `pyproject.toml`, or the URL attachment's `pyproject.toml` at its resolved base commit, must carry a `[tool.bro]` table declaring its session defaults (`bro/workspace/project.py`).
-Detached launches read no project file:
+The installation names its home in its environment's `bro-installation-home` marker.
+The home ships launch settings as a `bro-settings.toml` package resource through `bro.settings` ([extending](extending.md#home-settings)).
+These settings apply regardless of the repository the ride attaches:
+
+```toml
+default-bro = "foo"
+harness = "claude"
+summon-harness = "bro"
+summon-depth = 4
+grant = ["github", "@reviewer", "bro.placement=join"]
+revoke = ["bro.placement=boxed"]
+```
+
+`default-bro` names the bro utilities such as `dive-in` and `ride scope` use when none is supplied;
+the mode verbs still require their bro positional.
+`harness` and `summon-harness` supply the selections described in "Harness selection".
+Each may be omitted when the launch or host configuration supplies it.
+`summon-depth` is a non-negative integer controlling the [summon allowance](#summon-allowance).
+Home settings may name credential kinds and authority entries, but not host credential instances.
+
+For bro B of home H in installation I, the stack is:
+
+1. I's packaged home settings;
+2. host `defaults`;
+3. `homes.I`;
+4. `homes.H.bros.B`, when H differs from I;
+5. `homes.I.bros.B`.
+
+`default-bro`, `harness` and `summon-harness` take the last setting.
+For `summon-depth`, the general layers set the root allowance and the bro layers set its cap, each last-wins.
+`llm` takes the last value per harness;
+`creds` takes the last pick per kind over the store defaults.
+Authority folds caps and then grants in stack order.
+An absent layer contributes nothing.
+The child bro's own stack governs its summon, not its summoner's stack.
+The [host schema](../setup/AGENTS.md#host-config-brojson) defines each layer's allowed keys.
+
+An installation validates its own home settings, `defaults` and `homes.I` in full at root start, every bro entry included.
+Unknown keys, types, options, bro targets and credential kinds refuse every launch, naming the layer and key.
+Recipes under installed harnesses bind fully;
+recipes under absent harnesses are grammar-checked only.
+Only installed foreign bros' own entries are read from other homes, and initially only their shape is checked.
+A foreign recipe, harness or credential pick binds only when it wins;
+foreign authority binds when its bro starts.
+An unsupported value refuses that start with its source, the plug-in to install, and `homes.I.bros.B` as the place to override it.
+Grants fold instead of shadowing, so answer an unwanted foreign grant with a revoke.
+Unrelated home sections are never read.
+A root freezes this reading for all its descendants and manual commits;
+configuration edits affect later roots only.
+
+### Attached-tree configuration
+
+Only `--repo PATH|URL` attaches a repository to `ride solo|along`; cwd is never an implicit attachment.
+Of the attached tree's `[tool.bro]`, ride reads only `build-context-command` and sub-tables:
 
 ```toml
 [tool.bro]
-default = "foo"                      # the bro utilities such as dive-in and scope default to
-harness = "claude"                   # launch harness
-summon-harness = "bro"               # summon harness
-summon-depth = 4                      # optional deepest summon generation
-grant = ["github", "@reviewer", "bro.placement=join"]
-revoke = ["bro.placement=boxed"]
-image-repository = "custom-images"   # optional: docker repository for the repo's session-container
-                                     # images, defaulting to bro/<default> (bro/foo here)
-build-context-command = "list-files"  # optional: stdout is the session image's context file list,
-                                      # replacing the default `git ls-files`
-```
+build-context-command = "list-files"
 
-A `[tool.bro.<name>]` sub-table is carried verbatim and interpreted by whoever declares it
-— the launch layer validates that its own keys are known and reads no further:
-
-```toml
 [tool.bro.devoops]
-target-registry = "acme.targets:registry"  # the module:attribute devoops loads its deploy targets from
-
-[tool.bro.llm]
-sharp = "openai:sol:max"             # a `--llm` preset name and the recipe it stands for
+target-registry = "acme.targets:registry"
 ```
 
-`default` is required and names the **project default bro** used by utilities such as `dive-in` and attached `ride scope`;
-the mode verbs still require their bro positional.
-`harness` and `summon-harness` supply the project's selections as described in "Harness selection";
-each may be omitted when the launch or host configuration supplies it.
-`summon-depth` is an optional positive integer with no imposed ceiling, setting the deepest summon generation with the root at depth 0 and a default of 2.
-The host's `~/.bro.json` value overrides it for the launch, and detached launches use only that host value or the default because they read no project file.
-`grant`, `revoke`, and `limit` are optional lists in the [permission grammar](permissions.md#string-syntax).
-A project may name credential kinds and authority entries, but not host credential instances.
-The [configuration fold](permissions.md#readings-bases-and-configuration) defines their order and validation.
-`image-repository` and `build-context-command` are optional.
-A URL attachment evaluates a build-context command in a temporary extraction of the committed base tree and reads the named files back from that commit.
-`[tool.bro.llm]` names the repo's `--llm` presets, which the host's own `~/.bro.json` `llm` table overrides per name.
-A bro's recipes on a project are likewise the host's to set:
-a `projects.<identity>.bros.<bro>.llm` entry lists them in preference order, and a ride launch or summon runs the first its harness serves beneath its own flags (`bro/setup/AGENTS.md`, "Host config").
-A missing pyproject, table, or default
-— or an unknown key
-— fails the launch.
-Which credential instance backs a kind stays out of the repo:
-the attachment — checkout path or normalized URL
-— keys the host's project selection in `~/.bro.json` (`bro/setup/AGENTS.md`, "Host config"), and `--cred` overrides that pick per launch.
-`--grant` and `--revoke` instead change whether the launch holds the credential kind.
-A repository may provide `setup.sh` to provision its workspace clone;
-the launch logs and skips that step when it is absent.
-The project environment need not install `bro-ride`, because session machinery comes from the runtime bundle.
-Personas remain registered through the `bro` entry-point group (`bro/reference/extending.md`, "Registering a bro")
-— in the invoking installation, whose registry a repository names its default bro out of but contributes nothing to.
-`dive-in` is deliberately the one cwd-bound launcher:
-it refuses a cwd outside git, resolves that checkout, and passes it to `ride along --repo` explicitly.
+`build-context-command` optionally replaces `git ls-files` for the project image's context file list.
+A URL attachment evaluates it in a temporary extraction of the committed base tree and reads the named files back from that commit.
+Sub-tables are carried verbatim and interpreted by their owners.
+No other key is read or validated: a tree from another home or an older commit attaches without changing the installation's launch defaults.
+A missing pyproject or table means no tree configuration.
+
+Credential picks live in host home and bro entries, independent of attachment identities.
+`--cred` overrides the pick for one launch.
 
 ## The outer layer
 
@@ -828,9 +832,10 @@ Container images are split:
   The Claude harness contributes its pinned binary.
   Its hash covers those assets, the Claude pin, and Python minor.
   It contains no Python distribution from the ride installation.
-- **Project image** (`<[tool.bro] image-repository>:<hash>`)
+- **Project image** (`bro/ride-project:<hash>`)
   — attached launches may add this layer `FROM` the runtime image, with `/opt/project-venv` and the staged uv manifest set.
-  Its hash covers the runtime tag and manifests.
+  Its hash covers the runtime tag, manifests and attachment's normalized path or URL.
+  It carries `ride-attachment=<identity>`, so attachments with identical manifests keep separate images.
   A repository with no `pyproject.toml`/`uv.lock` pair skips this layer and runs the runtime image directly.
 
 `ride.workspace.build_context` streams separate normalized contexts to `docker build -`:
@@ -838,8 +843,9 @@ the runtime context contains only runtime assets;
 the project context carries tracked project files, its Dockerfile, and the staged manifests under the reserved `.bro-container/` prefix.
 Each process holds a host-wide shared file lock on every runtime or project tag it resolves until that process exits.
 A missing tag is built under a host-wide per-tag build lock.
-Superseded tags are pruned per image repository only when a non-blocking exclusive lock proves that no current process holds the tag;
-the removal keeps that lock until `docker image rm` finishes.
+Superseded runtime tags are pruned per image repository, and project tags per `ride-attachment` label, only when a non-blocking exclusive lock proves that no current process holds the tag;
+cleanup of root-owned files finds an attachment's present project image by the same label.
+The removal keeps that lock until `docker image rm` finishes.
 A process reaching for a tag during its removal waits and rebuilds it when the removal succeeds.
 
 Network is not restricted by design.
@@ -1038,7 +1044,7 @@ the handle treats that record — or the client’s exit — as the started hand
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 A boxed member’s kill follows the same TERM → grace → KILL shape through `docker exec`, signaling only while the container’s `/proc` still shows the recorded start time, so a late kill finds no target and never a reused pid.
-The request’s `llm` recipe, settled over the first recipe in the host’s per-bro list that the child’s harness serves like a launch’s own, resolves within that harness and never switches it;
+The request’s complete `llm` text replaces the child’s configured recipe within that harness and never switches it;
 the child runs with the root session’s attachment.
 A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
 a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
@@ -1176,8 +1182,29 @@ Root exit *detaches* an in-flight manual child rather than killing it
 The summoner's side is the ordinary detach flow:
 the token works with `quest check` / `quest list` / `mission watch`, reading as running until the user launches.
 
+### Summon allowance
+
+Every mission records how many more generations may start below it.
+Launching any worker type requires an allowance of at least 1:
+a summon, a joined bro, a webview and a benchmark all consume one generation.
+
+A root takes the last `summon-depth` in its installation's home settings, host `defaults` and `homes.<installation home>`, or the framework default when none sets it.
+A bro's cap is the last `summon-depth` in its bro layers:
+its foreign home entry, when applicable, then the installation's own entry.
+The root's allowance is lowered to that cap when present.
+Every launched mission receives its launcher's allowance minus 1, lowered to its own cap if it is a bro.
+A cap never raises an inherited allowance;
+a cap of 0 prevents that bro from launching anything, including when it is a root.
+
+Manual preparation does not check the allowance;
+the operator's commit checks the summoner's allowance before admitting the child.
+A refused launch names the allowance and the configuration sources that set it.
+A resumed session is a fresh root and receives a root allowance from its new reading, not its previous inherited allowance.
+
+### Host launch records
+
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds a generic `WorkerFacts` row keyed by the mission a peer undertakes:
-type, workspace and optional joined-member name, expected/artifact-view state, published ports, and a type-owned extension.
+type, workspace and optional joined-member name, expected/artifact-view state, published ports, summon allowance with its sources, and a type-owned extension.
 The bro extension carries its name and resolved placement.
 The journal's host-anchored mission seeds the root row;
 an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace, a joined bro’s inherited workspace plus channel-named member, or the claimed workspace for an expected bro filled at launch.
@@ -1188,7 +1215,7 @@ Every owner resolves through one join
 A child has an independent base with explicit gifts and caps; its [authority record](permissions.md#resume-and-durable-records) is not copied from the parent.
 The root's reading fixes configuration and recipe defaults for the whole tree.
 A peer the control cannot attribute to a mission is denied.
-The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.
+Every launch is subject to the [summon allowance](#summon-allowance), independently of its authority.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance from the summoner's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
 Owner attribution has one shape in the audit: `{workspace, type, member?, bro?, trail_id?}`.
@@ -1291,7 +1318,7 @@ Unboxed isolation runs it from the snapshot venv and boxed isolation from the mo
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
 
-`do-ride` receives `RIDE_ISOLATION`, the admitted recipe in `RIDE_RESOLVED_LLM`, and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
+`do-ride` receives `RIDE_ISOLATION`, the admitted recipe in `RIDE_RESOLVED_RECIPE`, and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
 It then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
 It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, asks the selected harness to prepare its session state, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
@@ -1316,7 +1343,7 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 ### The claude argv
 
 The builder (`harnesses/claude/harness/bro/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks, kept on over a repository's `disableAllHooks`),
-a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's anthropic recipe, a model or effort the recipe leaves unnamed passed as no flag,
+a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's anthropic recipe, `--model` always passed and `--effort` passed only when set,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below,
 `--strict-mcp-config`, so that config is the session's only MCP source and a repository's `.mcp.json` loads nothing,
@@ -1449,7 +1476,7 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_RUNTIME` — launcher-side absolute path to the ride's materialized host runtime.
   Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under for telemetry and the banner:
-  the reconstructed `ride solo|along …` command with its flags, `ride resume <ref>` for a resume, or the `summon --join …` request that started a joined member.
+  the reconstructed `ride solo|along …` command with its flags, `ride resume [--llm RECIPE] <ref>` for a resume, or the `summon --join …` request that started a joined member.
   Set by the launch env of every started session and by the join lowering for a member.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
   Set explicitly in the container env at every boxed launch site
@@ -1517,7 +1544,10 @@ Wrappers and session daemons rely on a small set of env vars:
 - `BRO_INSTALL_DIR` — the session's directory for credential-hook output and its current environment overlay.
   Each launcher sets its own value, overriding ambient session state;
   a direct `do-ride` invocation derives the current isolation's session environment directory and exports it.
-- `RIDE_RESOLVED_LLM` — the JSON encoding of the exact LLM recipe the launcher validated, scoped, and recorded.
+- `RIDE_RESOLVED_RECIPE` — the JSON record `{"recipe": <dump>, "source": <source>}` of the recipe the launcher admitted and its source.
+  Starts, manual commits and resume records carry the same shape under `resolved_recipe`.
+  The native harness passes it verbatim to `bro run` or `bro chat` as `--resolved-recipe`;
+  the Claude harness reads its recipe for Claude Code’s model, effort and fast mode.
   `do-ride` requires it as the session's only recipe input, so the harness runs exactly what the launch admitted and recorded.
 - `BROKER_UPSTREAM` — the host broker address supplied by a launcher, `tcp://<token>@<host>:<port>`.
   Only the session broxy consumes it (`host.docker.internal` in a container, loopback on host), removing it once the local proxy is ready.

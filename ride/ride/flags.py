@@ -21,7 +21,7 @@ def add_harness_flags(parser: Parser) -> None:
   parser.add_argument(
     '--harness',
     default=None,
-    help='driving harness (otherwise project [tool.bro] harness, then host ~/.bro.json harness)',
+    help='driving harness (otherwise home settings harness, then host ~/.bro.json harness)',
   )
 
 
@@ -83,12 +83,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     'every level but guided skips permission prompts (unsandboxed when combined with --unboxed). '
     'defaults: unattended for ride solo; attended for boxed ride along and dive-in, guided when unboxed',
   )
-  add_llm_flags(
-    parser,
-    effort_help='reasoning effort level, resolved within the selected harness and provider',
-    fast_help='enable the selected recipe’s fast mode; support and behavior depend on the '
-    'harness and provider',
-  )
+  add_llm_flags(parser)
   add_scope_flags(parser)
   parser.add_argument(
     '--export',
@@ -131,7 +126,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     parser.add_argument(
       '--bro',
       default=None,
-      help='the bro the session runs as (default: the project default bro)',
+      help="the bro the session runs as (default: the installation's default bro)",
     )
 
 

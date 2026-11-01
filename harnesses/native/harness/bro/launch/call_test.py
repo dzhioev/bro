@@ -24,7 +24,7 @@ from bro.launch.call import (
   call_text,
   chat_main,
 )
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -80,10 +80,24 @@ class MockLLM(LLM):
 class RecordBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_echo.LLMSpec()
 
-  def __init__(self):
-    super().__init__(system_prompt='record')
+  def __init__(self, **kwargs):
+    super().__init__(**kwargs, system_prompt='record')
+    self.recipe = llm_llms_echo.Recipe(model='echo')
+
+
+@pytest.fixture(autouse=True)
+def configured_chat_recipe(monkeypatch, register_test_bros):
+  from pathlib import Path
+
+  from bro.base import host_config
+
+  register_test_bros(RecordBro)
+  Path(host_config.HOST_CONFIG_FILE).write_text(
+    json.dumps(
+      {'homes': {'test-home': {'bros': {'record': {'llm': {'bro': 'openai:gpt-6.1-sol'}}}}}}
+    )
+  )
 
 
 class _MockRunner(Runner):
@@ -91,7 +105,7 @@ class _MockRunner(Runner):
   need no provider."""
 
   def __init__(self, bro: Optional[BaseBro] = None, response: str = 'reply'):
-    super().__init__(bro if bro is not None else RecordBro())
+    super().__init__(bro if bro is not None else RecordBro(), llm_llms_echo.Recipe(model='echo'))
     self.mock_llm = MockLLM(response=response)
 
   def _create_llm(self, *, hold: str) -> LLM:
@@ -174,7 +188,8 @@ async def test_text_drives_send_until_eof(capsys):
 @pytest.mark.asyncio
 async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   monkeypatch.setattr(
-    'bro.workspace.banner.render_banner', lambda llm=False, bro=None: f'BANNER[{bro}]'
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: f'BANNER[{bro}]',
   )
   runner = _MockRunner(response='reply')
   await call_text(runner, 'first', read_line=_ScriptedLines([]), now=_fixed_now)
@@ -293,7 +308,10 @@ def test_a_line_reader_outliving_its_loop_ends_quietly_without_reading_on(monkey
 async def test_tui_starts_a_turn_when_news_arrives_while_idle(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageInput
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _MockRunner(response='reply')
   app = ChatApp(runner, 'first')
   with runner:
@@ -331,7 +349,10 @@ async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_wo
 ):
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _MockRunner(response='reply')
   runner._silence_clock = _OnceClock()
   returned = threading.Event()
@@ -362,7 +383,7 @@ async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_wo
 
 
 @dataclass(frozen=True)
-class _FastlessSpec(LLMSpec):
+class _FastlessSpec(Recipe):
   """test spec that intentionally has no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'fastless'
@@ -370,30 +391,23 @@ class _FastlessSpec(LLMSpec):
 
   model: str = 'whatever'
 
-  def _dump_impl(self) -> dict:
-    return {'type': self.TYPE, 'model': self.model}
-
-  @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    return cls(model=data['model'])
-
 
 class _ChatBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol')
 
-  def __init__(self):
-    super().__init__(system_prompt='record')
+  def __init__(self, **kwargs):
+    super().__init__(**kwargs, system_prompt='record')
+    self.recipe = llm_llms_openai.Recipe(model='gpt-6.1-sol')
 
 
 class _FastlessBro(Bro):
   name = 'fastless'
   description = 'has a spec without fast support'
-  llm_spec = _FastlessSpec(model='whatever')
 
-  def __init__(self):
-    super().__init__(system_prompt='fastless')
+  def __init__(self, **kwargs):
+    super().__init__(**kwargs, system_prompt='fastless')
+    self.recipe = _FastlessSpec(model='whatever')
 
 
 def _chat(argv: list[str]):
@@ -411,12 +425,12 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi']) is None
-  spec = built[0].bro.llm_spec
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
+  spec = built[0].recipe
+  assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier is None
 
 
-def test_bro_chat_fast_flag_is_explicit(monkeypatch):
+def test_bro_chat_runs_explicit_service_tier(monkeypatch):
   built: list[Runner] = []
 
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
@@ -426,9 +440,11 @@ def test_bro_chat_fast_flag_is_explicit(monkeypatch):
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  assert _chat(['bro', 'record', 'hi', '--fast']) is None
-  spec = built[0].bro.llm_spec
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
+  assert (
+    _chat(['bro', 'record', 'hi', '--llm', 'openai:gpt-5.6-terra,service_tier=priority']) is None
+  )
+  spec = built[0].recipe
+  assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier == 'priority'
 
 
@@ -438,20 +454,34 @@ def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     built.append(runner)
 
-  resolved = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high').fast()
+  resolved = llm_llms_openai.Recipe(
+    model='gpt-6.1-sol', reasoning_effort='high', service_tier='priority'
+  )
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  assert _chat(['bro', 'record', 'hi', '--resolved-llm', json.dumps(resolved.dump())]) is None
-  assert built[0].bro.llm_spec == resolved
+  assert (
+    _chat(
+      [
+        'bro',
+        'record',
+        'hi',
+        '--resolved-recipe',
+        json.dumps({'recipe': resolved.dump(), 'source': '--llm'}),
+      ]
+    )
+    is None
+  )
+  assert built[0].recipe == resolved
 
 
-def test_bro_chat_refuses_a_resolved_recipe_beside_a_selection(monkeypatch):
+def test_bro_chat_refuses_resolved_and_explicit_recipes_together(monkeypatch, capsys):
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  resolved = json.dumps(llm_llms_openai.LLMSpec().dump())
+  resolved = json.dumps(llm_llms_openai.Recipe(model='gpt-5.6-terra').dump())
   with pytest.raises(SystemExit):
-    _chat(['bro', 'record', 'hi', '--resolved-llm', resolved, '--fast'])
+    _chat(['bro', 'record', 'hi', '--resolved-recipe', resolved, '--llm', 'openai:gpt-6.1-sol'])
+  assert 'arguments --resolved-recipe and --llm are mutually exclusive' in capsys.readouterr().err
 
 
 def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
@@ -516,7 +546,7 @@ def test_at_requires_fork(capsys):
   assert 'requires --fork' in capsys.readouterr().err
 
 
-def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, capsys):
+def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
   from bro.launch.resume import ResumedCall
   from bro.trails.display import RecordedSource
 
@@ -539,9 +569,9 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
     )
   ]
 
-  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, activity_file=None):
+  def fake_resume(client, bro_name, trail_ref, *, recipe, at=None, activity_file=None):
     captured['trail_ref'] = trail_ref
-    captured['llm_spec'] = llm_spec
+    captured['recipe'] = recipe
     captured['at'] = at
     return ResumedCall(runner=forked_runner, history=history, trail_id='old-trail')
 
@@ -554,7 +584,7 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
   assert _chat(['bro', 'record', '--fork', 'trail-1', '--at', '7']) is None
   assert captured['trail_ref'] == 'trail-1'
   assert captured['at'] == 7
-  assert captured['llm_spec'] == _ChatBro.llm_spec
+  assert captured['recipe'] is None
   assert captured['runner'] is forked_runner
   assert captured['initial'] is None
   assert captured['history'] is history
@@ -566,7 +596,7 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
 
   captured: dict = {}
 
-  def fake_resume(client, bro_name, trail_ref, *, llm_spec, at=None, activity_file=None):
+  def fake_resume(client, bro_name, trail_ref, *, recipe, at=None, activity_file=None):
     captured['trail_ref'] = trail_ref
     return ResumedCall(runner=_MockRunner(), history=[], trail_id='old-trail')
 
@@ -642,7 +672,10 @@ def test_message_bubble_selection_honors_offsets():
 async def test_tui_drag_inside_markdown_bubble_selects_rendered_text(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(100, 40)) as pilot:
     _consume_display(
@@ -687,7 +720,10 @@ async def test_tui_markdown_bubble_copy_reflows_to_logical_lines(monkeypatch):
 
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   command = (
     'dive-in --auto --grant notion -t "https://example.com/x" '
     '"a long quoted argument that certainly wraps across the bubble width"'
@@ -728,7 +764,10 @@ async def test_tui_survives_markup_like_text(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, StatsScreen
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   # the shape that crashed the compositor: a bare `[` opens what Textual's
   # content-markup grammar reads as a tag with key=value pairs inside, and
   # rich.markup.escape does not neutralize it
@@ -785,7 +824,10 @@ async def test_tui_turn_error_renders_as_error_bubble(monkeypatch):
   async def fail(*args, **kwargs):
     raise RuntimeError("failed [status='down']")
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _MockRunner()
   monkeypatch.setattr(runner, 'send', fail)
   app = ChatApp(runner, None)
@@ -812,7 +854,10 @@ async def test_tui_answer_delivered_exits_carrying_the_answer(monkeypatch):
   async def deliver(*args, **kwargs):
     raise AnswerDelivered('the verdict')
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _MockRunner()
   monkeypatch.setattr(runner, 'send', deliver)
   app = ChatApp(runner, None)
@@ -831,7 +876,10 @@ async def test_tui_thinking_renders_as_muted_bubble_above_typing(monkeypatch):
 
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
@@ -868,7 +916,10 @@ async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypat
 
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     app._begin_turn()
@@ -893,7 +944,10 @@ async def test_tui_mid_turn_message_renders_as_bro_bubble_above_typing(monkeypat
 async def test_tui_timestamp_hugs_the_row_edge_with_seconds(monkeypatch):
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test(size=(80, 40)) as pilot:
     _consume_display(
@@ -939,7 +993,10 @@ async def test_tui_copies_selection_to_clipboard_on_mouse_up(monkeypatch):
 
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test() as pilot:
     # a plain click also posts TextSelected; with nothing selected the
@@ -962,7 +1019,10 @@ async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
 
   from bro.launch.call_tui import ChatApp, MessageInput
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _MockRunner()
   app = ChatApp(runner, None)
   async with app.run_test() as pilot:
@@ -985,7 +1045,10 @@ async def test_tui_shift_enter_breaks_line_and_enter_submits(monkeypatch):
 async def test_tui_enter_on_blank_input_submits_nothing(monkeypatch):
   from bro.launch.call_tui import ChatApp, MessageInput
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test() as pilot:
     await pilot.press('enter', 'shift+enter', 'enter')
@@ -1011,7 +1074,10 @@ async def test_tui_typing_indicator_tracks_run_state(monkeypatch):
 
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   app = ChatApp(_MockRunner(), None)
   async with app.run_test() as pilot:
     app._begin_turn()
@@ -1072,7 +1138,10 @@ async def _start_turn(app, pilot, runner: '_BlockingRunner', text: str = 'work o
 async def test_tui_input_is_disabled_while_a_turn_runs(monkeypatch):
   from bro.launch.call_tui import _BUSY_PLACEHOLDER, _IDLE_PLACEHOLDER, ChatApp, MessageInput
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _BlockingRunner()
   app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
@@ -1102,7 +1171,10 @@ async def test_tui_escape_interrupts_the_turn(monkeypatch):
     MessageInput,
   )
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _BlockingRunner()
   app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
@@ -1128,7 +1200,10 @@ async def test_tui_quit_takes_the_running_turn_with_it(monkeypatch):
 
   from bro.launch.call_tui import ChatApp
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
   runner = _BlockingRunner()
   app = ChatApp(runner, None)
   async with app.run_test(size=(80, 40)) as pilot:
@@ -1146,7 +1221,10 @@ async def test_tui_quit_takes_the_running_turn_with_it(monkeypatch):
 async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
   from bro.launch.call import INTERRUPTED_NOTICE
 
-  monkeypatch.setattr('bro.workspace.banner.render_banner', lambda llm=False, bro=None: 'BANNER')
+  monkeypatch.setattr(
+    'bro.workspace.banner.render_banner',
+    lambda plain=False, bro=None, resolved_recipe=None: 'BANNER',
+  )
 
   class _InterruptedRunner(_MockRunner):
     def __init__(self):
@@ -1191,13 +1269,13 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
 
   captured: dict = {}
   resumed_runner = _MockRunner()
-  recorded_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='low')
+  recorded_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='low')
 
   def fake_resume(
-    client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided', activity_file=None
+    client, bro_name, trail_ref, *, recipe, at=None, hold='guided', activity_file=None
   ):
     captured.update(
-      trail_ref=trail_ref, llm_spec=llm_spec, at=at, hold=hold, activity_file=activity_file
+      trail_ref=trail_ref, recipe=recipe, at=at, hold=hold, activity_file=activity_file
     )
     return ResumedCall(runner=resumed_runner, history=[], trail_id=trail_ref)
 
@@ -1216,8 +1294,8 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
       'record',
       '--continue-trail',
       'workspace-trail',
-      '--resolved-llm',
-      json.dumps(recorded_spec.dump()),
+      '--resolved-recipe',
+      json.dumps({'recipe': recorded_spec.dump(), 'source': 'defaults'}),
       '--hold',
       'attended',
       '--activity-file',
@@ -1227,7 +1305,8 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   )
   assert code is None
   assert captured['trail_ref'] == 'workspace-trail'
-  assert captured['llm_spec'] == recorded_spec
+  assert captured['recipe'].recipe == recorded_spec
+  assert captured['recipe'].source == 'defaults'
   assert captured['hold'] == 'attended'
   assert captured['activity_file'] == Path('/session/activity')
   assert captured['runner'] is resumed_runner
@@ -1239,17 +1318,70 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
 def test_managed_continuation_requires_the_resolved_recipe(monkeypatch, caplog):
   monkeypatch.setattr('bro.launch.resume.resume', lambda *args, **kwargs: pytest.fail('resumed'))
   assert _chat(['bro', 'record', '--continue-trail', 'workspace-trail']) == 1
-  assert '--continue-trail requires --resolved-llm' in caplog.text
+  assert '--continue-trail requires --resolved-recipe' in caplog.text
 
 
-def test_native_launch_without_a_recipe_is_refused(monkeypatch):
-  from bro.launch.run import run_llm_spec
-  from bro.llm.providers import LLMSelection, LLMSelectionError
+def test_native_launch_without_a_recipe_is_refused(monkeypatch, register_test_bros):
+  from bro.launch.run import launch_recipe
 
   class NoRecipeBro(Bro):
     name = 'no-recipe'
     description = 'fixture without a recipe'
 
+  register_test_bros(NoRecipeBro)
   monkeypatch.setattr('bro.registry.get_class', lambda name: NoRecipeBro)
-  with pytest.raises(LLMSelectionError, match='no-recipe declares no LLM recipe: pass --llm'):
-    run_llm_spec('no-recipe', LLMSelection())
+  with pytest.raises(ValueError, match='no-recipe has no recipe for harness bro'):
+    launch_recipe('no-recipe', {'llm': None, 'resolved_recipe': None})
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_public_fork_runs_the_trails_recipe_without_a_configured_recipe(monkeypatch, explicit):
+  import contextlib
+
+  from bro.base import host_config
+  from bro.launch.resume_test import FakeTrailsStore, _header, _row
+  from bro.llm.resolved import ResolvedRecipe
+  from bro.workspace.banner import render_banner
+
+  recorded = llm_llms_echo.Recipe(model='echo')
+  header = _header('fork-source', bro='bro')
+  header['native']['llm'] = recorded.dump()
+  store = FakeTrailsStore(
+    [header],
+    {
+      'fork-source': [
+        _row('fork-source', 0, 'system_prompt', 'prompt'),
+        _row('fork-source', 1, 'user_input', 'hello'),
+      ]
+    },
+  )
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: contextlib.nullcontext(store))
+  monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
+  Path(host_config.HOST_CONFIG_FILE).write_text('{}')
+  monkeypatch.setenv(
+    'RIDE_RESOLVED_RECIPE',
+    ResolvedRecipe(llm_llms_openai.Recipe(model='gpt-6.1-sol'), 'outer').encode(),
+  )
+  observed = []
+
+  async def inspect_runner(runner, initial, **kwargs):
+    observed.append(runner.resolved_recipe)
+    assert f'llm: {runner.resolved_recipe.display()}' in render_banner(
+      plain=True, resolved_recipe=runner.resolved_recipe
+    )
+
+  monkeypatch.setattr('bro.launch.call.call_text', inspect_runner)
+  flags = ['--llm', 'echo:echo'] if explicit else []
+  assert _chat(['bro', 'bro', '--fork', 'fork-source', *flags]) is None
+  assert observed == [ResolvedRecipe(recorded, '--llm' if explicit else 'trail fork-source')]
+
+
+def test_public_fork_still_requires_the_installations_home_marker(
+  monkeypatch, installation_environment, caplog
+):
+  from bro.workspace.installation import MARKER
+
+  (installation_environment / MARKER).unlink()
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: pytest.fail('opened trail store'))
+  assert _chat(['bro', 'record', '--fork', 'trail-1']) == 1
+  assert MARKER in caplog.text

@@ -18,6 +18,7 @@ from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.authority_test_helper import mission, reading
 from ride.bro_worker import BroFacts, BroType, Placement, SummonLaunchSpec
 from ride.launch_control import LaunchControl
+from ride.peer_facts import WorkerFacts
 from ride.workspace.metadata import Isolation
 
 
@@ -30,26 +31,32 @@ def installed_dev(register_test_bros):
 
 
 class Peers:
+  def __init__(self, allowance):
+    self.allowance = allowance
+
+  def for_mission(self, mission):
+    return WorkerFacts('bro', 'ws', allowance=self.allowance)
+
   def attribution_for_mission(self, journal, mission):
     return {'workspace': 'ws', 'type': 'bro', 'bro': 'bro-dev', 'trail_id': 'trail'}
 
 
 class Host:
   def __init__(self, source=None):
-    self.reading = source or reading(config={'summon-depth': 2})
+    self.reading = source or reading(config={'defaults': {'summon-depth': 2}})
     self.workspace = SimpleNamespace(
       name='ws',
       metadata=SimpleNamespace(repo=None),
       repository=None,
     )
-    self.peers = Peers()
+    self.peers = Peers(self.reading.root_allowance('bro-dev'))
     self.journal = MagicMock()
     self.session_env = {'ONE': '1'}
     self.summon_spawner = object()
     self.artifacts = MagicMock()
 
 
-def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), depth=0, source=None):
+def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), source=None):
   return PeerDescription(
     mission='root',
     workspace='ws',
@@ -61,7 +68,7 @@ def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), depth=0, s
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
-    depth=depth,
+    depth=0,
     extension=BroFacts('bro-dev') if type == 'bro' else None,
   )
 
@@ -84,11 +91,9 @@ def _request(tmp_path, *, host=None, owner=None, **args):
   return admitted
 
 
-def test_worker_defers_an_uninstalled_summon_default_until_a_request(monkeypatch):
-  resolve = MagicMock(side_effect=ValueError("harness 'bro' is not installed"))
-  monkeypatch.setattr(bro_worker, 'get_harness', resolve)
-  BroType(Host())
-  resolve.assert_not_called()
+def test_owned_uninstalled_summon_default_refuses_the_reading(monkeypatch):
+  with pytest.raises(ValueError, match='summon-harness.*not-installed'):
+    reading(config={'defaults': {'summon-harness': 'not-installed'}})
 
 
 def test_talk_widens_the_bro_default(tmp_path):
@@ -172,9 +177,10 @@ def test_owner_of_another_type_may_summon_with_authority(tmp_path):
   assert isinstance(run, Spawn)
 
 
-def test_depth_cap_is_enforced_at_the_host_boundary(tmp_path):
-  with pytest.raises(LaunchDenied, match='depth cap'):
-    _request(tmp_path, owner=_owner(tmp_path, depth=2))
+def test_allowance_is_enforced_at_the_host_boundary(tmp_path):
+  host = Host(reading(config={'defaults': {'summon-depth': 0}}))
+  with pytest.raises(LaunchDenied, match='summon allowance.*allowance 0'):
+    _request(tmp_path, host=host)
 
 
 def test_target_requires_use_authority(tmp_path):
@@ -252,35 +258,35 @@ def test_a_gift_of_an_absent_instance_is_admitted_without_reading_its_material(t
 
 
 def test_harness_and_llm_choices_do_not_answer_to_the_summoners_credentials(tmp_path):
-  admitted = _request(tmp_path, harness='claude', llm=':opus5')
+  admitted = _request(tmp_path, harness='claude', llm='anthropic:claude-opus-5')
   launch = cast(SummonLaunchSpec, cast(Spawn, BroType(Host()).launch(admitted)).launch)
   assert launch.harness == 'claude'
   assert launch.record.descriptor.values['provider'] == 'anthropic'
 
 
 def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
-  with pytest.raises(LaunchDenied, match="the claude harness cannot run recipe 'openai:sol'"):
-    _request(tmp_path, harness='claude', llm='openai:sol')
+  with pytest.raises(LaunchDenied, match="the claude harness cannot run provider 'openai'"):
+    _request(tmp_path, harness='claude', llm='openai:gpt-6.1-sol')
 
 
-def _host_recipes(*recipes):
-  source = reading(config={'projects': {'/proj': {'bros': {'dev': {'llm': list(recipes)}}}}})
+def _host_recipes(recipe):
+  source = reading(config={'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': recipe}}}}}})
   return Host(replace(source, attachment=Attachment(path='/proj')))
 
 
-def test_a_spawned_summon_is_denied_a_configured_list_its_harness_runs_none_of(tmp_path):
-  host = _host_recipes('anthropic:opus55:high+fast')
-  with pytest.raises(LaunchDenied, match='no configured recipe runs'):
+def test_a_spawned_summon_refuses_a_configured_provider_its_harness_cannot_run(tmp_path):
+  host = _host_recipes('anthropic:claude-opus-5-5,effort=high,fast_mode=true')
+  with pytest.raises(LaunchDenied, match='cannot run provider'):
     _request(tmp_path, host=host)
 
 
-def test_a_spawned_summon_runs_the_listed_recipe_its_harness_serves(tmp_path):
-  host = _host_recipes('anthropic:opus55:high+fast', 'default')
+def test_a_spawned_summon_runs_its_configured_recipe(tmp_path):
+  host = _host_recipes('openai:gpt-5.6-terra')
   assert isinstance(BroType(host).launch(_request(tmp_path, host=host)), Spawn)
 
 
-def test_a_manual_summon_leaves_the_configured_list_to_the_operators_launch(tmp_path):
-  host = _host_recipes('anthropic:opus55:high+fast')
+def test_a_manual_summon_leaves_the_recipe_to_the_operators_launch(tmp_path):
+  host = _host_recipes('anthropic:claude-opus-5-5,effort=high,fast_mode=true')
   assert isinstance(BroType(host).launch(_request(tmp_path, host=host, manual=True)), Expect)
 
 
@@ -313,7 +319,7 @@ def test_manual_preparation_publishes_the_bro_default_talk(tmp_path):
 
 @pytest.mark.parametrize('passthrough', [False, True])
 def test_summon_admission_and_join_command_forward_passthrough(tmp_path, passthrough):
-  text = 'openai:gpt-7:high' + ('+passthrough' if passthrough else '')
+  text = 'openai:gpt-7' + ('+passthrough' if passthrough else '') + ',reasoning_effort=high'
   if not passthrough:
     with pytest.raises(LaunchDenied, match='gpt-7.*passthrough'):
       _request(tmp_path, llm=text)
@@ -322,7 +328,8 @@ def test_summon_admission_and_join_command_forward_passthrough(tmp_path, passthr
   admitted = _request(tmp_path, host=host, llm=text)
   launch = cast(SummonLaunchSpec, cast(Spawn, BroType(host).launch(admitted)).launch)
   spec = bro_worker._child_session_spec(launch, 'child', None)
-  assert spec.llm_spec.passthrough
-  assert spec.llm_spec.selection()['model'] == 'gpt-7'
+  assert spec.recipe.passthrough
+  assert spec.recipe.model == 'gpt-7'
   command = bro_worker._joined_ride_command(launch)
-  assert '--passthrough' in command and '--model gpt-7' in command
+  assert '--llm ' + text in command
+  assert '--model' not in command and '--passthrough' not in command

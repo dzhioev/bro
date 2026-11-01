@@ -517,22 +517,3 @@ def test_numeric_string_sentinel_is_distinct_from_integer():
   assert values.contains(1) and values.contains('1')
   assert not values.contains(True)
   assert parse_values(render_values(values), domain) == values
-
-
-@pytest.mark.parametrize(
-  'text',
-  ['~default', 'default', '"~default"', '!~default', '!{~default,default}', '*', '{}', '~on|"on"'],
-)
-def test_symbol_string_sum_round_trip(text):
-  from .values import Symbol
-
-  symbols = frozenset({Symbol('default'), Symbol('on')})
-  domain = Scalars((Strings(cofinite=True), Finite(symbols, symbols)))
-  values = parse_values(text, domain)
-  rendered = render_values(values)
-  assert parse_values(rendered, domain) == values
-  assert render_values(parse_values(rendered, domain)) == rendered
-  assert parse_values('~default', domain).contains(Symbol('default'))
-  assert not parse_values('~default', domain).contains('default')
-  assert parse_values('default', domain).contains('default')
-  assert not parse_values('default', domain).contains(Symbol('default'))

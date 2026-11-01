@@ -193,9 +193,9 @@ class TestImageTag:
     (tmp_path / 'member' / 'pyproject.toml').write_text('[project]\nname = "member"\n')
     return tmp_path
 
-  def test_repository_comes_from_the_project(self, project):
+  def test_project_image_uses_the_runtime_owned_repository(self, project):
     tag = workspace_docker.project_image_tag(workspace_docker.runtime_image_tag(), project)
-    assert tag is not None and tag.startswith('custom-images:')
+    assert tag is not None and tag.startswith('bro/ride-project:')
 
   def test_a_member_manifest_edit_changes_the_tag(self, project):
     runtime = workspace_docker.runtime_image_tag()
@@ -880,3 +880,64 @@ class TestDockerCreateArgv:
   def test_no_extra_mounts_by_default(self, build_argv):
     # the every-session path stays unchanged: still -it, no stray broker mount.
     assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
+
+
+def test_project_images_are_partitioned_by_attachment(tmp_path, monkeypatch):
+  import ride.workspace.model as model
+
+  attachments = [tmp_path / 'first', tmp_path / 'second']
+  for attachment in attachments:
+    attachment.mkdir()
+    (attachment / 'pyproject.toml').write_text('[project]\nname = "same"\n')
+    (attachment / 'uv.lock').write_text('same-lock')
+  images: dict[str, str] = {}
+  removed = []
+
+  def docker(command, **kwargs):
+    if command[:2] == ['docker', 'build']:
+      images[command[command.index('-t') + 1]] = command[command.index('--label') + 1]
+    elif command[:3] == ['docker', 'image', 'inspect']:
+      return _FakeProc(returncode=0 if command[-1] in images else 1)
+    elif command[:2] == ['docker', 'images']:
+      label = command[command.index('--filter') + 1].removeprefix('label=')
+      arguments = iter(command[2:])
+      repository = None
+      for argument in arguments:
+        if argument in ('--filter', '--format'):
+          next(arguments)
+        else:
+          assert repository is None
+          repository = argument
+      return _FakeProc(
+        stdout='\n'.join(
+          tag
+          for tag, value in images.items()
+          if value == label and (repository is None or tag.rsplit(':', 1)[0] == repository)
+        )
+      )
+    elif command[:3] == ['docker', 'image', 'rm']:
+      removed.append(command[-1])
+      del images[command[-1]]
+    else:
+      pytest.fail(f'unexpected Docker command: {command}')
+    return _FakeProc()
+
+  monkeypatch.setattr(workspace_docker.subprocess, 'run', docker)
+  monkeypatch.setattr(workspace_docker, 'ensure_image', lambda _: contextlib.nullcontext())
+  monkeypatch.setattr(workspace_docker.build_context, 'assemble_project', lambda _: b'context')
+  runtime = 'test/runtime:one'
+  first, second = [workspace_docker.ensure_project_image(runtime, path) for path in attachments]
+  assert first != second
+  assert images == {
+    first: f'ride-attachment={attachments[0]}',
+    second: f'ride-attachment={attachments[1]}',
+  }
+  downstream = 'acme/application:release'
+  images[downstream] = images[first]
+  (attachments[0] / 'uv.lock').write_text('new-lock')
+  newer = workspace_docker.ensure_project_image(runtime, attachments[0])
+  assert removed == [first]
+  assert set(images) == {newer, second, downstream}
+  monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'test/runtime:another')
+  assert model._cleanup_image(Repository(str(attachments[0]), attachments[0])) == newer
+  assert model._cleanup_image(Repository(str(attachments[1]), attachments[1])) == second

@@ -23,12 +23,7 @@ def _configured_wire(role: str | None) -> Wire:
   try:
     material = _Material.model_validate(credentials.get_json('mu'))
     pair = material.roles.get(role, material) if role is not None else material
-    selection = providers.parse(pair.llm)
-    if selection.provider is None:
-      raise ValueError('llm must name a provider')
-    recipe = providers.resolve(
-      providers.default_spec(selection.provider), selection, providers.known_names()
-    )
+    recipe = providers.bind_recipe(pair.llm)
     wire = wires.open(recipe, pair.credential)
     if type(wire).structured is Wire.structured:
       raise ValueError(f'wire {wire.NAME!r} has no structured one-shot')

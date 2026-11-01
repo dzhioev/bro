@@ -48,6 +48,7 @@ def _pin_host(
 def _manifest(**overrides: object) -> dict[str, object]:
   manifest: dict[str, object] = {
     'format': MANIFEST_FORMAT,
+    'home': 'benchmark',
     'harness_files': {'bro': {}, 'claude': {'engine/binary': hashlib.sha256(b'').hexdigest()}},
     'cpython': CPYTHON_VERSION,
     'harnesses': ['bro', 'claude'],
@@ -66,6 +67,7 @@ def _fake_bundle(root: Path) -> Bundle:
   bundle = Bundle(root)
   bundle.interpreter.parent.mkdir(parents=True)
   bundle.interpreter.symlink_to(sys.executable)
+  (bundle.venv / 'bro-installation-home').write_text('benchmark\n')
   ride = bundle.script('ride')
   ride.write_text(f'#!{bundle.interpreter}\n{_SCRIPT_BODY}')
   assert relocate_script(ride, bundle.venv)
@@ -514,3 +516,10 @@ def test_bundle_rejects_a_registered_wire_client_that_cannot_import(tmp_path, mo
   with pytest.raises(subprocess.CalledProcessError):
     build(tmp_path / 'checkout', root)
   assert 'fixture-wire[client]' in capfd.readouterr().err
+
+
+def test_built_refuses_a_home_that_disagrees_with_the_manifest(tmp_path):
+  bundle = _fake_bundle(tmp_path / 'bundle')
+  (bundle.venv / 'bro-installation-home').write_text('wrong-home\n')
+  with pytest.raises(ValueError, match='installation home disagrees'):
+    built(bundle.root)

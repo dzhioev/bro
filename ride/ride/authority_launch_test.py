@@ -17,13 +17,12 @@ from bro.authority.records import (
 )
 from bro.authority.rules import Refusal, Request
 from bro.authority.syntax import parse_layer
-from bro.authority.values import Symbol
 from bro.base import credentials, host_config
 from bro.bro import BaseBro
 from bro.broker.brotocol import request as message
 from bro.harness import Harness
-from bro.native.echo_declaration import LLMSpec
 from bro.worker_types import installed_types
+from bro.workspace.settings import HomeSettings
 from ride.authority_launch import (
   credential_values,
   credentials_for,
@@ -59,17 +58,17 @@ def source(monkeypatch, tmp_path):
   driver._llm_providers = ('echo',)
   installed = Installation(
     {'root': Root(credential_presence=kinds), 'browser': Browser(credential_presence=kinds)},
-    {'probe': HarnessReading(driver, {'root': LLMSpec(), 'browser': LLMSpec()})},
+    {'probe': HarnessReading(driver)},
     kinds,
     {'echo': frozenset()},
     {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
   )
   return Reading(
-    Configuration.parse({}),
+    Configuration.parse({'defaults': {'llm': {'probe': 'echo:echo'}}}),
     {},
     installed,
     host_config.Attachment(path='/project'),
-    {'summon-harness': 'probe'},
+    settings=HomeSettings(summon_harness='probe'),
   )
 
 
@@ -85,11 +84,12 @@ def test_give_only_cookie_right_reaches_the_recipient_but_not_the_starter(source
     source,
     configuration=Configuration.parse(
       {
-        'projects': {
-          '/project': {
+        'defaults': {'llm': {'probe': 'echo:echo'}},
+        'homes': {
+          'test-home': {
             'bros': {'root': {'grant': ['@browser', 'webview.cred=cookies+profile to @browser']}}
           }
-        }
+        },
       }
     ),
   )
@@ -127,7 +127,7 @@ def test_request_records_round_trip_typed_values_and_forwarded_gifts(source):
     atom, Descriptor('webview'), source.installation.declarations
   ).use.matches(Descriptor('webview'))
   values = {
-    'model': Symbol('default'),
+    'model': 'full-model-id',
     'literal': '~default',
     'talk': frozenset({'owner.say'}),
     'timeout': 5,
@@ -195,19 +195,15 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   (store / 'creds').mkdir(parents=True)
   (store / 'creds' / 'github+operator.cred').write_text('operator-material')
   (store / credentials.STORE_FILE).write_text('{}')
-  from bro.openai.declaration import LLMSpec as OpenAIRecipe
 
   driver = source.installation.harnesses['probe']
   driver.harness._llm_providers = ('openai', 'echo')
   source = replace(
     source,
+    configuration=Configuration.parse({'defaults': {'llm': {'probe': 'openai:gpt-5.6-terra'}}}),
     installation=replace(
       source.installation,
-      harnesses={
-        'probe': replace(
-          driver, recipes={name: OpenAIRecipe() for name in source.installation.bros}, llm_key=True
-        )
-      },
+      harnesses={'probe': replace(driver, llm_key=True)},
       provider_needs={'echo': frozenset(), 'openai': frozenset({'cookies'})},
     ),
   )
@@ -220,7 +216,9 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   )
   prepared = source.rules.prepare(requested, root.authority, source)
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('root')
+    ),
     'manual': WorkerFacts(type='bro', workspace=None, record=prepared, expected=True),
   }
   peers = SimpleNamespace(for_mission=lambda identifier: facts[identifier])
@@ -230,7 +228,7 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   )
   replies = []
   context = SimpleNamespace(journal=journal, reply=lambda peer, result: replies.append(result))
-  worker = BroType(cast(Any, SimpleNamespace(depth_cap=3)))
+  worker = BroType(cast(Any, object()))
   control = LaunchControl(
     ride='root',
     types={'bro': worker},
@@ -253,16 +251,20 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
         'placement': 'unboxed',
         'hold': 'unattended',
         'timeout': None,
-        'llm': 'echo',
+        'llm': 'echo:echo',
         'pass': ['github+operator'],
       },
     },
   )
   control.commit(cast(Any, context), 'operator', commit)
   control.commit(cast(Any, context), 'operator', commit)
-  assert [reply['outcome'] for reply in replies] == ['ok', 'ok']
+  assert [reply['outcome'] for reply in replies] == ['ok', 'ok'], replies
   assert replies[0]['value']['descriptor'] == replies[1]['value']['descriptor']
   assert replies[0]['value']['commit'] == replies[1]['value']['commit']
+  parent_allowance = facts['root'].allowance
+  child_allowance = facts['manual'].allowance
+  assert parent_allowance is not None and child_allowance is not None
+  assert child_allowance.value == parent_allowance.value - 1
   assert replies[1]['value']['descriptor']['values']['cred.github'] == 'operator'
   assert replies[1]['value']['descriptor']['values']['provider'] == 'echo'
   assert replies[1]['value']['descriptor']['values']['placement'] == 'unboxed'
@@ -288,17 +290,10 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   assert facts['manual'].workspace == 'committed-child'
 
 
-def test_host_expands_presets_under_the_reading_and_overlays_piece_values(source):
-  source = replace(source, configuration=Configuration.parse({'llm': {'chosen': 'echo'}}))
-  mapped = BroType.option_values({'target': 'root', 'llm': 'chosen', 'effort': 'high'}, source)
-  assert mapped.values['provider'] == 'echo'
-  assert mapped.values['effort'] == 'high'
-
-
 def test_reading_and_ambient_config_refuse_retired_default_picks_consistently():
   value = {'defaults': {'creds': ['github+picked']}}
   for parse in (Configuration.parse, host_config.parse):
-    with pytest.raises(ValueError, match=r'defaults.creds is retired'):
+    with pytest.raises(ValueError, match=r'defaults.*creds'):
       parse(value)
 
 
@@ -315,13 +310,18 @@ def test_manual_commit_checks_the_operators_fixed_option_values(
   source, tmp_path, option, value, permission
 ):
   source = replace(
-    source, configuration=Configuration.parse({'operator': {'revoke': [permission]}})
+    source,
+    configuration=Configuration.parse(
+      {'defaults': {'llm': {'probe': 'echo:echo'}}, 'operator': {'revoke': [permission]}}
+    ),
   )
   root = start(source, grant=['@browser'])
   requested, _ = request(BroType, {'target': 'browser', 'manual': True}, source, root.authority)
   prepared = source.rules.prepare(requested, root.authority, source)
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('root')
+    ),
     'manual': WorkerFacts(type='bro', workspace=None, record=prepared, expected=True),
   }
   peers = SimpleNamespace(for_mission=lambda identifier: facts[identifier])
@@ -368,7 +368,9 @@ def test_manual_commit_can_replace_a_complete_subset_option(source, tmp_path):
   )
   prepared = source.rules.prepare(requested, root.authority, source)
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('root')
+    ),
     'manual': WorkerFacts(type='bro', workspace=None, record=prepared, expected=True),
   }
   replies = []

@@ -168,9 +168,7 @@ async def test_model_gate_checks_all_files_before_encoding(name, transport, monk
   from bro.llm.llm import UnsupportedContent
 
   recipe = _CASES[name]['plain'].recipe
-  monkeypatch.setattr(
-    type(recipe), 'MODEL_INPUTS', {recipe.selection()['model']: frozenset({'application/pdf'})}
-  )
+  monkeypatch.setattr(type(recipe), 'MODEL_INPUTS', {recipe.model: frozenset({'application/pdf'})})
   wire = wires.open(recipe, {'api_key': 'fixture-key'})
   with pytest.raises(UnsupportedContent, match='image/png.*not supported'):
     await wire.exchange(
@@ -185,9 +183,7 @@ async def test_protocol_gate_refuses_a_model_accepted_document(name, transport, 
   from bro.llm.llm import UnsupportedContent
 
   recipe = _CASES[name]['plain'].recipe
-  monkeypatch.setattr(
-    type(recipe), 'MODEL_INPUTS', {recipe.selection()['model']: frozenset({'application/pdf'})}
-  )
+  monkeypatch.setattr(type(recipe), 'MODEL_INPUTS', {recipe.model: frozenset({'application/pdf'})})
   wire = wires.open(recipe, {'api_key': 'fixture-key'})
   with pytest.raises(UnsupportedContent, match='cannot carry'):
     await wire.exchange([UserMessage((File(b'pdf', 'application/pdf'),))], [], None)

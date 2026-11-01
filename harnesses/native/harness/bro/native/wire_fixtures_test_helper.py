@@ -2,17 +2,17 @@
 
 from dataclasses import dataclass
 
-from bro.deepseek.declaration import LLMSpec as ChatSpec
-from bro.llm.llm import LLMSpec
+from bro.deepseek.declaration import Recipe as ChatSpec
+from bro.llm.llm import Recipe
 from bro.llm.records import Call, Message, Reasoning
-from bro.native.echo_declaration import LLMSpec as EchoSpec
-from bro.openai.declaration import LLMSpec as ResponsesSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
+from bro.openai.declaration import Recipe as ResponsesSpec
 from bro.wire_chat.fixtures_test_helper import call as chat_call, response as chat_response
 
 
 @dataclass(frozen=True)
 class Case:
-  recipe: LLMSpec
+  recipe: Recipe
   response: dict
   parts: tuple
   stop: str = 'completed'
@@ -108,7 +108,11 @@ def cases() -> dict[str, dict[str, Case]]:
   return {
     'responses': cases,
     'chat': chat_cases(),
-    'echo': {'plain': Case(EchoSpec(), {'model': 'echo', 'text': 'reply'}, (Message(1, 'reply'),))},
+    'echo': {
+      'plain': Case(
+        EchoSpec(model='echo'), {'model': 'echo', 'text': 'reply'}, (Message(1, 'reply'),)
+      )
+    },
   }
 
 
@@ -141,7 +145,7 @@ def capture_requests(monkeypatch, sent: list[dict]) -> None:
 
 
 def chat_cases() -> dict[str, Case]:
-  recipe = ChatSpec()
+  recipe = ChatSpec(model='deepseek-v4-pro')
   usage = {'input': 6, 'cache_read': 4, 'cache_write': 0, 'output': 3}
   cases = {
     'plain': Case(recipe, chat_response(), (Message(1, 'reply'),), counts=usage),

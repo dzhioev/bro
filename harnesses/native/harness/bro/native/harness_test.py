@@ -22,10 +22,10 @@ from bro.jobs_test_helper import StalledSupervisor
 from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.native import dev_mcp
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
-from ride.do_ride import SessionRun, encode_resolved_llm
+from ride.do_ride import SessionRun, encode_resolved_recipe
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -53,7 +53,7 @@ def _spec(**overrides) -> SessionSpec:
     'grant': [],
     'revoke': [],
     'llm': None,
-    'resolved_llm': LLMSpec().dump(),
+    'resolved_recipe': {'recipe': Recipe(model='gpt-5.6-terra').dump(), 'source': '--llm'},
     'solo': False,
     'resume': False,
     'no_trails': False,
@@ -76,7 +76,7 @@ def _run(**overrides) -> SessionRun:
     repo=spec.repo,
     harness=spec.resolved_harness,
     hold=spec.hold,
-    resolved_llm=spec.resolved_llm,
+    resolved_recipe=spec.resolved_recipe,
     solo=spec.solo,
     resume=spec.resume,
     bro=spec.bro,
@@ -164,12 +164,19 @@ class TestNativeArgv:
     return session
 
   def test_chat_runs_the_resolved_recipe(self, monkeypatch):
-    run = _run(resolved_llm=LLMSpec(model='gpt-6.1-sol', reasoning_effort='high').fast().dump())
+    run = _run(
+      resolved_recipe={
+        'recipe': Recipe(
+          model='gpt-6.1-sol', reasoning_effort='high', service_tier='priority'
+        ).dump(),
+        'source': '--llm',
+      }
+    )
     assert self._argv(run, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
-      '--resolved-llm',
-      encode_resolved_llm(run.resolved_llm),
+      '--resolved-recipe',
+      encode_resolved_recipe(run.resolved_recipe),
       '--hold',
       'attended',
       '--activity-file',
@@ -186,13 +193,13 @@ class TestNativeArgv:
     runs: list[tuple[str, str]] = []
 
     class _Runner:
-      def __init__(self, bro, *, activity_file) -> None:
-        del bro, activity_file
+      def __init__(self, bro, recipe, *, activity_file) -> None:
+        del bro, recipe, activity_file
 
       async def run(self, text: str, **options) -> None:
         runs.append((text, options['hold']))
 
-    monkeypatch.setattr('bro.registry.create_bro', lambda name, llm_spec: MagicMock())
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: MagicMock())
     monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: None)
     monkeypatch.setattr('bro.launch.run.Runner', _Runner)
     monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
@@ -207,7 +214,7 @@ class TestNativeArgv:
     argv = self._argv(run, monkeypatch)
     assert argv[:2] == ['/venv/bin/bro', 'chat'] and argv[-2:] == ['--', 'dev']
     assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
-    assert json.loads(argv[argv.index('--resolved-llm') + 1]) == run.resolved_llm
+    assert json.loads(argv[argv.index('--resolved-recipe') + 1]) == run.resolved_recipe
 
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
@@ -269,7 +276,7 @@ class TestContainerSession:
       'RIDE_BASE_SHA': 'abc123',
       ride_session.RUNTIME_ENV: str(_runtime_bundle(tmp_path).host_root),
       ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
-      ride_session.RESOLVED_LLM_ENV: ride_session.encode_resolved_llm(spec.resolved_llm),
+      ride_session.RESOLVED_RECIPE_ENV: ride_session.encode_resolved_recipe(spec.resolved_recipe),
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
     }
     assert launch.base_ref == 'abc123'
@@ -456,6 +463,7 @@ class _ShellBro(BaseBro):
 class _NativeRun:
   def __init__(self, brash_policy: Optional[Path] = None):
     self.trail_id = None
+    self.resolved_recipe = None
     self.current_tool_step_id = None
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
@@ -718,44 +726,24 @@ class TestNativeServiceTools:
       assert job.mode == 'bg'
 
 
-class TestRecipeResolution:
-  def test_every_served_provider_declares_a_native_recipe(self):
-    from bro.llm import providers
-    from bro.llm.llm import LLMSpec
+class TestRecipeSupport:
+  def test_every_served_provider_has_an_installed_client(self):
+    from bro.llm import providers, wires
     from bro.native.harness import BRO
 
     for provider in BRO.llm_providers:
-      assert isinstance(providers.default_spec(provider), LLMSpec)
+      assert providers.declaration(provider).Recipe.WIRE in wires.client_names()
 
-  def test_short_names_do_not_collide_across_the_served_providers(self):
-    # a model named alone resolves among the providers the harness serves, so
-    # one name may never be carried by two of them
-    from bro.llm import providers
+  def test_native_harness_refuses_a_self_driving_recipe(self):
+    from bro.llm.providers import RecipeError, bind_recipe
     from bro.native.harness import BRO
 
-    seen: dict[str, str] = {}
-    for provider in BRO.llm_providers:
-      for short_name in providers.models(provider):
-        assert short_name not in seen, f'{short_name} in both {seen.get(short_name)} and {provider}'
-        seen[short_name] = provider
+    with pytest.raises(RecipeError, match='anthropic runs on the claude harness'):
+      BRO.check_recipe(bind_recipe('anthropic:claude-fable-5'))
 
-  def test_native_resolution_refuses_a_self_driving_recipe(self):
-    from bro.llm.providers import LLMSelection, LLMSelectionError
-    from bro.native.harness import BRO, resolve_native
-    from bro.openai import declaration as openai
 
-    with pytest.raises(
-      LLMSelectionError,
-      match="the bro harness cannot run recipe 'anthropic:fable5'",
-    ) as refused:
-      resolve_native(openai.LLMSpec(), LLMSelection(provider='anthropic', model='fable5'))
-    assert f'it serves {", ".join(BRO.llm_providers)};' in str(refused.value)
-    assert 'anthropic runs on the claude harness' in str(refused.value)
+def test_provider_diagnostic_runs_complete_recipe_text(capsys):
+  from bro.native.llm import main
 
-  def test_native_selection_keeps_provider_knobs(self):
-    from bro.llm.providers import LLMSelection
-    from bro.native.harness import resolve_native
-    from bro.openai import declaration as openai
-
-    resolved = resolve_native(openai.LLMSpec(), LLMSelection(effort='high', fast=True))
-    assert resolved == openai.LLMSpec().with_effort('high').fast()
+  main(['bro.native.llm', '--llm', 'echo:echo', 'diagnostic request'])
+  assert '< diagnostic request' in capsys.readouterr().out

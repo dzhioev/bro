@@ -263,7 +263,7 @@ def _trail_summary(
         model, raw_usage, service_tier = _message_call(message)
         llm_calls += 1
         tokens = usage.add(
-          tokens, usage.from_wire_counts(providers.default_spec(provider).WIRE, raw_usage)
+          tokens, usage.from_wire_counts(providers.declaration(provider).Recipe.WIRE, raw_usage)
         )
         if providers.price(provider, model, raw_usage, service_tier) is not None:
           priced_models.setdefault(provider, set()).add(model)

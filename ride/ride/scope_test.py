@@ -7,14 +7,13 @@ import pytest
 
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
-from bro.authority.syntax import parse_layer
 from bro.base import credentials, host_config
 from bro.base.condition import when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
 from bro.mcp import MCPServerSpec, ToolLayer, creds
-from bro.native.echo_declaration import LLMSpec
 from bro.worker_types import installed_types
+from bro.workspace.settings import HomeSettings
 from ride import scope
 from ride.authority_reading import Configuration, HarnessReading, Installation, Policy, Reading
 from ride.workspace.store import ScopedSecrets
@@ -63,18 +62,17 @@ def scoped_installation(monkeypatch, tmp_path):
   installation = Installation(
     {
       bro.name: bro(credential_presence=kinds, credential_kinds=kinds)
-      for bro in (ScopedBro, GatedBro)
+      for bro in (ScopedBro, GatedBro, type('Reviewer', (BaseBro,), {'name': 'reviewer'}))
     },
-    {
-      'test': HarnessReading(
-        harness, {'scoped': LLMSpec(), 'gated': LLMSpec()}, auth_kind='auth', llm_key=True
-      )
-    },
+    {'test': HarnessReading(harness, auth_kind='auth', llm_key=True)},
     kinds,
     {'echo': frozenset({'provider_key'})},
     {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
   )
   monkeypatch.setattr(Installation, 'take', lambda: installation)
+  Path(host_config.HOST_CONFIG_FILE).write_text(
+    json.dumps({'defaults': {'llm': {'test': 'echo:echo'}}})
+  )
   return installation
 
 
@@ -84,11 +82,11 @@ def _recipe(installation):
 
 def _reading(installation, configuration=None, project=None):
   return Reading(
-    Configuration.parse(configuration or {}),
+    Configuration.parse({'defaults': {'llm': {'test': 'echo:echo'}}, **(configuration or {})}),
     {},
     installation,
-    project={'summon-harness': 'test'},
-    project_policy=project or Policy(),
+    settings=HomeSettings(summon_harness='test'),
+    home_policy=project or Policy(),
   )
 
 
@@ -127,7 +125,10 @@ class TestScopedSecrets:
       )
 
   def test_operator_caps_apply_to_the_root_request(self, scoped_installation):
-    Path(host_config.HOST_CONFIG_FILE).write_text(json.dumps({'operator': {'revoke': ['@scoped']}}))
+    path = Path(host_config.HOST_CONFIG_FILE)
+    config = json.loads(path.read_text())
+    config['operator'] = {'revoke': ['@scoped']}
+    path.write_text(json.dumps(config))
     with pytest.raises(scope.LaunchScopeError, match='use rule.*scoped'):
       scope.scoped_secrets('scoped', _recipe(scoped_installation))
 
@@ -180,7 +181,7 @@ class TestAuthorityLayers:
     reading = _reading(
       scoped_installation,
       {'defaults': {'grant': ['webview']}},
-      Policy(parse_layer(revoke=['webview'])),
+      Policy(HomeSettings(revoke=('webview',))),
     )
     assert not _pair(reading, Atom('webview')).use.is_empty
     reading = _reading(scoped_installation, {'defaults': {'revoke': ['webview']}})
@@ -217,24 +218,17 @@ class TestAuthorityLayers:
     assert not pair.give.matches(Descriptor('bro', {'target': 'reviewer', 'placement': 'join'}))
 
   def test_unknown_names_fail_only_when_their_layer_applies(self, scoped_installation):
-    reading = _reading(scoped_installation, {'projects': {'/other': {'grant': ['unknown']}}})
+    reading = _reading(scoped_installation, {'homes': {'other': {'grant': ['unknown']}}})
     assert not _pair(reading, Atom('bro')).use.is_empty
-    reading = _reading(scoped_installation, {'defaults': {'grant': ['unknown']}})
     with pytest.raises(ValueError, match='unknown mission type'):
-      _pair(reading, Atom('bro'))
+      _reading(scoped_installation, {'defaults': {'grant': ['unknown']}})
 
-  def test_overlapping_grant_and_revoke_are_refused_on_resolution(self, scoped_installation):
-    reading = _reading(
-      scoped_installation,
-      {
-        'defaults': {
-          'grant': ['bro.placement=*'],
-          'revoke': ['bro.placement=join'],
-        }
-      },
-    )
+  def test_overlapping_grant_and_revoke_are_refused_on_reading(self, scoped_installation):
     with pytest.raises(ValueError, match='cannot grant and revoke'):
-      _pair(reading, Atom('bro'))
+      _reading(
+        scoped_installation,
+        {'defaults': {'grant': ['bro.placement=*'], 'revoke': ['bro.placement=join']}},
+      )
 
 
 class TestLaunchViewStore:

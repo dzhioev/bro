@@ -4,7 +4,7 @@ import sys
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional
 
-from bro.anthropic.declaration import LLMSpec
+from bro.anthropic.declaration import Recipe
 from bro.base import credentials, log
 from bro.base.condition import StringVariable, Variables
 from bro.base.offload import off_loop
@@ -21,7 +21,6 @@ from bro.claude.claude_config import (
 )
 from bro.claude.provisioning import claude_code_version
 from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
-from bro.llm.providers import LLMSelection, parse
 from bro.mcp import Reach
 from bro.run_lifecycle import RunLifecycle
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
@@ -37,13 +36,11 @@ if TYPE_CHECKING:
 
 
 _AUTH_SECRET = 'claude_code'
-# names neither model nor effort, so Claude Code runs its own current default
-_SESSION_DEFAULT = LLMSpec(model=None, effort=None)
 
 
-def llm_spec(spec: 'SessionSpec | SessionRun') -> LLMSpec:
-  resolved = spec.llm_spec
-  if not isinstance(resolved, LLMSpec):
+def recipe(spec: 'SessionSpec | SessionRun') -> Recipe:
+  resolved = spec.recipe
+  if not isinstance(resolved, Recipe):
     raise TypeError(f'claude harness resolved an incompatible recipe: {type(resolved).__name__}')
   return resolved
 
@@ -78,7 +75,9 @@ class ClaudeHarness(Harness):
   def llm_providers(self) -> tuple[str, ...]:
     from bro.llm import providers
 
-    return tuple(name for name, spec in providers.available_specs() if isinstance(spec, LLMSpec))
+    return tuple(
+      name for name, module in providers.declarations() if issubclass(module.Recipe, Recipe)
+    )
 
   def facts(self) -> Variables:
     return {
@@ -129,14 +128,6 @@ class ClaudeHarness(Harness):
 
   def scope_recipe(self) -> ScopeRecipe:
     return _SCOPE
-
-  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
-    del bro_name
-    selection = LLMSelection() if value is None else parse(value)
-    resolved = self.resolve_recipe(_SESSION_DEFAULT, selection)
-    if not isinstance(resolved, LLMSpec):
-      raise TypeError(f'the claude harness resolved an incompatible recipe: {resolved.TYPE}')
-    return resolved
 
   def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]:
     del spec

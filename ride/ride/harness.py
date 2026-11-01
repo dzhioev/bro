@@ -5,12 +5,11 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 from bro.harness import get_harness as load_harness, installed_harness_names
-from bro.llm.llm import LLMSpec
 from ride.scope import ScopeRecipe
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
-  from bro.llm.providers import LLMSelection
+  from bro.llm.llm import Recipe
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
   from ride.workspace.model import Workspace
@@ -42,11 +41,9 @@ class SessionHarness(Protocol):
   @property
   def llm_providers(self) -> tuple[str, ...]: ...
 
-  def runs(self, selection: LLMSelection) -> bool: ...
+  def check_recipe(self, recipe: Recipe) -> None: ...
 
   def scope_recipe(self) -> ScopeRecipe: ...
-
-  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec: ...
 
   def preflight_auth(self, spec: SessionSpec, scoped: ScopedSecrets) -> Optional[str]: ...
 

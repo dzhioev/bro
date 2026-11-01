@@ -185,7 +185,7 @@ a reviewer judges it apart from the bump, and a wrong one reverts alone.
 ## Step 5 — gate
 
 Run the repository's formatter, then a persona construction smoke through the project environment
-— `uv run bro show <default bro>` for the `[tool.bro] default`, and `uv run bro list`
+— `uv run bro show <default bro>` for the installation's `default-bro`, and `uv run bro list`
 — which resolves entry points and loads spells and declarations against the new framework, so an import or declaration error surfaces before the suite does.
 Then run the repository's own gate (its docs name the command).
 Give a long-running gate an explicit timeout large enough for the full run.

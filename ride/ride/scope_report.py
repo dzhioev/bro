@@ -1,14 +1,12 @@
 """Render a prospective descriptor, base authority, and credential presence."""
 
 import json
-from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
 from bro.authority.records import dump_values
 from bro.authority.values import Strings
 from bro.base import credentials
-from bro.workspace.project import project_config
 from ride.authority_launch import mission_view, request
 from ride.authority_reading import Reading
 from ride.authority_scope import existence
@@ -21,22 +19,14 @@ def report_scope(
   bro: str | None,
   harness: str | None,
   llm: str | None = None,
-  *,
-  recipe_options: Mapping[str, object] | None = None,
 ) -> int:
   try:
     repository = None if repo is None else as_repository(repo)
-    if bro is None:
-      if repository is None:
-        raise ValueError('ride scope requires --bro when detached')
-      bro = (
-        repository.project_config().default_bro
-        if repository.is_url
-        else project_config(repository.git_dir).default_bro
-      )
     reading = Reading.take(repository)
-    harness = reading.resolve_harness(harness)
-    fields = {'target': bro, 'harness': harness, **(recipe_options or {})}
+    if bro is None:
+      bro = reading.default_bro
+    harness = reading.resolve_harness(harness, target=bro)
+    fields = {'target': bro, 'harness': harness}
     if llm is not None:
       fields['llm'] = llm
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
@@ -57,10 +47,14 @@ def report_scope(
     manifest = existence(
       descriptor, reading, present_kinds, check_presence=False, require_recipe=False
     )
+    from ride.authority_scope import checked_recipe
+
+    resolved = checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm'))
     print(
       'descriptor: '
       + json.dumps(dump_values(descriptor.values), ensure_ascii=False, sort_keys=True)
     )
+    print(f'llm: {resolved.display()}')
     view = mission_view(mission)
     for key in ('summon_entries', 'permits', 'may_give'):
       print(f'{key}: ' + (', '.join(view[key]) or '(none)'))

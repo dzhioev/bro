@@ -19,7 +19,6 @@ from .values import (
   Scalars,
   Strings,
   Subsets,
-  Symbol,
   Value,
   ValueSet,
 )
@@ -27,9 +26,7 @@ from .values import (
 _NAME = re.compile(r'[a-z][a-z0-9_-]*')
 _WORD = re.compile(r'[A-Za-z0-9_:/.-]+')
 _RANGE = re.compile(r'(-?\d+)?\.\.(-?\d+)?')
-_TOKEN = re.compile(
-  r'~[a-z][a-z0-9_-]*|\s+|"(?:[^"\\]|\\.)*"|\?=|<=|>=|[{}\[\](),|&!*=+@]|[A-Za-z0-9_:/.-]+'
-)
+_TOKEN = re.compile(r'\s+|"(?:[^"\\]|\\.)*"|\?=|<=|>=|[{}\[\](),|&!*=+@]|[A-Za-z0-9_:/.-]+')
 
 
 def _name(text: str) -> str:
@@ -101,7 +98,7 @@ class ValueExpression:
       case 'scalar' | 'finite':
         result = domain.empty()
         for item in self.items:
-          value: Value = Symbol(item[1:]) if item.startswith('~') else _string(item)
+          value: Value = _string(item)
           if (
             isinstance(domain, Integers)
             or isinstance(domain, Scalars)
@@ -194,7 +191,7 @@ class _Parser:
 
   def scalar(self) -> str:
     token = self.take()
-    if not token.startswith(('"', '~')) and _WORD.fullmatch(token) is None:
+    if not token.startswith('"') and _WORD.fullmatch(token) is None:
       raise ValueError(f'expected a value, got {token!r}')
     return token
 
@@ -546,8 +543,6 @@ class Syntax:
 
 
 def _scalar(value: Value) -> str:
-  if isinstance(value, Symbol):
-    return '~' + value.name
   if type(value) is bool:
     return 'on' if value else 'off'
   if type(value) is int:

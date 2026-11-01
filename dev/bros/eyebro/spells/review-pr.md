@@ -277,7 +277,7 @@ driving a pull request to a verdict does not.
 The identity comes from configuration for this bro, never from a summon request:
 
 - a managed session or a summon reads the project's entry in the host's `~/.bro.json`:
-  `projects.<identity>.bros.<bro>.creds` with `github+<instance>`, `<bro>` being the name your banner's `bro` line gives, so every launch of this bro resolves one;
+  `homes.<installation home>.bros.<bro>.creds` with `github+<instance>`, `<bro>` being the name your banner's `bro` line gives, so every launch of this bro resolves one;
 - a direct `bro run` or `bro chat` uses the host's own store:
   an instance selected by the store's `~/.bro/creds.json` `defaults`, then `user.creds` or `user.tools.<command>.creds` in `~/.bro.json`, or the kind's empty instance when nothing selects one.
 

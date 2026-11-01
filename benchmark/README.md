@@ -272,3 +272,10 @@ Configure `mu+benchmark` using the material described in `bro/reference/permissi
 The ride hydrates the selected credentials into a private temporary store outside the collected tree.
 It sits in a container where an LLM has unrestricted shell and
 internet, and the task instruction is third-party text the bro treats as its request.
+
+## Trial model configuration
+
+Every agent preset requires `model_name` in `<provider>/<rest of recipe text>` form, with a full model id and provider-native fields.
+The agent writes a host configuration into its task container, setting `defaults.harness`, `defaults.summon-harness` and the matching `defaults.llm` entry.
+Both the root and its summons resolve the preset from that configuration;
+the trial's `ride solo` command passes no harness or model flags.

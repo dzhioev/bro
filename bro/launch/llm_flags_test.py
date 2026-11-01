@@ -1,140 +1,29 @@
-import json
-
 import pytest
 
-from bro.base import host_config
 from bro.base.args import Parser
-from bro.launch import llm_flags
-from bro.llm.providers import LLMSelection, LLMSelectionError
-from bro.workspace.project import ProjectConfig
+from bro.launch.llm_flags import add_llm_flags
 
 
-def _parser() -> Parser:
-  parser = Parser(add_help=False)
-  llm_flags.add_llm_flags(parser, effort_help='effort', fast_help='fast')
-  return parser
+def parser() -> Parser:
+  result = Parser(add_help=False)
+  add_llm_flags(result)
+  return result
 
 
-def _args(argv: list[str]) -> dict:
-  return vars(_parser().parse_args(argv))
+def test_recipe_text_is_forwarded_whole():
+  text = 'provider:model+passthrough,field=value'
+  arguments = vars(parser().parse_args(['--llm', text]))
+  assert arguments == {'llm': text}
+  assert parser().reconstruct(arguments, prog=[]) == ['--llm', text]
 
 
-class TestFlagSet:
-  def test_llm_excludes_the_flags_it_speaks_for(self):
-    for conflicting in (
-      ['--provider', 'openai'],
-      ['--model', 'sol'],
-      ['--effort', 'high'],
-      ['--fast'],
-    ):
-      with pytest.raises(SystemExit):
-        _parser().parse_args(['--llm', ':sol', *conflicting])
-
-  def test_the_pieces_combine_with_each_other(self):
-    args = _args(['--provider', 'openai', '--model', 'sol', '--effort', 'max', '--fast'])
-    assert llm_flags.selection_from_args(args) == LLMSelection('openai', 'sol', 'max', True)
-
-  def test_everything_defaults_to_an_empty_selection(self):
-    assert llm_flags.selection_from_args(_args([])).is_empty()
+def test_omitted_recipe_forwards_nothing():
+  arguments = vars(parser().parse_args([]))
+  assert arguments == {'llm': None}
+  assert parser().reconstruct(arguments, prog=[]) == []
 
 
-class TestCanonicalize:
-  def test_the_pieces_collapse_into_one_forwarded_flag(self):
-    args = _args(['--provider', 'openai', '--effort', 'max', '--fast'])
-    assert llm_flags.canonicalize(args, llm_flags.selection_from_args(args)) == 'openai::max+fast'
-    # the pieces go back to their parser defaults, so an argv rebuilt from the
-    # namespace carries the canonical value alone
-    assert _parser().reconstruct(args, prog=[]) == ['--llm', 'openai::max+fast']
-
-  def test_an_empty_selection_forwards_nothing(self):
-    args = _args([])
-    assert llm_flags.canonicalize(args, llm_flags.selection_from_args(args)) is None
-    assert _parser().reconstruct(args, prog=[]) == []
-
-  def test_dropping_the_pieces_leaves_only_the_canonical_value(self):
-    args = _args(['--fast'])
-    llm_flags.canonicalize(args, llm_flags.selection_from_args(args))
-    llm_flags.drop_piece_flags(args)
-    assert args == {'llm': '+fast'}
-
-
-class TestPresets:
-  @pytest.fixture(autouse=True)
-  def _stores(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', tmp_path / 'bro.json')
-    monkeypatch.setattr(
-      'bro.workspace.project.project_sections',
-      lambda: {'llm': {'sharp': 'openai:sol:max', 'cheap': ':terra'}},
-    )
-    self.host_file = tmp_path / 'bro.json'
-
-  def test_a_project_preset_expands(self):
-    args = _args(['--llm', 'sharp'])
-    assert llm_flags.selection_from_args(args) == LLMSelection('openai', 'sol', 'max')
-
-  def test_an_already_read_project_config_supplies_presets(self):
-    config = ProjectConfig(
-      default_bro='bro', image_repository='bro/bro', sections={'llm': {'remote': ':terra'}}
-    )
-    assert llm_flags.selection_from_args(
-      _args(['--llm', 'remote']), project=config
-    ) == LLMSelection(model='terra')
-
-  def test_the_host_table_overrides_the_project_per_name(self):
-    self.host_file.write_text(json.dumps({'llm': {'sharp': ':fable5'}}))
-    args = _args(['--llm', 'sharp'])
-    assert llm_flags.selection_from_args(args) == LLMSelection(model='fable5')
-    # the name the host doesn't restate still comes from the project
-    assert llm_flags.selection_from_args(_args(['--llm', 'cheap'])) == LLMSelection(model='terra')
-
-  def test_a_name_no_table_carries_is_read_as_a_recipe(self):
-    assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
-
-  def test_a_recipe_is_read_without_reaching_for_a_table(self, monkeypatch):
-    def unreachable():
-      raise AssertionError('a recipe must resolve on its own')
-
-    monkeypatch.setattr('bro.workspace.project.project_sections', unreachable)
-
-    assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
-
-  def test_the_host_names_stay_in_scope_outside_a_project(self, monkeypatch):
-    monkeypatch.setattr('bro.workspace.project.project_sections', dict)
-    self.host_file.write_text(json.dumps({'llm': {'sharp': ':fable5'}}))
-
-    assert llm_flags.selection_from_args(_args(['--llm', 'sharp'])) == LLMSelection(model='fable5')
-
-  def test_a_malformed_preset_names_itself_in_the_error(self):
-    self.host_file.write_text(json.dumps({'llm': {'broken': '::ludicrous'}}))
-    with pytest.raises(LLMSelectionError, match="preset 'broken'"):
-      llm_flags.selection_from_args(_args(['--llm', 'broken']))
-
-  def test_an_installed_provider_cannot_be_shadowed(self):
-    self.host_file.write_text(json.dumps({'llm': {'openai': 'anthropic:opus5'}}))
-    assert llm_flags.selection_from_args(_args(['--llm', 'openai'])) == LLMSelection(
-      provider='openai'
-    )
-
-  def test_an_unknown_word_lists_providers_and_presets(self):
-    with pytest.raises(
-      LLMSelectionError, match='installed providers:.*openai.*presets: cheap, sharp'
-    ):
-      llm_flags.selection_from_args(_args(['--llm', 'missing']))
-
-  def test_provider_and_model_flags_validate_grammar_only(self):
-    assert llm_flags.selection_from_args(
-      _args(['--provider', 'future', '--model', 'unlisted'])
-    ) == LLMSelection('future', 'unlisted')
-    assert llm_flags.selection_from_args(_args(['--llm', 'future:unlisted'])) == LLMSelection(
-      'future', 'unlisted'
-    )
-
-
-def test_passthrough_piece_flag_canonicalizes_and_excludes_whole_recipe():
-  args = _args(['--provider', 'openai', '--model', 'gpt-7', '--effort', 'high', '--passthrough'])
-  selection = llm_flags.selection_from_args(args)
-  assert selection.passthrough
-  assert llm_flags.canonicalize(args, selection) == 'openai:gpt-7:high+passthrough'
-  assert _parser().reconstruct(args, prog=[]) == ['--llm', selection.format()]
+@pytest.mark.parametrize('flag', ['--provider', '--model', '--effort', '--fast', '--passthrough'])
+def test_piece_flags_are_not_launch_options(flag):
   with pytest.raises(SystemExit):
-    _args(['--llm', 'openai', '--passthrough'])
+    parser().parse_args([flag, 'value'])

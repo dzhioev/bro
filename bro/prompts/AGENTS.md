@@ -63,7 +63,7 @@ A markdown reference doc in `bro/prompts/` (loader names are `/`-relative) reach
 Current reference docs:
 
 - `environment.md` — session-banner playbook:
-  every surface calls the `bro::banner` service tool and reads this doc through the `environment` page (`ride banner --llm` stays as the human CLI).
+  every surface calls the `bro::banner` service tool and reads this doc through the `environment` page (`ride banner --plain` stays as the human CLI).
   Tool-served only — not injected
 
 - `tool_names.md` — inserts the selected harness's `tool_name_rule` passage;

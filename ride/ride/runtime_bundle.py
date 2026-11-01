@@ -26,6 +26,7 @@ import certifi
 
 from bro.base import log
 from bro.base.source_commit import RECORD_NAME, SourceCommit, checkout_commit
+from bro.workspace.installation import MARKER, installation_home, validate_home
 from bro.workspace.paths import runtime_base
 
 _SESSION_COMMAND_GROUP = 'bro.session_commands'
@@ -136,7 +137,7 @@ class RuntimeBundle:
       log.info('materializing runtime bundle %s for the host', self.hash[:12])
       shutil.rmtree(host, ignore_errors=True)
       host.mkdir()
-      _materialize(self.root, host, sys.executable)
+      _materialize(self.root, host, sys.executable, home=_manifest_home(self.root))
       complete.touch()
 
   def require_frozen_manifest(self) -> None:
@@ -180,6 +181,7 @@ class RuntimeBundle:
             Path('/bundle'),
             Path('/var/ride/runtime'),
             '/usr/local/bin/python',
+            home=_manifest_home(self.root),
             wheel_names=wheel_names,
             run=lambda command, description: _container_run(
               container_id, command, description=description
@@ -227,6 +229,10 @@ def validate_materialized_runtime(root: Path) -> None:
   python = venv_bin / 'python'
   if not python.is_file() or not os.access(python, os.X_OK):
     raise RuntimeBundleError(f'materialized runtime is missing executable {python}')
+  try:
+    installation_home(root / 'venv')
+  except ValueError as error:
+    raise RuntimeBundleError(str(error)) from error
   commands = _session_commands(python)
   declared = set(commands)
   shim_names = {path.name for path in shim_directory.iterdir()}
@@ -636,12 +642,18 @@ def _wheel_digest(path: Path) -> str:
   return digest.hexdigest()
 
 
-def _manifest(python: str, pins: list[str], wheels: list[Path]) -> dict:
+def _manifest(python: str, pins: list[str], wheels: list[Path], *, home: str) -> dict:
   return {
     'python': python,
+    'home': validate_home(home),
     'pins': pins,
     'wheels': {wheel.name: _wheel_digest(wheel) for wheel in wheels},
   }
+
+
+def _manifest_home(root: Path) -> str:
+  manifest = json.loads((root / 'bundle.json').read_text())
+  return validate_home(manifest.get('home'))
 
 
 def _manifest_bytes(manifest: dict) -> bytes:
@@ -787,6 +799,7 @@ def _materialize(
   target: Path,
   python: str,
   *,
+  home: str,
   wheel_names: list[str] | None = None,
   run: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> None:
@@ -821,6 +834,10 @@ def _materialize(
   command_runner(
     ['uv', 'pip', 'check', '--python', str(venv / 'bin' / 'python')],
     description='runtime dependency closure is incomplete',
+  )
+  command_runner(
+    ['sh', '-c', 'printf \'%s\\n\' "$1" > "$2"', 'sh', validate_home(home), str(venv / MARKER)],
+    description='cannot write runtime installation home',
   )
   link_session_commands(target, run=command_runner)
 
@@ -889,6 +906,7 @@ def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBun
           raise RuntimeBundleError(
             f'cannot load frozen runtime bundle {reference}: {error}'
           ) from error
+        validate_home(manifest.get('home'))
         python = manifest.get('python')
         if not isinstance(python, str) or python == '':
           raise RuntimeBundleError(f'frozen runtime bundle {reference} has no Python version')
@@ -896,6 +914,7 @@ def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBun
       yield RuntimeBundle(root, python)
     return
 
+  home = installation_home()
   python, pins, local = _classify_installation()
   base = runtime_base()
   runtime = base / 'runtime'
@@ -903,7 +922,7 @@ def resolve_runtime_bundle(reference: str | None = None) -> Generator[RuntimeBun
   with contextlib.ExitStack() as lifetime:
     with tempfile.TemporaryDirectory(prefix='ride-runtime-wheels-') as temporary:
       wheels = _build_wheels(local, Path(temporary))
-      manifest = _manifest(python, pins, wheels)
+      manifest = _manifest(python, pins, wheels, home=home)
       running = _running_bundle_hash(base)
       if running is not None and running != _bundle_hash(manifest):
         raise RuntimeBundleError(

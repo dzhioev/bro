@@ -48,5 +48,5 @@ def test_wheel_declares_entry_points(wheel):
   scripts = metadata['console_scripts']
   assert scripts['bro-oops-dir'] == 'bro.oops._entrypoints:bro_oops_assets'
   assert scripts['bro.oops.assets'] == 'bro.oops._entrypoints:bro_oops_assets'
-  assert metadata['bro']['devoops'] == 'bros.devoops:Devoops'
+  assert metadata['bro.bros.bro']['devoops'] == 'bros.devoops:Devoops'
   assert metadata['bro.toolsets']['infra'] == 'bro.oops.mcp:toolset'
