@@ -65,7 +65,7 @@ backward compatibility is not a constraint (`AGENTS.md`, "Conventions"), and oth
   **Canonical text** is the one recipe text `format_recipe` writes for a recipe (§3.4).
 - **Listed model** — a key of the recipe class's `MODEL_INPUTS` table (#1143);
   a recipe is **admitted** when its model is listed or it carries `passthrough` (§3.5).
-- **Retired model** — a model a provider once admitted and no longer does, kept with its retirement date so recorded trails stay priced (§3.5).
+- **Retired model** — a model a provider once admitted and no longer does, kept with its retirement date so the trails that ran it stay priced (§3.5).
 - **Harness** — the engine a session runs on (`bro`, `claude`);
   a harness **serves** the providers named by its `llm_providers` (§3.6).
 - **Distribution** — an installable Python package built from one `pyproject.toml`, such as `bro-dev` or `bro-local`.
@@ -151,7 +151,9 @@ It is stored as the base class's keyword-only field, which no provider may decla
 
 `format_recipe(recipe)` writes the canonical text:
 `provider:model`, then `+passthrough` when set, then `,field=value` for each field whose value differs from the class's default, in the order the class declares its fields, with `bool` written `true` or `false` and `int` in decimal.
-Since every field is writable (R5) and every value is (R6), `bind_recipe(format_recipe(recipe)) == recipe` for every recipe.
+R5 and R6 make every recipe writable, and binding refuses only a recipe that is not admitted (B7),
+so `bind_recipe(format_recipe(recipe)) == recipe` for every admitted recipe.
+A recipe `Recipe.from_dict` rebuilt from a record of a model since retired has canonical text too, which binding refuses (R4).
 
 `Recipe.dump()` is defined once in the base class:
 `{"type": <provider>, "model": <model>, <field>: <value> for every field}`, plus `"passthrough": true` when set.
@@ -181,12 +183,15 @@ The base class no longer declares `selection_fields`, `deferred_fields`, `effort
   `ride resume` (E3) and `bro.fork.fork` (S3) for a recipe `Recipe.from_dict` rebuilt from a record;
   and `wires.open` again for every recipe a native run opens a wire for, the managed session's `--resolved-recipe` included.
 - **R2.** The class's `RETIRED_MODELS` maps each retired model id to its retirement date, the day the framework stopped admitting it.
-- **R3.** The models of the price table are exactly the listed models together with the retired ones, and no model is both listed and retired.
-  Cost prices each call by the model id the vendor returned, and OpenAI's table maps a dated snapshot id to its undated name, so a snapshot of a listed or retired model is priced through that mapping.
+- **R3.** The models of the price table are exactly the listed models together with the retired ones, and no model is both listed and retired,
+  so every model that has a price row keeps it.
+  Cost prices each call by the model id the vendor returned, and OpenAI's table maps a dated snapshot id to its undated name, so a snapshot of a listed or retired model is priced through that mapping;
+  a model with no row, run through `+passthrough` or verbatim before #1143, stays unpriced, as today.
 - **R4.** Refusing a retired model without `+passthrough` names its retirement date:
   `gpt-5.5 was retired on 2026-11-01; listed openai models: gpt-6.1-sol, gpt-6-luna, gpt-6-astra, gpt-5.6-terra, gpt-5.6-luna; add +passthrough to run it anyway`.
-- **R5.** Every provider field is typed `bool`, `int`, `str` or a `Literal` of strings, or one of those `| None` with the default `None`.
-- **R6.** The base class refuses a model containing `+`, `,` or whitespace, and a `str` field value containing `,` or whitespace, since recipe text cannot write them.
+- **R5.** Every provider field has a name of the `field` grammar of §3.1 other than `type`, `model` and `passthrough`.
+  It is typed `bool`, `int`, `str`, or a `Literal` of strings each of which the `value` grammar can write, or one of those `| None` with the default `None`.
+- **R6.** The base class refuses an empty model or one containing `+`, `,` or whitespace, and an empty `str` field value or one containing `,` or whitespace, since recipe text cannot write them.
 
 Loading a declaration refuses one that breaks R2, R3 or R5, as it refuses a malformed table.
 The models the price tables hold today without listing them were admitted verbatim until #1143 landed on 2026-11-01, so each gets that date.
@@ -375,6 +380,7 @@ At a root's start, the reading reads the installation's marker, its home setting
 - **V3.** Of the rest of `homes`, the reading reads only the foreign entries `homes.H.bros.B` for the installed bros `B` whose home `H` differs from `I`.
   At the start it checks only their shape:
   known keys, value shapes, recipe text by `parse_recipe`, well-formed names.
+  A shape error there refuses every launch from the installation, as a failure under V1 does (V7).
 - **V4.** A foreign entry's value is bound in full only when a start uses it:
   a recipe when it wins under L2, a harness when it wins under L1, a credential pick and the authority entries whenever its bro starts.
   What the installation cannot honor refuses that start alone, naming the layer and both ways on:
@@ -384,7 +390,8 @@ At a root's start, the reading reads the installation's marker, its home setting
   the installation answers a foreign grant it does not want with a `revoke` in `homes.I.bros.B`.
   A foreign grant naming something the installation does not register cannot be revoked, since its own layers name only what it registers (V1);
   it refuses its bro's starts until the plug-in is installed.
-- **V6.** Nothing else under `homes` is read, so another home's mistakes reach this installation only through the foreign entries of bros it installs, and only at the starts that use them.
+- **V6.** Nothing else under `homes` is read, so another home's mistakes reach this installation only through the foreign entries of bros it installs:
+  a malformed one refuses every launch (V3), and a well-formed value the installation cannot honor refuses only the starts that use it (V4).
 - **V7.** A failure under V1 refuses every launch from the installation, naming the layer and the key:
   `~/.bro.json: homes.bro.bros.bro-eyebro.llm.bro: unknown field 'effort' for openai; fields: reasoning_effort, service_tier, compact_threshold`.
 
@@ -449,8 +456,10 @@ of the attached repository it reads only what describes the tree.
 
 - **P1.** Of the attached tree's `[tool.bro]`, a ride reads `build-context-command` and sub-tables such as `[tool.bro.devoops]`, whose keys belong to whoever declares them.
   It reads no other key, so a tree from another home, or from a commit before this design, attaches with whatever else its `[tool.bro]` holds.
-- **P2.** A boxed session on an attached tree with a `uv.lock` runs in the tree's project image, tagged `bro/ride-project:<hash>`, where the hash covers the runtime image and the tree's manifests as today.
-  The image carries the label `ride-attachment=<the attachment's identity>`, its path or URL.
+- **P2.** A boxed session on an attached tree with a `uv.lock` runs in the tree's project image, tagged `bro/ride-project:<hash>`.
+  The hash covers the attachment's identity, its normalized path or URL, besides the runtime image and the tree's manifests it covers today,
+  so two attachments never share an image, even with identical manifests.
+  The image carries the label `ride-attachment=<the attachment's identity>`.
 - **P3.** After building a project image, ride untags the other unlocked project images labeled with the same attachment, and the cleanup that removes root-owned files looks up a present image of the tree by that label;
   so each attachment keeps one project image, as each image repository name does today.
 
@@ -459,8 +468,9 @@ of the attached repository it reads only what describes the tree.
 ### 6.1 The resolution function
 
 `resolve_recipe(reading, bro, harness, explicit=None)` (`ride/ride/authority_scope.py`) returns the resolved recipe and its source.
+`explicit`, when given, is an explicit recipe: the recipe text a surface passed, together with that surface's source name from §6.2.
 
-1. When `explicit` recipe text is given, it is the text, and the source is the surface that passed it (§6.2).
+1. When `explicit` is given, its text is the text and its source the source.
    Otherwise the text is the winning `llm` entry for the harness under L2, and the source is that layer's name.
    With neither, the start is refused:
    `<bro> has no recipe for harness <harness>: pass --llm, or set llm.<harness> in a layer of ~/.bro.json or in the home settings`.
@@ -472,7 +482,7 @@ an explicit text replaces the configured one whole, and two layers never combine
 
 ### 6.2 Surfaces
 
-| surface | explicit text | harness | reading | source when explicit |
+| surface | explicit text | harness | reading | source name of an explicit recipe |
 |---|---|---|---|---|
 | `ride solo`, `ride along` | `--llm` | `--harness`, else the stack's `harness` | the root's | `--llm` |
 | `dive-in` | `--llm`, forwarded | as `ride along` | as `ride along` | `--llm` |
@@ -537,9 +547,9 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
 - **E2.** `ride resume` runs the recorded recipe unless `--llm` replaces it;
   a replacement is resolved as on `ride along`, on the recorded harness, and its source is `--llm`.
   A native session continues its trail on one wire, so a replacement on another wire than the recorded recipe's is refused before the session starts.
-- **E3.** Before the session starts, `ride resume` checks the recorded recipe, rebuilt with `Recipe.from_dict`, for admission (R1) and against the recorded harness (§3.6).
+- **E3.** When no `--llm` replaces it, `ride resume` checks the recorded recipe, rebuilt with `Recipe.from_dict`, for admission (R1) and against the recorded harness (§3.6) before the session starts.
   One whose model has since been retired is refused with R4's message;
-  `ride resume --llm` with a listed model, or the same model with `+passthrough`, resumes it.
+  `ride resume --llm` with a listed model, or the same model with `+passthrough`, resumes it, and the replacement alone is checked (E2).
 - **E4.** A record written before this design has no resolved recipe, and its request may carry the options this design removes (`effort`, `fast`, `~default`).
   `ride resume` recognizes such a record and refuses it, naming the workspace and the two ways on:
   `bro chat <bro> --fork <trail>` for a native session, or a new session;
@@ -567,7 +577,7 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
 | no harness | §5.3 | the bro, where to set one | the start |
 | a missing or malformed marker | the reading (I4) | the marker's path, the line to write | every launch |
 | two `bro.settings` entries for one home | the reading (G3) | both distributions | every launch |
-| a malformed part the installation owns | the reading (V7) | the layer and key | every launch |
+| a malformed part the installation owns, or a malformed foreign entry of a bro it installs | the reading (V3, V7) | the layer and key | every launch |
 | a foreign entry's value the installation cannot honor | the start using it (V4) | the layer, what to install, the override to add | that start |
 | two entries claiming one bro name | the registry (H3) | both distributions | the registry is read |
 | a declaration breaking R2, R3 or R5 | `providers.declaration` | the model or field | the provider is used |
@@ -610,7 +620,7 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
   Recorded headers stay readable:
   `rewind`, cost, the trail projections and the benchmark read their fields as stored, and only `bro.fork.fork` rebuilds a header's recipe, from native trails, whose recipes always name a model (S3).
   An Anthropic header recorded with `model: null` comes from the Claude harness only and is never rebuilt.
-- Every model a recorded trail ran is listed or retired, or a dated snapshot of one, so its cost is still priced (R3).
+- Every model that has a price row keeps it, so a recorded trail priced before this design is priced the same after it (R3).
 - Resume records gain the resolved-recipe record (E1);
   older ones are refused (E4).
 - Benchmark retention keeps the trial's `model_name` as written.
@@ -642,7 +652,7 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
   a root, a summon by a root started earlier, and an old benchmark bundle.
 - **The benchmark bundle** is built from the checkout, not from the host installation;
   building it writes its marker and records its home `benchmark` in its manifest, whose format the landing changes.
-  `benchmark-run` and `benchmark-job` rebuild a bundle of another format, so no bundle from before this design runs a trial after it, unless kept with `--keep-bundle`.
+  Every benchmark job builds its trials' bundle through the check that rebuilds a bundle of another format, `--keep-bundle` or not, so no bundle from before this design runs a trial after it.
   A trial reads no host file but the one it writes (S6) and a store hydrated from the host's, `mu+benchmark` included,
   so no benchmark runs between the landing and the rewrite, when new code would meet the old material.
 - **The summon payload** is read only by processes of the root's runtime bundle, so its `llm`-only shape needs no order.
@@ -657,8 +667,14 @@ the start's `resolved_recipe`, a manual summon's commit, the resume record (E1),
 4. The host's installation re-syncs to the landed commit, which writes its marker;
    the two new files replace the current ones, with backups kept.
 5. Fresh roots start.
-6. ppp's and kap's installations move (§12.2), each through a session on its own repository.
-7. The owner moves the second host.
+6. ppp, then kap, moves (§12.2).
+   A `bro-dev` session of this host's re-synced installation, attached to the consumer's repository by its URL, carries the move as a pull request through `bump-bro`;
+   it can attach the unmigrated tree, since a ride reads none of that tree's launch keys (P1).
+   Once the pull request merges, the consumer's checkout pulls it and runs its own `./setup.sh`, which re-syncs its installation and writes its marker,
+   and `ride scope` from that installation checks each of its bros on each harness.
+7. The owner moves the second host:
+   each checkout there pulls the merged commits, its own moves of step 6 included, and runs its `./setup.sh`,
+   and `ride scope` from each installation checks its bros.
 
 Rollback before step 6 restores the two backups and re-syncs the previous commit.
 
@@ -675,11 +691,13 @@ The last step of the implementation plan is attended and needs the host's own fi
    and, for each bro whose work calls for a different model, knob or allowance, a bro layer with the recipe and the reason.
    It proposes the `mu` material's recipes in the new syntax.
 4. The owner settles every entry.
-5. It writes `~/.bro.json.next` and the new `mu` material beside the current files, and validates them with the landed code,
-   in a worktree of the landed commit that `./setup.sh` has synced and given its marker.
-   There it runs `ride scope --bro <bro> --harness <harness>` for every bro of this installation on every harness,
-   with `HOME` set to a scratch directory holding the candidate as `.bro.json`, `BRO_STORE` set to the host's store and `UV_CACHE_DIR` to the host's uv cache;
-   and it runs `bro.native.llm --llm <text>` once for each recipe of the `mu` material.
+5. It writes `~/.bro.json.next` and, for each `mu` instance of the store (`mu`, `mu+benchmark`), its new material beside the current file,
+   and validates them with the landed code, in a worktree of the landed commit that `./setup.sh` has synced and given its marker:
+   - `ride scope --bro <bro> --harness <harness>` for every bro of this installation on every harness,
+     with `HOME` set to a scratch directory holding the candidate as `.bro.json`, `BRO_STORE` set to the host's store and `UV_CACHE_DIR` to the host's uv cache;
+   - for each candidate `mu` instance, a scratch store holding it as the kind's empty instance, together with the credentials its `$cred` references name, copied from the host's store;
+     with `BRO_STORE` set to that store, one real `mu` call per role the material defines, and one for its default pair, each asking for a one-field result.
+
    ppp's and kap's sections are validated by their own moves (step 6 of §12.3), since this installation reads no section of theirs (V6).
 
 ## 13. Examples
@@ -808,10 +826,10 @@ the owner settled N1 to N8 and N22 to N24 in the design discussion of 2026-11-01
   `launch_llm`, `launch_selection`, `summon_depth` and `LLMDefault` go.
 - `bro/workspace/project.py` — the attached tree's `[tool.bro]` of P1;
   the marker and home-settings readers move to a module of their own.
-- `ride/ride/workspace/docker.py`, `ride/ride/workspace/model.py` — project images named, labeled, pruned and looked up as P2 and P3 say.
+- `ride/ride/workspace/docker.py`, `ride/ride/workspace/model.py` — project images hashed over their attachment, named, labeled, pruned and looked up as P2 and P3 say.
 - `ride/ride/authority_reading.py` — the reading of the marker and the home settings, the layer stack (§5.2), the owned and foreign parts (§5.4);
   per-bro base recipes and the providers' default recipes go.
-- `ride/ride/authority_scope.py` — `resolve_recipe` (§6.1), the options of §6.3 without `effort`, `fast` and the `~default` symbol, `checked_recipe` built on them.
+- `ride/ride/authority_scope.py` — `resolve_recipe` (§6.1) with the explicit recipe as text and source name, the options of §6.3 without `effort`, `fast` and the `~default` symbol, `checked_recipe` built on them.
 - `ride/ride/launch_control.py`, `bro_worker.py` — the allowance (§5.6), recorded on each mission and checked at each launch and manual commit;
   the joined member's command without the piece flags.
 - `ride/ride/cli.py`, `flags.py`, `session.py`, `listing.py`, `scope_report.py`, `dive_in.py`, `operator.py` — `--llm` alone;
