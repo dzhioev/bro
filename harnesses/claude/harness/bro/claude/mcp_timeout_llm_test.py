@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import bro.claude.runner as runner
 from bro import watches
-from bro.anthropic.declaration import LLMSpec
+from bro.anthropic.declaration import Recipe
 from bro.claude.claude_argv import STREAM_JSON_ARGS, ClaudeLaunch
 from bro.claude.live_claude_test_helper import (
   REQUIRES_CLAUDE_CREDENTIAL,
@@ -124,7 +124,7 @@ def _session(prompt: str, activity_file: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    resolved_llm=LLMSpec(model='haiku').dump(),
+    resolved_llm=Recipe(model='haiku').dump(),
     solo=True,
     resume=False,
     bro='bro',

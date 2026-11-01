@@ -13,7 +13,7 @@ from bro.base.condition import when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
 from bro.mcp import MCPServerSpec, ToolLayer, creds
-from bro.native.echo_declaration import LLMSpec
+from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
 from ride import scope
 from ride.authority_reading import Configuration, HarnessReading, Installation, Policy, Reading
@@ -67,7 +67,7 @@ def scoped_installation(monkeypatch, tmp_path):
     },
     {
       'test': HarnessReading(
-        harness, {'scoped': LLMSpec(), 'gated': LLMSpec()}, auth_kind='auth', llm_key=True
+        harness, {'scoped': Recipe(), 'gated': Recipe()}, auth_kind='auth', llm_key=True
       )
     },
     kinds,

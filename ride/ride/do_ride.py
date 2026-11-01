@@ -16,7 +16,7 @@ from bro.base import credentials
 from bro.base.args import Parser
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.monitor import PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
 from bro.summon import party_member
@@ -61,8 +61,8 @@ class SessionRun:
   activity_file: Path
 
   @property
-  def llm_spec(self) -> LLMSpec:
-    return LLMSpec.from_dict(self.resolved_llm)
+  def llm_spec(self) -> Recipe:
+    return Recipe.from_dict(self.resolved_llm)
 
 
 def command(spec: 'SessionSpec') -> list[str]:
@@ -129,7 +129,7 @@ def _resolved_llm() -> dict:
   data = json.loads(encoded)
   if not isinstance(data, dict):
     raise TypeError(f'{RESOLVED_LLM_ENV} must encode an object')
-  return LLMSpec.from_dict(data).dump()
+  return Recipe.from_dict(data).dump()
 
 
 def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:

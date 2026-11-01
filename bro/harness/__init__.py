@@ -10,7 +10,7 @@ from bro.base.condition import Variables
 
 if TYPE_CHECKING:
   from bro.bro import BaseBro, LiveRun
-  from bro.llm.llm import LLMSpec
+  from bro.llm.llm import Recipe
   from bro.llm.mcp import Tool
   from bro.llm.providers import LLMSelection
   from bro.mcp import MCPServerSpec, Reach
@@ -93,7 +93,17 @@ class Harness:
     looked up among `llm_providers`."""
     return len(selection.providers(self.llm_providers)) > 0
 
-  def resolve_recipe(self, base: 'LLMSpec | None', selection: 'LLMSelection') -> 'LLMSpec':
+  def check_recipe(self, recipe: 'Recipe') -> None:
+    from bro.llm.providers import RecipeError
+
+    if recipe.TYPE not in self.llm_providers:
+      raise RecipeError(
+        f'the {self.name} harness cannot run provider {recipe.TYPE!r} on wire {recipe.WIRE!r}; '
+        f'it serves {", ".join(self.llm_providers) or "no provider"}; '
+        f'{recipe.TYPE} runs on {_harnesses_running(recipe.TYPE)}'
+      )
+
+  def resolve_recipe(self, base: 'Recipe | None', selection: 'LLMSelection') -> 'Recipe':
     """`selection` over the standing `base`, among `llm_providers`; a recipe this
     harness does not run is refused, naming the installed harnesses that do."""
     from bro.llm.providers import LLMSelectionError, default_spec, known_names, resolve

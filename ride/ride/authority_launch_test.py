@@ -22,7 +22,7 @@ from bro.base import credentials, host_config
 from bro.bro import BaseBro
 from bro.broker.brotocol import request as message
 from bro.harness import Harness
-from bro.native.echo_declaration import LLMSpec
+from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
 from ride.authority_launch import (
   credential_values,
@@ -59,7 +59,7 @@ def source(monkeypatch, tmp_path):
   driver._llm_providers = ('echo',)
   installed = Installation(
     {'root': Root(credential_presence=kinds), 'browser': Browser(credential_presence=kinds)},
-    {'probe': HarnessReading(driver, {'root': LLMSpec(), 'browser': LLMSpec()})},
+    {'probe': HarnessReading(driver, {'root': Recipe(), 'browser': Recipe()})},
     kinds,
     {'echo': frozenset()},
     {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
@@ -195,7 +195,7 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   (store / 'creds').mkdir(parents=True)
   (store / 'creds' / 'github+operator.cred').write_text('operator-material')
   (store / credentials.STORE_FILE).write_text('{}')
-  from bro.openai.declaration import LLMSpec as OpenAIRecipe
+  from bro.openai.declaration import Recipe as OpenAIRecipe
 
   driver = source.installation.harnesses['probe']
   driver.harness._llm_providers = ('openai', 'echo')

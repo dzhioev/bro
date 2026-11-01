@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, ClassVar, Optional
@@ -15,34 +16,36 @@ MODELS: dict[str, str] = {}
 # and no API to fail against
 FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = ()
 
-PRICE_TABLE: Mapping[str, Any] = MappingProxyType({})
-PRICE_TABLE_SHA256 = pricing.content_sha256({})
+
+@dataclass(frozen=True)
+class PriceTable:
+  models: Mapping[str, Decimal]
+
+
+PRICE_TABLE = PriceTable(MappingProxyType({DEFAULT_MODEL: Decimal(0)}))
+PRICE_TABLE_SHA256 = pricing.content_sha256(
+  {model: str(rate) for model, rate in PRICE_TABLE.models.items()}
+)
 
 
 def price(
   model: str,
   usage: Mapping[str, Any],
   service_tier: Optional[str],
-  table: Optional[Mapping[str, Any]] = None,
+  table: Optional[PriceTable] = None,
 ) -> Optional[Decimal]:
   """Echo makes no billable provider call."""
-  return None
+  return (PRICE_TABLE if table is None else table).models.get(model)
 
 
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.LLMSpec):
-  """trivial spec for Echo. inherits the raising base `.fast` since echo has
-  no fast-mode equivalent."""
+class Recipe(llm_llm.Recipe):
+  """A diagnostic recipe for the echo wire."""
 
   TYPE: ClassVar[str] = 'echo'
   WIRE: ClassVar[str] = 'echo'
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {DEFAULT_MODEL: frozenset()}
 
+  RETIRED_MODELS: ClassVar[Mapping[str, date]] = {}
+
   model: str = DEFAULT_MODEL
-
-  def _dump_impl(self) -> dict:
-    return {'type': self.TYPE, 'model': self.model}
-
-  @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    return cls(model=data['model'])

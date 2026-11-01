@@ -64,7 +64,7 @@ class _MinimalBro(BaseBro):
 class _FullBro(BaseBro):
   name = 'full'
   description = 'has a data source and two MCP servers'
-  llm_spec = llm_llms_openai.LLMSpec(reasoning_effort='medium')
+  llm_spec = llm_llms_openai.Recipe(reasoning_effort='medium')
   tools: ClassVar = [mcp.source(_StubSource()), _layer('ab', ServerAB), _layer('xz', ServerXZ)]
 
   def __init__(self):
@@ -85,7 +85,7 @@ class TestFormatCard:
 
   @pytest.mark.asyncio
   async def test_identity_omits_reasoning_effort_when_none(self):
-    card = await format_card(_MinimalBro.create(llm_llms_openai.LLMSpec()))
+    card = await format_card(_MinimalBro.create(llm_llms_openai.Recipe()))
     assert 'reasoning effort' not in card
 
   @pytest.mark.asyncio
@@ -244,7 +244,7 @@ class TestFormatCard:
     class _KeylessBro(BaseBro):
       name = 'keyless'
       description = 'no secrets'
-      llm_spec = llm_llms_echo.LLMSpec()
+      llm_spec = llm_llms_echo.Recipe()
 
       def __init__(self):
         super().__init__(system_prompt='hi')

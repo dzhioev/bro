@@ -1,14 +1,14 @@
 # LLM recipes and shared execution contracts
 
 Provider-neutral declarations and the contracts shared by harness engines.
-A persona names an `LLMSpec`;
+Provider declarations export `Recipe`;
 `providers.py` resolves the launch grammar;
 observers, trackers, usage records, and MCP live objects are the common seams engines consume.
 The bro-native loop lives in `bro.native`; wire clients implement the core port.
 
 ## Design
 
-- **Empty package hub.** `__init__.py` re-exports nothing, and consumers import submodules directly (`from bro.llm.llm import LLMSpec`).
+- **Empty package hub.** `__init__.py` re-exports nothing, and consumers import submodules directly (`from bro.llm.llm import Recipe`).
   Records and wire decode sides stay SDK-free, so an environment without an engine can read recorded responses and usage;
   a hub re-export would put unrelated live dependencies on every import of this package.
 - **Recipe boundary.** `llm.py` and `providers.py` are declaration-side and import no SDK, harness or live MCP layer.
@@ -21,15 +21,21 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 
 ## Modules
 
-- `llm.py` — the `LLMSpec` ABC:
-  a frozen recipe (model + provider knobs) with `needed_secrets`, optional `.fast()` / `.with_effort(level)` transforms (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max vocabulary),
-  and a `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
+- `llm.py` — the `Recipe` base:
+  a frozen recipe (model + provider knobs) with class-level `needed_secrets`, optional `.fast()` / `.with_effort(level)` transforms (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max vocabulary),
+  and one field-driven `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
+  Field types and writable values are validated by the base; providers add combination checks.
+  Records require `type` and `model`, omit unset `passthrough`, use defaults for missing fields and refuse unknown keys.
+  Reading a record does not check admission.
   `WIRE` names the recipe’s recorded protocol.
   `selection` and `with_selection` project and reconstruct model/effort choices, with each recipe declaring its concrete effort vocabulary and deferrable fields.
   `LLMUnavailable` is the provider-neutral failure a client raises once its provider stays down through the client's retries.
   `LLMStopped` carries the neutral stop and the provider's own stop reason for an uncompleted leg.
 - `providers.py` — the provider roster.
-  `bro.llm.providers` entry points name declaration modules exporting `LLMSpec`, `DEFAULT_MODEL`, `MODELS`, and `FAILURE_SIGNATURES`.
+  `bro.llm.providers` entry points name declaration modules exporting `Recipe`, `DEFAULT_MODEL`, `MODELS`, and `FAILURE_SIGNATURES`.
+  `parse_recipe`, `bind_recipe` and `format_recipe` own complete recipe text, typed binding and canonical formatting; their operator-facing failures are `RecipeError`.
+  `RETIRED_MODELS` holds dates beside each class's `MODEL_INPUTS`; price rows cover exactly both tables, and a refusal names a retired model's date.
+  Declaration loading checks these tables and the field schema.
   `known_names()` reads sorted metadata without imports; `declaration(name)` loads and validates only the named provider.
   Searches warn and skip broken declarations; an explicit selection fails by name.
   Model resolution tries the short name, then full id, then verbatim;

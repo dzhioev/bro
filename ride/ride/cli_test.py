@@ -11,7 +11,7 @@ import ride.cli as ride_cli
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
 from bro.base import configs, credentials, host_config
-from bro.native.echo_declaration import LLMSpec as EchoLLMSpec
+from bro.native.echo_declaration import Recipe as EchoRecipe
 from bro.workspace.paths import workspace_dir
 from bros.bro import Bro
 from ride import pending_launch
@@ -24,7 +24,7 @@ class HydrationBro(Bro):
   name = 'hydration-test'
   description = 'credential hydration route fixture'
   extra_secrets = ('github',)
-  llm_spec = EchoLLMSpec()
+  llm_spec = EchoRecipe()
 
 
 @pytest.fixture(autouse=True)

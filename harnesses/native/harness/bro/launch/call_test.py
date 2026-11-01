@@ -24,7 +24,7 @@ from bro.launch.call import (
   call_text,
   chat_main,
 )
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.mcp import MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -80,7 +80,7 @@ class MockLLM(LLM):
 class RecordBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_echo.LLMSpec()
+  llm_spec = llm_llms_echo.Recipe()
 
   def __init__(self):
     super().__init__(system_prompt='record')
@@ -362,7 +362,7 @@ async def test_tui_watchdog_stands_down_while_a_turn_runs_and_notices_overdue_wo
 
 
 @dataclass(frozen=True)
-class _FastlessSpec(LLMSpec):
+class _FastlessSpec(Recipe):
   """test spec that intentionally has no fast-mode equivalent."""
 
   TYPE: ClassVar[str] = 'fastless'
@@ -370,18 +370,11 @@ class _FastlessSpec(LLMSpec):
 
   model: str = 'whatever'
 
-  def _dump_impl(self) -> dict:
-    return {'type': self.TYPE, 'model': self.model}
-
-  @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    return cls(model=data['model'])
-
 
 class _ChatBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol')
+  llm_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol')
 
   def __init__(self):
     super().__init__(system_prompt='record')
@@ -412,7 +405,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
 
   assert _chat(['bro', 'record', 'hi']) is None
   spec = built[0].bro.llm_spec
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier is None
 
 
@@ -428,7 +421,7 @@ def test_bro_chat_fast_flag_is_explicit(monkeypatch):
 
   assert _chat(['bro', 'record', 'hi', '--fast']) is None
   spec = built[0].bro.llm_spec
-  assert isinstance(spec, llm_llms_openai.LLMSpec)
+  assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier == 'priority'
 
 
@@ -438,7 +431,7 @@ def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     built.append(runner)
 
-  resolved = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high').fast()
+  resolved = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high').fast()
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
@@ -449,7 +442,7 @@ def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
 
 def test_bro_chat_refuses_a_resolved_recipe_beside_a_selection(monkeypatch):
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  resolved = json.dumps(llm_llms_openai.LLMSpec().dump())
+  resolved = json.dumps(llm_llms_openai.Recipe().dump())
   with pytest.raises(SystemExit):
     _chat(['bro', 'record', 'hi', '--resolved-llm', resolved, '--fast'])
 
@@ -1191,7 +1184,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
 
   captured: dict = {}
   resumed_runner = _MockRunner()
-  recorded_spec = llm_llms_openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='low')
+  recorded_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='low')
 
   def fake_resume(
     client, bro_name, trail_ref, *, llm_spec, at=None, hold='guided', activity_file=None

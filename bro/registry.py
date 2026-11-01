@@ -3,7 +3,7 @@ import importlib.metadata
 from typing import Optional
 
 from bro.bro import BaseBro
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 
 _REGISTRY: dict[str, type[BaseBro]] = {}
 # when True (the default), a lookup miss imports the matching bro module on
@@ -85,7 +85,7 @@ def get_class(name: str) -> type[BaseBro]:
   raise KeyError(f'unknown bro: {name!r}')
 
 
-def create_bro(name: str, llm_spec: Optional[LLMSpec] = None) -> BaseBro:
+def create_bro(name: str, llm_spec: Optional[Recipe] = None) -> BaseBro:
   """instantiate the registered bro by name. returns a fresh instance every
   call — construction walks the MRO, materialises MCP servers, and renders the
   system prompt, so callers that need the same instance across requests should

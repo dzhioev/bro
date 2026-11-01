@@ -351,9 +351,7 @@ Follow the repository's own formatter, test, and build instructions.
 class MyDev(Dev):
   name = 'my-dev'
   description = '<project> development: task → implement → verify → land'
-  llm_spec = llm_llms_openai.LLMSpec(
-    model='<model from the pinned source>', reasoning_effort='high'
-  )
+  llm_spec = llm_llms_openai.Recipe(model='<model from the pinned source>', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
   tools = [

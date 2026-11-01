@@ -5,7 +5,7 @@ from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Optional, Protocol, runtime_checkable
 
 from bro.harness import get_harness as load_harness, installed_harness_names
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from ride.scope import ScopeRecipe
 from ride.workspace.store import ScopedSecrets
 
@@ -46,7 +46,7 @@ class SessionHarness(Protocol):
 
   def scope_recipe(self) -> ScopeRecipe: ...
 
-  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec: ...
+  def resolve_llm(self, value: str | None, bro_name: str) -> Recipe: ...
 
   def preflight_auth(self, spec: SessionSpec, scoped: ScopedSecrets) -> Optional[str]: ...
 

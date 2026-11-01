@@ -22,7 +22,7 @@ from bro.base import configs, credentials, log
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM, Talk
 from bro.harness import harness_name
 from bro.llm import providers
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.monitor import (
   SESSION_DIR_ENV,
   party_member_dir,
@@ -176,8 +176,8 @@ class SessionSpec:
     return self.harness
 
   @property
-  def llm_spec(self) -> LLMSpec:
-    return LLMSpec.from_dict(self.resolved_llm)
+  def llm_spec(self) -> Recipe:
+    return Recipe.from_dict(self.resolved_llm)
 
   @property
   def tty(self) -> bool:

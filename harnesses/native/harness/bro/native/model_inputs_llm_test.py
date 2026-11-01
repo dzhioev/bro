@@ -10,10 +10,10 @@ from pydantic import BaseModel
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
-from bro.deepseek.declaration import LLMSpec as ChatRecipe
+from bro.deepseek.declaration import Recipe as ChatRecipe
 from bro.llm import providers, wires
 from bro.llm.wire import File, Text
-from bro.openai.declaration import MODELS, LLMSpec as ResponsesRecipe
+from bro.openai.declaration import MODELS, Recipe as ResponsesRecipe
 
 
 class Answer(BaseModel):

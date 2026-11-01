@@ -6,7 +6,7 @@ from typing import ClassVar
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
-from bro.llm.llm import LLMSpec, LLMStopped, UnsupportedContent
+from bro.llm.llm import LLMStopped, Recipe, UnsupportedContent
 from bro.llm.mcp import Tool, encode_tool_result
 from bro.llm.records import Chaining, Unknown
 from bro.llm.retry import retry_llm
@@ -67,7 +67,7 @@ class Chat(Wire):
   CHAINING: ClassVar[Chaining] = CHAINING
   OWNED = frozenset({'model', 'messages', 'tools'})
 
-  def __init__(self, recipe: LLMSpec, secrets: dict):
+  def __init__(self, recipe: Recipe, secrets: dict):
     self.recipe = recipe
     self.client = AsyncOpenAI(api_key=secrets['api_key'], base_url=recipe.ENDPOINT, max_retries=0)
     self._history: list[dict] = []

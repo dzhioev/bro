@@ -6,7 +6,7 @@ from bro.llm.mcp import MCPServer
 from bro.llm.observer import Observer
 from bro.llm.tracker import Tracker
 from bro.native.loop import Loop
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 from bro.wire_responses.client import Responses
 
 
@@ -30,7 +30,7 @@ def make_loop(
 ) -> ResponsesLoop:
   from bro.openai.declaration import DEFAULT_MODEL
 
-  recipe = LLMSpec(
+  recipe = Recipe(
     model=model if model is not None else DEFAULT_MODEL,
     reasoning_effort=reasoning_effort,
     service_tier=service_tier,

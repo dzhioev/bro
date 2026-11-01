@@ -1,6 +1,6 @@
 """The diagnostic echo protocol and its client."""
 
-from bro.llm.llm import LLMSpec, UnsupportedContent
+from bro.llm.llm import Recipe, UnsupportedContent
 from bro.llm.mcp import Tool
 from bro.llm.records import Chaining, DecodedCall, Message
 from bro.llm.wire import (
@@ -33,7 +33,7 @@ class Echo(Wire):
   CHAINING = CHAINING
   OWNED = frozenset({'model', 'input', 'tools'})
 
-  def __init__(self, recipe: LLMSpec, secrets: dict):
+  def __init__(self, recipe: Recipe, secrets: dict):
     self.recipe = recipe
     self.history: list[dict] = []
 

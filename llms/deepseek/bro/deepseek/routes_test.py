@@ -14,11 +14,11 @@ import bro.native.harness as native_harness
 import bro.run as bro_run
 from bro.base import credentials
 from bro.bro import BaseBro
-from bro.deepseek.declaration import LLMSpec
+from bro.deepseek.declaration import Recipe
 from bro.fork import fork, latest_fork_point
 from bro.launch.resume import resume
 from bro.llm import providers
-from bro.llm.llm import LLMSpec as Recipe
+from bro.llm.llm import Recipe as BaseRecipe
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
 from bro.llm.mu import mu
 from bro.llm.observer import Observer, ReasoningEvent, ToolCallEvent
@@ -73,9 +73,9 @@ def endpoint(monkeypatch):
     thread.start()
     resources.callback(thread.join)
     resources.callback(server.shutdown)
-    from bro.openai.declaration import LLMSpec as OpenAISpec
+    from bro.openai.declaration import Recipe as OpenAISpec
 
-    for spec in (LLMSpec, OpenAISpec):
+    for spec in (Recipe, OpenAISpec):
       monkeypatch.setattr(spec, 'ENDPOINT', f'http://127.0.0.1:{server.server_port}')
     yield requests, replies, authorizations
 
@@ -112,7 +112,7 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   monkeypatch.setattr(native_loop, 'create', with_tools)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=LLMSpec(reasoning_effort='high')))
+  runner = Runner(create_bro('bro', llm_spec=Recipe(reasoning_effort='high')))
   assert await runner.run('start', surface='test') == 'answer'
   assert called == [True]
   assert requests[1]['messages'][2] == {
@@ -141,13 +141,13 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   result = next(step for step in recorded.steps if step.kind == 'tool_result')
   assert result.extras['call_id'] == tool_call['call_id']
   assert tool_call['source'] == {'step_id': calls[0].step_id, 'index': 2}
-  assert recorded.header.native['usage'][LLMSpec().model]['completion_tokens'] == 6
+  assert recorded.header.native['usage'][Recipe().model]['completion_tokens'] == 6
 
   resumed = resume(
     store,
     'bro',
     runner.trail_id,
-    llm_spec=LLMSpec.from_dict(recorded.header.native['llm']),
+    llm_spec=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
   with resumed.runner:
@@ -181,7 +181,7 @@ async def test_http_errors_follow_provider_retry_policy(server, monkeypatch, sta
     waits.append(seconds)
 
   monkeypatch.setattr('bro.base.retry.asyncio_sleep', wait)
-  runner = Runner(create_bro('bro', llm_spec=LLMSpec()))
+  runner = Runner(create_bro('bro', llm_spec=Recipe()))
   if status == 402:
     with pytest.raises(openai.APIStatusError) as caught:
       await runner.run('go', surface='test')
@@ -210,7 +210,7 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
   monkeypatch.setattr('bro.llm.retry.asyncio_sleep', wait)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=LLMSpec()))
+  runner = Runner(create_bro('bro', llm_spec=Recipe()))
   assert await runner.run('go', surface='test') == 'reply'
   assert waits == [10]
   assert requests[0] == requests[1]
@@ -223,7 +223,7 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
     store,
     'bro',
     runner.trail_id,
-    llm_spec=LLMSpec.from_dict(recorded.header.native['llm']),
+    llm_spec=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
   with resumed.runner:
@@ -271,10 +271,10 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
   )
   descriptor = reading.rules.normalize(requested, reading)
   assert descriptor.values['provider'] == 'deepseek'
-  assert descriptor.values['model'] == LLMSpec().model
+  assert descriptor.values['model'] == Recipe().model
   assert descriptor.values['effort'] == 'high'
   assert descriptor.values['cred.deepseek'] == ''
-  assert checked_recipe(requested, descriptor, reading) == LLMSpec(reasoning_effort='high')
+  assert checked_recipe(requested, descriptor, reading) == Recipe(reasoning_effort='high')
 
 
 DEEPSEEK_KEY = 'host-deepseek-key'
@@ -291,7 +291,7 @@ class Answer(BaseModel):
 
 @dataclass(frozen=True)
 class Stage:
-  recipe: Recipe
+  recipe: BaseRecipe
   files: dict[str, bytes]
   session: credentials.Store
   argv: list[str]
@@ -396,7 +396,7 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
   )
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro', llm_spec=LLMSpec()))
+  runner = Runner(create_bro('bro', llm_spec=Recipe()))
   runner.inbox.post('notice')
   events = []
 
@@ -414,9 +414,9 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     assert len(rejected) == 1
     assert rejected[0].extras['stopped'] == 'failed'
     assert rejected[0].body['response']['choices'][0]['message']['reasoning_content'] == 'discard'
-    assert recorded.header.native['usage'][LLMSpec().model]['completion_tokens'] == 3
+    assert recorded.header.native['usage'][Recipe().model]['completion_tokens'] == 3
     assert latest_fork_point(recorded) < rejected[0].step_id
-    resumed = resume(store, 'bro', runner.trail_id, llm_spec=LLMSpec(), hold='unattended')
+    resumed = resume(store, 'bro', runner.trail_id, llm_spec=Recipe(), hold='unattended')
     with resumed.runner:
       assert await resumed.runner.send('continue', surface='test') == 'reply'
     assert await runner.send('continue', surface='test') == 'reply'
@@ -429,7 +429,7 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
   ]
   assert runner.trail_id is not None
   continued = fetch_recorded_trail(store, runner.trail_id)
-  assert continued.header.native['usage'][LLMSpec().model]['completion_tokens'] == 6
+  assert continued.header.native['usage'][Recipe().model]['completion_tokens'] == 6
 
 
 @pytest.mark.asyncio
@@ -443,14 +443,14 @@ async def test_live_probe_roster_includes_the_managed_summoned_service_schemas(m
   monkeypatch.setattr(credentials, 'get_json', lambda kind: pytest.fail('credential material read'))
   monkeypatch.setattr(Client, 'from_env', lambda: pytest.fail('broker connection'))
   standalone = None
-  with Runner(create_bro('bro-dev', llm_spec=LLMSpec())) as runner:
+  with Runner(create_bro('bro-dev', llm_spec=Recipe())) as runner:
     standalone = tools_to_chat_format(
       await ToolRegistry(
         runner.bro.assemble(harness=BRO, hold='unattended', live_run=runner)
       ).resolve()
     )
   assert standalone is not None
-  managed = await managed_roster(monkeypatch, LLMSpec())
+  managed = await managed_roster(monkeypatch, Recipe())
   standalone_by_name = {tool['function']['name']: tool for tool in standalone}
   managed_by_name = {tool['function']['name']: tool for tool in managed}
   assert {name: managed_by_name[name] for name in standalone_by_name} == standalone_by_name
@@ -495,7 +495,7 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   )
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(ShellBro.create(LLMSpec()))
+  runner = Runner(ShellBro.create(Recipe()))
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
   *history, notification = requests[2]['messages']

@@ -11,7 +11,7 @@ import pytest
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
-from bro.deepseek.declaration import LLMSpec
+from bro.deepseek.declaration import Recipe
 from bro.deepseek.probe_test_helper import managed_roster
 from bro.llm.records import Unknown
 from bro.wire_chat.client import assistant_message
@@ -23,7 +23,7 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
   with host_credential_store():
     if not credentials.available('deepseek'):
       pytest.skip('needs the deepseek credential')
-    recipe = LLMSpec(reasoning_effort='low')
+    recipe = Recipe(reasoning_effort='low')
     roster = await managed_roster(monkeypatch, recipe)
     client = openai.AsyncOpenAI(
       api_key=credentials.get_json('deepseek')['api_key'], base_url=recipe.ENDPOINT, max_retries=0

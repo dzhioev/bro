@@ -24,7 +24,7 @@ A distribution contributes through these `[project.entry-points]` groups of its 
 - `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
   each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
 - `bro.llm.providers` — provider declaration modules, `<name> = "bro.<name>.declaration"`;
-  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `LLMSpec`, `DEFAULT_MODEL`, `MODELS`, failure signatures and pricing.
+  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `Recipe`, `DEFAULT_MODEL`, `MODELS`, failure signatures and pricing.
   A provider contributes its credential kind separately through `bro.credentials` from an import-free literal module.
   Provider package hubs import nothing, and declarations import no SDK at module level and no harness.
   Explicit selection loads only that declaration; searches warn and skip a broken declaration.
@@ -109,7 +109,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   See `bro/reference/conditions.md`.
   Declarations skip the `ClassVar` annotation, since BaseBro's class-level declarations carry the types;
   a ruff configuration selecting RUF012 ignores it for persona modules.
-- `llm_spec = openai.LLMSpec(...)` (imported from `bro.openai.declaration`, with a dependency on `bro-openai`) declares the recipe the native engine runs the bro under;
+- `llm_spec = openai.Recipe(...)` (imported from `bro.openai.declaration`, with a dependency on `bro-openai`) declares the recipe the native engine runs the bro under;
   a Claude Code session runs under the recipe its own launch names.
   A persona may omit it; a native launch then needs an explicit provider recipe.
   Per-instance overrides go through `YourBro.create(spec)`.

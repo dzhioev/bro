@@ -78,7 +78,7 @@ issue number, what you read, and the task.
 class Triage(Bro):
   name = 'triage'
   description = 'reads and labels incoming issues, hands confirmed bugs on'
-  llm_spec = openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
+  llm_spec = openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high')
   features = {'brog': creds.contains('brog')}
   may_summon = ('browser', 'devoops')
   tools = [
@@ -306,7 +306,7 @@ from bros.dev import Dev
 class Fixer(Dev):
   name = 'fixer'
   description = 'fixes a confirmed bug and opens the pull request'
-  llm_spec = openai.LLMSpec(model='gpt-6.1-sol', reasoning_effort='high')
+  llm_spec = openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
   system_prompt = 'Work from the task you were handed, and open the pull request with [[run pr]].'

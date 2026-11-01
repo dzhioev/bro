@@ -1,5 +1,5 @@
 """Anthropic as an LLM provider: the model and knobs a Claude Code session runs
-under, carried as an `LLMSpec` like every other provider's recipe, plus
+under, carried as a `Recipe` like every other provider's recipe, plus
 Anthropic list pricing.
 
 The recipe has no in-process client: a session surface reads the fields off it.
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, ClassVar, Optional, Self
+from typing import Any, ClassVar, Literal, Optional, Self
 
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
@@ -485,11 +485,8 @@ def price(
   ) / _ONE_MILLION
 
 
-DEFAULT_EFFORT = 'xhigh'
-
-
 @dataclass(frozen=True)
-class LLMSpec(llm_llm.LLMSpec):
+class Recipe(llm_llm.Recipe):
   """spec for an Anthropic model.
 
   `model` and `effort` None name none, leaving the choice to the session that
@@ -506,19 +503,30 @@ class LLMSpec(llm_llm.LLMSpec):
     MODELS.values(),
     frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'}),
   )
+  RETIRED_MODELS: ClassVar[Mapping[str, date]] = dict.fromkeys(
+    [
+      'claude-3-5-haiku-20241022',
+      'claude-mythos-5',
+      'claude-mythos-5-1',
+      'claude-opus-4-1-20250805',
+      'claude-opus-4-20250514',
+      'claude-opus-4-5-20251101',
+      'claude-opus-4-6',
+      'claude-opus-4-7',
+      'claude-opus-4-8',
+      'claude-sonnet-4-20250514',
+      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-4-6',
+    ],
+    date(2026, 11, 1),
+  )
   selection_fields = MappingProxyType({'model': 'model', 'effort': 'effort'})
   deferred_fields = frozenset({'model', 'effort'})
   effort_values = frozenset(llm_llm.EFFORT_LEVELS)
 
   model: Optional[str] = DEFAULT_MODEL
-  effort: Optional[str] = DEFAULT_EFFORT
+  effort: Literal['low', 'medium', 'high', 'xhigh', 'max'] | None = None
   fast_mode: bool = False
-
-  def __post_init__(self):
-    if self.effort is not None and self.effort not in llm_llm.EFFORT_LEVELS:
-      raise ValueError(
-        f'invalid effort {self.effort!r}; expected one of {list(llm_llm.EFFORT_LEVELS)} or None'
-      )
 
   def fast(self) -> Self:
     return dataclasses.replace(self, fast_mode=True)
@@ -529,22 +537,6 @@ class LLMSpec(llm_llm.LLMSpec):
         f'unknown effort level {effort!r}; expected one of {list(llm_llm.EFFORT_LEVELS)}'
       )
     return dataclasses.replace(self, effort=effort)
-
-  def _dump_impl(self) -> dict:
-    return {
-      'type': self.TYPE,
-      'model': self.model,
-      'effort': self.effort,
-      'fast_mode': self.fast_mode,
-    }
-
-  @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    return cls(
-      model=data['model'],
-      effort=data.get('effort'),
-      fast_mode=data.get('fast_mode', False),
-    )
 
 
 MODEL_SLUG = re.compile(r'^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?')

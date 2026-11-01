@@ -223,7 +223,7 @@ import asyncio
 import re
 import urllib.parse
 
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.llm.tracker import NullTracker
 from bro.native.llm import LLM
 from bro.native.runner import Runner
@@ -399,7 +399,7 @@ import urllib.parse
 from contextlib import contextmanager
 
 from bro import quest
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.llm.tracker import NullTracker
 from bro.native.llm import LLM
 from bro.native.runner import Runner

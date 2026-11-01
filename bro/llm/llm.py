@@ -1,12 +1,14 @@
-from abc import ABC, abstractmethod
+import re
+import types
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
+from datetime import date
 from types import MappingProxyType
-from typing import ClassVar, Self
+from typing import Any, ClassVar, Literal, Self, Union, get_args, get_origin, get_type_hints
 
 from bro.llm.records import Stop
 
-# the neutral reasoning-effort vocabulary `LLMSpec.with_effort` accepts; each
+# the neutral reasoning-effort vocabulary `Recipe.with_effort` accepts; each
 # provider maps these levels onto its own scale.
 EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
@@ -60,20 +62,12 @@ class UnsupportedContent(ValueError):
 
 
 @dataclass(frozen=True)
-class LLMSpec(ABC):
-  """recipe for an LLM: model + provider-specific knobs.
+class Recipe:
+  """A model, provider-native fields and framework flags for one wire."""
 
-  Subclasses carry typed provider knobs and validate their field combinations.
-  The recipe names the wire a compatible harness can drive.
-
-  Frozen so a class-level `llm_spec = SomeSpec(...)` default can be shared
-  across instances safely — `.fast()` and friends return a new spec via
-  `dataclasses.replace` rather than mutating in place.
-  """
-
-  # short stable identifier used as the discriminator in `dump` / `from_dict`.
   TYPE: ClassVar[str]
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]]
+  RETIRED_MODELS: ClassVar[Mapping[str, date]]
   WIRE: ClassVar[str]
   ENDPOINT: ClassVar[str | None] = None
   selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
@@ -81,6 +75,13 @@ class LLMSpec(ABC):
   effort_values: ClassVar[frozenset[str]] = frozenset()
 
   passthrough: bool = field(default=False, kw_only=True)
+
+  def __post_init__(self):
+    for name, annotation in field_types(type(self)).items():
+      value = getattr(self, name)
+      validate_field(name, value, annotation)
+      if name == 'model' and value is not None and re.fullmatch(r'[^+,\s]+', value) is None:
+        raise ValueError(f'invalid model {value!r}: recipe text cannot write it')
 
   def admitted(self) -> bool:
     model = self.selection()['model']
@@ -129,34 +130,65 @@ class LLMSpec(ABC):
     """
     raise NotImplementedError(f'{self.TYPE} does not support an effort override')
 
-  def needed_secrets(self) -> tuple[str, ...]:
+  @classmethod
+  def needed_secrets(cls) -> tuple[str, ...]:
     """Credentials this provider needs on surfaces running it as an LLM process."""
     return ()
 
   def dump(self) -> dict:
-    """serialize to a dict including `type` so `LLMSpec.from_dict` can round-trip."""
-    data = self._dump_impl()
-    if self.passthrough:
-      data['passthrough'] = True
+    data = {'type': self.TYPE}
+    data.update(
+      (item.name, getattr(self, item.name))
+      for item in fields(self)
+      if item.name != 'passthrough' or self.passthrough
+    )
     return data
 
-  @abstractmethod
-  def _dump_impl(self) -> dict: ...
-
   @classmethod
-  def from_dict(cls, data: dict) -> 'LLMSpec':
-    """Reconstruct through only the declaration named by the stored type."""
+  def from_dict(cls, data: dict) -> 'Recipe':
+    """Rebuild a record without checking whether its model is still admitted."""
     from bro.llm import providers
 
-    spec = providers.declaration(data['type']).LLMSpec._from_dict_impl(data)
-    if 'passthrough' in data:
-      if type(data['passthrough']) is not bool:
-        raise TypeError('passthrough must be a boolean')
-      spec = replace(spec, passthrough=data['passthrough'])
-    return spec
+    recipe_class = providers.declaration(data['type']).Recipe
+    if 'model' not in data:
+      raise ValueError('recipe record requires model')
+    unknown = data.keys() - {'type', *field_types(recipe_class)}
+    if unknown:
+      raise ValueError(f'unknown recipe fields: {", ".join(sorted(unknown))}')
+    return recipe_class(**{name: value for name, value in data.items() if name != 'type'})
 
-  @classmethod
-  @abstractmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    """build an instance from a dict produced by `dump`. called via `LLMSpec.from_dict`."""
-    ...
+
+def field_types(recipe_class: type[Recipe]) -> dict[str, Any]:
+  annotations = get_type_hints(recipe_class)
+  return {item.name: annotations[item.name] for item in fields(recipe_class)}
+
+
+def field_type(annotation: Any) -> tuple[Any, bool]:
+  nullable = get_origin(annotation) in (Union, types.UnionType)
+  if nullable:
+    arguments = get_args(annotation)
+    if len(arguments) != 2 or type(None) not in arguments:
+      raise TypeError(f'unsupported recipe field type {annotation}')
+    annotation = next(item for item in arguments if item is not type(None))
+  if annotation not in (bool, int, str) and not (
+    get_origin(annotation) is Literal
+    and all(
+      type(value) is str and re.fullmatch(r'[^,\s]+', value) for value in get_args(annotation)
+    )
+  ):
+    raise TypeError(f'unsupported recipe field type {annotation}')
+  return annotation, nullable
+
+
+def validate_field(name: str, value: Any, annotation: Any) -> None:
+  annotation, nullable = field_type(annotation)
+  if value is None and nullable:
+    return
+  if get_origin(annotation) is Literal:
+    if type(value) is not str or value not in get_args(annotation):
+      raise ValueError(f'invalid {name}: must be one of {get_args(annotation)}; got {value!r}')
+  elif type(value) is not annotation:
+    expected = 'boolean' if annotation is bool else annotation.__name__
+    raise TypeError(f'{name} must be {expected}; got {value!r}')
+  if isinstance(value, str) and re.fullmatch(r'[^,\s]+', value) is None:
+    raise ValueError(f'invalid {name} {value!r}: recipe text cannot write it')

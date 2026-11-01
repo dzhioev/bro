@@ -13,12 +13,12 @@ import bro.llm.llm as llm_module
 import bro.openai.declaration as openai_llm
 from bro.base.source_root import SOURCE_ROOT
 from bro.llm.pricing import StalePriceTableWarning
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 
 
-class TestLLMSpec:
+class TestRecipe:
   def test_default_spec_has_no_optional_knobs(self):
-    spec = LLMSpec()
+    spec = Recipe()
     assert spec.model == openai_llm.DEFAULT_MODEL
     assert spec.reasoning_effort is None
     assert spec.service_tier is None
@@ -26,19 +26,19 @@ class TestLLMSpec:
 
   def test_invalid_service_tier_rejected(self):
     with pytest.raises(ValueError, match='invalid service_tier'):
-      LLMSpec(service_tier='nope')  # type: ignore[arg-type]
+      Recipe(service_tier='nope')  # type: ignore[arg-type]
 
   def test_invalid_reasoning_effort_rejected(self):
     with pytest.raises(ValueError, match='invalid reasoning_effort'):
-      LLMSpec(reasoning_effort='ludicrous')  # type: ignore[arg-type]
+      Recipe(reasoning_effort='ludicrous')  # type: ignore[arg-type]
 
   @pytest.mark.parametrize('threshold', [0, -1])
   def test_invalid_compact_threshold_rejected(self, threshold: int):
     with pytest.raises(ValueError, match='invalid compact_threshold'):
-      LLMSpec(compact_threshold=threshold)
+      Recipe(compact_threshold=threshold)
 
   def test_fast_returns_new_spec_with_priority_tier(self):
-    spec = LLMSpec(model='gpt-5.4-mini', reasoning_effort='medium', compact_threshold=50_000)
+    spec = Recipe(model='gpt-5.4-mini', reasoning_effort='medium', compact_threshold=50_000)
     fast = spec.fast()
     assert fast.service_tier == 'priority'
     # original untouched (frozen) and a distinct instance
@@ -51,16 +51,16 @@ class TestLLMSpec:
 
   @pytest.mark.parametrize('level', ['low', 'medium', 'high', 'xhigh', 'max'])
   def test_with_effort_maps_shared_levels_through(self, level: str):
-    assert LLMSpec().with_effort(level).reasoning_effort == level
+    assert Recipe().with_effort(level).reasoning_effort == level
 
   def test_with_effort_rejects_a_level_outside_the_neutral_vocabulary(self):
     # 'minimal' is a valid reasoning_effort but not a neutral level — with_effort
     # speaks only the neutral vocabulary
     with pytest.raises(ValueError, match='unknown effort level'):
-      LLMSpec().with_effort('minimal')
+      Recipe().with_effort('minimal')
 
   def test_with_effort_returns_new_spec_preserving_other_knobs(self):
-    spec = LLMSpec(model='gpt-5.4-mini', service_tier='priority')
+    spec = Recipe(model='gpt-5.4-mini', service_tier='priority')
     with_effort = spec.with_effort('high')
     assert with_effort.reasoning_effort == 'high'
     # original untouched (frozen) and a distinct instance
@@ -71,27 +71,27 @@ class TestLLMSpec:
     assert with_effort.service_tier == 'priority'
 
   def test_frozen_rejects_mutation(self):
-    spec = LLMSpec()
+    spec = Recipe()
     # frozen dataclass raises FrozenInstanceError, a subclass of AttributeError
     with pytest.raises(AttributeError):
       spec.service_tier = 'priority'  # type: ignore[misc]
 
   def test_dump_round_trips_through_base_from_dict(self):
-    spec = LLMSpec(
+    spec = Recipe(
       model='gpt-5.4-mini',
       reasoning_effort='medium',
       service_tier='priority',
       compact_threshold=50_000,
     )
-    restored = llm_module.LLMSpec.from_dict(spec.dump())
+    restored = llm_module.Recipe.from_dict(spec.dump())
     # frozen dataclass auto-generates __eq__ — single assertion covers every field
     assert restored == spec
 
   def test_dump_round_trip_handles_missing_optional_keys(self):
     # legacy / hand-written payloads may omit fields that were absent on write
-    restored = llm_module.LLMSpec.from_dict({'type': 'openai', 'model': 'gpt-5'})
-    assert isinstance(restored, LLMSpec)
-    assert restored == LLMSpec(model='gpt-5')
+    restored = llm_module.Recipe.from_dict({'type': 'openai', 'model': 'gpt-5'})
+    assert isinstance(restored, Recipe)
+    assert restored == Recipe(model='gpt-5')
 
   def test_from_dict_works_without_pre_importing_provider_module(self):
     import subprocess
@@ -102,8 +102,8 @@ class TestLLMSpec:
     script = (
       'import sys; '
       "assert 'bro.openai.declaration' not in sys.modules; "
-      'from bro.llm.llm import LLMSpec; '
-      "spec = LLMSpec.from_dict({'type': 'openai', 'model': 'gpt-5'}); "
+      'from bro.llm.llm import Recipe; '
+      "spec = Recipe.from_dict({'type': 'openai', 'model': 'gpt-5'}); "
       "assert spec.model == 'gpt-5'; "
       "assert spec.TYPE == 'openai'"
     )
@@ -145,7 +145,7 @@ class TestLLMSpec:
     script = (
       'import sys; '
       'import bro.openai.declaration; '
-      "bro.openai.declaration.LLMSpec(reasoning_effort='medium'); "
+      "bro.openai.declaration.Recipe(reasoning_effort='medium'); "
       "assert 'openai' not in sys.modules"
     )
     result = subprocess.run(

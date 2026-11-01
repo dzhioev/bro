@@ -17,10 +17,10 @@ from ride.workspace.model import Workspace
 
 @pytest.fixture(autouse=True)
 def native_persona_recipe(monkeypatch):
-  from bro.openai.declaration import LLMSpec
+  from bro.openai.declaration import Recipe
   from bros.dev import Dev
 
-  monkeypatch.setattr(Dev, 'llm_spec', LLMSpec(reasoning_effort='medium'))
+  monkeypatch.setattr(Dev, 'llm_spec', Recipe(reasoning_effort='medium'))
 
 
 @pytest.fixture(autouse=True)
@@ -74,9 +74,9 @@ class TestCommand:
     ]  # fmt: skip
 
   def test_recorded_recipe_crosses_the_launcher_boundary(self, monkeypatch):
-    from bro.anthropic.declaration import LLMSpec
+    from bro.anthropic.declaration import Recipe
 
-    recorded = LLMSpec(model='recorded-model').dump()
+    recorded = Recipe(model='recorded-model').dump()
     spec = dataclasses.replace(_spec(), resolved_llm=recorded)
     monkeypatch.setenv(do_ride.RESOLVED_LLM_ENV, do_ride.encode_resolved_llm(recorded))
     assert _parsed_run(_command(spec)).resolved_llm == recorded

@@ -16,11 +16,11 @@ from bro.llm.llm import LLMStopped
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
 from bro.llm.wire import Leg, SystemPrompt, Text, UserMessage, Wire
 from bro.native import loop as native_loop, runner as native_runner
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
 from bro.native.wire_fixtures_test_helper import call, message, response
-from bro.openai.declaration import LLMSpec as ResponsesSpec
+from bro.openai.declaration import Recipe as ResponsesSpec
 from bro.registry import create_bro
 from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder

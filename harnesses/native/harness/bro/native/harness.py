@@ -14,7 +14,7 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.providers import LLMSelection, parse
 from bro.monitor import trail_pointer
 from bro.native import dev_mcp, loop
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
   from ride.session import SessionSpec
 
 
-def resolve_native(base: LLMSpec | None, selection: LLMSelection) -> LLMSpec:
+def resolve_native(base: Recipe | None, selection: LLMSelection) -> Recipe:
   """the recipe a bro-native launcher runs: `selection` over the bro's own spec,
   among the providers the engine has a client for."""
   return BRO.resolve_recipe(base, selection)
@@ -245,7 +245,7 @@ class BroHarness(Harness):
   def scope_recipe(self) -> ScopeRecipe:
     return _BRO_RUN_RECIPE
 
-  def resolve_llm(self, value: str | None, bro_name: str) -> LLMSpec:
+  def resolve_llm(self, value: str | None, bro_name: str) -> Recipe:
     from bro.registry import get_class
 
     selection = LLMSelection() if value is None else parse(value)

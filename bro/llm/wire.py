@@ -15,7 +15,7 @@ from bro.llm.records import Call, Chaining, DecodedCall, Part, Stop
 if TYPE_CHECKING:
   from pydantic import BaseModel
 
-  from bro.llm.llm import LLMSpec
+  from bro.llm.llm import Recipe
   from bro.llm.mcp import Tool
   from bro.trails.model import Step
 
@@ -166,7 +166,7 @@ class UserMessage:
       raise TypeError('UserMessage.content items must be Text or File')
 
 
-def require_accepted(recipe: LLMSpec, content: tuple[Content, ...]) -> None:
+def require_accepted(recipe: Recipe, content: tuple[Content, ...]) -> None:
   from bro.llm.llm import UnsupportedContent
 
   for item in content:
@@ -254,7 +254,7 @@ class Wire(ABC):
   OWNED: ClassVar[frozenset[str]]
 
   @abstractmethod
-  def __init__(self, recipe: LLMSpec, secrets: dict): ...
+  def __init__(self, recipe: Recipe, secrets: dict): ...
 
   @abstractmethod
   async def exchange(

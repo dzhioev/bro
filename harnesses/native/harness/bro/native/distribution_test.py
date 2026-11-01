@@ -573,9 +573,9 @@ def test_deepseek_provider_wheel_loads_without_the_client_extra(wheels, tmp_path
   probe = """
 import sys
 from bro.llm import providers, wires
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 recipe = providers.resolve(None, providers.parse('deepseek:pro:high'), ('deepseek',))
-assert LLMSpec.from_dict(recipe.dump()) == recipe
+assert Recipe.from_dict(recipe.dump()) == recipe
 assert recipe.WIRE in wires.client_names()
 assert providers.price_table(recipe.TYPE).models
 assert wires.decode(recipe.WIRE, {'choices': [{'finish_reason': 'stop', 'message': {'content': 'reply'}}]}).reply == 'reply'

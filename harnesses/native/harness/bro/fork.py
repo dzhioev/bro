@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.llm import wires
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.tracker import NullTracker, Tracker
 from bro.llm.wire import Prefix
 from bro.native.harness import BRO
@@ -113,7 +113,7 @@ def fork(
   forked_from_trail: RecordedTrail,
   up_to_step_id: int,
   *,
-  llm_spec: Optional[LLMSpec] = None,
+  llm_spec: Optional[Recipe] = None,
   system_prompt: Optional[str] = None,
   record: bool = True,
   tracker: Optional[Tracker] = None,
@@ -132,7 +132,7 @@ def fork(
   bro_name = forked_from_trail.header.bro
   if bro_name is None:
     raise ValueError(f'trail {forked_from_trail.header.id!r} has no bro persona')
-  spec = llm_spec if llm_spec is not None else LLMSpec.from_dict(forked_from_trail.header.llm_spec)
+  spec = llm_spec if llm_spec is not None else Recipe.from_dict(forked_from_trail.header.llm_spec)
   if spec.WIRE not in wires.client_names():
     raise ValueError(
       f'trail {forked_from_trail.header.id!r} was recorded under {spec.TYPE!r}, whose harness '
@@ -202,7 +202,7 @@ def fork(
 def _server_side_eligible(
   *,
   forked_from_spec: dict,
-  new_spec: LLMSpec,
+  new_spec: Recipe,
   fork_step: Step,
   system_prompt_override: Optional[str],
 ) -> bool:

@@ -248,7 +248,7 @@ class TestSessionRun:
       assert h.start_recorder.call_args.args[0] == tmp_path
       # the launch recipe lands on the trail header as native.llm
       assert h.start_recorder.call_args.kwargs['llm'] == (
-        anthropic.LLMSpec(model=None, effort=None).dump()
+        anthropic.Recipe(model=None, effort=None).dump()
       )
       assert h.start_recorder.return_value.stop.call_count == 1
 

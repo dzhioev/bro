@@ -66,7 +66,7 @@ def staged_repo(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_dev_commit_carries_the_footer(staged_repo, host_store):
-  runner = Runner(_ProbeDev.create(llm_llms_openai.LLMSpec(reasoning_effort='low')))
+  runner = Runner(_ProbeDev.create(llm_llms_openai.Recipe(reasoning_effort='low')))
   await runner.run(
     'Commit the staged change in this repository with an appropriate message '
     'following the repository conventions. Do not push.',
