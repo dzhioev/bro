@@ -7,13 +7,13 @@ import pytest
 from pydantic import BaseModel
 
 from bro.base import credentials
-from bro.deepseek.declaration import LLMSpec as ChatRecipe
+from bro.deepseek.declaration import Recipe as ChatRecipe
 from bro.llm.llm import UnsupportedContent
 from bro.llm.mu import mu
 from bro.llm.wire import File, Text
 from bro.native.llm import main
 from bro.native.wire_fixtures_test_helper import message, response
-from bro.openai.declaration import LLMSpec as ResponsesRecipe
+from bro.openai.declaration import Recipe as ResponsesRecipe
 from bro.wire_chat.fixtures_test_helper import response as chat_response
 
 

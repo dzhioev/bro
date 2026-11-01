@@ -13,7 +13,7 @@ from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.harness import Harness
-  from bro.llm.llm import LLMSpec
+  from bro.llm.llm import Recipe
   from ride.harness import SessionHarness
   from ride.repository import Repository
 
@@ -40,7 +40,7 @@ class ScopeRecipe:
 
 def launch_llm_spec(
   driver: SessionHarness, attachment: str | None, bro_name: str, llm: str | None
-) -> LLMSpec:
+) -> Recipe:
   from ride.authority_launch import request
   from ride.authority_reading import Reading
   from ride.authority_scope import checked_recipe
@@ -63,7 +63,7 @@ def scoped_secrets(
   *,
   attachment: str | None = None,
   attachment_repository: Repository | None = None,
-  llm_spec: LLMSpec | None = None,
+  llm_spec: Recipe | None = None,
   cred: Sequence[str] = (),
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),

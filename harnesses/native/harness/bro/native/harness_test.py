@@ -22,7 +22,7 @@ from bro.jobs_test_helper import StalledSupervisor
 from bro.llm.mcp import MCPServer, Tool
 from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.native import dev_mcp
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
 from ride.do_ride import SessionRun, encode_resolved_llm
@@ -53,7 +53,7 @@ def _spec(**overrides) -> SessionSpec:
     'grant': [],
     'revoke': [],
     'llm': None,
-    'resolved_llm': LLMSpec().dump(),
+    'resolved_llm': Recipe().dump(),
     'solo': False,
     'resume': False,
     'no_trails': False,
@@ -164,7 +164,7 @@ class TestNativeArgv:
     return session
 
   def test_chat_runs_the_resolved_recipe(self, monkeypatch):
-    run = _run(resolved_llm=LLMSpec(model='gpt-6.1-sol', reasoning_effort='high').fast().dump())
+    run = _run(resolved_llm=Recipe(model='gpt-6.1-sol', reasoning_effort='high').fast().dump())
     assert self._argv(run, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
@@ -721,11 +721,11 @@ class TestNativeServiceTools:
 class TestRecipeResolution:
   def test_every_served_provider_declares_a_native_recipe(self):
     from bro.llm import providers
-    from bro.llm.llm import LLMSpec
+    from bro.llm.llm import Recipe
     from bro.native.harness import BRO
 
     for provider in BRO.llm_providers:
-      assert isinstance(providers.default_spec(provider), LLMSpec)
+      assert isinstance(providers.default_spec(provider), Recipe)
 
   def test_short_names_do_not_collide_across_the_served_providers(self):
     # a model named alone resolves among the providers the harness serves, so
@@ -748,7 +748,7 @@ class TestRecipeResolution:
       LLMSelectionError,
       match="the bro harness cannot run recipe 'anthropic:fable5'",
     ) as refused:
-      resolve_native(openai.LLMSpec(), LLMSelection(provider='anthropic', model='fable5'))
+      resolve_native(openai.Recipe(), LLMSelection(provider='anthropic', model='fable5'))
     assert f'it serves {", ".join(BRO.llm_providers)};' in str(refused.value)
     assert 'anthropic runs on the claude harness' in str(refused.value)
 
@@ -757,5 +757,5 @@ class TestRecipeResolution:
     from bro.native.harness import resolve_native
     from bro.openai import declaration as openai
 
-    resolved = resolve_native(openai.LLMSpec(), LLMSelection(effort='high', fast=True))
-    assert resolved == openai.LLMSpec().with_effort('high').fast()
+    resolved = resolve_native(openai.Recipe(), LLMSelection(effort='high', fast=True))
+    assert resolved == openai.Recipe().with_effort('high').fast()

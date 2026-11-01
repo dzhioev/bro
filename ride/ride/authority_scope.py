@@ -26,7 +26,7 @@ from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.bro import CredentialManifest
 from bro.broker.environment import TALK_RIGHTS
 from bro.llm import providers
-from bro.llm.llm import EFFORT_LEVELS, LLMSpec
+from bro.llm.llm import EFFORT_LEVELS, Recipe
 from bro.mcp import HOLDS
 from bro.summon import DEFAULT_TALK, DEFAULT_TIMEOUT
 from ride.authority_reading import Reading
@@ -62,7 +62,7 @@ def no_recipe(target: str) -> str:
 
 def recipe(
   values: Mapping[str, Value], reading: Reading, *, required: bool = False
-) -> LLMSpec | None:
+) -> Recipe | None:
   target = cast(str, values.get('target', ''))
   name = reading.resolve_harness(cast(str | None, values.get('harness')), summon=True)
   installed = reading.installation
@@ -483,7 +483,7 @@ def validate_joint(descriptor: Descriptor) -> None:
     raise ValueError('a joint start cannot join')
 
 
-def checked_recipe(request: Request, descriptor: Descriptor, reading: Reading) -> LLMSpec:
+def checked_recipe(request: Request, descriptor: Descriptor, reading: Reading) -> Recipe:
   spec = recipe(request.values, reading, required=True)
   if spec is None:
     raise ValueError('cannot materialize a recipe for an uninstalled target or harness')

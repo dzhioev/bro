@@ -31,7 +31,7 @@ from bro.datasources.file import FileSource
 from bro.datasources.man import manual
 from bro.harness import Harness, get_harness
 from bro.launch.hold import UNATTENDED
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
@@ -965,7 +965,7 @@ class CredentialManifest:
 class BaseBro(ABC):
   name: str
   description: str
-  llm_spec: LLMSpec | None = None
+  llm_spec: Recipe | None = None
   # the bro's tool reach: tool groups, mounts, `cli` tools, data sources, and
   # reference pages, each entry keyed by its kind and a name. entries may be
   # wrapped with `bro.base.condition.when(...)` / grouped with `iff(...)` to gate
@@ -1360,8 +1360,8 @@ class BaseBro(ABC):
     return tuple(sorted(name for name in required if not credentials.available(name)))
 
   @classmethod
-  def create(cls, llm_spec: LLMSpec) -> Self:
-    # factory for a construction-time LLMSpec override — applied after the bro's
+  def create(cls, llm_spec: Recipe) -> Self:
+    # factory for a construction-time Recipe override — applied after the bro's
     # own __init__, so subclass constructors never need to know about it. the
     # spec replaces the class default in full; build a new spec (or call
     # `spec.fast()`) if you want to tweak a single knob on top of the bro's

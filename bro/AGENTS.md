@@ -121,7 +121,7 @@ A subpackage with a map of its own is pointed at, not described here.
   The directories are portions of the shared `bro.launch` namespace;
   see `launch/AGENTS.md`
 - `llm/` — the provider-neutral declaration and shared-contract layer:
-  `LLMSpec` recipes and provider selection, the live MCP tool/server seam engines consume, observers and trackers, token-usage accounting, and `mu`, the typed one-shot call helper an extension calls directly;
+  `Recipe` recipes and provider selection, the live MCP tool/server seam engines consume, observers and trackers, token-usage accounting, and `mu`, the typed one-shot call helper an extension calls directly;
   see `llm/AGENTS.md`
 - `monitor/` — session-local monitoring paths and signals shared across package boundaries:
   the recording health file (`health.py`) and a managed session's current-trail pointer (`trail_pointer.py`)

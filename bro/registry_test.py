@@ -7,7 +7,7 @@ import pytest
 
 import bro.registry
 from bro.inbox import Inbox
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.mcp import MCPServer
 from bro.llm.wire import SystemPrompt, UserMessage
 from bro.native.llm import LLM
@@ -26,17 +26,10 @@ class MockLLM(LLM):
 
 
 @dataclass(frozen=True)
-class _EchoOnlySpec(LLMSpec):
+class _EchoOnlySpec(Recipe):
   TYPE: ClassVar[str] = 'mock'
 
   model: str = 'mock'
-
-  def _dump_impl(self) -> dict:
-    return {'type': self.TYPE, 'model': self.model}
-
-  @classmethod
-  def _from_dict_impl(cls, data: dict) -> 'LLMSpec':
-    return cls(model=data['model'])
 
 
 class AlphaBro(Bro):

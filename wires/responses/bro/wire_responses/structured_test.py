@@ -8,7 +8,7 @@ from pydantic import BaseModel, ValidationError
 
 from bro.llm.llm import LLMStopped, UnsupportedContent
 from bro.llm.wire import File, Prefix, Text
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 from bro.wire_responses import client as client_module
 from bro.wire_responses.client import Responses
 
@@ -57,7 +57,7 @@ def client(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_structured_enforces_the_schema_and_options_without_conversation_state(client):
-  recipe = LLMSpec(reasoning_effort='high', service_tier='priority')
+  recipe = Recipe(reasoning_effort='high', service_tier='priority')
   wire = Responses(recipe, {'api_key': 'key'})
   wire.restore(Prefix('restored prompt', ()))
   wire.seed_chain('previous')
@@ -94,7 +94,7 @@ async def test_structured_enforces_the_schema_and_options_without_conversation_s
 async def test_stops_are_checked_before_partial_json_is_validated(client, status, reason, stop):
   client.replies = [_response('{"answer":', status=status, incomplete_details={'reason': reason})]
   with pytest.raises(LLMStopped) as error:
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+    await Responses(Recipe(), {'api_key': 'key'}).structured(
       'question', _Answer, (Text('input'),), None
     )
   assert error.value.reason == stop
@@ -107,7 +107,7 @@ async def test_stops_are_checked_before_partial_json_is_validated(client, status
 async def test_empty_or_invalid_completed_replies_raise(client, text):
   client.replies = [_response(text)]
   with pytest.raises((RuntimeError, ValidationError)):
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+    await Responses(Recipe(), {'api_key': 'key'}).structured(
       'question', _Answer, (Text('input'),), None
     )
   assert client.closed
@@ -119,7 +119,7 @@ async def test_a_refusal_is_not_validated_as_an_answer(client):
     _response(output=[{'type': 'message', 'content': [{'type': 'refusal', 'refusal': 'no'}]}])
   ]
   with pytest.raises(RuntimeError, match='refusal'):
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+    await Responses(Recipe(), {'api_key': 'key'}).structured(
       'question', _Answer, (Text('input'),), None
     )
 
@@ -127,7 +127,7 @@ async def test_a_refusal_is_not_validated_as_an_answer(client):
 @pytest.mark.asyncio
 async def test_unsupported_content_is_refused_before_a_request(client):
   with pytest.raises(UnsupportedContent, match='audio.*gpt'):
-    await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+    await Responses(Recipe(), {'api_key': 'key'}).structured(
       'question', _Answer, (File(b'audio', 'audio/wav'),), None
     )
   assert client.requests == []
@@ -145,7 +145,7 @@ async def test_transient_errors_use_the_recipe_retry_and_close_the_client(client
     openai.APIConnectionError(request=httpx2.Request('POST', 'https://test')),
     _response(),
   ]
-  answer = await Responses(LLMSpec(), {'api_key': 'key'}).structured(
+  answer = await Responses(Recipe(), {'api_key': 'key'}).structured(
     'question', _Answer, (Text('input'),), None
   )
   assert answer.answer == '42'
@@ -176,7 +176,7 @@ async def test_capacity_uses_the_shared_retry_without_chaining(client, monkeypat
   monkeypatch.setattr(retry, 'asyncio_sleep', wait)
   capacity = _response(capacity=True)
   client.replies = [capacity] * 7 if exhausted else [capacity, _response()]
-  wire = Responses(LLMSpec(), {'api_key': 'key'})
+  wire = Responses(Recipe(), {'api_key': 'key'})
   if exhausted:
     with pytest.raises(LLMStopped, match='capacity'):
       await wire.structured('question', _Answer, (Text('input'),), None)

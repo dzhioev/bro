@@ -18,7 +18,7 @@ from bro.base import configs, credentials, host_config, log
 from bro.bro import BaseBro
 from bro.harness import Harness, harness_name
 from bro.llm import providers
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 
 if TYPE_CHECKING:
   from ride.repository import Repository
@@ -154,7 +154,7 @@ class Configuration:
 @dataclass(frozen=True)
 class HarnessReading:
   harness: Harness
-  recipes: Mapping[str, LLMSpec | None]
+  recipes: Mapping[str, Recipe | None]
   auth_kind: str | None = None
   llm_key: bool = False
   unavailable_recipes: Mapping[str, str] = field(default_factory=dict)
@@ -214,7 +214,7 @@ class Installation:
         unavailable_harnesses[name] = str(error)
         log.warning('harness %r is unavailable: %s', name, error)
         continue
-      recipes: dict[str, LLMSpec | None] = {}
+      recipes: dict[str, Recipe | None] = {}
       unavailable_recipes: dict[str, str] = {}
       for target, bro in bros.items():
         if scope.llm_key and bro.llm_spec is None:
@@ -232,7 +232,7 @@ class Installation:
     unavailable_providers = {}
     for name in providers.known_names():
       try:
-        provider_needs[name] = frozenset(providers.default_spec(name).needed_secrets())
+        provider_needs[name] = frozenset(providers.declaration(name).Recipe.needed_secrets())
       except Exception as error:
         unavailable_providers[name] = str(error)
         log.warning('provider %r is unavailable: %s', name, error)

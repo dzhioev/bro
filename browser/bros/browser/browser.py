@@ -65,6 +65,6 @@ class Browser(Bro):
     mount(artifact_mcp.toolset),
     source(CurrentTime()),
   ]
-  llm_spec = openai.LLMSpec(reasoning_effort='medium')
+  llm_spec = openai.Recipe(reasoning_effort='medium')
   spells = (browser.spells.browse,)
   system_prompt = SYSTEM_PROMPT

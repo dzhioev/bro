@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from bro.launch.resume import RESUME_LATEST, conversation_history, find_latest_call_trail, resume
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 from bro.trails.backends import get_format
 from bro.trails.display import AssistantText, InterimAssistantText, ToolCall, UserInput
 from bro.trails.model import spill_descriptor
@@ -303,7 +303,7 @@ class TestResume:
     )
 
   def test_resumes_the_latest_call_trail_at_its_latest_fork_point(self):
-    spec = LLMSpec(model='gpt-5', service_tier='priority')
+    spec = Recipe(model='gpt-5', service_tier='priority')
     with patch('bro.launch.resume.fork') as fork_stub:
       resumed = resume(cast(Any, self._client()), 'record', RESUME_LATEST, llm_spec=spec)
     assert resumed.trail_id == 'trail-1'
@@ -321,7 +321,7 @@ class TestResume:
     assert resumed.runner is fork_stub.return_value
 
   def test_an_explicit_at_overrides_the_latest_fork_point(self):
-    spec = LLMSpec(model='gpt-5', service_tier='priority')
+    spec = Recipe(model='gpt-5', service_tier='priority')
     with patch('bro.launch.resume.fork') as fork_stub:
       resume(cast(Any, self._client()), 'record', 'trail-1', llm_spec=spec, at=1)
     (_, step_id), _ = fork_stub.call_args
@@ -333,9 +333,9 @@ class TestResume:
       steps={'trail-1': _forked_from_steps()},
     )
     with pytest.raises(ValueError, match="belongs to bro 'other'"):
-      resume(cast(Any, client), 'record', 'trail-1', llm_spec=LLMSpec(model='gpt-5'))
+      resume(cast(Any, client), 'record', 'trail-1', llm_spec=Recipe(model='gpt-5'))
 
   def test_raises_when_the_bro_has_nothing_to_resume(self):
     client = FakeTrailsStore(headers=[], steps={})
     with pytest.raises(ValueError, match='no call conversation found'):
-      resume(cast(Any, client), 'record', RESUME_LATEST, llm_spec=LLMSpec(model='gpt-5'))
+      resume(cast(Any, client), 'record', RESUME_LATEST, llm_spec=Recipe(model='gpt-5'))

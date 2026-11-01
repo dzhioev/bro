@@ -33,10 +33,10 @@ from bro.llm.tracker import NullTracker, Tracker
 from bro.llm.wire import SystemPrompt, Text, UserMessage
 from bro.mcp import MCPServerSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
-from bro.native.echo_declaration import LLMSpec as EchoSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
-from bro.openai.declaration import LLMSpec as OpenAISpec
+from bro.openai.declaration import Recipe as OpenAISpec
 from bro.run_lifecycle import RunLifecycle
 
 
@@ -1216,7 +1216,7 @@ class TestRunLifecycle:
 
 class TestAgentIdentity:
   def test_create_llm_threads_the_agent_identity(self):
-    from bro.native.echo_declaration import LLMSpec as EchoSpec
+    from bro.native.echo_declaration import Recipe as EchoSpec
 
     class PlainBro(Declared):
       llm_spec = EchoSpec()

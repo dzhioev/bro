@@ -16,9 +16,9 @@ from bro.base import credentials, host_config
 from bro.base.condition import iff, when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
-from bro.llm.llm import LLMSpec as Recipe
+from bro.llm.llm import Recipe as BaseRecipe
 from bro.mcp import MCPServerSpec, ToolLayer, creds
-from bro.native.echo_declaration import LLMSpec
+from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
 from ride.authority_launch import mission_view
 from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
@@ -89,8 +89,8 @@ def installation(monkeypatch):
   return Installation(
     {'child': Child(credential_presence=kinds), 'other': Other(credential_presence=kinds)},
     {
-      'native': HarnessReading(native, {'child': LLMSpec(), 'other': LLMSpec()}, llm_key=True),
-      'auth': HarnessReading(auth, {'child': LLMSpec(), 'other': LLMSpec()}, auth_kind='auth'),
+      'native': HarnessReading(native, {'child': Recipe(), 'other': Recipe()}, llm_key=True),
+      'auth': HarnessReading(auth, {'child': Recipe(), 'other': Recipe()}, auth_kind='auth'),
     },
     kinds,
     {'echo': frozenset({'provider_key'})},
@@ -623,7 +623,7 @@ def test_explicit_presence_never_initializes_ambient_store(installation, monkeyp
 
 
 def test_model_alias_is_mapped_before_use_checks(installation):
-  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from bro.openai.declaration import Recipe as OpenAISpec
 
   native = Harness('native')
   native._llm_providers = ('openai',)
@@ -664,7 +664,7 @@ def test_new_grammar_snapshot_does_not_open_the_ambient_store(tmp_path, monkeypa
   assert snapshot.installation.declarations
 
 
-def recipe_installation(installation: Installation, harness: str, spec: Recipe) -> Installation:
+def recipe_installation(installation: Installation, harness: str, spec: BaseRecipe) -> Installation:
   driver = Harness(harness)
   driver._llm_providers = (spec.TYPE,)
   return replace(
@@ -675,7 +675,7 @@ def recipe_installation(installation: Installation, harness: str, spec: Recipe) 
 
 
 def test_deferred_recipe_choices_are_checked_then_omitted(installation):
-  from bro.anthropic.declaration import LLMSpec as AnthropicSpec
+  from bro.anthropic.declaration import Recipe as AnthropicSpec
   from ride.authority_scope import DEFAULT, checked_recipe
 
   spec = AnthropicSpec(model=None, effort=None)
@@ -709,7 +709,7 @@ def test_deferred_recipe_choices_are_checked_then_omitted(installation):
 
 
 def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation):
-  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from bro.openai.declaration import Recipe as OpenAISpec
   from ride.authority_scope import DEFAULT, checked_recipe
 
   source = reading(recipe_installation(installation, 'native', OpenAISpec()))
@@ -728,7 +728,7 @@ def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation
 @pytest.mark.parametrize('effort', ['none', 'minimal', None])
 def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, effort):
   from bro.authority.syntax import render_values
-  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from bro.openai.declaration import Recipe as OpenAISpec
   from ride.authority_scope import checked_recipe
 
   standing = OpenAISpec(
@@ -1003,9 +1003,7 @@ def test_managed_recipe_supplied_to_a_persona_without_one(absent_recipe_installa
     with pytest.raises(ValueError, match='declares no LLM recipe'):
       checked_recipe(requested, descriptor, source)
   else:
-    assert checked_recipe(requested, descriptor, source) == LLMSpec(
-      model='chosen', passthrough=True
-    )
+    assert checked_recipe(requested, descriptor, source) == Recipe(model='chosen', passthrough=True)
     assert 'cred.provider_key' in descriptor.values
 
 
@@ -1045,7 +1043,7 @@ def test_unknown_host_provider_is_skipped_and_refused_when_exhausted(installatio
 
 
 def test_recipe_layers_preserve_persona_knobs_but_named_provider_resets_them(installation):
-  from bro.openai.declaration import MODELS, LLMSpec as OpenAISpec
+  from bro.openai.declaration import MODELS, Recipe as OpenAISpec
   from ride.authority_scope import checked_recipe
   from ride.bro_worker import BroType
 
@@ -1117,7 +1115,7 @@ def test_default_without_a_declaration_does_not_hide_missing_host_plugins(
 def test_admission_on_the_final_launch_recipe(
   installation, monkeypatch, capsys, surface, selection
 ):
-  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from bro.openai.declaration import Recipe as OpenAISpec
   from ride.authority_launch import request
   from ride.authority_scope import checked_recipe
   from ride.scope_report import report_scope
@@ -1157,7 +1155,7 @@ def test_admission_on_the_final_launch_recipe(
   ],
 )
 def test_unlisted_standing_recipe_is_overridable(installation, selection, model, passthrough):
-  from bro.openai.declaration import LLMSpec as OpenAISpec
+  from bro.openai.declaration import Recipe as OpenAISpec
   from ride.authority_scope import checked_recipe
 
   installed = recipe_installation(installation, 'native', OpenAISpec(model='gpt-7'))
@@ -1189,7 +1187,7 @@ def test_unlisted_standing_recipe_is_overridable(installation, selection, model,
   ],
 )
 def test_claude_deferred_listed_and_unlisted_admission(installation, text, admitted):
-  from bro.anthropic.declaration import LLMSpec as AnthropicSpec
+  from bro.anthropic.declaration import Recipe as AnthropicSpec
   from ride.authority_scope import checked_recipe
 
   source = reading(

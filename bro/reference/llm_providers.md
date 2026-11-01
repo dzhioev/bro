@@ -9,39 +9,48 @@ A provider is selected by recipe, independently of the persona: adding one does 
 
 Use [DeepSeek's distribution](../../llms/deepseek/pyproject.toml) and
 [declaration](../../llms/deepseek/bro/deepseek/declaration.py) as a concrete example.
-The shared interfaces are [LLMSpec](../llm/llm.py) and the [provider roster](../llm/providers.py).
+The shared interfaces are [Recipe](../llm/llm.py) and the [provider roster](../llm/providers.py).
 
 - Register the declaration module in `bro.llm.providers` and the credential kind in `bro.credentials`.
   The provider entry name follows `[a-z][a-z0-9-]*` and equals the recipe's `TYPE` and credential kind.
   Duplicate entry names fail rather than establish a priority.
   Entry points require an environment sync after they change.
-- Export a frozen `LLMSpec` with validated model and knob fields, `_dump_impl()` and `_from_dict_impl()` for round trips,
-  and `selection_fields`, `deferred_fields` and `effort_values` for selection and reconstruction.
-  Map the neutral levels of `with_effort()` onto the provider's documented scale;
-  implement `fast()` only when supported.
-  A client-driven recipe supplies `WIRE`, `ENDPOINT` when needed, `request_options()`,
-  `needed_secrets()` and `is_transient(error)`.
-  Every recipe class defines `MODEL_INPUTS`, mapping listed model ids to `frozenset`s of lowercase MIME types without parameters, copied from the vendor’s model and input-format guides.
-  `DEFAULT_MODEL` and every `MODELS` value must occur in the table;
-  declaration loading validates the table and its MIME types.
-  The base `accepts(mime_type)` accepts every MIME type under the keyword-only `passthrough` flag, otherwise checks the selected model’s row; do not override it.
-  `admitted()` accepts listed or deferred models, or any model under `passthrough`.
-  The base `dump()` adds the flag only when true; `from_dict()` requires a boolean when the key is present.
+- Export a frozen dataclass `Recipe` inheriting the shared base, with a `model` field and provider-native fields.
+  Each provider field has a default and a name matching `[a-z][a-z0-9_]*`, other than `type`, `model` or `passthrough`.
+  Its type is `bool`, `int`, `str`, a `Literal` of writable strings, or one of those unioned with `None` with default `None`.
+  An unset optional field leaves the vendor's own behavior in force.
+  The inherited `__post_init__` validates types and refuses values recipe text cannot write:
+  an empty model or one containing `+`, `,` or whitespace, and an empty string field or one containing `,` or whitespace.
+  Additional combination checks call `super().__post_init__()` first.
+  The base owns serialization; providers implement no record methods.
+- The class supplies `TYPE`, `WIRE`, `ENDPOINT` when needed, and the class method `needed_secrets()`.
+  A client-driven recipe supplies `request_options()` and `is_transient(error)`.
+  Discovery reads wires and keys from classes without building recipes.
+  Every recipe class defines `MODEL_INPUTS`, mapping listed model ids to `frozenset`s of lowercase MIME types without parameters, copied from the vendor's model and input-format guides.
   Text is always accepted and is not listed in the table.
+  The base `accepts(mime_type)` accepts every MIME type under its keyword-only `passthrough` flag, otherwise checks the model's row; do not override it or redeclare the flag.
   Options must not overlap the wire client's `OWNED` fields; unsupported input raises `UnsupportedContent` before sending.
-- Export `DEFAULT_MODEL`, `MODELS` (short names to full ids), and `MODEL_ID` when verbatim model ids need a pattern.
-  Resolution tries a short name, then a full id, then a verbatim id.
-  Before a recipe drives a run, `require_admitted` refuses an unlisted model unless it carries `+passthrough`; resolution and declaration discovery do not check admission.
-  Authority settlement, native launches and `wires.open` check the final recipe, so a listed selection can override an unlisted declaration.
+- The class also defines `RETIRED_MODELS`, mapping retired model ids to `datetime.date` retirement dates.
+  A model cannot be both listed and retired.
+  `PRICE_TABLE.models` must hold exactly the listed and retired models, so delisting never discards historical prices.
+  Declaration loading validates these tables and the provider field schema, naming the offending model or field.
   Export `FAILURE_SIGNATURES` using the neutral failure categories in `llm.py`.
   Pricing exports are `PRICE_TABLE`, `PRICE_TABLE_SHA256` and `price(model, usage, service_tier, table)`;
   add `price_table_from_content` for retained benchmark tables.
   Record source and effective date, use the provider's raw billing vocabulary, and leave unknown models unpriced.
   Export `MODEL_SLUG` and `model_family(slug)` only when the generic dated-slug label is insufficient.
+- The launch selection API also requires `DEFAULT_MODEL`, `MODELS` (short names to full ids), and `MODEL_ID` when verbatim model ids need a pattern.
+  The default and alias targets must be listed in `MODEL_INPUTS`.
+  `selection_fields`, `deferred_fields` and `effort_values` support selection and reconstruction;
+  `with_effort()` maps neutral levels onto the provider's documented scale, and `fast()` is implemented only when supported.
+  This selection API is separate from complete recipe text below.
+  `require_admitted` checks the final recipe at authority settlement, native launch and wire opening;
+  a listed selection can override an unlisted declaration.
+  The deferred Anthropic session model remains admitted for this API.
 - `known_names()` reads sorted metadata without imports.
   Explicit selection loads only the named declaration and fails by name if it is unavailable;
   searches warn and skip broken declarations, without breaking unrelated launches.
-  Stored recipes resolve by their `type` through `LLMSpec.from_dict()`.
+  Stored recipes resolve by their `type` through `Recipe.from_dict()`.
   A native launch requires a client entry for the recipe's wire;
   an entry alone does not install that client's SDK.
 - Contribute the key as a credential kind, normally with material `{"api_key": "…"}`;
@@ -51,6 +60,32 @@ The shared interfaces are [LLMSpec](../llm/llm.py) and the [provider roster](../
   registry assembly loads every credential contribution.
   Declarations import no harness and no SDK at module level;
   import SDK exception classes inside `is_transient()` instead.
+
+### Recipe text and records
+
+The complete text API in `bro.llm.providers` uses `provider:model[+passthrough][,field=value]...`.
+It names the model verbatim, not a short name, and the fields under their provider-native names.
+The text splits at its first `:`, allowing further colons in a model id.
+Flags precede fields; `passthrough` is the only framework flag, and neither flags nor fields may repeat.
+Whitespace, empty slots, unknown fields and values of the wrong type are refused with `RecipeError` naming the text and offending part.
+
+- `parse_recipe(text)` checks only grammar and returns provider, model, flags and assignments as written, without loading declarations.
+- `bind_recipe(text)` loads the named declaration, reads fields by their annotated types, constructs the recipe and requires admission.
+  Booleans are `true` or `false`, integers are decimal digits with an optional `-`, and `Literal` values must be members.
+  An omitted field keeps its class default; no text sets a field to `None`.
+- `format_recipe(recipe)` writes canonical text:
+  the provider and model, `+passthrough` when set, then fields differing from defaults in declaration order.
+  For every admitted recipe with a concrete model, binding its canonical text rebuilds the same recipe.
+
+For example, `openai:gpt-5.6-terra,service_tier=priority,reasoning_effort=high` canonicalizes to `openai:gpt-5.6-terra,reasoning_effort=high,service_tier=priority`.
+Anthropic's native fast knob is `fast_mode=true`; `+fast` is not a framework flag in this grammar.
+Launch flags and configuration still take the selection API described under [operator adoption](#operator-adoption), not this complete text API.
+
+`Recipe.dump()` stores `type`, `model` and every provider field, adding `passthrough` only when true.
+`Recipe.from_dict(data)` requires `type` and `model`, uses class defaults for omitted fields and refuses unknown keys or wrongly typed values.
+It loads only the named declaration and does not check admission, preserving retired-model records.
+For example, an older OpenAI record missing `compact_threshold` loads with that field unset.
+A retired recipe still has canonical text, but binding it without `+passthrough` refuses it with its retirement date and the provider's listed models.
 
 ### Installing the client extra
 
@@ -209,14 +244,16 @@ an unknown wire degrades to a forensic event without losing its record.
 
 ## Adding a model to an existing provider
 
-Use the existing declaration: add a `MODELS` alias, a `MODEL_INPUTS` row copied from the vendor’s input-format documentation, and a price row, and check `MODEL_ID` admits the vendor's full and returned snapshot ids.
+Use the existing declaration: add a `MODELS` alias, a `MODEL_INPUTS` row copied from the vendor’s input-format documentation, and a price row, and check the vendor's returned snapshot ids remain priced.
 Add newly documented filename suffixes to `EXTENSION_TYPES` in `bro.llm.wire`, choosing a MIME type every vendor accepting that format lists.
 When no single type serves them all, leave the suffix out and require callers to pass `mime_type` explicitly.
 Test knob defaults, effort mapping, content support, usage and pricing for any model-specific differences.
 A new model need not require a new wire, credential or provider distribution.
 Update and run the provider's live probe, refresh captured fixtures, and adjust presets and operator recipes that select the model.
 An unlisted model is refused unless the recipe carries `+passthrough`, which also bypasses its model-input checks, but not the wire’s protocol constraints.
-A listed model without a price row remains usable but unpriced.
+To retire a model, remove its aliases and `MODEL_INPUTS` row, add its id to `RETIRED_MODELS` with the date the framework stops admitting it, and keep its price row.
+OpenAI's dated snapshot ids remain priced through its table's snapshot mapping.
+Models outside both tables can run under `+passthrough` but remain unpriced.
 
 ## Operator adoption
 

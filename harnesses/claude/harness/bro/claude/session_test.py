@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from bro import watches
-from bro.anthropic.declaration import LLMSpec
+from bro.anthropic.declaration import Recipe
 from bro.claude import runner
 from bro.claude.claude_config import claude_projects_dir
 from bro.claude.fake_claude_test_helper import write_fake_claude
@@ -77,7 +77,7 @@ def _session(tmp_path: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    resolved_llm=LLMSpec(model=None, effort=None).dump(),
+    resolved_llm=Recipe(model=None, effort=None).dump(),
     solo=True,
     resume=False,
     bro='bro',

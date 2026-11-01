@@ -1,5 +1,5 @@
 """the LLM provider roster: which providers exist, what a launch calls them, and
-how a `provider:model:effort+fast+passthrough` selection resolves to an `LLMSpec`.
+how a `provider:model:effort+fast+passthrough` selection resolves to a `Recipe`.
 
 A provider name is the whole vocabulary for one provider — the `--provider`
 value, its spec's `TYPE` discriminator, and (where it reads one) its credential
@@ -15,12 +15,20 @@ import importlib.metadata
 import re
 from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
-from types import ModuleType
-from typing import Any, Optional
+from types import MappingProxyType, ModuleType
+from typing import Any, Literal, Optional, get_args, get_origin
 
 from bro.base import log
-from bro.llm.llm import EFFORT_LEVELS, FailureSignature, LLMSpec
+from bro.llm.llm import (
+  EFFORT_LEVELS,
+  FailureSignature,
+  Recipe,
+  field_type,
+  field_types,
+  validate_field,
+)
 from bro.llm.wire import MIME_TYPE
 
 ENTRY_POINT_GROUP = 'bro.llm.providers'
@@ -31,7 +39,11 @@ _SEPARATOR = ':'
 _SLOTS = 3
 
 
-class LLMSelectionError(ValueError):
+class RecipeError(ValueError):
+  """Recipe text or a provider declaration cannot be bound."""
+
+
+class LLMSelectionError(RecipeError):
   """a launch named an LLM that cannot be resolved: an unknown provider, model,
   or preset, or a malformed `--llm` value. The message is operator-facing."""
 
@@ -67,16 +79,16 @@ def declaration(provider: str) -> ModuleType:
     module = entries[provider].load()
     if not isinstance(module, ModuleType):
       raise TypeError('entry must load a declaration module')
-    if not issubclass(module.LLMSpec, LLMSpec) or module.LLMSpec.TYPE != provider:
-      raise ValueError('declaration LLMSpec.TYPE must equal the entry name')
-    if not isinstance(module.DEFAULT_MODEL, str) or not isinstance(module.LLMSpec.WIRE, str):
+    if not issubclass(module.Recipe, Recipe) or module.Recipe.TYPE != provider:
+      raise ValueError('declaration Recipe.TYPE must equal the entry name')
+    if not isinstance(module.DEFAULT_MODEL, str) or not isinstance(module.Recipe.WIRE, str):
       raise TypeError('declaration must name a default model and a wire')
     if not isinstance(module.MODELS, Mapping) or any(
       not isinstance(name, str) or not isinstance(model, str)
       for name, model in module.MODELS.items()
     ):
       raise TypeError('declaration MODELS must map short names to model ids')
-    inputs = module.LLMSpec.MODEL_INPUTS
+    inputs = module.Recipe.MODEL_INPUTS
     if not isinstance(inputs, Mapping) or any(
       not isinstance(model, str)
       or not isinstance(types, frozenset)
@@ -91,6 +103,7 @@ def declaration(provider: str) -> ModuleType:
       )
     if any(model not in inputs for model in (module.DEFAULT_MODEL, *module.MODELS.values())):
       raise ValueError('declaration MODEL_INPUTS must cover DEFAULT_MODEL and MODELS')
+    _check_recipe_class(module.Recipe, module.PRICE_TABLE)
     if not isinstance(module.FAILURE_SIGNATURES, tuple) or any(
       not isinstance(signature, FailureSignature) for signature in module.FAILURE_SIGNATURES
     ):
@@ -118,32 +131,22 @@ def declarations(among: Collection[str] | None = None) -> Iterator[tuple[str, Mo
     yield name, module
 
 
-def available_specs() -> Iterator[tuple[str, LLMSpec]]:
-  for name, module in declarations():
-    try:
-      spec = module.LLMSpec()
-    except Exception as error:
-      log.warning('provider %r is unavailable: %s', name, error)
-      continue
-    yield name, spec
-
-
 def models(provider: str) -> dict[str, str]:
   """the provider's short model names, each mapped to the full id it stands for."""
   return declaration(provider).MODELS
 
 
-def default_spec(provider: str) -> LLMSpec:
+def default_spec(provider: str) -> Recipe:
   """the provider's own default recipe — its default model and no knobs."""
   module = declaration(provider)
   try:
-    return module.LLMSpec()
+    return module.Recipe()
   except Exception as error:
     raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
 
 
 def effort_values() -> frozenset[str]:
-  return frozenset(value for _, spec in available_specs() for value in spec.effort_values)
+  return frozenset(value for _, module in declarations() for value in module.Recipe.effort_values)
 
 
 def failure_signatures(provider: str) -> tuple[FailureSignature, ...]:
@@ -343,7 +346,7 @@ def parse_with_presets(value: str, presets: Mapping[str, str]) -> LLMSelection:
     raise LLMSelectionError(f'--llm preset {value!r} ({presets[value]}): {error}') from error
 
 
-def resolve(base: LLMSpec | None, selection: LLMSelection, among: Collection[str]) -> LLMSpec:
+def resolve(base: Recipe | None, selection: LLMSelection, among: Collection[str]) -> Recipe:
   """Apply a selection to a base; only a named provider starts a new recipe.
 
   Fast is a best-effort preference; an unsupported effort override raises.
@@ -369,10 +372,151 @@ def resolve(base: LLMSpec | None, selection: LLMSelection, among: Collection[str
   return spec
 
 
-def require_admitted(recipe: LLMSpec) -> None:
+def require_admitted(recipe: Recipe) -> None:
   if not recipe.admitted():
+    model = recipe.selection()['model']
+    if model is not None and model in recipe.RETIRED_MODELS:
+      raise LLMSelectionError(
+        f'{model} was retired on {recipe.RETIRED_MODELS[model].isoformat()}; '
+        f'listed {recipe.TYPE} models: {", ".join(recipe.MODEL_INPUTS)}; '
+        'add +passthrough to run it anyway'
+      )
     raise LLMSelectionError(
-      f'model {recipe.selection()["model"]!r} is not listed by provider {recipe.TYPE!r}; '
-      f'choose one of: {", ".join(models(recipe.TYPE))}; '
+      f'model {model!r} is not listed by provider {recipe.TYPE!r}; '
+      f'choose one of: {", ".join(recipe.MODEL_INPUTS)}; '
       'or add +passthrough to send the model and content unchecked'
     )
+
+
+def _check_recipe_class(recipe_class: type[Recipe], price_table: Any) -> None:
+  retired = recipe_class.RETIRED_MODELS
+  if not isinstance(retired, Mapping):
+    raise TypeError('RETIRED_MODELS must map model ids to retirement dates')
+  for model, retired_on in retired.items():
+    if type(model) is not str or re.fullmatch(r'[^+,\s]+', model) is None:
+      raise ValueError(f'invalid retired model {model!r}')
+    if type(retired_on) is not date:
+      raise TypeError(f'retired model {model!r} requires a retirement date')
+    if model in recipe_class.MODEL_INPUTS:
+      raise ValueError(f'model {model!r} is both listed and retired')
+  expected = recipe_class.MODEL_INPUTS.keys() | retired.keys()
+  priced = price_table.models.keys()
+  if expected != priced:
+    raise ValueError(
+      f'price table models must be exactly listed and retired models; '
+      f'missing: {sorted(expected - priced)}; extra: {sorted(priced - expected)}'
+    )
+  if 'passthrough' in recipe_class.__annotations__:
+    raise ValueError('provider must not declare passthrough')
+  annotations = field_types(recipe_class)
+  for item in dataclasses.fields(recipe_class):
+    if item.name in {'model', 'passthrough'}:
+      continue
+    if item.name == 'type' or re.fullmatch(r'[a-z][a-z0-9_]*', item.name) is None:
+      raise ValueError(f'invalid recipe field {item.name!r}')
+    try:
+      _, nullable = field_type(annotations[item.name])
+      if item.default is dataclasses.MISSING or (nullable and item.default is not None):
+        raise ValueError('field requires a default; optional fields require default None')
+      validate_field(item.name, item.default, annotations[item.name])
+    except (TypeError, ValueError) as error:
+      raise ValueError(f'invalid recipe field {item.name!r}: {error}') from error
+
+
+@dataclass(frozen=True)
+class ParsedRecipe:
+  provider: str
+  model: str
+  flags: frozenset[str]
+  fields: Mapping[str, str]
+
+
+def parse_recipe(text: str) -> ParsedRecipe:
+  """Read recipe grammar without loading a declaration or installation metadata."""
+
+  def refuse(reason: str):
+    raise RecipeError(f'invalid recipe {text!r}: {reason}')
+
+  body, *assignments = text.split(',')
+  provider, separator, tail = body.partition(':')
+  model, *flags = tail.split('+')
+  if (
+    not separator
+    or re.fullmatch(r'[a-z][a-z0-9-]*', provider) is None
+    or re.fullmatch(r'[^+,\s]+', model) is None
+  ):
+    refuse('expected provider:model[+passthrough][,field=value]...')
+  if len(set(flags)) != len(flags):
+    refuse('duplicate flag')
+  if any(flag != 'passthrough' for flag in flags):
+    refuse('the only framework flag is +passthrough')
+  values = {}
+  for assignment in assignments:
+    name, separator, value = assignment.partition('=')
+    if (
+      not separator
+      or re.fullmatch(r'[a-z][a-z0-9_]*', name) is None
+      or re.fullmatch(r'[^,\s]+', value) is None
+    ):
+      refuse(f'invalid field assignment {assignment!r}')
+    if name in values:
+      refuse(f'duplicate field {name!r}')
+    values[name] = value
+  return ParsedRecipe(provider, model, frozenset(flags), MappingProxyType(values))
+
+
+def _bind_value(value: str, annotation: Any) -> Any:
+  annotation, _ = field_type(annotation)
+  if annotation is bool:
+    if value not in {'true', 'false'}:
+      raise ValueError('expected true or false')
+    return value == 'true'
+  if annotation is int:
+    if re.fullmatch(r'-?[0-9]+', value) is None:
+      raise ValueError('expected a decimal integer')
+    return int(value)
+  if get_origin(annotation) is Literal and value not in get_args(annotation):
+    raise ValueError(f'expected one of {get_args(annotation)}')
+  return value
+
+
+def bind_recipe(text: str) -> Recipe:
+  parsed = parse_recipe(text)
+  try:
+    recipe_class = declaration(parsed.provider).Recipe
+    annotations = field_types(recipe_class)
+    provider_fields = annotations.keys() - {'model', 'passthrough'}
+    unknown = parsed.fields.keys() - provider_fields
+    if unknown:
+      raise ValueError(
+        f'unknown field {", ".join(sorted(unknown))}; '
+        f'fields: {", ".join(name for name in annotations if name in provider_fields) or "(none)"}'
+      )
+    values = {}
+    for name, value in parsed.fields.items():
+      try:
+        values[name] = _bind_value(value, annotations[name])
+      except ValueError as error:
+        raise ValueError(f'field {name!r}: {error}') from error
+    recipe = recipe_class(model=parsed.model, passthrough='passthrough' in parsed.flags, **values)
+    require_admitted(recipe)
+    return recipe
+  except (TypeError, ValueError) as error:
+    raise RecipeError(f'recipe {text!r} for provider {parsed.provider!r}: {error}') from error
+
+
+def format_recipe(recipe: Recipe) -> str:
+  model = recipe.selection()['model']
+  if model is None:
+    raise RecipeError('a deferred model has no complete recipe text')
+  text = f'{recipe.TYPE}:{model}'
+  if recipe.passthrough:
+    text += '+passthrough'
+  for item in dataclasses.fields(recipe):
+    if item.name in {'model', 'passthrough'}:
+      continue
+    value = getattr(recipe, item.name)
+    if value != item.default:
+      rendered = str(value).lower() if type(value) is bool else str(value)
+      text += f',{item.name}={rendered}'
+  return text

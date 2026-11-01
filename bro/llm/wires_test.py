@@ -66,16 +66,16 @@ def test_two_legacy_claimants_are_an_error(monkeypatch):
 
 
 def test_open_refuses_a_wire_without_a_client():
-  from bro.anthropic.declaration import LLMSpec
+  from bro.anthropic.declaration import Recipe
 
   with pytest.raises(wires.WireUnavailable, match='messages.*no client'):
-    wires.open(LLMSpec(), {})
+    wires.open(Recipe(), {})
 
 
 def test_open_refuses_wire_owned_recipe_options():
-  from bro.openai.declaration import LLMSpec
+  from bro.openai.declaration import Recipe
 
-  class Collision(LLMSpec):
+  class Collision(Recipe):
     def request_options(self) -> dict:
       return {'previous_response_id': 'foreign-chain'}
 
@@ -108,7 +108,7 @@ def test_entry_name_and_decode_side_name_must_match(monkeypatch):
 
 
 def test_open_names_the_wire_and_distribution_extra_when_the_sdk_is_missing(tmp_path, monkeypatch):
-  from bro.native.echo_declaration import LLMSpec
+  from bro.native.echo_declaration import Recipe as EchoRecipe
 
   metadata = tmp_path / 'fixture_wire-1.dist-info'
   metadata.mkdir()
@@ -123,11 +123,11 @@ def test_open_names_the_wire_and_distribution_extra_when_the_sdk_is_missing(tmp_
     wires, '_client_entries', lambda: {'fixture': distribution.entry_points['fixture']}
   )
 
-  class Recipe(LLMSpec):
+  class FixtureRecipe(EchoRecipe):
     WIRE = 'fixture'
 
   with pytest.raises(
     wires.WireUnavailable, match=r"wire 'fixture'.*fixture-wire\[client\]"
   ) as refused:
-    wires.open(Recipe(), {})
+    wires.open(FixtureRecipe(), {})
   assert isinstance(refused.value.__cause__, ModuleNotFoundError)

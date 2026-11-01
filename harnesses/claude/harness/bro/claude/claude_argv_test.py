@@ -221,6 +221,11 @@ class TestRideSessionLaunch:
     assert status_line['type'] == 'command'
     assert status_line['command'] == statusline_command()
 
+  @pytest.mark.parametrize('selection', ['anthropic', 'anthropic:opus55'])
+  def test_unset_provider_effort_leaves_claude_to_choose(self, selection):
+    argv = _ride_session_launch(_spec(llm=selection)).argv
+    assert '--effort' not in argv
+
   def test_effort_injected(self):
     argv = _ride_session_launch(_spec(llm='::xhigh')).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'

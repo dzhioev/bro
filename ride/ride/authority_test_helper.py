@@ -12,7 +12,7 @@ from ride.bro_worker import BroType
 
 
 def reading(*, declarations=None, config=None) -> Reading:
-  from bro.openai.declaration import LLMSpec
+  from bro.openai.declaration import Recipe
 
   installed = Installation.take()
   installed = replace(
@@ -21,7 +21,7 @@ def reading(*, declarations=None, config=None) -> Reading:
       name: replace(
         driver,
         recipes={
-          target: LLMSpec(reasoning_effort='medium') if recipe is None else recipe
+          target: Recipe(reasoning_effort='medium') if recipe is None else recipe
           for target, recipe in driver.recipes.items()
         },
       )

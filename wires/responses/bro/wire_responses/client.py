@@ -6,7 +6,7 @@ from openai import AsyncOpenAI, pydantic_function_tool
 from pydantic import BaseModel
 
 from bro.base import log
-from bro.llm.llm import LLMSpec, LLMStopped
+from bro.llm.llm import LLMStopped, Recipe
 from bro.llm.mcp import Tool, encode_tool_result
 from bro.llm.records import Chaining, DecodedCall, Unknown
 from bro.llm.retry import retry_llm
@@ -80,7 +80,7 @@ class Responses(Wire):
   CHAINING: ClassVar[Chaining] = CHAINING
   OWNED = frozenset({'model', 'input', 'tools', 'previous_response_id'})
 
-  def __init__(self, recipe: LLMSpec, secrets: dict):
+  def __init__(self, recipe: Recipe, secrets: dict):
     self.recipe = recipe
     self.client = AsyncOpenAI(api_key=secrets['api_key'], base_url=recipe.ENDPOINT)
     self._last_response_id: str | None = None

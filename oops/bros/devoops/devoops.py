@@ -27,7 +27,7 @@ Do not create or edit tasks unprompted; task writes happen when the request call
 class Devoops(Bro):
   name = 'devoops'
   description = 'repository-configured deployments, restarts, probes, and infrastructure inspection'
-  llm_spec = openai.LLMSpec(reasoning_effort='medium')
+  llm_spec = openai.Recipe(reasoning_effort='medium')
   features = {'brog': creds.contains('brog')}
   tools = [
     mount(operations_mcp.toolset),

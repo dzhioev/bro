@@ -73,7 +73,7 @@ def test_in_process_selection_does_not_read_the_managed_host_list(register_test_
   from bro.bro import BaseBro
   from bro.launch.run import run_llm_spec
   from bro.llm.providers import LLMSelection, parse
-  from bro.native.echo_declaration import LLMSpec
+  from bro.native.echo_declaration import Recipe
   from ride.authority_reading import Reading
 
   class RecipeLess(BaseBro):
@@ -81,7 +81,7 @@ def test_in_process_selection_does_not_read_the_managed_host_list(register_test_
 
   register_test_bros(RecipeLess)
   monkeypatch.setattr(Reading, 'take', lambda *_: pytest.fail('read managed configuration'))
-  assert run_llm_spec('recipe-less', parse('echo:chosen+passthrough')) == LLMSpec(
+  assert run_llm_spec('recipe-less', parse('echo:chosen+passthrough')) == Recipe(
     model='chosen', passthrough=True
   )
   with pytest.raises(ValueError, match='declares no LLM recipe'):
@@ -97,11 +97,11 @@ def test_native_launch_refuses_an_unlisted_driven_recipe_before_the_runner(
 
   from bro.bro import BaseBro
   from bro.launch.call import chat_main
-  from bro.openai.declaration import LLMSpec
+  from bro.openai.declaration import Recipe
 
   class Reader(BaseBro):
     name = 'unlisted-reader'
-    llm_spec = LLMSpec(model='gpt-7')
+    llm_spec = Recipe(model='gpt-7')
 
   register_test_bros(Reader)
   monkeypatch.setattr('bro.launch.run.Runner', lambda *args, **kwargs: pytest.fail('started'))
@@ -120,11 +120,11 @@ def test_native_unlisted_declaration_accepts_a_listed_override_or_flag(register_
   from bro.bro import BaseBro
   from bro.launch.run import run_llm_spec
   from bro.llm.providers import parse
-  from bro.openai.declaration import LLMSpec
+  from bro.openai.declaration import Recipe
 
   class Reader(BaseBro):
     name = 'unlisted-reader'
-    llm_spec = LLMSpec(model='gpt-7')
+    llm_spec = Recipe(model='gpt-7')
 
   register_test_bros(Reader)
   spec = run_llm_spec(Reader.name, parse(':sol'))

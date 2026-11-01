@@ -2,17 +2,17 @@
 
 from dataclasses import dataclass
 
-from bro.deepseek.declaration import LLMSpec as ChatSpec
-from bro.llm.llm import LLMSpec
+from bro.deepseek.declaration import Recipe as ChatSpec
+from bro.llm.llm import Recipe
 from bro.llm.records import Call, Message, Reasoning
-from bro.native.echo_declaration import LLMSpec as EchoSpec
-from bro.openai.declaration import LLMSpec as ResponsesSpec
+from bro.native.echo_declaration import Recipe as EchoSpec
+from bro.openai.declaration import Recipe as ResponsesSpec
 from bro.wire_chat.fixtures_test_helper import call as chat_call, response as chat_response
 
 
 @dataclass(frozen=True)
 class Case:
-  recipe: LLMSpec
+  recipe: Recipe
   response: dict
   parts: tuple
   stop: str = 'completed'

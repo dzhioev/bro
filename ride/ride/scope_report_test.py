@@ -4,7 +4,7 @@ import pytest
 
 from bro.base import credentials, host_config
 from bro.bro import BaseBro
-from bro.native.echo_declaration import LLMSpec
+from bro.native.echo_declaration import Recipe
 from ride.scope_report import report_scope
 
 
@@ -12,7 +12,7 @@ class ReportBro(BaseBro):
   name = 'report-test'
   extra_secrets = ('github',)
   may_summon = ('reviewer',)
-  llm_spec = LLMSpec()
+  llm_spec = Recipe()
 
 
 @pytest.fixture

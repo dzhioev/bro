@@ -15,7 +15,7 @@ from bro.launch.llm_flags import (
   add_llm_flags,
   selection_from_args,
 )
-from bro.llm.llm import LLMSpec
+from bro.llm.llm import Recipe
 from bro.llm.providers import SELECTION_OPTIONS, LLMSelectionError, require_admitted
 from bro.mcp import HOLDS
 from bro.native.harness import resolve_native
@@ -35,7 +35,7 @@ HOLD_HELP = (
 )
 
 
-def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[LLMSpec]:
+def run_llm_spec(bro_name: str, selection: 'LLMSelection') -> Optional[Recipe]:
   """Resolve an explicit selection over the bro's declared native recipe."""
   from bro.registry import get_class
 
@@ -56,7 +56,7 @@ def add_resolved_llm_flag(parser: base_args.Parser) -> None:
   parser.add_exclusive_groups(['resolved_llm'], ['llm', *SELECTION_OPTIONS])
 
 
-def launch_llm_spec(bro_name: str, args: dict) -> Optional[LLMSpec]:
+def launch_llm_spec(bro_name: str, args: dict) -> Optional[Recipe]:
   """The run's recipe override: `--resolved-llm` verbatim, else the selection over the declaration."""
   from bro.llm import wires
 
@@ -64,7 +64,7 @@ def launch_llm_spec(bro_name: str, args: dict) -> Optional[LLMSpec]:
   if encoded is None:
     return run_llm_spec(bro_name, selection_from_args(args))
   try:
-    spec = LLMSpec.from_dict(json.loads(encoded))
+    spec = Recipe.from_dict(json.loads(encoded))
   except (KeyError, TypeError, ValueError) as error:
     raise LLMSelectionError(f'invalid --resolved-llm recipe: {error}') from error
   if spec.WIRE not in wires.client_names():

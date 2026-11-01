@@ -7,7 +7,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from bro.base import retry
 from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMUnavailable
-from bro.openai.declaration import LLMSpec
+from bro.openai.declaration import Recipe
 
 _REQUEST = httpx2.Request('POST', 'https://api.example.test/v1/responses')
 
@@ -64,7 +64,7 @@ def _request(clock: _Clock, failures: int, error: Exception, attempt_seconds: fl
 def test_transient_failures_are_repeated(clock, error) -> None:
   request, attempts = _request(clock, 2, error)
 
-  assert asyncio.run(llm_retry.retry_llm(request, LLMSpec().is_transient)) == 'reply'
+  assert asyncio.run(llm_retry.retry_llm(request, Recipe().is_transient)) == 'reply'
   assert len(attempts) == 3
 
 
@@ -73,7 +73,7 @@ def test_client_errors_and_rate_limits_are_not_repeated(clock, status) -> None:
   request, attempts = _request(clock, 1, _status_error(status))
 
   with pytest.raises(APIStatusError):
-    asyncio.run(llm_retry.retry_llm(request, LLMSpec().is_transient))
+    asyncio.run(llm_retry.retry_llm(request, Recipe().is_transient))
   assert len(attempts) == 1
 
 
@@ -81,7 +81,7 @@ def test_an_outage_past_the_window_raises_the_neutral_error(clock) -> None:
   request, attempts = _request(clock, 1000, APIConnectionError(request=_REQUEST))
 
   with pytest.raises(LLMUnavailable) as error:
-    asyncio.run(llm_retry.retry_llm(request, LLMSpec().is_transient))
+    asyncio.run(llm_retry.retry_llm(request, Recipe().is_transient))
 
   assert len(attempts) > 1
   assert attempts[-1] < llm_retry.RETRY_WINDOW_SECONDS
