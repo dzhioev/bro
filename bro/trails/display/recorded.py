@@ -377,10 +377,14 @@ class RecordedAdapter:
   def _segment_messages(
     self, trail_id: str, header: dict[str, Any], bound: dict[str, Any] | None
   ) -> list[dict[str, Any]]:
+    extent = _require_integer(header.get('extent'), 'trail extent')
     if bound is None:
-      extent = _require_integer(header.get('extent'), 'trail extent')
       return self.client.collect_messages(trail_id, extent=extent)
     bound_step_id = _require_integer(bound.get('step_id'), 'fork bound step_id')
+    if bound_step_id >= extent:
+      raise ValueError(
+        f'fork bound step {bound_step_id} lies past the {extent} steps trail {trail_id} holds'
+      )
     messages = self.client.collect_messages(trail_id, extent=bound_step_id + 1)
     bound_index_value = bound.get('index')
     if bound_index_value is None:

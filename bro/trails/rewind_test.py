@@ -6,6 +6,7 @@ from typing import Any, Optional, cast
 import pytest
 
 import bro.trails.rewind as rewind
+from bro.base.args import CLIError
 from bro.trails.backends import get_format
 from bro.trails.display import ColorMode, preset
 from bro.trails.rewind import (
@@ -520,11 +521,31 @@ class TestGrep:
     client.add_bro('T-broken', [{'step_id': 0, 'kind': 'user_input', 'body': 17, 'ts': None}])
     client.add_claude('T-good', [_user('the needle is here')])
 
-    assert _command_grep(_client(client), self._grep_args('needle')) == 2
+    assert _command_grep(_client(client), self._grep_args('needle')) == 0
 
     captured = capsys.readouterr()
     assert 'T-good:' in captured.out
     assert 'T-broken' in captured.err and 'user input' in captured.err
+
+  def test_an_unrenderable_trail_leaves_a_sweep_without_matches_at_one(self):
+    client = FakeClient()
+    client.add_bro('T-broken', [{'step_id': 0, 'kind': 'user_input', 'body': 17, 'ts': None}])
+    client.add_claude('T-good', [_user('nothing here')])
+
+    assert _command_grep(_client(client), self._grep_args('needle')) == 1
+
+  def test_a_fork_bound_past_the_parents_steps_skips_only_that_trail(self, capsys):
+    client = FakeClient()
+    client.add_claude('parent', [_user('parent needle')])
+    client.add_claude(
+      'T-fork', [_user('fork needle')], forked_from={'trail_id': 'parent', 'step_id': 303}
+    )
+
+    assert _command_grep(_client(client), self._grep_args('needle')) == 0
+
+    captured = capsys.readouterr()
+    assert 'parent:' in captured.out and 'T-fork:' not in captured.out
+    assert 'fork bound step 303 lies past the 1 steps trail parent holds' in captured.err
 
   def test_a_structured_error_body_is_searchable(self, capsys):
     client = FakeClient()
@@ -654,6 +675,17 @@ class TestCapabilities:
 
     assert 'T1' in target.getvalue()
     assert paged == [target.getvalue()]
+
+  def test_a_malformed_trail_is_a_cli_error_naming_it(self, monkeypatch):
+    client = FakeClient()
+    client.add_claude('parent', [_user('hello')])
+    client.add_claude('T1', [_user('child')], forked_from={'trail_id': 'parent', 'step_id': 303})
+    monkeypatch.setattr(rewind, 'default_store', lambda: contextlib.nullcontext(_client(client)))
+
+    with pytest.raises(
+      CLIError, match='malformed recorded trail T1: fork bound step 303 lies past the 1 steps'
+    ):
+      rewind.main(['rewind', 'show', 'T1', '--no-pager'])
 
   def test_rewind_no_longer_owns_trail_formatting_helpers(self):
     for name in (

@@ -261,7 +261,7 @@ class TestMessages:
 class TestCollection:
   def test_fork_chain_honors_the_exact_step_and_index_bound(self):
     fake = FakeClient()
-    fake.headers['parent'] = _header('parent')
+    fake.headers['parent'] = _header('parent', extent=3)
     fake.headers['child'] = _header(
       'child', extent=1, forked_from={'trail_id': 'parent', 'step_id': 1, 'index': 1}
     )
@@ -284,9 +284,22 @@ class TestCollection:
     assert message_content == ['kept zero', 'kept one', 'kept two', 'child']
     assert any(isinstance(record, SegmentBoundary) for record in records)
 
+  def test_a_fork_bound_past_the_parents_steps_is_malformed(self):
+    fake = FakeClient()
+    fake.headers['parent'] = _header('parent', extent=2)
+    fake.headers['child'] = _header(
+      'child', extent=1, forked_from={'trail_id': 'parent', 'step_id': 5}
+    )
+
+    with pytest.raises(
+      DisplayDataError,
+      match='malformed recorded trail child: fork bound step 5 lies past the 2 steps trail parent',
+    ):
+      RecordedAdapter(_client(fake)).conversation_records(fake.headers['child'])
+
   def test_tool_call_ids_are_scoped_across_collected_segments(self):
     fake = FakeClient()
-    fake.headers['parent'] = _header('parent')
+    fake.headers['parent'] = _header('parent', extent=2)
     fake.headers['child'] = _header(
       'child', extent=2, forked_from={'trail_id': 'parent', 'step_id': 1}
     )
@@ -392,7 +405,7 @@ class TestStructures:
 
   def test_structural_adapters_reject_invalid_segment_and_end_status(self):
     fake = FakeClient()
-    fake.headers['parent'] = _header('parent')
+    fake.headers['parent'] = _header('parent', extent=1)
     fake.headers['child'] = _header(
       'child',
       native={'llm': {'model': 'gpt-5'}, 'segment': 3},

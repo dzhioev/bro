@@ -231,7 +231,8 @@ def _grep_lines(
 
 
 def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
-  """Exit 0 when at least one line matched, 1 when none did, 2 when a trail would not render."""
+  """Exit 0 when at least one line matched, 1 when none did; a trail that will not
+  render is named on stderr and leaves the exit status alone."""
   try:
     regex = re.compile(args['pattern'], re.IGNORECASE if args.get('ignore_case', False) else 0)
   except re.error as exception:
@@ -276,7 +277,6 @@ def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
     sys.stdout.flush()
   if unrenderable_trails > 0:
     log.warning('%d of %d trails could not be rendered', unrenderable_trails, len(headers))
-    return 2
   return 0 if len(groups) > 0 else 1
 
 
@@ -391,4 +391,7 @@ def main(argv: list[str]) -> Optional[int]:
 
 def _dispatch(command: Callable[[TrailsStore, dict[str, Any]], int], args: dict[str, Any]) -> int:
   with default_store() as client:
-    return command(client, args)
+    try:
+      return command(client, args)
+    except DisplayDataError as exception:
+      raise base_args.CLIError(str(exception)) from exception
