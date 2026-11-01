@@ -45,10 +45,13 @@ def _brog_task(name: str = 'my task'):
 
 
 @pytest.fixture
-def fake_proj(monkeypatch, tmp_path):
+def fake_proj(monkeypatch, tmp_path, home_settings_file):
+  home_settings_file.write_text('default-bro = "bro-dev"\nharness = "claude"\n')
   monkeypatch.setattr(workspace_paths, 'project_root', lambda: tmp_path)
   monkeypatch.setattr(dive_in, 'project_root', lambda: tmp_path)
-  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro-dev"\nharness = "claude"\n')
+  (tmp_path / 'pyproject.toml').write_text(
+    '[tool.bro]\ndefault = "ignored-tree-bro"\nharness = "not-installed"\n'
+  )
   monkeypatch.setattr(dive_in, '_fresh_origin_head', lambda _repo: FRESH_SHA)
   workspaces = workspace_paths.workspaces_dir()
   workspaces.mkdir(parents=True)
@@ -288,6 +291,10 @@ class TestTaskMode:
 
 
 class TestTaskSystem:
+  @pytest.fixture(autouse=True)
+  def default_bro(self, home_settings_file):
+    home_settings_file.write_text('default-bro = "bro-dev"\n')
+
   """the prefetch backend reads `brog` through the launch's own scope binding."""
 
   @pytest.mark.parametrize('harness,llm', [('claude', None), ('bro', 'openai:gpt-7+passthrough')])
@@ -353,18 +360,12 @@ class TestTaskSystem:
       )
 
   def _fake_wiring(self, monkeypatch, calls: dict, read=None):
-    from types import SimpleNamespace
-
     class FakeStore:
       def get_json(self, name):
         calls['read'] = name
         if read is not None:
           return read()
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
-
-    monkeypatch.setattr(
-      dive_in, 'project_config', lambda _repo: SimpleNamespace(default_bro='bro-dev')
-    )
 
     def fake_scoped_secrets(bro_name, surface, *, attachment, llm_spec, cred, grant, revoke):
       calls['scoped'] = (bro_name, surface, cred, grant, revoke)
@@ -527,9 +528,14 @@ class TestPrefetchTask:
 
 
 @pytest.mark.parametrize('layer', ['launch', 'project', 'host', 'absent'])
-def test_harness_resolution_precedes_task_prefetch(fake_proj, monkeypatch, caplog, capsys, layer):
+def test_harness_resolution_precedes_task_prefetch(
+  fake_proj, monkeypatch, caplog, capsys, layer, home_settings_file
+):
   from bro.base import host_config
 
+  home_settings_file.write_text(
+    'default-bro = "bro-dev"\n' + ('harness = "bro"\n' if layer == 'project' else '')
+  )
   project = fake_proj / 'pyproject.toml'
   project.write_text(
     '[tool.bro]\ndefault = "bro-dev"\n' + ('harness = "bro"\n' if layer == 'project' else '')
@@ -553,7 +559,7 @@ def test_harness_resolution_precedes_task_prefetch(fake_proj, monkeypatch, caplo
     assert seen == []
     assert capsys.readouterr().out == ''
     assert (
-      'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
+      'no harness: pass --harness, set home settings harness, or set "harness" in ~/.bro.json'
       in caplog.text
     )
   else:

@@ -89,7 +89,7 @@ Refer to credentials only by kind, instance name, expected non-secret identity, 
 2. Identify the distribution and package-discovery rule that would ship the bro declaration.
 3. Inspect the active environment and lock for private, local-only, platform-specific, or otherwise unreproducible distributions.
    `ride` freezes the entire invoking installation, not only bro's dependency closure.
-4. Search installed and declared `bro` entry points and existing `[tool.bro]` tables for name or behavior conflicts.
+4. Search installed and declared `bro.bros.<home>` entry points and existing `[tool.bro]` tables for name or behavior conflicts.
 5. Reconcile any partial bootstrap across dependencies, Git sources, entry point, module, lock, project configuration, environment, and ignored files.
 6. If the repository root has `uv.lock`, inspect the root and every workspace member, dependency group, extra, source override, and local path dependency.
    The root lock triggers a project image independently of the environment that supplied `ride`.
@@ -156,12 +156,12 @@ For a fresh integrated root, use normalized project metadata, version `0.1.0`, t
 requires = ["uv_build>=0.13,<0.14"]
 build-backend = "uv_build"
 
-[project.entry-points.bro]
+[project.entry-points."bro.bros.<home>"]
 my-dev = "bros.my_dev:MyDev"
 
 [tool.uv.build-backend]
 module-root = ""
-module-name = ["bros.my_dev"]
+module-name = ["bros.my_dev", "my_project"]
 namespace = true
 ```
 
@@ -171,7 +171,7 @@ Adapt an existing backend's own package-discovery configuration instead of addin
 
 For a sidecar:
 
-1. Keep `[tool.bro]` in the repository-root `pyproject.toml`, creating a table-only root file if necessary.
+1. Keep tree-specific `[tool.bro]` configuration, if any, in the repository-root `pyproject.toml`.
 2. Create `bro_project/pyproject.toml` as a complete Python 3.12 uv-build project named `<project-slug>-bros`.
 3. Give it the same framework runtime dependencies and Git sources, with `bro-native`, `bro-claude`, and `bro-ride` in its `dev` group.
 4. Register `my-dev = "<project_slug>_bros.my_dev:MyDev"`.
@@ -182,7 +182,7 @@ For a sidecar:
 9. Address every sidecar operation with `--project bro_project`.
 10. Ignore only `bro_project/.venv/`, build output, and normal Python cache files, and commit `bro_project/uv.lock`.
 
-If a root `setup.sh` exists, preserve its flow and add only the selected sync and `bro.dev.install` operations after reading and obtaining approval.
+If a root `setup.sh` exists, preserve its flow and add the selected sync, installation-home marker write and `bro.dev.install` operations after reading and obtaining approval.
 Use `uv run --project bro_project bro.dev.install` for a sidecar.
 Do not add a setup script merely because one is absent.
 
@@ -211,7 +211,7 @@ Fetch and read these paths before using their contracts:
 - `bro/workspace/project.py`;
 - `llms/anthropic/bro/anthropic/declaration.py`;
 - `llms/openai/bro/openai/declaration.py`;
-- `bro/reference/ride.md`, especially **Harness selection**, **Per-project defaults**, **Summoning another bro**, and **Session permissions and credentials**;
+- `bro/reference/ride.md`, especially **Harness selection**, **Home settings**, **Summoning another bro**, and **Session permissions and credentials**;
 - `bro/reference/dive_in.md`;
 - `ride/ride/dive_in.py`;
 - `bro/harness/__init__.py` and `ride/ride/harness.py`;
@@ -231,29 +231,29 @@ The first contains only `uv.lock`, the root `pyproject.toml`, and every discover
 The second contains the complete tracked build context plus the approved pending packaging files.
 Build the computed pinned runtime image if absent, then run each uv command in a fresh container from that image with no launcher credential, credential directory, or host package cache mounted.
 Run the manifest tree with `--no-install-workspace` and the full tree without it, using `--frozen --all-packages --all-groups --all-extras` in both.
-This is a support gate, not the final image proof; section 4 builds the actual project image after its required `[tool.bro]` settings and declaration exist.
+This is a support gate, not the final image proof; section 4 builds the actual project image after its home settings and declaration exist.
 Run both gates against the root even when `ride` comes from `bro_project/.venv`, and do not substitute a sidecar-only sync.
 Ask before local Docker image writes, show the image tag and temporary paths, remove the temporary trees afterward, and fail closed on either phase.
 
 **Checkpoint 2:** report the selected packaging shape, owning distribution, exact `BRO_SHA`, all four locked source records, source paths read at that SHA, root-lock status, both image-phase results, and any preserved project setup conventions.
 
-## 3. Choose the harness configuration and write project launch settings
+## 3. Choose the home and write its launch settings
 
 ### Check
 
-1. Read the repository-root `[tool.bro]` table and the pinned closed scalar schema.
-2. Inspect any existing project default, `harness`, `summon-harness`, image repository, sub-tables, and host `~/.bro.json` LLM preset names without reading secrets.
-3. Determine a lowercase Docker-compatible image repository unique among this host's consumer repositories.
+1. Read installed `bro.settings` entries and the pinned home-settings schema.
+2. Choose a well-formed home name for this consumer, distinct from the framework's `bro` home, and inspect any existing home settings and host `~/.bro.json` without reading secrets.
+3. Keep the attached tree's build-context command and sub-tables separate from installation settings.
 
 ### Ask
 
-1. On first adoption, propose the selected developer as `[tool.bro] default`.
+1. On first adoption, propose the selected developer as the home settings' `default-bro`.
 2. If an already bro-enabled repository intentionally uses another default, ask whether to preserve it.
    A preserved default requires `--bro <developer-name>` on default-dependent `ride scope` and `dive-in` commands.
-3. Explain the two harness keys from the pinned per-project defaults:
-   `harness` drives every attached launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness.
-   There is no framework harness default: each key must be declared in `[tool.bro]`, supplied as a top-level key of the same name in `~/.bro.json`, or selected for the launch.
-   A project key overrides the host's value.
+3. Explain the two harness keys from the pinned home settings:
+   `harness` drives every launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness.
+   There is no framework harness default: each key must be declared in home settings, supplied as a top-level key of the same name in `~/.bro.json`, or selected for the launch.
+   A home settings key overrides the host's value.
    Claude Code runs on the `claude_code` setup token, which section 5 always wires;
    the native loop runs the developer's `llm_spec` recipe on its provider key, the `openai` credential.
 4. Ask whether the user has an OpenAI API key and wants section 5 to wire it.
@@ -270,20 +270,34 @@ Ask before local Docker image writes, show the image tag and temporary paths, re
 
 ### Act
 
-Merge the approved values into the repository-root table, writing both harness keys explicitly:
+Register the settings package in the selected distribution, using the same home as its `bro.bros.<home>` group:
 
 ```toml
-[tool.bro]
-default = "my-dev"
-harness = "claude"
-summon-harness = "bro"
-image-repository = "bro/<project-unique-docker-slug>"
+[project.entry-points."bro.settings"]
+<home> = "my_project"
 ```
 
-Substitute the chosen public name and the chosen harness pair consistently.
+Create `my_project/__init__.py` and package `my_project/bro-settings.toml`:
+
+```toml
+default-bro = "my-dev"
+harness = "claude"
+summon-harness = "bro"
+```
+
+For a sidecar, put the resource in its `<project_slug>_bros` package and name that package in the entry.
+Substitute the chosen public name and harness pair consistently.
 Preserve an intentional existing default when approved.
-Leave `summon-depth`, `build-context-command`, and unrelated sub-tables absent unless a discovered project requirement needs them.
-Unknown root scalars are errors.
+Leave `summon-depth` absent unless a discovered requirement needs it.
+After syncing the launch environment, write its marker, including from setup on subsequent runs:
+
+```bash
+printf '<home>\n' > .venv/bro-installation-home
+```
+
+Use `bro_project/.venv/bro-installation-home` for a sidecar environment.
+Ride names project images itself; no image repository needs configuring.
+The attached tree's `[tool.bro]` reads only `build-context-command` and sub-tables, and ignores other keys.
 `--harness` on a `ride` or `dive-in` command and `harness` on a summon request override the keys for one launch;
 do not add them to ordinary commands.
 
@@ -299,7 +313,8 @@ The current neutral effort vocabulary is read from the pinned source rather than
 Add `--llm <project-slug>-developer` to ordinary `ride` and `dive-in` commands only.
 Do not add it to the exact acceptance command, which must continue to test the framework default.
 
-**Checkpoint 3:** report the effective default, the harness pair and the configuration it is, whether an OpenAI key will be wired, unique image repository, whether commands need `--bro`, and the optional named preset and its explicit-use rule.
+**Checkpoint 3:** report the effective default, the harness pair and the configuration it is, whether an OpenAI key will be wired, the installation home and marker,
+whether commands need `--bro`, and the optional named preset and its explicit-use rule.
 
 ## 4. Define and package the developer bro
 
@@ -599,7 +614,7 @@ Diagnose failures from the earliest failing layer:
 
 1. A wrong or missing command requires a sync, activation of the intended environment, and `type -a ride` inspection.
 2. `unknown bro` requires checking entry-point metadata, class name, import path, package discovery, and the post-edit sync.
-3. A `[tool.bro]` error requires fixing the closed schema, not inventing fallback keys.
+3. A home settings or installation-marker error names the configuration to fix; do not invent fallback keys.
 4. A `MISSING` scope row requires repairing material or host selection, not masking it with `--grant`.
 5. A Claude auth error requires repairing the scalar `claude_code` setup token.
 6. A native run refusing for a missing `bro` command requires `bro-native` in the synced environment and a rebuilt project image;
@@ -693,7 +708,7 @@ Prepare a bare `dive-in` prompt containing the same roster-design request plus o
 
 ### Check
 
-Confirm the setup commit base, selected environment, effective project default, optional preset, and task status.
+Confirm the setup commit base, selected environment, effective home default, optional preset, and task status.
 Do not hand off a terminal task.
 
 ### Ask
@@ -711,7 +726,7 @@ dive-in --task <canonical-task-id-or-url>
 ```
 
 Use `source bro_project/.venv/bin/activate` for a sidecar.
-Add `--bro <developer-name>` when an intentional existing project default was preserved.
+Add `--bro <developer-name>` when an intentional existing home default was preserved.
 Add `--llm <project-slug>-developer` when the user chose a named Claude preset.
 Add `--into <setup-commit-sha>` while the setup commit is not reachable from origin's default branch, and explain when that modifier becomes unnecessary.
 

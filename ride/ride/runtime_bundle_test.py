@@ -17,6 +17,7 @@ import pytest
 
 import ride.runtime_bundle as runtime_bundle
 from bro.base.source_commit import RECORD_NAME, SourceCommit, installed_commit
+from bro.workspace.installation import installation_home
 
 _discover_distributions = importlib.metadata.distributions
 
@@ -27,6 +28,7 @@ _GIVEN_COMMANDS = ['ride', 'do-ride', 'summon']
 def _materialized_runtime(root: Path) -> Path:
   venv_bin = root / 'venv' / 'bin'
   venv_bin.mkdir(parents=True)
+  (root / 'venv' / 'bro-installation-home').write_text('test-home\n')
   shim_directory = root / 'bin'
   shim_directory.mkdir()
   (venv_bin / 'python').symlink_to(sys.executable)
@@ -377,6 +379,23 @@ def test_a_host_snapshot_reresolves_to_its_own_bundle(monkeypatch, probe, tmp_pa
 
   with runtime_bundle.resolve_runtime_bundle() as bundle:
     bundle.materialize_host()
+    from bro.workspace import installation
+
+    home = installation.installation_home()
+    assert json.loads((bundle.root / 'bundle.json').read_text())['home'] == home
+    result = subprocess.run(
+      [
+        str(bundle.host_venv / 'bin' / 'python'),
+        '-c',
+        'from pathlib import Path; import sys; print((Path(sys.prefix) / "bro-installation-home").read_text(), end="")',
+      ],
+      capture_output=True,
+      text=True,
+      check=True,
+    )
+    assert result.stdout == f'{home}\n'
+    monkeypatch.setattr(installation, 'ENVIRONMENT', bundle.host_venv)
+    monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(bundle.host_venv))
     _read_installation(monkeypatch, _site_packages(bundle.host_venv))
 
     with runtime_bundle.resolve_runtime_bundle() as snapshot:
@@ -415,7 +434,7 @@ def test_a_stamped_or_reordered_rebuild_freezes_one_bundle(monkeypatch, tmp_path
     staging = tmp_path / attempt
     staging.mkdir()
     wheels = runtime_bundle._build_wheels(local, staging)
-    manifest = runtime_bundle._manifest('3.12', [], wheels)
+    manifest = runtime_bundle._manifest('3.12', [], wheels, home=installation_home())
     frozen.append(runtime_bundle._persist_bundle(tmp_path / 'base', manifest, wheels))
 
   assert frozen[0] == frozen[1]
@@ -454,12 +473,12 @@ def test_a_setuptools_wheel_leaves_out_a_stale_build_tree(tmp_path):
 def test_bundle_hash_covers_pins_python_and_wheel_bytes(tmp_path):
   wheel = tmp_path / 'demo.whl'
   wheel.write_bytes(b'wheel one')
-  first_manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel])
+  first_manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel], home=installation_home())
   first = runtime_bundle._persist_bundle(tmp_path, first_manifest, [wheel])
   assert runtime_bundle._persist_bundle(tmp_path, first_manifest, [wheel]) == first
 
   wheel.write_bytes(b'wheel two')
-  second_manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel])
+  second_manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel], home=installation_home())
   second = runtime_bundle._persist_bundle(tmp_path, second_manifest, [wheel])
 
   assert first != second
@@ -470,7 +489,7 @@ def test_bundle_hash_covers_pins_python_and_wheel_bytes(tmp_path):
 def test_bundle_persistence_reuses_a_concurrent_winner(monkeypatch, tmp_path):
   wheel = tmp_path / 'demo.whl'
   wheel.write_bytes(b'wheel')
-  manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel])
+  manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel], home=installation_home())
   original_rename = Path.rename
 
   def rename_after_competitor_wins(source: Path, target: Path):
@@ -488,7 +507,7 @@ def test_bundle_persistence_reuses_a_concurrent_winner(monkeypatch, tmp_path):
 def test_bundle_persistence_propagates_unexpected_rename_errors(monkeypatch, tmp_path):
   wheel = tmp_path / 'demo.whl'
   wheel.write_bytes(b'wheel')
-  manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel])
+  manifest = runtime_bundle._manifest('3.12', ['a==1'], [wheel], home=installation_home())
 
   def refuse_rename(_source: Path, _target: Path):
     raise OSError(errno.EACCES, 'permission denied')
@@ -529,6 +548,8 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
       (Path(command[-1]) / 'bin').mkdir(parents=True)
       (Path(command[-1]) / 'bin' / 'python').touch()
       (Path(command[-1]) / 'bin' / 'summon').touch()
+    elif command[0] == 'sh':
+      subprocess.run(command, check=True)
     elif command[0] == 'mkdir':
       Path(command[1]).mkdir()
     elif command[0] == 'ln':
@@ -540,8 +561,9 @@ def test_materializer_installs_exact_snapshot_checks_closure_and_builds_shims(
   host = bundle / 'host'
   host.mkdir()
 
-  runtime_bundle._materialize(bundle, host, sys.executable)
+  runtime_bundle._materialize(bundle, host, sys.executable, home='root-home')
 
+  assert (host / 'venv' / 'bro-installation-home').read_text() == 'root-home\n'
   assert commands[0][:4] == ['uv', 'venv', '--python', sys.executable]
   assert '--no-deps' in commands[1]
   assert str(bundle / 'pins.txt') in commands[1]
@@ -617,6 +639,7 @@ def test_container_materialization_and_preflight_settle_once_per_bundle(
 ):
   root = tmp_path / ('a' * 64)
   (root / 'wheels').mkdir(parents=True)
+  (root / 'bundle.json').write_text(json.dumps({'home': 'root-home'}))
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   preflights: list[str] = []
   calls, launches, materialized = _fake_container_docker(monkeypatch, [None])
@@ -625,6 +648,7 @@ def test_container_materialization_and_preflight_settle_once_per_bundle(
     bundle.materialize_container('runtime-image', preflight=lambda: preflights.append('ran'))
     bundle.materialize_container('runtime-image', preflight=lambda: preflights.append('ran'))
 
+  assert materialized[0][1]['home'] == 'root-home'
   assert len(materialized) == 1
   assert preflights == ['ran']
   assert caplog.text.count(f'materializing runtime bundle {bundle.hash[:12]}') == 1
@@ -651,6 +675,7 @@ def test_a_volume_the_marker_was_not_written_for_is_materialized_again(monkeypat
   """
   root = tmp_path / ('a' * 64)
   (root / 'wheels').mkdir(parents=True)
+  (root / 'bundle.json').write_text(json.dumps({'home': 'root-home'}))
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   held: list[str | None] = [None]
   _calls, _launches, materialized = _fake_container_docker(monkeypatch, held)
@@ -755,7 +780,7 @@ def test_resolver_holds_the_bundle_lock(monkeypatch, tmp_path):
 
 def test_hash_resolver_holds_the_existing_bundle_lock(monkeypatch, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
-  manifest = runtime_bundle._manifest('3.12', [], [])
+  manifest = runtime_bundle._manifest('3.12', [], [], home=installation_home())
   root = runtime_bundle._persist_bundle(tmp_path, manifest, [])
 
   with runtime_bundle.resolve_runtime_bundle(root.name) as bundle:
@@ -767,7 +792,7 @@ def test_hash_resolver_holds_the_existing_bundle_lock(monkeypatch, tmp_path):
 
 def test_the_bundle_hold_survives_the_holders_exec(tmp_path):
   data_home = tmp_path / 'data'
-  manifest = runtime_bundle._manifest('3.12', [], [])
+  manifest = runtime_bundle._manifest('3.12', [], [], home=installation_home())
   root = runtime_bundle._persist_bundle(data_home / 'ride', manifest, [])
   waiter = 'import sys; print("held", flush=True); sys.stdin.readline()'
   holder = (
@@ -797,7 +822,7 @@ def test_the_bundle_hold_survives_the_holders_exec(tmp_path):
 def test_a_freeze_from_inside_a_frozen_bundle_resolves_that_bundle(monkeypatch, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   monkeypatch.setattr(runtime_bundle, '_classify_installation', lambda: ('3.12', ['a==1'], []))
-  manifest = runtime_bundle._manifest('3.12', ['a==1'], [])
+  manifest = runtime_bundle._manifest('3.12', ['a==1'], [], home=installation_home())
   root = runtime_bundle._persist_bundle(tmp_path, manifest, [])
   (root / 'host' / 'venv').mkdir(parents=True)
   monkeypatch.setattr(runtime_bundle.sys, 'prefix', str(root / 'host' / 'venv'))
@@ -1085,3 +1110,14 @@ def test_runtime_reexec_is_a_noop_inside_the_named_runtime(tmp_path, monkeypatch
     lambda *_args: pytest.fail('the runtime must not re-exec itself again'),
   )
   runtime_bundle.reexec_from_runtime(str(root), ['ride', 'list'])
+
+
+def test_the_installation_home_partitions_frozen_bundle_identity(installation_environment):
+  marker = installation_environment / 'bro-installation-home'
+  marker.write_text('first-home\n')
+  first = runtime_bundle._manifest('3.12', [], [], home=installation_home())
+  marker.write_text('second-home\n')
+  second = runtime_bundle._manifest('3.12', [], [], home=installation_home())
+  assert first['home'] == 'first-home'
+  assert second['home'] == 'second-home'
+  assert runtime_bundle._bundle_hash(first) != runtime_bundle._bundle_hash(second)

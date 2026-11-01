@@ -378,6 +378,8 @@ PYTEST_FILES = [
   'ride/ride/workspace/model_test.py',
   'bro/workspace/paths_test.py',
   'bro/workspace/project_test.py',
+  'bro/workspace/settings_test.py',
+  'bro/workspace/installation_test.py',
   'bro/workspace/session_test.py',
   'ride/ride/workspace/spawn_test.py',
   'ride/ride/workspace/store_test.py',

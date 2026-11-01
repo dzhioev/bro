@@ -56,7 +56,8 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
   every console script relocated to find the interpreter beside itself,
   ride's shim farm over the session commands,
   and runtime assets installed by the bundle’s own registered harnesses.
-  Its manifest records those inputs plus each harness’s files and checksums and gives the bundle a content-derived identity.
+  Its manifest records the `benchmark` installation home and those inputs plus each harness’s files and checksums and gives the bundle a content-derived identity.
+  The bundle writes its installation-home marker beside the interpreter's environment.
   `Bundle` is the layout a consumer addresses — interpreter, scripts, shim farm, manifest, and identity;
   `built(root)` reports a stale, incomplete, or malformed bundle rather than building one behind the caller's back;
   `cached(workspace, root)` builds a stale one first and refuses the rest

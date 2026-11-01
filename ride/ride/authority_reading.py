@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,11 +13,14 @@ from typing import TYPE_CHECKING, Any, cast
 from bro.authority.authority import Authority
 from bro.authority.rules import Declaration, Rules
 from bro.authority.syntax import Layer, Syntax, parse_layer
-from bro.base import configs, credentials, host_config, log
+from bro.base import credentials, host_config, log
 from bro.bro import BaseBro
-from bro.harness import Harness, harness_name
+from bro.harness import Harness
 from bro.llm import providers
 from bro.llm.llm import Recipe
+from bro.workspace.installation import installation_home
+from bro.workspace.project import project_config_from_text
+from bro.workspace.settings import HomeSettings, home_settings
 
 if TYPE_CHECKING:
   from ride.repository import Repository
@@ -40,55 +42,16 @@ def _object(value: object, where: str, allowed: set[str] | None = None) -> dict[
   return value
 
 
-def _strings(value: object, where: str) -> tuple[str, ...]:
-  if not isinstance(value, list) or any(type(item) is not str or not item for item in value):
-    raise ValueError(f'{where} must be a list of non-empty strings')
-  return tuple(value)
-
-
-def _positive(value: object, where: str) -> int:
-  if type(value) is not int or value <= 0:
-    raise ValueError(f'{where} must be a positive integer')
-  return value
-
-
 @dataclass(frozen=True)
 class Policy:
   layer: Layer = Layer()
   picks: Mapping[str, str] = field(default_factory=dict)
   recipes: tuple[str, ...] | None = None
   source: str = ''
-  repository: bool = False
+  home_settings: bool = False
 
   def __post_init__(self) -> None:
     object.__setattr__(self, 'picks', MappingProxyType(dict(self.picks)))
-
-
-def _policy(value: object, where: str, *, bro: bool = False, repository: bool = False) -> Policy:
-  allowed = {'grant', 'revoke', 'limit'} | ({'llm', 'creds'} if bro else {'creds'})
-  data = _object(value, where, allowed)
-  picks = credentials.parse_picks(data.get('creds', []), where=where, field='creds')
-  if repository and picks:
-    raise ValueError('[tool.bro] cannot choose credential instances')
-  recipes = None
-  if 'llm' in data:
-    recipes = _strings(data['llm'], where + '.llm')
-    if not recipes or 'default' in recipes[:-1]:
-      raise ValueError(f'{where}: recipes must be non-empty, with default last')
-    for recipe in recipes:
-      if recipe != 'default':
-        providers.parse(recipe)
-  return Policy(
-    parse_layer(
-      grant=_strings(data.get('grant', []), where + '.grant'),
-      revoke=_strings(data.get('revoke', []), where + '.revoke'),
-      limit=_strings(data.get('limit', []), where + '.limit'),
-    ),
-    picks,
-    recipes,
-    where,
-    repository,
-  )
 
 
 @dataclass(frozen=True)
@@ -272,7 +235,9 @@ class Reading:
   installation: Installation
   attachment: host_config.Attachment | None = None
   project: Mapping[str, Any] = field(default_factory=dict)
-  project_policy: Policy = Policy()
+  home_policy: Policy = Policy()
+  settings: HomeSettings = HomeSettings()
+  home: str = field(default_factory=installation_home)
   derived: dict[str, Any] = field(default_factory=dict, init=False, repr=False, compare=False)
 
   def __post_init__(self) -> None:
@@ -307,45 +272,29 @@ class Reading:
     index = Path(directory) / credentials.STORE_FILE
     data = _object(json.loads(index.read_text()), str(index)) if index.is_file() else {}
     defaults = credentials.parse_picks(data.get('defaults', []), where=str(index), field='defaults')
+    home = installation_home()
+    settings = home_settings(home)
     project = {}
     attachment = None
     if repository is not None:
       attachment = attachment_identities(repository.identity)
       content = repository.read_file('pyproject.toml')
       if content is not None:
-        project = tomllib.loads(content.decode()).get('tool', {}).get('bro', {})
-        _object(project, '[tool.bro]')
-        allowed = {
-          'default',
-          'harness',
-          'summon-harness',
-          'image-repository',
-          'build-context-command',
-          'summon-depth',
-          'grant',
-          'revoke',
-          'limit',
-          'creds',
-        }
-        unknown = {
-          key
-          for key, value in project.items()
-          if key not in allowed and not isinstance(value, dict)
-        }
-        if unknown:
-          raise ValueError(f'[tool.bro]: unknown keys {sorted(unknown)}')
-        for key in ('harness', 'summon-harness'):
-          if key in project:
-            harness_name(project[key])
-        if 'summon-depth' in project:
-          _positive(project['summon-depth'], '[tool.bro].summon-depth')
-    policy = _policy(
-      {key: project[key] for key in ('grant', 'revoke', 'limit', 'creds') if key in project},
-      '[tool.bro]',
-      repository=True,
+        project = project_config_from_text(content.decode(), repository.identity).sections
+    policy = Policy(
+      parse_layer(grant=settings.grant, revoke=settings.revoke, limit=settings.limit),
+      source=f'{home} home settings',
+      home_settings=True,
     )
     result = cls(
-      configuration, defaults, installation or Installation.take(), attachment, project, policy
+      configuration,
+      defaults,
+      installation or Installation.take(),
+      attachment,
+      project,
+      policy,
+      settings,
+      home,
     )
     result.resolve(policy)
     return result
@@ -359,27 +308,31 @@ class Reading:
     return Rules(self.installation.declarations)
 
   @property
+  def default_bro(self) -> str:
+    if self.settings.default_bro is None:
+      raise ValueError('no default bro: pass a bro or set default-bro in home settings')
+    return self.settings.default_bro
+
+  @property
   def harness(self) -> str | None:
-    return self.project.get('harness', self.configuration.raw.get('harness'))
+    return self.settings.harness or self.configuration.raw.get('harness')
 
   @property
   def summon_harness(self) -> str | None:
-    return self.project.get('summon-harness', self.configuration.raw.get('summon-harness'))
+    return self.settings.summon_harness or self.configuration.raw.get('summon-harness')
 
   def resolve_harness(self, selected: str | None = None, *, summon: bool = False) -> str:
     name = selected if selected is not None else self.summon_harness if summon else self.harness
     if name is None:
       key = 'summon-harness' if summon else 'harness'
       raise ValueError(
-        f'no harness: pass --harness, set [tool.bro] {key}, or set "{key}" in ~/.bro.json'
+        f'no harness: pass --harness, set home settings {key}, or set "{key}" in ~/.bro.json'
       )
     return name
 
   @property
   def summon_depth(self) -> int:
-    return self.configuration.raw.get(
-      'summon-depth', self.project.get('summon-depth', configs.DEFAULT_SUMMON_DEPTH)
-    )
+    return self.configuration.raw.get('summon-depth', self.settings.summon_depth)
 
   def layers(self, target: str) -> tuple[Policy, ...]:
     matches = []
@@ -390,7 +343,7 @@ class Reading:
           if match is not None:
             matches.append(match)
     return (
-      self.project_policy,
+      self.home_policy,
       self.configuration.defaults,
       *(match.policy for match in matches),
       *(match.bros[target] for match in matches if target in match.bros),
@@ -412,7 +365,7 @@ class Reading:
     unknown = policy.picks.keys() - self.installation.credential_kinds
     if unknown:
       raise ValueError(f'{policy.source}: unknown credential kinds {sorted(unknown)}')
-    if policy.repository:
+    if policy.home_settings:
       for entry in (*policy.layer.grant, *policy.layer.revoke, *policy.layer.limit):
         options = [entry.permission.option]
         options.extend(
@@ -421,7 +374,7 @@ class Reading:
           for condition in pattern.conditions
         )
         if any(option is not None and option.startswith('cred.') for option in options):
-          raise ValueError('[tool.bro] cannot name credential instances')
+          raise ValueError('home settings cannot name credential instances')
     return self.syntax.layer(policy.layer)
 
   def operator(self) -> Authority:

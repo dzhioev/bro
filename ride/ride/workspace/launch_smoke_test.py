@@ -3,23 +3,21 @@ container prepared from it must reach running state.
 
 Drives the real host docker daemon through the production entry points: runtime
 bundle resolution, runtime/project image builds, volume materialization,
-`prepare_container`, and `docker start`. The images use repositories owned by the
-test and both tags are removed before resolution, forcing the cold-build path.
+`prepare_container`, and `docker start`. The images use a test runtime repository and a standalone attachment, and both
+tags are removed before resolution, forcing the cold-build path.
 """
 
 import contextlib
 import subprocess
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
-import bro.workspace.project as workspace_project
 import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
-from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import Launch
 from ride.workspace.metadata import Isolation
@@ -27,7 +25,6 @@ from ride.workspace.model import Workspace
 
 pytestmark = host_docker.HOST_DAEMON_ONLY
 
-_IMAGE_REPOSITORY = 'bro/launch-smoke-test'
 _WORKSPACE_NAME = 'launch-smoke-test'
 _READY_MARKER = '.launch-smoke-ready'
 # the session command. it marks the shared workspace mount because a container is
@@ -139,15 +136,12 @@ def isolated() -> Iterator[Isolated]:
 
 @pytest.fixture(scope='module')
 def launched(isolated: Isolated) -> Iterator[Launched]:
-  checkout = host_docker.checkout()
   with pytest.MonkeyPatch.context() as monkeypatch:
     monkeypatch.setenv('XDG_DATA_HOME', str(isolated.project.parent / 'state'))
-    config = replace(workspace_project.project_config(checkout), image_repository=_IMAGE_REPOSITORY)
-    monkeypatch.setattr(Repository, 'project_config', lambda _repository: config)
     monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/launch-smoke-runtime')
     with resolve_runtime_bundle() as bundle:
       runtime_tag = workspace_docker.runtime_image_tag(bundle.python_version)
-      project_tag = workspace_docker.project_image_tag(runtime_tag, checkout)
+      project_tag = workspace_docker.project_image_tag(runtime_tag, isolated.project)
       assert project_tag is not None
       with contextlib.ExitStack() as stack:
         stack.enter_context(_cold_image(runtime_tag))

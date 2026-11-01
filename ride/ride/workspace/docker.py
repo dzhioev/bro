@@ -264,7 +264,7 @@ def project_image_tag(runtime_image: str, project: Repository | Path) -> Optiona
   manifests = build_context.manifest_paths(repository)
   if len(manifests) == 0:
     return None
-  digest = hashlib.sha256(runtime_image.encode())
+  digest = hashlib.sha256(f'{runtime_image}\0{repository.identity}\0'.encode())
   for relative in manifests:
     content = repository.read_file(relative)
     if content is None:
@@ -272,18 +272,25 @@ def project_image_tag(runtime_image: str, project: Repository | Path) -> Optiona
     digest.update(relative.encode())
     digest.update(b'\0')
     digest.update(content)
-  return f'{repository.project_config().image_repository}:{digest.hexdigest()[:12]}'
+  return f'bro/ride-project:{digest.hexdigest()[:12]}'
 
 
 def image_present(tag: str) -> bool:
   return subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0
 
 
-def prune_superseded_images(current: str) -> None:
-  """untag unlocked predecessors from the current image repository."""
+def prune_superseded_images(current: str, *, attachment: str | None = None) -> None:
+  """Untag unlocked predecessors of a runtime or an attachment."""
   repository = current.rsplit(':', 1)[0]
   listed = subprocess.run(
-    ['docker', 'images', repository, '--format', '{{.Repository}}:{{.Tag}}'],
+    [
+      'docker',
+      'images',
+      repository,
+      *(['--filter', f'label=ride-attachment={attachment}'] if attachment is not None else []),
+      '--format',
+      '{{.Repository}}:{{.Tag}}',
+    ],
     capture_output=True,
     text=True,
   )
@@ -341,6 +348,8 @@ def build_project_image(tag: str, runtime_image: str, project: Repository | Path
       tag,
       '-f',
       build_context.DOCKERFILE_PATH,
+      '--label',
+      f'ride-attachment={as_repository(project).identity}',
       '--build-arg',
       f'RUNTIME_IMAGE={runtime_image}',
       '-',
@@ -375,7 +384,7 @@ def ensure_project_image(
       return tag
     build_project_image(tag, runtime_image, project)
     if prune:
-      prune_superseded_images(tag)
+      prune_superseded_images(tag, attachment=as_repository(project).identity)
   return tag
 
 

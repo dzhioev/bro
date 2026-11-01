@@ -21,7 +21,7 @@ dependencies = [
 "bro.webview.cli" = "bro.webview._entrypoints:bro_webview_cli"
 "webview" = "bro.webview._entrypoints:bro_webview_cli"
 
-[project.entry-points."bro"]
+[project.entry-points."bro.bros.bro"]
 browser = "bros.browser:Browser"
 
 [project.entry-points."bro.worker_types"]

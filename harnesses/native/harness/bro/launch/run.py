@@ -59,6 +59,10 @@ def add_resolved_llm_flag(parser: base_args.Parser) -> None:
 def launch_llm_spec(bro_name: str, args: dict) -> Optional[Recipe]:
   """The run's recipe override: `--resolved-llm` verbatim, else the selection over the declaration."""
   from bro.llm import wires
+  from bro.workspace.installation import installation_home
+  from bro.workspace.settings import home_settings
+
+  home_settings(installation_home())
 
   encoded = args['resolved_llm']
   if encoded is None:
@@ -96,7 +100,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
   try:
     bro = create_bro(args['bro'], launch_llm_spec(args['bro'], args))
-  except (KeyError, NotImplementedError, LLMSelectionError) as error:
+  except (KeyError, NotImplementedError, ValueError) as error:
     log.error('%s', error)
     return 1
 

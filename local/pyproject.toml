@@ -34,7 +34,7 @@ bro = { workspace = true }
 bro-dev = { workspace = true }
 bro-filetypes = { workspace = true }
 
-[project.entry-points.bro]
+[project.entry-points."bro.bros.bro"]
 bro-dev = "bros.bro_dev:BroDev"
 bro-eyebro = "bros.bro_eyebro:BroEyebro"
 bro-watch-probe = "bros.bro_watch_probe:BroWatchProbe"
@@ -60,3 +60,6 @@ wheel-exclude = [
   "**/AGENTS.md",
   "**/*.egg-info",
 ]
+
+[project.entry-points."bro.settings"]
+bro = "bro.local"

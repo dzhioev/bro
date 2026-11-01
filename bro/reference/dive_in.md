@@ -52,7 +52,7 @@ Unboxed sessions have no container boundary, so the guided default retains permi
 
 ## Bro and launch flags
 
-`dive-in` resolves the project's default bro itself when `--bro` is omitted, because `ride along` requires the bro positional.
+`dive-in` resolves the installation's `default-bro` itself when `--bro` is omitted, because `ride along` requires the bro positional.
 It forwards `--boxed`,
 `--unboxed`,
 `--hold`,

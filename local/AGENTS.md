@@ -12,6 +12,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 
 ## Components
 
+- `bro/local/bro-settings.toml` — the `bro` home's packaged launch settings
 - `bros/` — this checkout's developer and reviewer persona declarations, `bro-watch-probe` for shell conformance, and `bro-file-probe` for file-reading conformance.
 - `bro/local/prompts.py` — framework-project context shared by those personas.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.

@@ -9,7 +9,8 @@ conditions on them follow `conditions.md`, and the text they carry follows `temp
 
 A distribution contributes through these `[project.entry-points]` groups of its `pyproject.toml`:
 
-- `bro` — personas, `<name> = "<module>:<ClassName>"` ("Registering a bro" below)
+- `bro.bros.<home>` — personas belonging to `<home>`, `<name> = "<module>:<ClassName>"` ("Registering a bro" below)
+- `bro.settings` — home settings, `<home> = "<package>"`, read as that package's `bro-settings.toml` resource ("Home settings" below)
 - `bro.toolsets` — standalone MCP toolsets, each entry named after its namespace and targeting its module's `toolset` object ("Adding a toolset" below)
 - `bro.mcp.targets` — assembled target prefixes;
   each resolver accepts the value after `<prefix>:` and returns live MCP servers
@@ -199,12 +200,41 @@ here-documents, here-strings, descriptor duplication and closure, and `/dev/null
 
 ## Registering a bro
 
-Register the class under the distribution's `bro` entry-point group, `your-name = "your.module:YourBro"`, and sync ("Entry-point groups" above).
+Register the class under the distribution's `bro.bros.<home>` entry-point group, `your-name = "your.module:YourBro"`, and sync ("Entry-point groups" above).
 There is no auto-discovery:
 the entry is what makes `create_bro('your-name')` resolve wherever the distribution is installed, and its key must equal the class's `name`, which the registry validates when it lazily imports the module.
-Two installed distributions claiming one name fail the registry rather than letting import order decide.
+The group names the bro's home; a distribution may contribute bros to several homes.
+Two entries claiming one bro name, even across homes, fail the registry naming both distributions rather than letting import order decide.
 Package-relative spells and MRO-resolved `tools` declarations work across distributions.
-Project launch defaults (`[tool.bro] default`, image repository) are documented in `bro/reference/ride.md`, "Per-project defaults".
+`bro show` reports the bro's home.
+
+## Home settings
+
+A home may ship settings without registering bros, and register bros without shipping settings.
+Register one settings package for a home:
+
+```toml
+[project.entry-points."bro.settings"]
+my-home = "my_project"
+```
+
+Include `my_project/bro-settings.toml` in the wheel as package data.
+Its launch keys are documented in [ride](ride.md#home-settings).
+A home without an entry ships no settings.
+Two installed entries for the same home's settings refuse every launch, naming both distributions.
+Only the installation's home settings are read.
+
+An installation names its home in `<environment>/bro-installation-home`, at `sys.prefix`, holding a `[a-z][a-z0-9-]*` name and a final newline.
+The home need not declare any bros or settings.
+The environment's setup writes the marker after syncing; for example:
+
+```bash
+printf 'my-home\n' > .venv/bro-installation-home
+```
+
+A missing or malformed marker refuses a launch, naming the path and the command to write it.
+Frozen runtime bundles carry the home in their manifest and write the marker into both host and container environments.
+An in-process `bro run` or `bro chat` reads its live environment's marker.
 
 ## Adding a data source
 
