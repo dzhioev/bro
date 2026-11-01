@@ -69,14 +69,16 @@ ecr_login() {
 }
 
 _stage_workspace_wheels() {
-  local checkout="$1" declaration="$2" output_directory="$3" packages package
-  packages="$(python3 - "$checkout" "$declaration" <<'PYTHON'
+  local checkout="$1" output_directory="$2" packages package
+  shift 2
+  packages="$(python3 - "$checkout" "$@" <<'PYTHON'
 import sys
 from pathlib import Path
 
 from bro.oops.wheel_staging import wheel_packages
 
-print('\n'.join(wheel_packages(Path(sys.argv[1]), Path(sys.argv[2]))))
+declaration = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+print('\n'.join(wheel_packages(Path(sys.argv[1]), declaration)))
 PYTHON
 )" || return
   while read -r package; do
@@ -86,20 +88,22 @@ PYTHON
 }
 
 stage_bro_wheel() {
-  if [ "$#" -ne 1 ]; then
-    echo "usage: stage_bro_wheel <entries-json>" >&2
+  if [ "$#" -gt 1 ]; then
+    echo "usage: stage_bro_wheel [declaration-json]" >&2
     return 2
   fi
-  local repository_root output_directory declaration checkout source_data url revision description
-  local -a source_parts
-  declaration="$(realpath "$1")"
+  local repository_root output_directory checkout source_data url revision description
+  local -a source_parts declaration=()
+  if [ "$#" -eq 1 ]; then
+    declaration=("$(realpath "$1")")
+  fi
   repository_root="$(git rev-parse --show-toplevel)"
   output_directory="${repository_root}/${_BRO_WHEEL_CONTEXT_DIRECTORY}"
   mkdir -p "$output_directory"
   find "$output_directory" -maxdepth 1 -type f -name '*.whl' -delete
 
   if _framework_checkout "$repository_root"; then
-    _stage_workspace_wheels "$repository_root" "$declaration" "$output_directory" || return
+    _stage_workspace_wheels "$repository_root" "$output_directory" "${declaration[@]}" || return
     description="the framework working tree"
   else
     source_data="$(_locked_bro_source "$repository_root")" || return
@@ -111,7 +115,7 @@ stage_bro_wheel() {
       trap 'rm -rf "$checkout"' EXIT
       git clone --quiet --filter=blob:none "$url" "$checkout" || exit
       git -C "$checkout" checkout --quiet --detach "$revision" || exit
-      _stage_workspace_wheels "$checkout" "$declaration" "$output_directory"
+      _stage_workspace_wheels "$checkout" "$output_directory" "${declaration[@]}"
     ) || return
     description="${url}@${revision}"
   fi
@@ -137,9 +141,14 @@ prepare_image_build() {
     echo "usage: prepare_image_build <dockerfile> [buildx-argument ...]" >&2
     return 2
   fi
-  local dockerfile="$1"
+  local dockerfile="$1" declaration
   shift
-  stage_bro_wheel "$(dirname "$dockerfile")/entries.json"
+  declaration="$(dirname "$dockerfile")/entries.json"
+  if [ -e "$declaration" ]; then
+    stage_bro_wheel "$declaration"
+  else
+    stage_bro_wheel
+  fi
   ensure_server_base "$dockerfile" "$@"
 }
 

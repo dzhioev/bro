@@ -12,6 +12,8 @@ dependencies = [
   "bro-openai",
   "bro",
   "bro-dev",
+  "packaging==26.3",
+  "pydantic",
 ]
 
 [project.scripts]

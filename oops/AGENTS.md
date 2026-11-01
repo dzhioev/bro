@@ -11,7 +11,7 @@ The root repository owns formatting, lint, typing, packaging policy, and the tes
 - `bro/oops/mcp.py` — `infra` MCP operations over the repository's registered targets
 - `bros/devoops/` — the operations persona and its target-driven deploy spell
 - `bro/oops/config.py` — resolves the `infra` credential into typed deployment configuration and neutral defaults
-- `bro/oops/wheel_staging.py` — finds the workspace distributions providing an image's declared format and wire entries
+- `bro/oops/wheel_staging.py` — resolves an image's framework declaration to the workspace distributions it stages
 - `bro/oops/infra/deploy_lib.sh` — sourceable image-build, ECR, CodeBuild, wheel-staging, and CDK helpers
 - `bro/oops/infra/monitor_ecs.sh` — ECS deployment-state monitor
 - `bro/oops/infra/buildspec.yml` — consumer-configured CodeBuild image-build pattern

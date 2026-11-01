@@ -580,6 +580,8 @@ dependencies = [
     { name = "bro" },
     { name = "bro-dev" },
     { name = "bro-openai" },
+    { name = "packaging" },
+    { name = "pydantic" },
 ]
 
 [package.metadata]
@@ -587,6 +589,8 @@ requires-dist = [
     { name = "bro", editable = "." },
     { name = "bro-dev", editable = "dev" },
     { name = "bro-openai", editable = "llms/openai" },
+    { name = "packaging", specifier = "==26.3" },
+    { name = "pydantic" },
 ]
 
 [[package]]
