@@ -1,5 +1,6 @@
 from typing import Optional
 
+from bro import registry
 from bro.base.condition import Condition
 from bro.bro import BaseBro
 from bro.harness import get_harness, installed_harness_names
@@ -10,6 +11,8 @@ async def format_card(bro: BaseBro, *, system_prompt_hold: Optional[str] = None)
   """the bro's info card, closing on the system prompt it runs under
   `system_prompt_hold` when one is given."""
   parts = [f'# {bro.name}', '', bro.description, '']
+  if (home := registry.home(bro.name)) is not None:
+    parts.append(f'Home: `{home}`')
   parts.extend(_identity_lines(bro))
   reach = bro.reach()
 

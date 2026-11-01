@@ -44,7 +44,7 @@ dependencies = [
 "poll-pr" = "bro.dev._entrypoints:bro_extra_github_poll_pr"
 "pr-state" = "bro.dev._entrypoints:bro_extra_github_pr_state"
 
-[project.entry-points.bro]
+[project.entry-points."bro.bros.bro"]
 dev = "bros.dev:Dev"
 eyebro = "bros.eyebro:Eyebro"
 lead = "bros.lead:Lead"

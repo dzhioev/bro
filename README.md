@@ -322,17 +322,14 @@ class Reviewer(Eyebro):
   features = {'github': True}
 ```
 
-Registration is three entry points and a default:
+Registration names each bro's home:
 
 ```toml
 # pyproject.toml
-[project.entry-points.bro]
+[project.entry-points."bro.bros.example"]
 triage = "bros.triage:Triage"
 fixer = "bros.fixer:Fixer"
 reviewer = "bros.reviewer:Reviewer"
-
-[tool.bro]
-default = "triage"
 ```
 
 The persona is the same on every harness:

@@ -2,6 +2,7 @@ import importlib.metadata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import ClassVar, Optional
+from unittest.mock import Mock
 
 import pytest
 
@@ -167,8 +168,12 @@ class TestAutoload:
       get_class('dev')
 
 
-def _entry_point(name: str, value: str) -> importlib.metadata.EntryPoint:
-  return importlib.metadata.EntryPoint(name, value, bro.registry._ENTRY_POINT_GROUP)
+def _entry_point(
+  name: str, value: str, home: str = 'example', distribution: str = 'example-distribution'
+) -> importlib.metadata.EntryPoint:
+  entry = importlib.metadata.EntryPoint(name, value, f'bro.bros.{home}')
+  object.__setattr__(entry, 'dist', Mock(metadata={'Name': distribution}))
+  return entry
 
 
 class TestDeclaredSpecs:
@@ -178,16 +183,16 @@ class TestDeclaredSpecs:
   def enable_autoload(self):
     bro.registry._autoload = True
 
-  def test_entry_points_use_the_bro_group(self, monkeypatch):
-    calls: list[dict] = []
-
-    def entry_points(**kwargs):
-      calls.append(kwargs)
-      return ()
-
-    monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
-    assert bro.registry._entry_points() == ()
-    assert calls == [{'group': 'bro'}]
+  def test_entry_points_read_all_home_groups_without_loading_modules(self, monkeypatch):
+    first = _entry_point('first', 'unimportable:First', 'one')
+    second = _entry_point('second', 'unimportable:Second', 'two')
+    entries = importlib.metadata.EntryPoints(
+      [first, second, importlib.metadata.EntryPoint('old', 'unimportable:Old', 'bro')]
+    )
+    monkeypatch.setattr(importlib.metadata, 'entry_points', lambda: entries)
+    assert bro.registry.declared_specs() == {'first': first.value, 'second': second.value}
+    assert bro.registry.home('first') == 'one'
+    assert bro.registry.home('second') == 'two'
 
   def test_get_class_resolves_a_declared_entry_point(self, monkeypatch):
     monkeypatch.setattr(
@@ -213,10 +218,12 @@ class TestDeclaredSpecs:
       '_entry_points',
       lambda: (
         _entry_point('external', 'bro.registry_test:ExternalBro'),
-        _entry_point('external', 'other.module:Other'),
+        _entry_point('external', 'other.module:Other', 'another', 'second-distribution'),
       ),
     )
-    with pytest.raises(ValueError, match='duplicate bro'):
+    with pytest.raises(
+      ValueError, match='duplicate bro.*example-distribution.*second-distribution'
+    ):
       bro.registry.known_names()
 
   def test_a_declared_name_over_the_length_bound_raises_before_import(self, monkeypatch):

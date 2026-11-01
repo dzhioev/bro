@@ -121,7 +121,7 @@ bro-local = { workspace = true }
 "usage" = "bro._entrypoints:bro_llm_usage"
 "watch-run" = "bro._entrypoints:bro_watch_run"
 
-[project.entry-points.bro]
+[project.entry-points."bro.bros.bro"]
 bro = "bros.bro:Bro"
 
 [project.entry-points."bro.credential_sources"]
@@ -131,11 +131,6 @@ github_app = "bro.extra.github.app:Source"
 artifact = "bro.artifact_mcp:toolset"
 brog = "bro.brog.mcp:toolset"
 file = "bro.files.mcp:toolset"
-
-[tool.bro]
-default = "bro-dev"
-harness = "claude"
-summon-harness = "bro"
 
 [tool.bro.devoops]
 target-registry = "oops.deploy_targets:registry"

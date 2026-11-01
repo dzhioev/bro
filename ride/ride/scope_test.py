@@ -15,6 +15,7 @@ from bro.harness import Harness
 from bro.mcp import MCPServerSpec, ToolLayer, creds
 from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
+from bro.workspace.settings import HomeSettings
 from ride import scope
 from ride.authority_reading import Configuration, HarnessReading, Installation, Policy, Reading
 from ride.workspace.store import ScopedSecrets
@@ -87,8 +88,8 @@ def _reading(installation, configuration=None, project=None):
     Configuration.parse(configuration or {}),
     {},
     installation,
-    project={'summon-harness': 'test'},
-    project_policy=project or Policy(),
+    settings=HomeSettings(summon_harness='test'),
+    home_policy=project or Policy(),
   )
 
 

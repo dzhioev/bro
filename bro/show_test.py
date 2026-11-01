@@ -1,10 +1,11 @@
+import importlib.metadata
 from typing import ClassVar
 
 import pytest
 
 import bro.native.echo_declaration as llm_llms_echo
 import bro.openai.declaration as llm_llms_openai
-from bro import mcp
+from bro import mcp, registry
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.mcp import FunctionTool, InProcessMCPServer
@@ -72,6 +73,15 @@ class _FullBro(BaseBro):
 
 
 class TestFormatCard:
+  @pytest.mark.asyncio
+  async def test_card_reports_the_registered_home(self, monkeypatch):
+    entry = importlib.metadata.EntryPoint(
+      _MinimalBro.name, 'unimported:Bro', 'bro.bros.external-home'
+    )
+    monkeypatch.setattr(registry, '_entry_points', lambda: (entry,))
+    card = await format_card(_MinimalBro())
+    assert 'Home: `external-home`' in card
+
   @pytest.mark.asyncio
   async def test_header_includes_name_and_description(self):
     card = await format_card(_MinimalBro())

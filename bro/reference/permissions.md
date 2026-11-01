@@ -186,7 +186,7 @@ A bro's base folds these layers in order:
    There is one entry per configured kind and instance, whose use pattern carries a `configured=<kind>+<instance>` condition decided against the concrete start;
    the family is fixed by the reading, independent of `add` and `drop`, and does not grow with targets, harnesses, or providers.
 2. The persona's `may_summon` entries as `@<bro>`, and its `may_launch` entries as type start permissions, with full use and give.
-3. Repository `[tool.bro]`, host `defaults`, matching project URL, project path, URL `bros.<target>`, then path `bros.<target>`.
+3. Installation home settings, host `defaults`, matching project URL, project path, URL `bros.<target>`, then path `bros.<target>`.
 
 Each configuration layer applies `revoke` and `limit` caps first, then its `grant` entries.
 A later layer can therefore restore an earlier removed right.
@@ -197,7 +197,7 @@ A plain grant in a base gives full use and give.
 On a summon, a plain grant instead forwards full use with the starter's own recipients for that permission; a qualified grant supplies exactly its clauses, bounded by the gift rule.
 Bare credential kinds in grants/revokes become `add`/`drop`, not gifts/caps over credential option atoms.
 
-Repository policy cannot choose host instances: `[tool.bro]` refuses credential-instance permissions and picks.
+Home settings cannot choose host instances: they refuse credential-instance permissions and picks.
 Host project and bro entries may contain `creds`; host `defaults` may not.
 A bro-specific pick must name a configured kind still held after its policy layers; a later request grant cannot validate an otherwise invalid bro-specific pick.
 Unknown types, options, and kinds fail only launches whose applicable layers name them; syntax is checked throughout the host config.

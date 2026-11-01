@@ -66,6 +66,7 @@ from bro.broker.dispatcher import Broker, Dispatcher, ping_handler, spawn_test_h
 from bro.broker.runtime import Peer
 from bro.broker.transports.tcp import TcpServerTransport, parse_address
 from bro.worker_types import WorkerType
+from bro.workspace.installation import installation_home
 from ride.authority_launch import request as authority_request
 from ride.authority_reading import Reading
 from ride.bro_worker import BroType
@@ -104,7 +105,7 @@ def _root_mission(
 ) -> Mission:
   reading = Reading.take(repository)
   if depth is not None:
-    reading = replace(reading, project={**reading.project, 'summon-depth': depth})
+    reading = replace(reading, settings=replace(reading.settings, summon_depth=depth))
   if types is not None:
     reading = replace(
       reading,
@@ -194,6 +195,8 @@ import os, sys, time
 from pathlib import Path
 
 from bro.broker.transports.tcp import parse_address
+from bro.workspace.installation import installation_home
+assert installation_home() == os.environ["RIDE_E2E_HOME"]
 channel = os.environ.get('BROKER_CHANNEL')
 assert channel, 'the launch carried no channel'
 assert os.environ.get('BROKER_UPSTREAM') is None, 'the broxy did not consume its upstream'
@@ -613,6 +616,7 @@ if os.environ.get('RIDE_E2E_LOCAL_TRAILS') == '1':
 launch = Launch(name=name,
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']),
                 env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
+                     'RIDE_E2E_HOME': os.environ['RIDE_E2E_HOME'],
                      'RIDE_BRO': 'bro-dev',
                      'RIDE_COMMAND': 'ride along bro-dev',
                      ISOLATION_ENV: workspace.isolation.value,
@@ -773,9 +777,17 @@ def isolated_env() -> Iterator[IsolatedEnv]:
 
 
 @pytest.fixture(autouse=True)
-def route_environment(isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch) -> None:
+def route_environment(
+  isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, installation_environment
+) -> None:
   from bro.base import configs, credentials
+  from bro.workspace import installation
 
+  monkeypatch.setattr(
+    installation,
+    'ENVIRONMENT',
+    isolated_env.runtime_root / 'runtime' / isolated_env.runtime_bundle_hash / 'host' / 'venv',
+  )
   monkeypatch.setenv('HOME', str(isolated_env.home))
   monkeypatch.setenv('XDG_DATA_HOME', str(isolated_env.data_home))
   monkeypatch.setattr(configs, 'STORE_DIR', str(isolated_env.home / '.bro'))
@@ -819,6 +831,7 @@ class _Driver:
     driver_env = {k: v for k, v in os.environ.items() if not k.startswith(('RIDE_', 'BROKER_'))}
     driver_env['HOME'] = str(env.home)
     driver_env['RIDE_E2E_NAME'] = name
+    driver_env['RIDE_E2E_HOME'] = installation_home()
     driver_env['RIDE_E2E_COMMAND'] = json.dumps(command)
     driver_env['RIDE_E2E_IMAGE'] = env.image
     driver_env['RIDE_E2E_RUNTIME_IMAGE'] = env.runtime_image
@@ -2079,13 +2092,10 @@ channel.close()
 """
 
 
-def _permission_repository(env: IsolatedEnv, suffix: str, policy: dict | None = None) -> Repository:
+def _permission_repository(env: IsolatedEnv, suffix: str) -> Repository:
   directory = env.root / f'permission-project-{suffix}'
   directory.mkdir()
-  project = '[tool.bro]\n'
-  for name, values in (policy or {}).items():
-    project += f'{name} = {json.dumps(values)}\n'
-  (directory / 'pyproject.toml').write_text(project)
+  (directory / 'pyproject.toml').write_text('[project]\nname = "permission-fixture"\n')
   subprocess.run(['git', 'init', '--quiet', str(directory)], check=True)
   subprocess.run(
     ['git', 'remote', 'add', 'origin', 'https://example.test/permissions.git'],
@@ -3463,7 +3473,7 @@ Path('.permission-refusals').write_text(json.dumps(refusals))
 """
 
 
-@pytest.mark.parametrize('layer', ['host', 'project'])
+@pytest.mark.parametrize('layer', ['host', 'home'])
 def test_configuration_rules_refuse_cli_tool_and_wire_starts(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch, layer: str, register_test_bros
 ) -> None:
@@ -3484,7 +3494,15 @@ def test_configuration_rules_refuse_cli_tool_and_wire_starts(
   config = env.root / 'refusal-policy.json'
   config.write_text(json.dumps({'defaults': policy} if layer == 'host' else {}))
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
-  repository = _permission_repository(env, layer, policy if layer == 'project' else None)
+  if layer == 'home':
+    from bro.workspace.settings import home_settings
+
+    settings = home_settings(installation_home())
+    monkeypatch.setattr(
+      'ride.authority_reading.home_settings',
+      lambda home: replace(settings, limit=tuple(policy['limit'])),
+    )
+  repository = _permission_repository(env, layer)
   workspace = Workspace.ensure(f'{_NAME_PREFIX}refusals-{layer}', repository, Isolation.UNBOXED)
   mission = _root_mission(
     workspace.repository,

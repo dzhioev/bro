@@ -31,6 +31,7 @@ from bro.workspace.paths import (
   ride_trails_dir,
   workspace_dir,
 )
+from bro.workspace.settings import HomeSettings
 from ride import pending_launch
 from ride.authority_test_helper import mission, reading
 from ride.bro_worker import pending_bro
@@ -1245,6 +1246,7 @@ class TestUnboxedSession:
     runtime_root = tmp_path / 'given-runtime'
     runtime_bin = runtime_root / 'venv' / 'bin'
     runtime_bin.mkdir(parents=True)
+    (runtime_root / 'venv' / 'bro-installation-home').write_text('test-home\n')
     shim_directory = runtime_root / 'bin'
     shim_directory.mkdir()
     (runtime_bin / 'python').symlink_to(sys.executable)
@@ -1761,7 +1763,7 @@ class TestReadingAdmission:
 
   def test_resumed_child_keeps_its_recorded_harness(self, monkeypatch):
     source = reading()
-    source = replace(source, project={'summon-harness': 'bro'})
+    source = replace(source, settings=HomeSettings(summon_harness='bro'))
     requested = Request('bro', {'target': 'bro-dev'})
     spec = replace(
       _spec(resume=True), authority_request=dump_request(requested, Descriptor('bro', {}))

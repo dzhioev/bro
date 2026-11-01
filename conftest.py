@@ -97,3 +97,39 @@ def register_test_bros():
 
   for name in registered_names:
     del bro.registry._REGISTRY[name]
+
+
+@pytest.fixture(autouse=True)
+def installation_environment(monkeypatch, tmp_path):
+  from bro.workspace import installation
+
+  environment = tmp_path.parent / f'{tmp_path.name}-installation'
+  environment.mkdir()
+  (environment / installation.MARKER).write_text('test-home\n')
+  monkeypatch.setattr(installation, 'ENVIRONMENT', environment)
+  return environment
+
+
+@pytest.fixture
+def home_settings_file(monkeypatch, tmp_path):
+  import importlib.metadata
+  import sys
+
+  package_name = 'test_home_settings'
+  package = tmp_path / package_name
+  package.mkdir()
+  (package / '__init__.py').touch()
+  settings = package / 'bro-settings.toml'
+  settings.touch()
+  monkeypatch.syspath_prepend(str(tmp_path))
+  monkeypatch.delitem(sys.modules, package_name, raising=False)
+  discover = importlib.metadata.entry_points
+  entry = importlib.metadata.EntryPoint('test-home', package_name, 'bro.settings')
+
+  def entry_points(**kwargs):
+    if kwargs.get('group') == 'bro.settings':
+      return (entry,)
+    return discover(**kwargs)
+
+  monkeypatch.setattr(importlib.metadata, 'entry_points', entry_points)
+  return settings

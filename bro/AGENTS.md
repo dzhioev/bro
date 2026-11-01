@@ -33,7 +33,7 @@ A subpackage with a map of its own is pointed at, not described here.
   `create_bro` returns a fresh instance every call.
   `lineage(name)` is the names a bro answers to — its own plus every registered bro on its MRO, which is what `#may_summon`'s is-a membership tests against.
   `declared_specs()` is the one name source:
-  `name -> "module:ClassName"` read from every installed distribution's `bro` entry points, metadata only, importing nothing
+  `name -> "module:ClassName"` read from every installed distribution's `bro.bros.<home>` entry points, metadata only, importing nothing
   — two distributions claiming one name raise rather than letting import order decide.
   Lookup is lazy:
   a miss imports only the single module that declaration names, so resolving one bro never pulls in another's dependency graph;
@@ -136,7 +136,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `trails/` — the recording pipeline;
   see `trails/AGENTS.md`
 - `workspace/` — the dependency-light workspace contracts core services read;
-  see `workspace/AGENTS.md` and `reference/ride.md`, "Per-project defaults", for project and host harness selections
+  see `workspace/AGENTS.md` and `reference/ride.md`, "Home settings", for installation and host harness selections
 - `bros/bro/` — the core distribution's sole concrete persona, inside the shared PEP 420 `bros` namespace.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.
   Bros normally inherit from this `Bro`, so they pick up the shared defaults via the MRO walk;
@@ -148,7 +148,7 @@ A subpackage with a map of its own is pointed at, not described here.
   — and `spell::watch` — keeping an admitted command's lines in view through `bro::watch`, ending turns while idle, and stopping it through `bro::unwatch`.
   Development personas ship from `bro-dev`;
   `dev/AGENTS.md` maps them.
-  Consumer personas register through the `bro` entry-point group and live in their contributing packages.
+  Consumer personas register through `bro.bros.<home>` entry-point groups and live in their contributing packages.
 
 ## Running a declaration
 

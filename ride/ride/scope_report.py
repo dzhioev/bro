@@ -8,7 +8,6 @@ from typing import cast
 from bro.authority.records import dump_values
 from bro.authority.values import Strings
 from bro.base import credentials
-from bro.workspace.project import project_config
 from ride.authority_launch import mission_view, request
 from ride.authority_reading import Reading
 from ride.authority_scope import existence
@@ -26,15 +25,9 @@ def report_scope(
 ) -> int:
   try:
     repository = None if repo is None else as_repository(repo)
-    if bro is None:
-      if repository is None:
-        raise ValueError('ride scope requires --bro when detached')
-      bro = (
-        repository.project_config().default_bro
-        if repository.is_url
-        else project_config(repository.git_dir).default_bro
-      )
     reading = Reading.take(repository)
+    if bro is None:
+      bro = reading.default_bro
     harness = reading.resolve_harness(harness)
     fields = {'target': bro, 'harness': harness, **(recipe_options or {})}
     if llm is not None:

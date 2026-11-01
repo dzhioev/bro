@@ -19,7 +19,7 @@ dependencies = [
 "bro-oops-dir" = "bro.oops._entrypoints:bro_oops_assets"
 "bro.oops.assets" = "bro.oops._entrypoints:bro_oops_assets"
 
-[project.entry-points.bro]
+[project.entry-points."bro.bros.bro"]
 devoops = "bros.devoops:Devoops"
 
 [project.entry-points."bro.toolsets"]

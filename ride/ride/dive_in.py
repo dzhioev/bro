@@ -94,8 +94,8 @@ def _task_system(
   LLM selection shape the same scope the session's store hydrates. every read
   carries the launch's error surface (`launch_scope_errors`), the deferred ones
   included: the backend re-reads the config per operation, past this call."""
-  project = project_config(repo)
-  bro_name = bro if bro is not None else project.default_bro
+  reading = Reading.take(as_repository(repo))
+  bro_name = bro if bro is not None else reading.default_bro
   driver = get_harness(harness)
 
   with launch_scope_errors():
@@ -133,12 +133,14 @@ def dive_in(
   repo: Optional[Path] = None,
 ) -> int:
   """launch the session. session shaping — the bro (prompt, spells, MCP
-  namespaces) selected by `--bro` or the project default, and the harness —
+  namespaces) selected by `--bro` or the installation's default bro, and the harness —
   rides the forwarded flags; dive-in adds nothing of its own beyond binding the
   task prefetch to the same scope (`_task_system`)."""
   repo = project_root() if repo is None else repo
   try:
-    harness = Reading.take(as_repository(repo)).resolve_harness(harness)
+    reading = Reading.take(as_repository(repo))
+    bro_name = bro if bro is not None else reading.default_bro
+    harness = reading.resolve_harness(harness)
     get_harness(harness)
   except ValueError as error:
     log.error('%s', error)
@@ -183,7 +185,6 @@ def dive_in(
     name = fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
-  bro_name = bro if bro is not None else project_config(repo).default_bro
   ride_command = [
     'ride',
     'along',

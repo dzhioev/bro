@@ -24,6 +24,7 @@ from bro.broker.brotocol import request as message
 from bro.harness import Harness
 from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
+from bro.workspace.settings import HomeSettings
 from ride.authority_launch import (
   credential_values,
   credentials_for,
@@ -69,7 +70,7 @@ def source(monkeypatch, tmp_path):
     {},
     installed,
     host_config.Attachment(path='/project'),
-    {'summon-harness': 'probe'},
+    settings=HomeSettings(summon_harness='probe'),
   )
 
 

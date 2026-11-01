@@ -11,33 +11,47 @@ _REGISTRY: dict[str, type[BaseBro]] = {}
 # hand, so the real bros never bleed into list_classes().
 _autoload = True
 
-# every bro registers through this entry-point group, the framework's own no
-# differently from a consuming project's: a distribution declares
-# `[project.entry-points.bro] <name> = "<module>:<ClassName>"` and its bros
-# resolve wherever that venv is active.
-_ENTRY_POINT_GROUP = 'bro'
+_ENTRY_POINT_PREFIX = 'bro.bros.'
 
 
 def _entry_points() -> tuple[importlib.metadata.EntryPoint, ...]:
-  return tuple(importlib.metadata.entry_points(group=_ENTRY_POINT_GROUP))
+  entries = importlib.metadata.entry_points()
+  return tuple(
+    entry
+    for group in sorted(entries.groups)
+    if group.startswith(_ENTRY_POINT_PREFIX)
+    for entry in entries.select(group=group)
+  )
+
+
+def _declarations() -> dict[str, importlib.metadata.EntryPoint]:
+  from bro.workspace.installation import validate_home
+
+  declarations: dict[str, importlib.metadata.EntryPoint] = {}
+  for entry in _entry_points():
+    validate_home(entry.group.removeprefix(_ENTRY_POINT_PREFIX))
+    _validate_name(f'entry point {entry.value}', entry.name)
+    if entry.name in declarations:
+      previous = declarations[entry.name]
+      assert previous.dist is not None and entry.dist is not None
+      raise ValueError(
+        f'duplicate bro {entry.name!r}: '
+        f'{previous.dist.metadata["Name"]} ({previous.group}: {previous.value}) vs '
+        f'{entry.dist.metadata["Name"]} ({entry.group}: {entry.value})'
+      )
+    declarations[entry.name] = entry
+  return declarations
 
 
 def declared_specs() -> dict[str, str]:
-  """name -> "module:ClassName" for every bro the installed distributions declare.
+  """Read installed bro names and class references without importing their modules."""
+  return {name: entry.value for name, entry in _declarations().items()}
 
-  Reading the metadata imports no bro module, so a caller can learn which names
-  resolve without paying for any of them. Two distributions claiming one name
-  raise rather than letting import order pick a winner.
-  """
-  specs: dict[str, str] = {}
-  for entry_point in _entry_points():
-    _validate_name(f'entry point {entry_point.value}', entry_point.name)
-    if entry_point.name in specs:
-      raise ValueError(
-        f'duplicate bro {entry_point.name!r}: {specs[entry_point.name]} vs {entry_point.value}'
-      )
-    specs[entry_point.name] = entry_point.value
-  return specs
+
+def home(name: str) -> str | None:
+  """The home declaring `name`, or None for a class registered only in-process."""
+  entry = _declarations().get(name)
+  return None if entry is None else entry.group.removeprefix(_ENTRY_POINT_PREFIX)
 
 
 MAX_NAME_LENGTH = 64

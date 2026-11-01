@@ -31,6 +31,7 @@ from bro.trails.local import LocalStore
 from bro.trails.record.bro import Recorder
 from bro.trails.store import fetch_recorded_trail
 from bro.wire_chat.fixtures_test_helper import call, response
+from bro.workspace.settings import HomeSettings
 from ride import cli
 from ride.authority_launch import credentials_for, hydrate, request
 from ride.authority_reading import Configuration, Installation, Reading
@@ -249,7 +250,9 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
       for name, harness in installation.harnesses.items()
     },
   )
-  reading = Reading(Configuration.parse({}), {}, installation, None, {'summon-harness': 'bro'})
+  reading = Reading(
+    Configuration.parse({}), {}, installation, settings=HomeSettings(summon_harness='bro')
+  )
   monkeypatch.setattr(Reading, 'take', lambda repository: reading)
   monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
   if present:
@@ -311,7 +314,7 @@ def summoned_stage(tmp_path, monkeypatch, backing: str, llm: str = 'deepseek:pro
     (host / 'creds' / f'{name}.cred').write_text(json.dumps(material))
   monkeypatch.setattr(credentials, 'STORE_DIR', str(host))
   reading = Reading(
-    Configuration.parse({}), {}, Installation.take(), None, {'summon-harness': 'bro'}
+    Configuration.parse({}), {}, Installation.take(), settings=HomeSettings(summon_harness='bro')
   )
   fields = {
     'target': 'bro-dev',

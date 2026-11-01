@@ -73,9 +73,7 @@ class TestPresets:
     assert llm_flags.selection_from_args(args) == LLMSelection('openai', 'sol', 'max')
 
   def test_an_already_read_project_config_supplies_presets(self):
-    config = ProjectConfig(
-      default_bro='bro', image_repository='bro/bro', sections={'llm': {'remote': ':terra'}}
-    )
+    config = ProjectConfig(sections={'llm': {'remote': ':terra'}})
     assert llm_flags.selection_from_args(
       _args(['--llm', 'remote']), project=config
     ) == LLMSelection(model='terra')

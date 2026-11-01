@@ -16,9 +16,10 @@ class ReportBro(BaseBro):
 
 
 @pytest.fixture
-def report_environment(tmp_path, monkeypatch, register_test_bros):
+def report_environment(tmp_path, monkeypatch, register_test_bros, home_settings_file):
   register_test_bros(ReportBro)
-  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "report-test"\n')
+  home_settings_file.write_text('default-bro = "report-test"\n')
+  (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "ignored-tree-bro"\n')
   store = tmp_path / 'store'
   material = store / credentials.MATERIAL_DIR
   material.mkdir(parents=True)
@@ -99,7 +100,7 @@ def test_authority_instance_presence_is_independent_of_kind_hold(report_environm
 
 def test_detached_report_requires_an_explicit_target(capsys):
   assert report_scope(None, None, 'claude') == 1
-  assert 'requires --bro when detached' in capsys.readouterr().out
+  assert 'no default bro' in capsys.readouterr().out
 
 
 def test_unknown_target_is_reported_as_an_existence_error(report_environment, capsys):
@@ -154,3 +155,9 @@ def test_scope_of_absent_recipe_has_no_provider_key(report_environment, capsys, 
   assert 'cred.openai' not in descriptor
   assert report_scope(repository, 'report-test', 'bro', 'openai:terra') == 0
   assert 'openai+: MISSING' in capsys.readouterr().out
+
+
+def test_detached_scope_uses_the_installation_default(report_environment, capsys):
+  assert report_scope(None, None, 'claude') == 0
+  descriptor = json.loads(capsys.readouterr().out.splitlines()[0].removeprefix('descriptor: '))
+  assert descriptor['target'] == ReportBro.name

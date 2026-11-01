@@ -347,7 +347,7 @@ def test_installation_preserves_broken_persona_and_provider_faults(monkeypatch):
     importlib.metadata.EntryPoint(
       name='faulty-persona',
       value='faulty_provider.persona:Persona',
-      group='bro',
+      group='bro.bros.bro',
     ),
   )
   monkeypatch.setattr(registry, '_entry_points', lambda: entries)

@@ -243,7 +243,8 @@ class TestHostLLMDefault:
 
 class TestCredentialHydrationRoutes:
   @pytest.fixture
-  def route(self, tmp_path, monkeypatch, register_test_bros):
+  def route(self, tmp_path, monkeypatch, register_test_bros, home_settings_file):
+    home_settings_file.write_text('grant = ["aws"]\nrevoke = ["openai"]\n')
     register_test_bros(HydrationBro)
     repository = tmp_path / 'repo'
     repository.mkdir()
@@ -544,13 +545,13 @@ class TestCredentialHydrationRoutes:
     ids=['launch', 'project', 'host'],
   )
   def test_harness_precedence_reaches_the_started_session(
-    self, route, mode, selected, project, host
+    self, route, mode, selected, project, host, home_settings_file
   ):
     configuration = json.loads(route.config.read_text())
     configuration['harness'] = host
     route.config.write_text(json.dumps(configuration))
     if project is not None:
-      with (route.repository / 'pyproject.toml').open('a') as output:
+      with home_settings_file.open('a') as output:
         output.write(f'harness = "{project}"\n')
     assert route.launch('--cred', 'harbor+launch', harness=selected, mode=mode) == 0
     spec, scope = route.captures[-1]
@@ -563,37 +564,39 @@ class TestCredentialHydrationRoutes:
     assert route.captures == []
     assert not (workspace_dir('hydration-route') / 'workspace.json').exists()
     assert (
-      'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
+      'no harness: pass --harness, set home settings harness, or set "harness" in ~/.bro.json'
       in caplog.text
     )
 
   @pytest.mark.parametrize('layer', ['launch', 'project', 'host'])
-  def test_uninstalled_harness_is_refused_without_falling_back(self, route, layer, caplog):
+  def test_uninstalled_harness_is_refused_without_falling_back(
+    self, route, layer, caplog, home_settings_file
+  ):
     configuration = json.loads(route.config.read_text())
     configuration['harness'] = 'not-installed' if layer == 'host' else 'bro'
     route.config.write_text(json.dumps(configuration))
     if layer == 'project':
-      with (route.repository / 'pyproject.toml').open('a') as output:
+      with home_settings_file.open('a') as output:
         output.write('harness = "not-installed"\n')
     assert route.launch(harness='not-installed' if layer == 'launch' else None) == 1
     assert route.captures == []
     assert "harness 'not-installed' is not installed" in caplog.text
 
-  def test_resume_keeps_the_harness_after_project_and_host_changes(self, route):
+  def test_resume_keeps_the_harness_after_home_and_host_changes(self, route, home_settings_file):
     assert route.launch('--cred', 'harbor+launch') == 0
     configuration = json.loads(route.config.read_text())
     configuration['harness'] = 'not-installed'
     configuration['summon-harness'] = 'not-installed'
     route.config.write_text(json.dumps(configuration))
-    with (route.repository / 'pyproject.toml').open('a') as output:
+    with home_settings_file.open('a') as output:
       output.write('harness = "not-installed"\nsummon-harness = "not-installed"\n')
     assert ride_cli.main(['ride', 'resume', 'hydration-route']) == 0
     assert route.captures[-1][0].harness == 'bro'
 
   @pytest.mark.parametrize('layer', ['launch', 'project', 'host', 'absent'])
-  def test_scope_resolves_the_same_harness_layers(self, route, layer, capsys):
+  def test_scope_resolves_the_same_harness_layers(self, route, layer, capsys, home_settings_file):
     if layer == 'project':
-      with (route.repository / 'pyproject.toml').open('a') as output:
+      with home_settings_file.open('a') as output:
         output.write('harness = "bro"\n')
     configuration = json.loads(route.config.read_text())
     if layer in ('project', 'host'):
@@ -607,13 +610,43 @@ class TestCredentialHydrationRoutes:
     if layer == 'absent':
       assert result == 1
       assert (
-        'no harness: pass --harness, set [tool.bro] harness, or set "harness" in ~/.bro.json'
+        'no harness: pass --harness, set home settings harness, or set "harness" in ~/.bro.json'
         in output
       )
     else:
       assert result == 0
       descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
       assert descriptor['harness'] == 'bro'
+
+  @pytest.mark.parametrize('content', [None, 'not a home\n'])
+  def test_bad_installation_marker_refuses_before_start(
+    self, route, installation_environment, caplog, content
+  ):
+    marker = installation_environment / 'bro-installation-home'
+    if content is None:
+      marker.unlink()
+    else:
+      marker.write_text(content)
+    assert route.launch() == 1
+    assert route.captures == []
+    assert str(marker) in caplog.text
+    assert "printf '<home>\\n' >" in caplog.text
+
+  def test_along_into_an_old_tree_keeps_installation_configuration(self, route, home_settings_file):
+    home_settings_file.write_text('harness = "bro"\nsummon-harness = "bro"\n')
+    (route.repository / 'pyproject.toml').write_text(
+      '[tool.bro]\ndefault = "unknown-old-bro"\nharness = "old-harness"\n'
+      'summon-harness = "old-summon-harness"\ngrant = ["unknown-old-grant"]\n'
+    )
+    subprocess.run(
+      ['git', '-C', str(route.repository), 'commit', '-am', 'old tree', '-q'], check=True
+    )
+    assert (
+      route.launch('--into', 'HEAD', '--cred', 'harbor+launch', harness=None, mode='along') == 0
+    )
+    spec, launch_scope = route.captures[-1]
+    assert spec.harness == 'bro'
+    assert launch_scope.mission.descriptor.values['harness'] == 'bro'
 
 
 class TestAlong:
@@ -760,7 +793,8 @@ class TestLifecycle:
       'recipe_options': {},
     }
 
-  def test_scope_reports_a_malformed_project_config(self, tmp_path, capsys):
+  def test_scope_reports_malformed_home_settings(self, tmp_path, capsys, home_settings_file):
+    home_settings_file.write_text('harness = 5\n')
     (tmp_path / 'pyproject.toml').write_text('[tool.bro]\nharness = 5\n')
     with patch.object(ride_cli, '_resolve_repository_argument') as resolve:
       from ride.repository import Repository

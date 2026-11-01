@@ -19,7 +19,6 @@ from bro.launch.llm_flags import EFFORT_HELP, FAST_HELP, add_llm_flags
 from bro.launch.resume import RESUME_LATEST
 from bro.launch.run import HOLD_HELP, add_resolved_llm_flag, launch_llm_spec
 from bro.llm.observer import Observer
-from bro.llm.providers import LLMSelectionError
 from bro.mcp import HOLDS
 from bro.native.runner import Runner
 from bro.run_lifecycle import RunLifecycle
@@ -303,7 +302,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
   try:
     run_spec = launch_llm_spec(args['bro'], args)
-  except (KeyError, NotImplementedError, LLMSelectionError) as error:
+  except (KeyError, NotImplementedError, ValueError) as error:
     log.error('%s', error)
     return 1
   hold = args['hold'] if args['hold'] is not None else 'guided'

@@ -21,7 +21,7 @@ def add_harness_flags(parser: Parser) -> None:
   parser.add_argument(
     '--harness',
     default=None,
-    help='driving harness (otherwise project [tool.bro] harness, then host ~/.bro.json harness)',
+    help='driving harness (otherwise home settings harness, then host ~/.bro.json harness)',
   )
 
 
@@ -131,7 +131,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     parser.add_argument(
       '--bro',
       default=None,
-      help='the bro the session runs as (default: the project default bro)',
+      help="the bro the session runs as (default: the installation's default bro)",
     )
 
 

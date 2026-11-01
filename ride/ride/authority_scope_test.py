@@ -20,6 +20,7 @@ from bro.llm.llm import Recipe as BaseRecipe
 from bro.mcp import MCPServerSpec, ToolLayer, creds
 from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
+from bro.workspace.settings import HomeSettings
 from ride.authority_launch import mission_view
 from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
 from ride.authority_scope import configured_entries, configured_kinds, existence
@@ -98,13 +99,14 @@ def installation(monkeypatch):
   )
 
 
-def reading(installation, configuration=None, project=None, defaults=None):
+def reading(installation, configuration=None, project=None, defaults=None, settings=None):
   return Reading(
     Configuration.parse(configuration or {}),
     defaults or {},
     installation,
     host_config.Attachment(path='/project', url='https://github.com/example/project.git'),
-    project or {'summon-harness': 'native'},
+    project=project or {},
+    settings=settings or HomeSettings(summon_harness='native'),
   )
 
 
@@ -285,7 +287,10 @@ def test_operator_caps_and_layer_conflicts(installation):
     bad.rules.start(Request('bro', {'target': 'child'}), Authority.top(), bad)
 
 
-def test_reading_snapshots_whole_config_defaults_and_working_tree(tmp_path, installation):
+def test_reading_snapshots_whole_config_defaults_home_and_tree(
+  tmp_path, installation, home_settings_file
+):
+  home_settings_file.write_text('summon-harness = "native"\ngrant = ["@other"]\n')
   host, store, project = tmp_path / 'host.json', tmp_path / 'store', tmp_path / 'project'
   store.mkdir()
   project.mkdir()
@@ -307,6 +312,7 @@ def test_reading_snapshots_whole_config_defaults_and_working_tree(tmp_path, inst
   source = Reading.take(
     Repository(str(project), project), host=host, store=store, installation=installation
   )
+  home_settings_file.write_text('broken')
   host.write_text('{broken')
   (store / 'creds.json').write_text('{broken')
   (project / 'pyproject.toml').write_text('[broken')
@@ -314,7 +320,7 @@ def test_reading_snapshots_whole_config_defaults_and_working_tree(tmp_path, inst
   assert source.configuration.raw['user']['creds'] == ('cookies+operator',)
   assert source.configuration.raw['llm']['local'] == 'echo:echo'
   assert source.summon_depth == 7
-  assert source.project_policy.layer.grant
+  assert source.home_policy.layer.grant
   normalized(source)
   with pytest.raises(TypeError):
     source.configuration.raw['llm']['new'] = 'echo:echo'
@@ -332,7 +338,7 @@ def test_reading_skips_unregistered_store_defaults_but_rejects_used_policy(tmp_p
   request = Request('bro', {'target': 'child', 'harness': 'native'})
   source.rules.start(request, Authority.top(), source)
   configured = replace(
-    source, project_policy=replace(source.project_policy, picks={'consumer_only': 'host'})
+    source, home_policy=replace(source.home_policy, picks={'consumer_only': 'host'})
   )
   with pytest.raises(ValueError, match='unknown credential kind'):
     configured.rules.start(request, Authority.top(), configured)
@@ -348,11 +354,11 @@ def test_reading_validates_unregistered_default_syntax(tmp_path, installation, d
     Reading.take(host=tmp_path / 'absent', store=tmp_path, installation=installation)
 
 
-def test_repository_refuses_instance_entries(tmp_path, installation):
+def test_home_settings_refuse_instance_entries(tmp_path, installation, home_settings_file):
   project = tmp_path / 'project'
   project.mkdir()
   for entry in ('bro.cred=cookies+profile', 'bro.cred=cookies+* to @child'):
-    (project / 'pyproject.toml').write_text('[tool.bro]\ngrant = [' + json.dumps(entry) + ']')
+    home_settings_file.write_text('grant = [' + json.dumps(entry) + ']')
     with pytest.raises(ValueError, match='credential instances'):
       Reading.take(
         Repository(str(project), project),
@@ -399,10 +405,15 @@ def test_other_types_defaults_domains_and_empty_bases(installation):
     source.rules.normalize(Request('benchmark', {'timeout': 'none'}), source)
 
 
-def test_url_attachment_reads_resolved_commit_not_working_tree(tmp_path, installation):
+def test_url_attachment_reads_only_tree_sections_at_the_resolved_commit(
+  tmp_path, installation, home_settings_file
+):
+  home_settings_file.write_text('summon-harness = "native"\ngrant = ["@other"]\n')
   subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
   project = tmp_path / 'pyproject.toml'
-  project.write_text('[tool.bro]\nsummon-harness = "native"\ngrant = ["@other"]')
+  project.write_text(
+    '[tool.bro]\nsummon-harness = "ignored"\ngrant = ["invalid"]\n[tool.bro.example]\nvalue = "committed"'
+  )
   subprocess.run(['git', '-C', str(tmp_path), 'add', 'pyproject.toml'], check=True)
   subprocess.run(
     [
@@ -422,7 +433,7 @@ def test_url_attachment_reads_resolved_commit_not_working_tree(tmp_path, install
   commit = subprocess.check_output(
     ['git', '-C', str(tmp_path), 'rev-parse', 'HEAD'], text=True
   ).strip()
-  project.write_text('[tool.bro]\nsummon-harness = "auth"\nrevoke = ["@other"]')
+  project.write_text('[tool.bro.example]\nvalue = "working"')
   source = Reading.take(
     Repository('https://github.com/example/project.git', tmp_path, commit),
     host=tmp_path / 'absent',
@@ -430,7 +441,8 @@ def test_url_attachment_reads_resolved_commit_not_working_tree(tmp_path, install
     installation=installation,
   )
   assert source.summon_harness == 'native'
-  assert source.project_policy.layer.grant and not source.project_policy.layer.revoke
+  assert source.home_policy.layer.grant and not source.home_policy.layer.revoke
+  assert source.project['example']['value'] == 'committed'
 
 
 def test_wire_mapping_separates_values_from_content_and_checks_sentinels(installation):
@@ -680,7 +692,8 @@ def test_deferred_recipe_choices_are_checked_then_omitted(installation):
 
   spec = AnthropicSpec(model=None, effort=None)
   source = reading(
-    recipe_installation(installation, 'claude', spec), project={'summon-harness': 'claude'}
+    recipe_installation(installation, 'claude', spec),
+    settings=HomeSettings(summon_harness='claude'),
   )
   request = Request('bro', {'target': 'child'})
   descriptor = source.rules.normalize(request, source)
@@ -927,7 +940,7 @@ def test_summon_harness_precedence(installation, selected, project, host, expect
     Configuration.parse({'summon-harness': host}),
     {},
     installation,
-    project={'summon-harness': project} if project is not None else {},
+    settings=HomeSettings(summon_harness=project),
   )
   descriptor = normalized(source, **({'harness': selected} if selected is not None else {}))
   assert descriptor.values['harness'] == expected
@@ -941,13 +954,16 @@ def test_unset_harness_does_not_prevent_reading_or_explicit_summons(installation
     normalized(source)
   assert (
     str(failure.value)
-    == 'no harness: pass --harness, set [tool.bro] summon-harness, or set "summon-harness" in ~/.bro.json'
+    == 'no harness: pass --harness, set home settings summon-harness, or set "summon-harness" in ~/.bro.json'
   )
 
 
 def test_summon_does_not_use_the_root_harness_key(installation):
   source = Reading(
-    Configuration.parse({'harness': 'native'}), {}, installation, project={'harness': 'auth'}
+    Configuration.parse({'harness': 'native'}),
+    {},
+    installation,
+    settings=HomeSettings(harness='auth'),
   )
   with pytest.raises(ValueError, match='summon-harness'):
     normalized(source)
@@ -1068,7 +1084,7 @@ def test_summon_preset_precedence_and_provider_no_shadowing(installation):
   source = reading(
     installation,
     {'llm': {'chosen': 'echo:host+passthrough', 'echo': 'uninstalled:model'}},
-    project={'summon-harness': 'native', 'llm': {'chosen': 'echo:project+passthrough'}},
+    project={'llm': {'chosen': 'echo:project+passthrough'}},
   )
   selected = BroType.option_values({'target': 'child', 'llm': 'chosen'}, source).values
   assert selected['model'] == 'host'
@@ -1077,9 +1093,7 @@ def test_summon_preset_precedence_and_provider_no_shadowing(installation):
   assert 'model' not in selected
 
 
-def test_configuration_and_repository_policy_parse_uninstalled_recipes():
-  from ride.authority_reading import _policy
-
+def test_configuration_parses_uninstalled_recipes():
   configuration = Configuration.parse(
     {
       'llm': {'future': 'uninstalled:model'},
@@ -1087,9 +1101,6 @@ def test_configuration_and_repository_policy_parse_uninstalled_recipes():
     }
   )
   assert configuration.projects['/elsewhere'].bros['missing'].recipes == ('uninstalled:model',)
-  assert _policy({'llm': ['uninstalled:model']}, 'fixture', bro=True).recipes == (
-    'uninstalled:model',
-  )
 
 
 def test_default_without_a_declaration_does_not_hide_missing_host_plugins(
@@ -1192,7 +1203,7 @@ def test_claude_deferred_listed_and_unlisted_admission(installation, text, admit
 
   source = reading(
     recipe_installation(installation, 'claude', AnthropicSpec(model=None, effort=None)),
-    project={'summon-harness': 'claude'},
+    settings=HomeSettings(summon_harness='claude'),
   )
 
   def launch():
@@ -1221,3 +1232,14 @@ def test_passthrough_cannot_be_overridden_or_set_on_a_manual_start(installation)
     BroType.option_values({'target': 'child', 'manual': True, 'passthrough': True}, source)
   with pytest.raises(ValueError, match='passthrough.*flag'):
     BroType.option_values({'target': 'child', 'passthrough': 1}, source)
+
+
+def test_the_bro_installation_reads_its_shipped_defaults(installation_environment, installation):
+  from bro.workspace.installation import MARKER
+  from bro.workspace.settings import home_settings
+
+  (installation_environment / MARKER).write_text('bro\n')
+  settings = home_settings('bro')
+  source = Reading.take(installation=installation)
+  assert source.resolve_harness() == settings.harness
+  assert source.default_bro == settings.default_bro
