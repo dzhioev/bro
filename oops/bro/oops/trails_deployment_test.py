@@ -9,7 +9,9 @@ import pytest
 
 from bro.base import credentials
 from bro.base.spawn import console_script
-from bro.oops.wheel_staging import entry_providers, wheel_packages
+from bro.llm import wires
+from bro.oops.wheel_staging import entry_providers, wheel_packages, workspace_projects
+from bro.trails import backends
 from bro.trails.local import LocalStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.entries import read_entries, resolve_entries
@@ -171,9 +173,14 @@ def test_repository_cdk_app_runs_in_the_environment_of_the_project_shipping_the_
 
 
 def test_image_declares_every_workspace_format_and_non_diagnostic_wire():
-  workspace = _PROJECT.parent
-  registered = {entry for entry in entry_providers(workspace) if entry.name != 'echo'}
-  assert set(read_entries(_SERVER / 'entries.json')) == registered
+  served_groups = {backends.ENTRY_POINT_GROUP, wires.ENTRY_POINT_GROUP}
+  registered = {
+    (entry.group, entry.name)
+    for entry in entry_providers(workspace_projects(_PROJECT.parent))
+    if entry.group in served_groups and entry.name != 'echo'
+  }
+  declared = {(entry.group, entry.name) for entry in read_entries(_SERVER / 'entries.json')}
+  assert declared == registered
 
 
 @pytest.mark.parametrize('harness', ['native', 'claude'])

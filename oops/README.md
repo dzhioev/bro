@@ -20,8 +20,14 @@ The project supplies a checkout-relative `IMAGE_BUILD_SCRIPT` environment variab
 the script can source `deploy_lib.sh` through `bro-oops-dir` after `uv sync` installs the member.
 `trigger_image_build` passes each build its `TARGET`, image repository and region, and the uv pin to install, so a consumer's copy of the buildspec reads nothing from the framework checkout.
 
-Framework-wheel staging builds the current working tree when run from the bro framework checkout.
+`prepare_image_build`, behind `build_image` and `build_and_push`, stages framework wheels into `build/bro-wheel/` for the image's Dockerfile to install.
+Staging builds the current working tree when run from the bro framework checkout.
 In any other checkout it builds the exact bro revision resolved by the consumer's `uv.lock`.
+The wheels staged are `bro` plus what the optional `entries.json` beside the Dockerfile declares, in a JSON list of items of two forms:
+an entry, `{"group": "bro.credentials", "name": "openai"}`, stages the workspace distribution registering it;
+a distribution, `{"distribution": "bro-filetypes"}`, stages that distribution.
+Each staged distribution brings the workspace distributions it depends on, and a missing or empty declaration stages `bro` alone.
+The Dockerfile installs every staged wheel in one command, so each wheel's framework dependencies resolve from the staged set rather than from an index.
 
 ## Operations
 
@@ -67,7 +73,7 @@ An ECS task definition's replacement is the exception:
 it is how every container or image change rolls out, so it passes.
 It asks for the verdict CloudFormation itself gives, so a plan creates and deletes a change set on each stack through the deploy role rather than only reading the account.
 The CLI's rendered text puts a logical id and an impact in the same field, so a resource named for one reads as carrying it and the scan errs toward reporting unsafe.
-The image uses the shared `bro-server-base`, and `image_build.sh` stages the framework wheel through `deploy_lib.sh` before pushing both commit and latest tags.
+The image uses the shared `bro-server-base`, and `image_build.sh` stages the framework wheels through `deploy_lib.sh` before pushing both commit and latest tags.
 Its baked `trails/server/creds.json` is a self-contained store config whose `sources` map annotates the `trails` and `trails_tokens` SSM names;
 the image therefore ships the store shape beside the framework version that reads it (`bro/reference/ride.md`, "Session permissions and credentials").
 

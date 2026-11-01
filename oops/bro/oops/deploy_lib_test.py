@@ -184,6 +184,13 @@ def _staging_workspace(root: Path) -> Path:
       f'[project.entry-points."{group}"]\n{name} = "example:ENTRY"\n'
     )
     entries.append({'group': group, 'name': name})
+  provider = root / 'plugins' / 'provider-a'
+  provider.mkdir()
+  (provider / 'pyproject.toml').write_text(
+    '[project]\nname = "bro-provider-a"\n'
+    'dependencies = ["bro", "bro-wire-a>=0.1", "pydantic"]\n'
+    '[project.entry-points."bro.credentials"]\nkind-a = "example:KIND"\n'
+  )
   declaration = root / 'entries.json'
   declaration.write_text(json.dumps(entries))
   return declaration
@@ -271,6 +278,61 @@ source = {{ git = "https://example.invalid/bro?branch=main#{_LOCKED_COMMIT}" }}
   assert f'checkout --quiet --detach {_LOCKED_COMMIT}' in arguments.read_text()
   assert len(list((consumer / 'build' / 'bro-wheel').glob('*.whl'))) == 3
   assert result.stdout.endswith(f'from https://example.invalid/bro@{_LOCKED_COMMIT}\n')
+
+
+def _prepared_wheels(root: Path, image: Path) -> set[str]:
+  dockerfile = image / 'Dockerfile'
+  dockerfile.write_text('FROM scratch\n')
+  result = _run_bash(
+    f"""
+    git() {{
+      [ "$*" = "rev-parse --show-toplevel" ] || return 88
+      echo {shlex.quote(str(root))}
+    }}
+    {_wheel_builder(root / 'arguments')}
+    prepare_image_build {shlex.quote(str(dockerfile))}
+    """
+  )
+  assert result.returncode == 0, result.stderr
+  return {path.name for path in (root / 'build' / 'bro-wheel').glob('*.whl')}
+
+
+def test_prepare_image_build_stages_the_declaration_beside_the_dockerfile(tmp_path):
+  _staging_workspace(tmp_path)
+  assert _prepared_wheels(tmp_path, tmp_path) == {
+    'bro-0.1.0-py3-none-any.whl',
+    'bro_format_a-0.1.0-py3-none-any.whl',
+    'bro_wire_a-0.1.0-py3-none-any.whl',
+  }
+
+
+def test_prepare_image_build_stages_core_alone_for_an_image_without_a_declaration(tmp_path):
+  _staging_workspace(tmp_path)
+  image = tmp_path / 'service'
+  image.mkdir()
+  assert _prepared_wheels(tmp_path, image) == {'bro-0.1.0-py3-none-any.whl'}
+
+
+def test_wheel_staging_stages_core_alone_for_an_empty_declaration(tmp_path):
+  declaration = _staging_workspace(tmp_path)
+  declaration.write_text('[]')
+  assert wheel_packages(tmp_path, declaration) == ('bro',)
+
+
+@pytest.mark.parametrize(
+  'item', [{'distribution': 'bro-provider-a'}, {'group': 'bro.credentials', 'name': 'kind-a'}]
+)
+def test_wheel_staging_stages_a_declared_item_with_its_workspace_dependencies(tmp_path, item):
+  declaration = _staging_workspace(tmp_path)
+  declaration.write_text(json.dumps([item]))
+  assert wheel_packages(tmp_path, declaration) == ('bro', 'bro-provider-a', 'bro-wire-a')
+
+
+def test_wheel_staging_refuses_a_distribution_outside_the_workspace(tmp_path):
+  declaration = _staging_workspace(tmp_path)
+  declaration.write_text(json.dumps([{'distribution': 'bro-missing'}]))
+  with pytest.raises(ValueError, match='bro-missing is not a workspace distribution'):
+    wheel_packages(tmp_path, declaration)
 
 
 def test_wheel_staging_refuses_an_entry_with_no_workspace_provider(tmp_path):

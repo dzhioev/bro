@@ -240,6 +240,8 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'bro',
     'bro-dev',
     'bro-openai',
+    'packaging',
+    'pydantic',
   }
   assert _project_dependencies(_ROOT / 'oops' / 'cdk' / 'pyproject.toml') >= {
     'aws-cdk-lib',
