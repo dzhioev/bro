@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from functools import cache
 from typing import cast
 
@@ -21,7 +22,6 @@ from bro.authority.values import (
   Symbol,
   Value,
 )
-from bro.base import log
 from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.bro import CredentialManifest
 from bro.broker.environment import TALK_RIGHTS
@@ -53,68 +53,81 @@ def _reading(value: object) -> Reading:
   return value
 
 
-def no_recipe(target: str) -> str:
+@dataclass(frozen=True)
+class ResolvedRecipe:
+  recipe: Recipe
+  source: str
+
+
+def no_recipe(target: str, harness: str = 'bro') -> str:
   return (
-    f'{target} declares no LLM recipe: pass --llm provider:model, '
-    f'or set "llm" under projects.<repo>.bros.{target} in ~/.bro.json'
+    f'{target} has no recipe for harness {harness}: pass --llm, or set '
+    f'llm.{harness} in a layer of ~/.bro.json or in the home settings'
   )
+
+
+def resolve_recipe(
+  reading: Reading, bro: str, harness: str, explicit: tuple[str, str] | None = None
+) -> ResolvedRecipe:
+  installed = reading.installation
+  installed.check_bro(bro)
+  installed.check_harness(harness)
+  if bro not in installed.bros or harness not in installed.harnesses:
+    raise ValueError(f'uninstalled bro {bro!r} or harness {harness!r}')
+  policy = None
+  if explicit is not None:
+    text, source = explicit
+  else:
+    for candidate in reversed(reading.layers(bro)):
+      if harness in candidate.config.llm:
+        policy = candidate
+        text, source = candidate.config.llm[harness], candidate.source
+        break
+    else:
+      raise ValueError(no_recipe(bro, harness))
+  try:
+    installed.check_provider(providers.parse_recipe(text).provider)
+    recipe = providers.bind_recipe(text)
+    installed.harnesses[harness].harness.check_recipe(recipe)
+  except ValueError as error:
+    if policy is not None:
+      raise reading.failure(policy, f'llm.{harness}', error, bro) from error
+    raise ValueError(f'{source}: {error}') from error
+  return ResolvedRecipe(recipe, source)
 
 
 def recipe(
   values: Mapping[str, Value], reading: Reading, *, required: bool = False
 ) -> Recipe | None:
   target = cast(str, values.get('target', ''))
-  name = reading.resolve_harness(cast(str | None, values.get('harness')), summon=True)
+  name = reading.resolve_harness(
+    cast(str | None, values.get('harness')), target=target, summon=True
+  )
   installed = reading.installation
   installed.check_bro(target)
-  installed.check_harness(name)
   if target not in installed.bros or name not in installed.harnesses:
     return None
-  driver = installed.harnesses[name]
-  if target in driver.unavailable_recipes:
-    raise ValueError(f'bro {target!r} recipe is unavailable: {driver.unavailable_recipes[target]}')
-  base = driver.recipes[target]
   requested = providers.LLMSelection(
     provider=cast(str | None, values.get('provider')),
     model=cast(str | None, values.get('model')) if values.get('model') != DEFAULT else None,
     effort=cast(str, values['effort']) if values.get('effort') in EFFORT_LEVELS else None,
-    **{name: values.get(name) is True for name in providers.SELECTION_FLAGS},
+    **{flag: values.get(flag) is True for flag in providers.SELECTION_FLAGS},
   )
-  selection = None
-  missing = []
-  for text in reading.recipes(target):
-    item = providers.LLMSelection() if text == 'default' else providers.parse(text)
-    provider = item.provider or (base.TYPE if base is not None else None)
-    if provider is not None and provider not in installed.provider_needs:
-      log.verbose(
-        'bro %s: skipping LLM recipe %r: provider %r is unavailable', target, text, provider
-      )
-      missing.append(provider)
-      continue
-    if provider is None and item.is_empty():
-      continue
-    if provider is None or provider in driver.harness.llm_providers:
-      selection = item
-      break
-  if selection is None:
-    if requested.provider is not None:
-      selection = providers.LLMSelection()
-    else:
-      if missing:
-        installed.check_provider(missing[0])
-      if base is None:
-        if required or not requested.is_empty():
-          raise ValueError(no_recipe(target))
-        return None
-      raise ValueError(f'bro {target}: no configured recipe runs on harness {name}')
-  combined = requested.over(selection)
-  if combined.provider is not None:
-    installed.check_provider(combined.provider)
-  if base is None and combined.provider is None:
-    if combined.is_empty() and not required:
-      return None
-    raise ValueError(no_recipe(target))
-  spec = driver.harness.resolve_recipe(base, combined)
+  configured = any(name in policy.config.llm for policy in reading.layers(target))
+  base = (
+    resolve_recipe(reading, target, name).recipe
+    if configured and requested.provider is None
+    else None
+  )
+  if requested.is_empty():
+    if base is None and required:
+      raise ValueError(no_recipe(target, name))
+    return base
+  if base is None and requested.provider is None:
+    raise ValueError(no_recipe(target, name))
+  if requested.provider is not None:
+    installed.check_provider(requested.provider)
+  spec = installed.harnesses[name].harness.resolve_recipe(base, requested)
   effective = spec.selection()
   if values.get('model') == DEFAULT:
     effective['model'] = None
@@ -129,7 +142,11 @@ def defaults(fixed: Descriptor, source: object) -> Mapping[str, Value]:
   reading = _reading(source)
   result: dict[str, Value] = {
     'placement': 'boxed',
-    'harness': reading.resolve_harness(cast(str | None, fixed.values.get('harness')), summon=True),
+    'harness': reading.resolve_harness(
+      cast(str | None, fixed.values.get('harness')),
+      target=cast(str, fixed.values.get('target', '')),
+      summon=True,
+    ),
     'hold': 'unattended',
     'talk': DEFAULT_TALK,
     'timeout': DEFAULT_TIMEOUT,
@@ -264,8 +281,6 @@ def configured_entries(reading: Reading) -> tuple[Entry, ...]:
 def _configured_entries(reading: Reading) -> tuple[Entry, ...]:
   installed = reading.installation
   targets = set(installed.bros)
-  for project in reading.configuration.projects.values():
-    targets.update(project.bros)
 
   @cache
   def held(target: str, harness: str, provider: str) -> frozenset[str]:
@@ -286,7 +301,7 @@ def _configured_entries(reading: Reading) -> tuple[Entry, ...]:
     return Predicate(f'configured={kind}+{instance}', holds)
 
   instances = {
-    kind: {reading.picks(target).get(kind, '') for target in targets}
+    kind: {reading.configured_picks(target).get(kind, '') for target in targets}
     for kind in installed.credential_kinds
   }
   return tuple(
@@ -326,7 +341,7 @@ def base(fixed: Descriptor, source: object) -> Authority:
     for permission in (*(f'@{name}' for name in bro._may_summon), *bro._may_launch):
       authority = authority.join(Authority((reading.syntax.entry(parse_entry(permission)),)))
   for policy in reading.layers(target):
-    authority = reading.resolve(policy).apply(authority)
+    authority = reading.resolve(policy, target).apply(authority)
   return authority
 
 
@@ -370,7 +385,7 @@ def existence(
     required.update(installed.provider_needs[provider])
   configured = set()
   for policy in reading.layers(target):
-    resolved = reading.resolve(policy)
+    resolved = reading.resolve(policy, target)
     configured.difference_update(resolved.drop)
     configured.update(resolved.hold)
   required.update(configured & held)
@@ -465,8 +480,7 @@ def option_values(fields: Mapping[str, object], source: object):
     text = fields['llm']
     if not isinstance(text, str):
       raise ValueError('llm must be a recipe string')
-    presets = {**reading.project.get('llm', {}), **reading.configuration.raw.get('llm', {})}
-    selection = providers.parse_with_presets(text, presets)
+    selection = providers.parse(text)
     for name in providers.SELECTION_OPTIONS:
       value = getattr(selection, name)
       if value is not None and (name not in providers.SELECTION_FLAGS or value):

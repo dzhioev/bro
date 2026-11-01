@@ -186,13 +186,13 @@ class TestNativeArgv:
     runs: list[tuple[str, str]] = []
 
     class _Runner:
-      def __init__(self, bro, *, activity_file) -> None:
-        del bro, activity_file
+      def __init__(self, bro, recipe, *, activity_file) -> None:
+        del bro, recipe, activity_file
 
       async def run(self, text: str, **options) -> None:
         runs.append((text, options['hold']))
 
-    monkeypatch.setattr('bro.registry.create_bro', lambda name, llm_spec: MagicMock())
+    monkeypatch.setattr('bro.registry.create_bro', lambda name: MagicMock())
     monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: None)
     monkeypatch.setattr('bro.launch.run.Runner', _Runner)
     monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)

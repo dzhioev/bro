@@ -22,7 +22,6 @@ from bro.base import credentials, host_config
 from bro.bro import BaseBro
 from bro.broker.brotocol import request as message
 from bro.harness import Harness
-from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
 from bro.workspace.settings import HomeSettings
 from ride.authority_launch import (
@@ -60,13 +59,13 @@ def source(monkeypatch, tmp_path):
   driver._llm_providers = ('echo',)
   installed = Installation(
     {'root': Root(credential_presence=kinds), 'browser': Browser(credential_presence=kinds)},
-    {'probe': HarnessReading(driver, {'root': Recipe(), 'browser': Recipe()})},
+    {'probe': HarnessReading(driver)},
     kinds,
     {'echo': frozenset()},
     {name: worker.authority_declaration(kinds) for name, worker in installed_types().items()},
   )
   return Reading(
-    Configuration.parse({}),
+    Configuration.parse({'defaults': {'llm': {'probe': 'echo:echo'}}}),
     {},
     installed,
     host_config.Attachment(path='/project'),
@@ -86,11 +85,12 @@ def test_give_only_cookie_right_reaches_the_recipient_but_not_the_starter(source
     source,
     configuration=Configuration.parse(
       {
-        'projects': {
-          '/project': {
+        'defaults': {'llm': {'probe': 'echo:echo'}},
+        'homes': {
+          'test-home': {
             'bros': {'root': {'grant': ['@browser', 'webview.cred=cookies+profile to @browser']}}
           }
-        }
+        },
       }
     ),
   )
@@ -196,19 +196,15 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   (store / 'creds').mkdir(parents=True)
   (store / 'creds' / 'github+operator.cred').write_text('operator-material')
   (store / credentials.STORE_FILE).write_text('{}')
-  from bro.openai.declaration import Recipe as OpenAIRecipe
 
   driver = source.installation.harnesses['probe']
   driver.harness._llm_providers = ('openai', 'echo')
   source = replace(
     source,
+    configuration=Configuration.parse({'defaults': {'llm': {'probe': 'openai:gpt-5.6-terra'}}}),
     installation=replace(
       source.installation,
-      harnesses={
-        'probe': replace(
-          driver, recipes={name: OpenAIRecipe() for name in source.installation.bros}, llm_key=True
-        )
-      },
+      harnesses={'probe': replace(driver, llm_key=True)},
       provider_needs={'echo': frozenset(), 'openai': frozenset({'cookies'})},
     ),
   )
@@ -289,17 +285,10 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   assert facts['manual'].workspace == 'committed-child'
 
 
-def test_host_expands_presets_under_the_reading_and_overlays_piece_values(source):
-  source = replace(source, configuration=Configuration.parse({'llm': {'chosen': 'echo'}}))
-  mapped = BroType.option_values({'target': 'root', 'llm': 'chosen', 'effort': 'high'}, source)
-  assert mapped.values['provider'] == 'echo'
-  assert mapped.values['effort'] == 'high'
-
-
 def test_reading_and_ambient_config_refuse_retired_default_picks_consistently():
   value = {'defaults': {'creds': ['github+picked']}}
   for parse in (Configuration.parse, host_config.parse):
-    with pytest.raises(ValueError, match=r'defaults.creds is retired'):
+    with pytest.raises(ValueError, match=r'defaults.*creds'):
       parse(value)
 
 
@@ -316,7 +305,10 @@ def test_manual_commit_checks_the_operators_fixed_option_values(
   source, tmp_path, option, value, permission
 ):
   source = replace(
-    source, configuration=Configuration.parse({'operator': {'revoke': [permission]}})
+    source,
+    configuration=Configuration.parse(
+      {'defaults': {'llm': {'probe': 'echo:echo'}}, 'operator': {'revoke': [permission]}}
+    ),
   )
   root = start(source, grant=['@browser'])
   requested, _ = request(BroType, {'target': 'browser', 'manual': True}, source, root.authority)

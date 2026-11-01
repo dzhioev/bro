@@ -33,7 +33,9 @@ from ride.harness import get_harness
 from ride import provisioning
 from ride.workspace import build_context, docker
 harness = get_harness(name)
-recipe = harness.resolve_llm('echo:' if name == 'bro' else None, 'bro')
+from bro.llm.providers import bind_recipe
+recipe = bind_recipe('echo:echo' if name == 'bro' else 'anthropic:claude-opus-5')
+harness.scope_recipe().harness.check_recipe(recipe)
 assert recipe.TYPE == ('echo' if name == 'bro' else 'anthropic')
 checks = []
 if name == 'claude':

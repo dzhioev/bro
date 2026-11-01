@@ -18,6 +18,7 @@ from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL, BROKER_TALK
 from bro.broker.transport import ClientTransport
 from bro.inbox import Inbox
+from bro.llm.llm import Recipe
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
   InterimAssistantTextEvent,
@@ -72,11 +73,11 @@ class Declared(BaseBro):
   test that asserts on the recorded bro name or prompt needs no subclass."""
 
   description = 'd'
-  llm_spec = EchoSpec()
 
   def __init__(self, name: str = 'runner-bro', system_prompt: str = ''):
     self.name = name
     super().__init__(system_prompt=system_prompt)
+    self.recipe = EchoSpec()
 
 
 class StubRunner(Runner):
@@ -87,10 +88,14 @@ class StubRunner(Runner):
     llm: Optional[LLM] = None,
     *,
     bro: Optional[BaseBro] = None,
+    recipe: Recipe | None = None,
     name: str = 'runner-bro',
     system_prompt: str = '',
   ):
-    super().__init__(bro if bro is not None else Declared(name=name, system_prompt=system_prompt))
+    super().__init__(
+      bro if bro is not None else Declared(name=name, system_prompt=system_prompt),
+      recipe if recipe is not None else EchoSpec(),
+    )
     self.llm = llm if llm is not None else MockLLM()
 
   def _create_llm(self, *, hold: str) -> LLM:
@@ -977,13 +982,13 @@ class TestNativeTurnEnd:
 
 
 class _GatedBro(BaseBro):
-  llm_spec = OpenAISpec()
   name = 'gated'
   description = 'declares secrets for credential-gate tests'
   extra_secrets = ('alpha', 'beta')
 
   def __init__(self):
     super().__init__(system_prompt='gated')
+    self.recipe = OpenAISpec()
 
 
 @pytest.mark.credential_gate
@@ -993,7 +998,7 @@ class TestCredentialGate:
 
   def _gated(self) -> tuple[StubRunner, MockLLM]:
     llm = MockLLM(response='ran')
-    return StubRunner(llm, bro=_GatedBro()), llm
+    return StubRunner(llm, bro=_GatedBro(), recipe=OpenAISpec()), llm
 
   @pytest.mark.asyncio
   async def test_run_refuses_listing_every_missing_name(self, monkeypatch):
@@ -1219,6 +1224,11 @@ class TestAgentIdentity:
     from bro.native.echo_declaration import Recipe as EchoSpec
 
     class PlainBro(Declared):
-      llm_spec = EchoSpec()
+      def __init__(self, name):
+        super().__init__(name=name)
+        self.recipe = EchoSpec()
 
-    assert Runner(PlainBro(name='plain'))._create_llm(hold='unattended').agent == 'bro//plain'
+    assert (
+      Runner(PlainBro(name='plain'), EchoSpec())._create_llm(hold='unattended').agent
+      == 'bro//plain'
+    )

@@ -36,7 +36,7 @@ class Peers:
 
 class Host:
   def __init__(self, source=None):
-    self.reading = source or reading(config={'summon-depth': 2})
+    self.reading = source or reading(config={'defaults': {'summon-depth': 2}})
     self.workspace = SimpleNamespace(
       name='ws',
       metadata=SimpleNamespace(repo=None),
@@ -84,11 +84,9 @@ def _request(tmp_path, *, host=None, owner=None, **args):
   return admitted
 
 
-def test_worker_defers_an_uninstalled_summon_default_until_a_request(monkeypatch):
-  resolve = MagicMock(side_effect=ValueError("harness 'bro' is not installed"))
-  monkeypatch.setattr(bro_worker, 'get_harness', resolve)
-  BroType(Host())
-  resolve.assert_not_called()
+def test_owned_uninstalled_summon_default_refuses_the_reading(monkeypatch):
+  with pytest.raises(ValueError, match='summon-harness.*not-installed'):
+    reading(config={'defaults': {'summon-harness': 'not-installed'}})
 
 
 def test_talk_widens_the_bro_default(tmp_path):
@@ -263,24 +261,24 @@ def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
     _request(tmp_path, harness='claude', llm='openai:sol')
 
 
-def _host_recipes(*recipes):
-  source = reading(config={'projects': {'/proj': {'bros': {'dev': {'llm': list(recipes)}}}}})
+def _host_recipes(recipe):
+  source = reading(config={'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': recipe}}}}}})
   return Host(replace(source, attachment=Attachment(path='/proj')))
 
 
-def test_a_spawned_summon_is_denied_a_configured_list_its_harness_runs_none_of(tmp_path):
-  host = _host_recipes('anthropic:opus55:high+fast')
-  with pytest.raises(LaunchDenied, match='no configured recipe runs'):
+def test_a_spawned_summon_refuses_a_configured_provider_its_harness_cannot_run(tmp_path):
+  host = _host_recipes('anthropic:claude-opus-5-5,effort=high,fast_mode=true')
+  with pytest.raises(LaunchDenied, match='cannot run provider'):
     _request(tmp_path, host=host)
 
 
-def test_a_spawned_summon_runs_the_listed_recipe_its_harness_serves(tmp_path):
-  host = _host_recipes('anthropic:opus55:high+fast', 'default')
+def test_a_spawned_summon_runs_its_configured_recipe(tmp_path):
+  host = _host_recipes('openai:gpt-5.6-terra')
   assert isinstance(BroType(host).launch(_request(tmp_path, host=host)), Spawn)
 
 
-def test_a_manual_summon_leaves_the_configured_list_to_the_operators_launch(tmp_path):
-  host = _host_recipes('anthropic:opus55:high+fast')
+def test_a_manual_summon_leaves_the_recipe_to_the_operators_launch(tmp_path):
+  host = _host_recipes('anthropic:claude-opus-5-5,effort=high,fast_mode=true')
   assert isinstance(BroType(host).launch(_request(tmp_path, host=host, manual=True)), Expect)
 
 

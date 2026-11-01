@@ -17,6 +17,7 @@ from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
 from bro.inbox import Inbox
 from bro.jobs import Registry
+from bro.llm.llm import Recipe
 from bro.llm.observer import (
   InterimAssistantTextEvent,
   NullObserver,
@@ -86,8 +87,9 @@ class Runner:
   toolset mounts report against this run.
   """
 
-  def __init__(self, bro: BaseBro, *, activity_file: Optional[Path] = None):
+  def __init__(self, bro: BaseBro, recipe: Recipe, *, activity_file: Optional[Path] = None):
     self.bro = bro
+    self.recipe = recipe
     self.activity_file = activity_file
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
@@ -220,7 +222,7 @@ class Runner:
     # or None to start. checked before any machinery (tracker, LLM, live
     # servers) so a missing secret surfaces at start, not mid-run at first use;
     # each surface delivers it per its mode — run() raises and send() returns it.
-    missing = self.bro.missing_secrets(BRO)
+    missing = self.bro.missing_secrets(BRO, self.recipe)
     if len(missing) == 0:
       return None
     return f'{self.bro.name} cannot start: missing credentials: {", ".join(missing)}'
@@ -250,7 +252,7 @@ class Runner:
     system_prompt = self.bro.system_prompt_for(hold=hold, harness=BRO)
     trail_id = self._tracker.start_trail(
       bro=self.bro.name,
-      llm_spec=self._recipe().dump(),
+      llm_spec=self.recipe.dump(),
       system_prompt=system_prompt,
       forked_from=None,
       interactive=interactive,
@@ -528,14 +530,9 @@ class Runner:
   def _make_channel(self) -> Optional[RunLifecycle]:
     return RunLifecycle.from_env()
 
-  def _recipe(self):
-    if self.bro.llm_spec is None:
-      raise ValueError(f'{self.bro.name} declares no LLM recipe: pass --llm provider:model')
-    return self.bro.llm_spec
-
   def _create_llm(self, *, hold: str) -> LLM:
     return loop.create(
-      self._recipe(),
+      self.recipe,
       self.inbox,
       mcp_servers=self.bro.assemble(harness=BRO, hold=hold, live_run=self),
       observer=self._observer,

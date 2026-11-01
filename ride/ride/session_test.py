@@ -1011,7 +1011,8 @@ class TestConcurrentSessionGuard:
   prepares anything."""
 
   @pytest.fixture(autouse=True)
-  def launch_preflights(self, monkeypatch):
+  def launch_preflights(self, monkeypatch, home_settings_file):
+    home_settings_file.write_text('[llm]\nclaude = "anthropic:claude-opus-5"\n')
     # start_session runs the auth and scope preflights ahead of the guards these
     # tests drive; without stubs they read the machine's own credential store
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)

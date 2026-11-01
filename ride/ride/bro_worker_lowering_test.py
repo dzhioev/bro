@@ -33,6 +33,7 @@ from bro.bro import BaseBro
 from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
+from bro.llm.providers import parse
 from bro.monitor import (
   SESSION_DIR_ENV,
   party_member_dir,
@@ -49,7 +50,7 @@ from bro.workspace.paths import (
 )
 from ride.authority_launch import credentials_for
 from ride.authority_reading import Reading
-from ride.authority_scope import checked_recipe
+from ride.authority_scope import checked_recipe, resolve_recipe
 from ride.authority_test_helper import mission, reading
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.metadata import Isolation
@@ -337,7 +338,15 @@ class TestSummonLowering:
     self, lowering_harness, monkeypatch, tmp_path
   ):
     source = replace(
-      reading(config={'projects': {'/proj': {'bros': {'dev': {'llm': ['openai:sol:xhigh']}}}}}),
+      reading(
+        config={
+          'homes': {
+            'test-home': {
+              'bros': {'dev': {'llm': {'bro': 'openai:gpt-6.1-sol,reasoning_effort=xhigh'}}}
+            }
+          }
+        }
+      ),
       attachment=Attachment(path='/proj'),
     )
     monkeypatch.setattr('bro.base.host_config._read', lambda: pytest.fail('launch reread policy'))
@@ -354,7 +363,7 @@ class TestSummonLowering:
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
-    assert resolved == native_harness.BRO.resolve_llm('openai:sol:low', 'dev').dump()
+    assert resolved == native_harness.BRO.resolve_recipe(None, parse('openai:sol:low')).dump()
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
@@ -679,7 +688,7 @@ class TestSummonLowering:
         'work beside me',
       ]
     )
-    resolved = ride.harness.get_harness('bro').resolve_llm(None, 'dev')
+    resolved = resolve_recipe(reading(), 'dev', 'bro').recipe
     assert member.env == {
       **workspace_docker.MEMBER_BASELINE_ENV,
       'RIDE_BRO': 'dev',

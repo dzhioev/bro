@@ -16,7 +16,6 @@ from bro.base import credentials, host_config
 from bro.base.condition import iff, when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
-from bro.llm.llm import Recipe as BaseRecipe
 from bro.mcp import MCPServerSpec, ToolLayer, creds
 from bro.native.echo_declaration import Recipe
 from bro.worker_types import installed_types
@@ -90,8 +89,8 @@ def installation(monkeypatch):
   return Installation(
     {'child': Child(credential_presence=kinds), 'other': Other(credential_presence=kinds)},
     {
-      'native': HarnessReading(native, {'child': Recipe(), 'other': Recipe()}, llm_key=True),
-      'auth': HarnessReading(auth, {'child': Recipe(), 'other': Recipe()}, auth_kind='auth'),
+      'native': HarnessReading(native, llm_key=True),
+      'auth': HarnessReading(auth, auth_kind='auth'),
     },
     kinds,
     {'echo': frozenset({'provider_key'})},
@@ -100,8 +99,13 @@ def installation(monkeypatch):
 
 
 def reading(installation, configuration=None, project=None, defaults=None, settings=None):
+  configuration = configuration or {}
+  defaults_layer = {
+    'llm': {'native': 'echo:echo', 'auth': 'echo:echo'},
+    **configuration.get('defaults', {}),
+  }
   return Reading(
-    Configuration.parse(configuration or {}),
+    Configuration.parse({**configuration, 'defaults': defaults_layer}),
     defaults or {},
     installation,
     host_config.Attachment(path='/project', url='https://github.com/example/project.git'),
@@ -189,8 +193,8 @@ def test_configured_instances_are_target_harness_provider_scoped(installation):
   source = reading(
     installation,
     {
-      'projects': {
-        '/project': {
+      'homes': {
+        'test-home': {
           'bros': {
             'child': {'creds': ['active+child-secret']},
             'other': {'creds': ['other_key+other-secret']},
@@ -225,9 +229,12 @@ def test_bases_match_finite_evaluator_and_layer_caps_before_grants(installation)
     installation,
     {
       'defaults': {'revoke': ['webview']},
-      'projects': {
-        'https://github.com/example/project.git': {'grant': ['webview']},
-        '/project': {'revoke': ['@other'], 'bros': {'child': {'grant': ['@other']}}},
+      'homes': {
+        'test-home': {
+          'grant': ['webview'],
+          'revoke': ['@other'],
+          'bros': {'child': {'grant': ['@other']}},
+        },
       },
     },
   )
@@ -259,89 +266,13 @@ def test_bases_match_finite_evaluator_and_layer_caps_before_grants(installation)
   source.rules.use(mission.base, normalized(source, target='other'))
 
 
-def test_unknown_names_in_unapplied_layers_do_not_poison_launch(installation):
-  source = reading(
-    installation,
-    {
-      'projects': {
-        '/elsewhere': {'grant': ['missing-type']},
-        '/project': {'bros': {'other': {'creds': ['unknown+instance'], 'grant': ['missing-type']}}},
-      }
-    },
-  )
-  mission = source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
-  from ride.authority_launch import mission_view
-
-  assert mission_view(mission)['descriptor']['values']['target'] == 'child'
-  with pytest.raises(ValueError, match='unknown'):
-    source.rules.start(Request('bro', {'target': 'other'}), Authority.top(), source)
-
-
 def test_operator_caps_and_layer_conflicts(installation):
   source = reading(installation, {'operator': {'revoke': ['@other']}})
   descriptor = normalized(source, target='other')
   with pytest.raises(Refusal, match='use rule'):
     source.rules.use(source.operator(), descriptor)
-  bad = reading(installation, {'defaults': {'grant': ['@other'], 'revoke': ['@other']}})
   with pytest.raises(ValueError, match='grant and revoke'):
-    bad.rules.start(Request('bro', {'target': 'child'}), Authority.top(), bad)
-
-
-def test_reading_snapshots_whole_config_defaults_home_and_tree(
-  tmp_path, installation, home_settings_file
-):
-  home_settings_file.write_text('summon-harness = "native"\ngrant = ["@other"]\n')
-  host, store, project = tmp_path / 'host.json', tmp_path / 'store', tmp_path / 'project'
-  store.mkdir()
-  project.mkdir()
-  host.write_text(
-    json.dumps(
-      {
-        'defaults': {'grant': ['webview']},
-        'operator': {'revoke': ['@other']},
-        'llm': {'local': 'echo:echo'},
-        'summon-depth': 7,
-        'user': {'creds': ['cookies+operator']},
-      }
-    )
-  )
-  (store / 'creds.json').write_text(json.dumps({'defaults': ['cookies+first'], 'sources': {}}))
-  (project / 'pyproject.toml').write_text(
-    '[tool.bro]\nsummon-harness = "native"\ngrant = ["@other"]\n'
-  )
-  source = Reading.take(
-    Repository(str(project), project), host=host, store=store, installation=installation
-  )
-  home_settings_file.write_text('broken')
-  host.write_text('{broken')
-  (store / 'creds.json').write_text('{broken')
-  (project / 'pyproject.toml').write_text('[broken')
-  assert source.picks('child')['cookies'] == 'first'
-  assert source.configuration.raw['user']['creds'] == ('cookies+operator',)
-  assert source.configuration.raw['llm']['local'] == 'echo:echo'
-  assert source.summon_depth == 7
-  assert source.home_policy.layer.grant
-  normalized(source)
-  with pytest.raises(TypeError):
-    source.configuration.raw['llm']['new'] = 'echo:echo'
-  with pytest.raises(TypeError):
-    cast(MutableMapping[str, str], source.store_defaults)['cookies'] = 'new'
-
-
-def test_reading_skips_unregistered_store_defaults_but_rejects_used_policy(tmp_path, installation):
-  (tmp_path / 'creds.json').write_text(
-    json.dumps({'defaults': ['cookies+work', 'consumer_only+host']})
-  )
-  source = Reading.take(host=tmp_path / 'absent', store=tmp_path, installation=installation)
-
-  assert source.picks('child') == {'cookies': 'work'}
-  request = Request('bro', {'target': 'child', 'harness': 'native'})
-  source.rules.start(request, Authority.top(), source)
-  configured = replace(
-    source, home_policy=replace(source.home_policy, picks={'consumer_only': 'host'})
-  )
-  with pytest.raises(ValueError, match='unknown credential kind'):
-    configured.rules.start(request, Authority.top(), configured)
+    reading(installation, {'defaults': {'grant': ['@other'], 'revoke': ['@other']}})
 
 
 @pytest.mark.parametrize(
@@ -366,27 +297,6 @@ def test_home_settings_refuse_instance_entries(tmp_path, installation, home_sett
         store=tmp_path / 'absent',
         installation=installation,
       )
-
-
-def test_recipe_list_prefers_first_served_and_more_specific_replaces(installation):
-  source = reading(
-    installation,
-    {
-      'projects': {
-        'https://github.com/example/project.git': {
-          'bros': {'child': {'llm': ['anthropic:opus55:high', 'echo:echo', 'default']}}
-        },
-        '/project': {'bros': {'child': {'llm': ['echo:custom+passthrough']}}},
-      }
-    },
-  )
-  assert normalized(source).values['model'] == 'custom'
-  assert source.attachment is not None
-  less_specific = replace(source, attachment=host_config.Attachment(url=source.attachment.url))
-  assert normalized(less_specific).values['provider'] == 'echo'
-  assert normalized(less_specific).values['model'] == 'echo'
-  with pytest.raises(ValueError):
-    normalized(source, provider='anthropic')
 
 
 def test_other_types_defaults_domains_and_empty_bases(installation):
@@ -548,8 +458,8 @@ def test_configured_lazy_entries_match_eager_at_prepare_and_commit(installation)
   source = reading(
     installation,
     {
-      'projects': {
-        '/project': {
+      'homes': {
+        'test-home': {
           'bros': {
             'child': {'creds': ['active+child-secret']},
           }
@@ -608,9 +518,8 @@ def test_configured_lazy_entries_match_eager_at_prepare_and_commit(installation)
 
 
 def test_authorized_missing_target_reaches_existence(installation):
-  source = reading(installation, {'defaults': {'grant': ['@uninstalled']}})
-  caller = source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
-  mission = source.rules.start(Request('bro', {'target': 'uninstalled'}), caller.base, source)
+  source = reading(installation)
+  mission = source.rules.start(Request('bro', {'target': 'uninstalled'}), Authority.top(), source)
   assert not any(name.startswith('cred.') for name in mission.descriptor.values)
   with pytest.raises(ValueError, match='target.*not installed'):
     existence(mission.descriptor, source, frozenset())
@@ -637,20 +546,7 @@ def test_explicit_presence_never_initializes_ambient_store(installation, monkeyp
 def test_model_alias_is_mapped_before_use_checks(installation):
   from bro.openai.declaration import Recipe as OpenAISpec
 
-  native = Harness('native')
-  native._llm_providers = ('openai',)
-  installation = replace(
-    installation,
-    harnesses={
-      'native': HarnessReading(
-        native,
-        {'child': OpenAISpec(reasoning_effort='medium'), 'other': OpenAISpec()},
-        llm_key=False,
-      )
-    },
-    provider_needs={'openai': frozenset()},
-  )
-  source = reading(installation)
+  source = recipe_reading(installation, 'native', OpenAISpec(reasoning_effort='medium'))
   from bro.llm.providers import resolve_model
 
   canonical = resolve_model('openai', 'sol')
@@ -667,65 +563,24 @@ def test_model_alias_is_mapped_before_use_checks(installation):
     normalized(source, provider='openai', model='sol')
 
 
-def test_new_grammar_snapshot_does_not_open_the_ambient_store(tmp_path, monkeypatch):
-  host = tmp_path / 'host.json'
-  host.write_text(json.dumps({'operator': {'revoke': ['@other']}}))
-  monkeypatch.setattr(credentials, 'default_store', lambda: pytest.fail('ambient store opened'))
-  snapshot = Reading.take(host=host, store=tmp_path / 'empty')
-  assert snapshot.configuration.operator.revoke
-  assert snapshot.installation.declarations
+def recipe_reading(installation, harness, spec):
+  from bro.llm.providers import format_recipe
 
-
-def recipe_installation(installation: Installation, harness: str, spec: BaseRecipe) -> Installation:
   driver = Harness(harness)
   driver._llm_providers = (spec.TYPE,)
-  return replace(
+  installed = replace(
     installation,
-    harnesses={harness: HarnessReading(driver, dict.fromkeys(installation.bros, spec))},
-    provider_needs={spec.TYPE: frozenset()},
+    harnesses={harness: HarnessReading(driver, llm_key=True)},
+    provider_needs={spec.TYPE: frozenset({'provider_key'})},
   )
-
-
-def test_deferred_recipe_choices_are_checked_then_omitted(installation):
-  from bro.anthropic.declaration import Recipe as AnthropicSpec
-  from ride.authority_scope import DEFAULT, checked_recipe
-
-  spec = AnthropicSpec(model=None, effort=None)
-  source = reading(
-    recipe_installation(installation, 'claude', spec),
-    settings=HomeSettings(summon_harness='claude'),
-  )
-  request = Request('bro', {'target': 'child'})
-  descriptor = source.rules.normalize(request, source)
-  assert descriptor.values['model'] == DEFAULT and descriptor.values['effort'] == DEFAULT
-  for option in ('model', 'effort'):
-    cap = source.syntax.layer(parse_layer(revoke=[f'bro.{option}=~default'])).cap
-    with pytest.raises(Refusal, match='use rule'):
-      source.rules.start(request, Authority.top().meet(cap), source)
-  source.rules.use(Authority.top(), descriptor)
-  assert checked_recipe(request, descriptor, source) == spec
-  literal_cap = source.syntax.layer(parse_layer(revoke=['bro.model=default'])).cap
-  source.rules.use(Authority.top().meet(literal_cap), descriptor)
-  explicit = Request(
-    'bro',
-    {
-      'target': 'child',
-      'provider': 'anthropic',
-      'model': 'claude-opaque-new',
-      'effort': 'high',
-      'passthrough': True,
-    },
-  )
-  explicit_descriptor = source.rules.normalize(explicit, source)
-  cap = source.syntax.layer(parse_layer(revoke=['bro.model=~default', 'bro.effort=~default'])).cap
-  source.rules.use(Authority.top().meet(cap), explicit_descriptor)
+  return reading(installed, {'defaults': {'llm': {harness: format_recipe(spec)}}})
 
 
 def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation):
   from bro.openai.declaration import Recipe as OpenAISpec
   from ride.authority_scope import DEFAULT, checked_recipe
 
-  source = reading(recipe_installation(installation, 'native', OpenAISpec()))
+  source = recipe_reading(installation, 'native', OpenAISpec())
   for model in ('default', '~default', 'vendor-private-variant'):
     request = Request(
       'bro', {'target': 'child', 'provider': 'openai', 'model': model, 'passthrough': True}
@@ -751,7 +606,7 @@ def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, 
     service_tier='flex',
     compact_threshold=12345,
   )
-  source = reading(recipe_installation(installation, 'native', standing))
+  source = recipe_reading(installation, 'native', standing)
   request = Request('bro', {'target': 'child'})
   descriptor = source.rules.normalize(request, source)
   domain = source.installation.declarations['bro'].options['effort'].domain
@@ -799,13 +654,15 @@ def test_cheatsheet_examples_use_shipped_configuration_and_permission_grammar():
   text = (reference.DIRECTORY / 'permissions_cheatsheet.md').read_text()
   for language, body in re.findall(r'```(\w+)\n(.*?)```', text, re.DOTALL):
     if language == 'json':
-      configuration = Configuration.parse(json.loads(body))
-      syntax.layer(configuration.defaults.layer)
-      syntax.layer(configuration.operator)
-      for project in configuration.projects.values():
-        syntax.layer(project.policy.layer)
-        for policy in project.bros.values():
-          syntax.layer(policy.layer)
+      data = json.loads(body)
+      for home in data.get('homes', {}) or {'test-home': {}}:
+        configuration = Configuration.parse(data, home=home, bro_homes={})
+        syntax.layer(configuration.defaults.layer)
+        syntax.layer(configuration.operator)
+        for section in configuration.homes.values():
+          syntax.layer(section.policy.layer)
+          for policy in section.bros.values():
+            syntax.layer(policy.layer)
     elif language == 'sh':
       for line in body.splitlines():
         words = shlex.split(line)
@@ -882,7 +739,7 @@ def test_configured_authority_agrees_with_configured_kinds_on_every_start(instal
   installation = grown(installation, 2)
   source = reading(
     installation,
-    {'projects': {'/project': {'bros': {'child': {'creds': ['active+child-secret']}}}}},
+    {'homes': {'test-home': {'bros': {'child': {'creds': ['active+child-secret']}}}}},
   )
   authority = Authority(configured_entries(source))
   types = tuple(installation.declarations)
@@ -926,296 +783,24 @@ def test_later_starts_under_a_reading_do_no_per_target_work(installation, monkey
   assert len(calls) <= len(installation.credential_kinds)
 
 
-@pytest.mark.parametrize(
-  ('selected', 'project', 'host', 'expected'),
-  [
-    ('auth', 'native', 'native', 'auth'),
-    (None, 'auth', 'native', 'auth'),
-    (None, None, 'native', 'native'),
-  ],
-  ids=['launch', 'project', 'host'],
-)
-def test_summon_harness_precedence(installation, selected, project, host, expected):
-  source = Reading(
-    Configuration.parse({'summon-harness': host}),
-    {},
-    installation,
-    settings=HomeSettings(summon_harness=project),
-  )
-  descriptor = normalized(source, **({'harness': selected} if selected is not None else {}))
-  assert descriptor.values['harness'] == expected
-
-
 def test_unset_harness_does_not_prevent_reading_or_explicit_summons(installation):
   source = Reading(Configuration.parse({}), {}, installation)
   assert source.harness is None and source.summon_harness is None
   assert normalized(source, harness='native').values['harness'] == 'native'
   with pytest.raises(ValueError) as failure:
     normalized(source)
-  assert (
-    str(failure.value)
-    == 'no harness: pass --harness, set home settings summon-harness, or set "summon-harness" in ~/.bro.json'
-  )
+  assert 'summon-harness' in str(failure.value)
 
 
 def test_summon_does_not_use_the_root_harness_key(installation):
   source = Reading(
-    Configuration.parse({'harness': 'native'}),
+    Configuration.parse({'defaults': {'harness': 'native'}}),
     {},
     installation,
     settings=HomeSettings(harness='auth'),
   )
   with pytest.raises(ValueError, match='summon-harness'):
     normalized(source)
-
-
-@pytest.fixture
-def absent_recipe_installation(installation):
-  native = installation.harnesses['native']
-  return replace(
-    installation,
-    harnesses={
-      **installation.harnesses,
-      'native': replace(native, recipes={'child': None, 'other': None}),
-    },
-  )
-
-
-def test_absent_recipe_reading_has_no_llm_key_but_start_is_refused(absent_recipe_installation):
-  from ride.authority_scope import checked_recipe
-
-  source = reading(absent_recipe_installation)
-  request = Request('bro', {'target': 'child'})
-  descriptor = source.rules.normalize(request, source)
-  assert 'provider' not in descriptor.values
-  assert 'cred.provider_key' not in descriptor.values
-  for check in (
-    lambda: existence(descriptor, source, frozenset(), check_presence=False),
-    lambda: checked_recipe(request, descriptor, source),
-  ):
-    with pytest.raises(
-      ValueError,
-      match='child declares no LLM recipe: pass --llm provider:model, or set "llm" under projects.<repo>.bros.child in ~/.bro.json',
-    ):
-      check()
-
-
-@pytest.mark.parametrize('supplied', ['wire', 'host', 'default'])
-def test_managed_recipe_supplied_to_a_persona_without_one(absent_recipe_installation, supplied):
-  from ride.authority_scope import checked_recipe
-  from ride.bro_worker import BroType
-
-  recipes = ['echo:chosen+passthrough'] if supplied == 'host' else ['default']
-  source = reading(
-    absent_recipe_installation, {'projects': {'/project': {'bros': {'child': {'llm': recipes}}}}}
-  )
-  fields = {'target': 'child'}
-  if supplied == 'wire':
-    fields['llm'] = 'echo:chosen+passthrough'
-  requested = Request('bro', BroType.option_values(fields, source).values)
-  descriptor = source.rules.normalize(requested, source)
-  if supplied == 'default':
-    assert 'provider' not in descriptor.values
-    with pytest.raises(ValueError, match='declares no LLM recipe'):
-      checked_recipe(requested, descriptor, source)
-  else:
-    assert checked_recipe(requested, descriptor, source) == Recipe(model='chosen', passthrough=True)
-    assert 'cred.provider_key' in descriptor.values
-
-
-@pytest.mark.parametrize('value', [':echo', '::high', '+fast'])
-def test_incomplete_summon_recipe_requires_a_base(absent_recipe_installation, value):
-  from ride.bro_worker import BroType
-
-  source = reading(absent_recipe_installation)
-  with pytest.raises(ValueError, match='child declares no LLM recipe'):
-    requested = Request(
-      'bro', BroType.option_values({'target': 'child', 'llm': value}, source).values
-    )
-    source.rules.normalize(requested, source)
-
-
-def test_unknown_host_provider_is_skipped_and_refused_when_exhausted(installation, monkeypatch):
-  from bro.base import log
-
-  messages = []
-  monkeypatch.setattr(log, 'verbose', lambda message, *args: messages.append(message % args))
-  config = {
-    'projects': {
-      '/project': {'bros': {'child': {'llm': ['uninstalled:remote', 'echo:local+passthrough']}}}
-    }
-  }
-  source = reading(installation, config)
-  assert normalized(source).values['model'] == 'local'
-  assert any('uninstalled' in message and 'skipping' in message for message in messages)
-  config['projects']['/project']['bros']['child']['llm'] = ['uninstalled:remote']
-  source = reading(installation, config)
-  with pytest.raises(ValueError, match='uninstalled.*install the plug-in'):
-    normalized(source)
-  assert (
-    normalized(source, provider='echo', model='override', passthrough=True).values['model']
-    == 'override'
-  )
-
-
-def test_recipe_layers_preserve_persona_knobs_but_named_provider_resets_them(installation):
-  from bro.openai.declaration import MODELS, Recipe as OpenAISpec
-  from ride.authority_scope import checked_recipe
-  from ride.bro_worker import BroType
-
-  standing = OpenAISpec(reasoning_effort='high', compact_threshold=12345)
-  installed = recipe_installation(installation, 'native', standing)
-  source = reading(installed, {'projects': {'/project': {'bros': {'child': {'llm': [':terra']}}}}})
-  requested = Request('bro', {'target': 'child', 'effort': 'low'})
-  descriptor = source.rules.normalize(requested, source)
-  assert checked_recipe(requested, descriptor, source) == replace(
-    standing, model=MODELS['terra'], reasoning_effort='low'
-  )
-  requested = Request(
-    'bro', BroType.option_values({'target': 'child', 'llm': 'openai:sol'}, source).values
-  )
-  descriptor = source.rules.normalize(requested, source)
-  assert checked_recipe(requested, descriptor, source) == OpenAISpec(model=MODELS['sol'])
-
-
-def test_summon_preset_precedence_and_provider_no_shadowing(installation):
-  from ride.bro_worker import BroType
-
-  source = reading(
-    installation,
-    {'llm': {'chosen': 'echo:host+passthrough', 'echo': 'uninstalled:model'}},
-    project={'llm': {'chosen': 'echo:project+passthrough'}},
-  )
-  selected = BroType.option_values({'target': 'child', 'llm': 'chosen'}, source).values
-  assert selected['model'] == 'host'
-  selected = BroType.option_values({'target': 'child', 'llm': 'echo'}, source).values
-  assert selected['provider'] == 'echo'
-  assert 'model' not in selected
-
-
-def test_configuration_parses_uninstalled_recipes():
-  configuration = Configuration.parse(
-    {
-      'llm': {'future': 'uninstalled:model'},
-      'projects': {'/elsewhere': {'bros': {'missing': {'llm': ['uninstalled:model']}}}},
-    }
-  )
-  assert configuration.projects['/elsewhere'].bros['missing'].recipes == ('uninstalled:model',)
-
-
-def test_default_without_a_declaration_does_not_hide_missing_host_plugins(
-  absent_recipe_installation,
-):
-  source = reading(
-    absent_recipe_installation,
-    {'projects': {'/project': {'bros': {'child': {'llm': ['uninstalled:model', 'default']}}}}},
-  )
-  with pytest.raises(ValueError, match='uninstalled.*install the plug-in'):
-    normalized(source)
-
-
-@pytest.mark.parametrize('surface', ['authority', 'scope'])
-@pytest.mark.parametrize(
-  'selection',
-  [
-    {'llm': 'openai:gpt-7:high'},
-    {'llm': 'openai:gpt-7:high+passthrough'},
-    {'provider': 'openai', 'model': 'gpt-7', 'effort': 'high', 'passthrough': True},
-  ],
-)
-def test_admission_on_the_final_launch_recipe(
-  installation, monkeypatch, capsys, surface, selection
-):
-  from bro.openai.declaration import Recipe as OpenAISpec
-  from ride.authority_launch import request
-  from ride.authority_scope import checked_recipe
-  from ride.scope_report import report_scope
-
-  source = reading(recipe_installation(installation, 'native', OpenAISpec()))
-  if surface == 'scope':
-    monkeypatch.setattr(Reading, 'take', lambda *_: source)
-    options = {name: value for name, value in selection.items() if name != 'llm'}
-    status = report_scope(None, 'child', 'native', selection.get('llm'), recipe_options=options)
-    assert status == (1 if selection == {'llm': 'openai:gpt-7:high'} else 0)
-    output = capsys.readouterr().out
-    assert 'gpt-7' in output
-    assert 'passthrough' in output
-    return
-
-  def launch():
-    requested, _ = request(
-      BroType, {'target': 'child', **selection}, source, source.operator(), forward=False
-    )
-    mission = source.rules.start(requested, source.operator(), source)
-    return checked_recipe(mission.request, mission.descriptor, source)
-
-  if selection == {'llm': 'openai:gpt-7:high'}:
-    with pytest.raises(ValueError, match='gpt-7.*\\+passthrough'):
-      launch()
-  else:
-    recipe = launch()
-    assert recipe.selection()['model'] == 'gpt-7' and recipe.passthrough
-
-
-@pytest.mark.parametrize(
-  'selection,model,passthrough',
-  [
-    ({}, None, False),
-    ({'llm': ':sol'}, 'gpt-6.1-sol', False),
-    ({'llm': '+passthrough'}, 'gpt-7', True),
-  ],
-)
-def test_unlisted_standing_recipe_is_overridable(installation, selection, model, passthrough):
-  from bro.openai.declaration import Recipe as OpenAISpec
-  from ride.authority_scope import checked_recipe
-
-  installed = recipe_installation(installation, 'native', OpenAISpec(model='gpt-7'))
-  source = reading(installed)
-  fields = {'target': 'child', **selection}
-  if model is None:
-    with pytest.raises(ValueError, match='gpt-7.*passthrough'):
-      BroType.option_values(fields, source)
-      normalized(source)
-  else:
-    values = BroType.option_values(fields, source).values
-    requested = Request('bro', values)
-    descriptor = source.rules.normalize(requested, source)
-    spec = checked_recipe(requested, descriptor, source)
-    assert spec.selection()['model'] == model and spec.passthrough is passthrough
-  source = reading(
-    installed, {'projects': {'/project': {'bros': {'child': {'llm': ['openai:terra']}}}}}
-  )
-  assert normalized(source).values['model'] == 'gpt-5.6-terra'
-
-
-@pytest.mark.parametrize(
-  'text,admitted',
-  [
-    ('::xhigh', True),
-    ('anthropic', True),
-    ('anthropic:claude-opus-6', False),
-    ('anthropic:claude-opus-6+passthrough', True),
-  ],
-)
-def test_claude_deferred_listed_and_unlisted_admission(installation, text, admitted):
-  from bro.anthropic.declaration import Recipe as AnthropicSpec
-  from ride.authority_scope import checked_recipe
-
-  source = reading(
-    recipe_installation(installation, 'claude', AnthropicSpec(model=None, effort=None)),
-    settings=HomeSettings(summon_harness='claude'),
-  )
-
-  def launch():
-    values = BroType.option_values({'target': 'child', 'llm': text}, source).values
-    requested = Request('bro', values)
-    return checked_recipe(requested, source.rules.normalize(requested, source), source)
-
-  if admitted:
-    assert launch().admitted()
-  else:
-    with pytest.raises(ValueError, match='claude-opus-6.*passthrough'):
-      launch()
 
 
 def test_passthrough_cannot_be_overridden_or_set_on_a_manual_start(installation):
@@ -1234,12 +819,262 @@ def test_passthrough_cannot_be_overridden_or_set_on_a_manual_start(installation)
     BroType.option_values({'target': 'child', 'passthrough': 1}, source)
 
 
-def test_the_bro_installation_reads_its_shipped_defaults(installation_environment, installation):
-  from bro.workspace.installation import MARKER
-  from bro.workspace.settings import home_settings
+def foreign_reading(installation, config):
+  installed = replace(installation, bro_homes={'child': 'foreign', 'other': 'test-home'})
+  config = {
+    'defaults': {
+      'harness': 'native',
+      'summon-harness': 'native',
+      'llm': {'native': 'echo:echo', 'auth': 'echo:echo'},
+    },
+    **config,
+  }
+  return Reading(
+    Configuration.parse(config, home='test-home', bro_homes=installed.bro_homes),
+    {},
+    installed,
+    home='test-home',
+  )
 
-  (installation_environment / MARKER).write_text('bro\n')
-  settings = home_settings('bro')
-  source = Reading.take(installation=installation)
-  assert source.resolve_harness() == settings.harness
-  assert source.default_bro == settings.default_bro
+
+def test_layer_winners_are_per_harness_for_roots_and_summons(installation):
+  from ride.authority_scope import checked_recipe, resolve_recipe
+
+  source = Reading(
+    Configuration.parse(
+      {
+        'defaults': {
+          'harness': 'auth',
+          'summon-harness': 'native',
+          'llm': {'native': 'echo:echo', 'auth': 'echo:auth+passthrough'},
+        },
+        'homes': {'test-home': {'bros': {'child': {'llm': {'native': 'echo:child+passthrough'}}}}},
+      }
+    ),
+    {},
+    installation,
+    settings=HomeSettings(
+      harness='native', summon_harness='auth', llm={'native': 'echo:settings+passthrough'}
+    ),
+  )
+  assert source.resolve_harness(target='child') == 'auth'
+  root = resolve_recipe(source, 'child', 'auth')
+  assert root.recipe.dump()['model'] == 'auth' and root.source == 'defaults'
+  requested = Request('bro', {'target': 'child'})
+  descriptor = source.rules.normalize(requested, source)
+  child = resolve_recipe(source, 'child', cast(str, descriptor.values['harness']))
+  assert child.recipe.dump()['model'] == 'child'
+  assert child.source == 'homes.test-home.bros.child'
+  assert checked_recipe(requested, descriptor, source) == child.recipe
+  assert resolve_recipe(source, 'other', 'native').source == 'defaults'
+
+
+@pytest.mark.parametrize('part', ['defaults', 'bro', 'settings'])
+def test_owned_recipes_bind_even_when_no_start_uses_them(installation, part):
+  config = (
+    {'defaults': {'llm': {'native': 'echo:echo,invalid=field'}}}
+    if part == 'defaults'
+    else {
+      'homes': {'test-home': {'bros': {'other': {'llm': {'native': 'echo:echo,invalid=field'}}}}}
+    }
+  )
+  with pytest.raises(ValueError, match=r'(defaults|other|home settings).llm.native.*invalid'):
+    if part == 'settings':
+      Reading(
+        Configuration.parse({}),
+        {},
+        installation,
+        settings=HomeSettings(llm={'native': 'echo:echo,invalid=field'}),
+      )
+    else:
+      reading(installation, config)
+
+
+@pytest.mark.parametrize(
+  'entry',
+  [
+    {'harness': 'uninstalled'},
+    {'grant': ['missing-type']},
+    {'creds': ['missing+instance']},
+    {'llm': {'native': 'uninstalled:model'}},
+  ],
+)
+def test_foreign_values_bind_only_when_their_bro_starts(installation, entry):
+  source = foreign_reading(installation, {'homes': {'foreign': {'bros': {'child': entry}}}})
+  source.rules.start(Request('bro', {'target': 'other'}), Authority.top(), source)
+  with pytest.raises(ValueError) as failure:
+    # root selection uses harness, while normalization selects summon-harness.
+    source.resolve_harness(target='child')
+    source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+  assert 'homes.foreign.bros.child' in str(failure.value)
+  assert 'install the plug-in' in str(failure.value)
+  assert 'homes.test-home.bros.child' in str(failure.value)
+
+
+@pytest.mark.parametrize(
+  'entry',
+  [
+    {'llm': []},
+    {'harness': 'Bad'},
+    {'summon-depth': -1},
+    {'unknown': []},
+    {'grant': ['invalid syntax']},
+  ],
+)
+def test_foreign_shape_errors_refuse_unrelated_starts(installation, entry):
+  with pytest.raises(ValueError, match='homes.foreign.bros.child'):
+    foreign_reading(installation, {'homes': {'foreign': {'bros': {'child': entry}}}})
+
+
+def test_own_bro_layer_shadows_foreign_scalars_and_recipes(installation):
+  from ride.authority_scope import resolve_recipe
+
+  source = foreign_reading(
+    installation,
+    {
+      'homes': {
+        'foreign': {
+          'bros': {
+            'child': {
+              'harness': 'uninstalled',
+              'summon-harness': 'uninstalled',
+              'llm': {'native': 'uninstalled:model'},
+              'creds': ['cookies+foreign'],
+            }
+          }
+        },
+        'test-home': {
+          'bros': {
+            'child': {
+              'harness': 'native',
+              'summon-harness': 'native',
+              'llm': {'native': 'echo:echo'},
+              'creds': ['cookies+own'],
+            }
+          }
+        },
+      }
+    },
+  )
+  assert source.resolve_harness(target='child') == 'native'
+  assert source.resolve_harness(target='child', summon=True) == 'native'
+  assert source.picks('child')['cookies'] == 'own'
+  resolved = resolve_recipe(source, 'child', 'native')
+  assert resolved.source == 'homes.test-home.bros.child'
+  source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+
+
+def test_foreign_grants_fold_instead_of_shadowing(installation):
+  source = foreign_reading(
+    installation,
+    {
+      'homes': {
+        'foreign': {'bros': {'child': {'grant': ['webview']}}},
+        'test-home': {'bros': {'child': {'revoke': ['webview']}}},
+      }
+    },
+  )
+  mission = source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+  assert mission.authority.evaluate(
+    Atom('webview'), Descriptor('webview'), source.installation.declarations
+  ).use.is_empty
+  with pytest.raises(ValueError, match='homes.foreign.bros.child.authority'):
+    poisoned = foreign_reading(
+      installation,
+      {
+        'homes': {
+          'foreign': {'bros': {'child': {'grant': ['missing-type']}}},
+          'test-home': {'bros': {'child': {'grant': ['webview']}}},
+        }
+      },
+    )
+    poisoned.rules.start(Request('bro', {'target': 'child'}), Authority.top(), poisoned)
+
+
+def test_other_homes_are_not_read_and_missing_harness_recipes_are_grammar_only(installation):
+  source = reading(
+    installation,
+    {
+      'homes': {'unrelated': {'broken': True, 'bros': {'other': None}}},
+      'defaults': {'llm': {'absent': 'uninstalled:model,unknown=value'}},
+    },
+  )
+  source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
+
+
+@pytest.mark.parametrize(
+  'entry',
+  [
+    {'default-bro': 'missing'},
+    {'bros': {'missing': {}}},
+    {'grant': ['@missing']},
+    {'creds': ['missing+instance']},
+    {'harness': 'missing'},
+  ],
+)
+def test_owned_home_unknown_values_refuse_every_launch(installation, entry):
+  with pytest.raises(ValueError, match='homes.test-home'):
+    reading(installation, {'homes': {'test-home': entry}})
+
+
+def test_reading_freezes_the_home_stack_and_ignores_attachment_edits(
+  tmp_path, installation, home_settings_file
+):
+  home_settings_file.write_text('summon-harness = "native"\n[llm]\nnative = "echo:echo"\n')
+  config = {
+    'homes': {
+      'test-home': {
+        'default-bro': 'other',
+        'summon-depth': 0,
+        'bros': {'child': {'llm': {'native': 'echo:chosen+passthrough'}}},
+      }
+    }
+  }
+  host = tmp_path / 'host.json'
+  host.write_text(json.dumps(config))
+  source = Reading.take(host=host, installation=installation)
+  config['homes']['test-home']['bros']['child']['llm']['native'] = 'uninstalled:model'
+  host.write_text(json.dumps(config))
+  from ride.authority_scope import resolve_recipe
+
+  assert resolve_recipe(source, 'child', 'native').recipe.dump()['model'] == 'chosen'
+  assert source.default_bro == 'other' and source.summon_depth == 0
+  with pytest.raises(TypeError):
+    cast(MutableMapping, source.layers('child')[-1].config.llm)['native'] = 'echo:changed'
+  assert resolve_recipe(replace(source, attachment=None), 'child', 'native') == resolve_recipe(
+    source, 'child', 'native'
+  )
+
+
+@pytest.mark.parametrize(
+  'config',
+  [
+    {'user': {'creds': ['missing+profile']}},
+    {'user': {'tools': {'example.command': {'creds': ['missing+profile']}}}},
+    {'operator': {'revoke': ['@missing']}},
+    {'operator': {'revoke': ['bro.missing=value']}},
+  ],
+)
+def test_owned_user_and_operator_values_are_validated_with_their_layer(installation, config):
+  with pytest.raises(ValueError, match='(user|operator).*missing'):
+    reading(installation, config)
+
+
+def test_explicit_recipe_replaces_an_unbound_foreign_recipe(installation):
+  from ride.authority_scope import resolve_recipe
+
+  source = foreign_reading(
+    installation,
+    {'homes': {'foreign': {'bros': {'child': {'llm': {'native': 'uninstalled:model'}}}}}},
+  )
+  resolved = resolve_recipe(source, 'child', 'native', ('echo:echo', '--llm'))
+  assert resolved.recipe == Recipe() and resolved.source == '--llm'
+  requested = Request('bro', {'target': 'child', 'provider': 'echo', 'model': 'echo'})
+  source.rules.start(requested, Authority.top(), source)
+
+
+@pytest.mark.parametrize('harness', ['native', 'uninstalled'])
+def test_explicit_harness_existence_is_not_exposed_before_authorization(installation, harness):
+  source = reading(installation)
+  with pytest.raises(Refusal, match='use rule: bro:'):
+    source.rules.start(Request('bro', {'target': 'child', 'harness': harness}), Authority(), source)

@@ -27,7 +27,7 @@ def test_packaged_settings_load_only_the_installation_home(home_settings_file):
 @pytest.mark.parametrize('key', ['harness', 'summon-harness', 'default-bro'])
 @pytest.mark.parametrize('value', ['5', '""'])
 def test_string_keys_are_validated_with_the_source(key, value):
-  with pytest.raises(ValueError, match=f'{key}.*fixture.toml'):
+  with pytest.raises(ValueError, match=f'fixture.toml.*{key}'):
     settings_from_text(f'{key} = {value}', 'fixture.toml')
 
 
@@ -37,9 +37,9 @@ def test_harness_names_are_validated_without_loading_them(key):
     settings_from_text(f'{key} = "Wrong"', 'fixture.toml')
 
 
-@pytest.mark.parametrize('value', ['0', '-1', 'true', '"3"', '2.5'])
-def test_depth_is_a_positive_integer(value):
-  with pytest.raises(ValueError, match='summon-depth.*positive integer'):
+@pytest.mark.parametrize('value', ['-1', 'true', '"3"', '2.5'])
+def test_depth_is_a_nonnegative_integer(value):
+  with pytest.raises(ValueError, match='summon-depth.*non-negative integer'):
     settings_from_text(f'summon-depth = {value}', 'fixture.toml')
 
 

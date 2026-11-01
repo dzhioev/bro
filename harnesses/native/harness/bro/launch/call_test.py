@@ -80,10 +80,24 @@ class MockLLM(LLM):
 class RecordBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_echo.Recipe()
 
-  def __init__(self):
-    super().__init__(system_prompt='record')
+  def __init__(self, **kwargs):
+    super().__init__(**kwargs, system_prompt='record')
+    self.recipe = llm_llms_echo.Recipe()
+
+
+@pytest.fixture(autouse=True)
+def configured_chat_recipe(monkeypatch, register_test_bros):
+  from pathlib import Path
+
+  from bro.base import host_config
+
+  register_test_bros(RecordBro)
+  Path(host_config.HOST_CONFIG_FILE).write_text(
+    json.dumps(
+      {'homes': {'test-home': {'bros': {'record': {'llm': {'bro': 'openai:gpt-6.1-sol'}}}}}}
+    )
+  )
 
 
 class _MockRunner(Runner):
@@ -91,7 +105,7 @@ class _MockRunner(Runner):
   need no provider."""
 
   def __init__(self, bro: Optional[BaseBro] = None, response: str = 'reply'):
-    super().__init__(bro if bro is not None else RecordBro())
+    super().__init__(bro if bro is not None else RecordBro(), llm_llms_echo.Recipe())
     self.mock_llm = MockLLM(response=response)
 
   def _create_llm(self, *, hold: str) -> LLM:
@@ -374,19 +388,19 @@ class _FastlessSpec(Recipe):
 class _ChatBro(Bro):
   name = 'record'
   description = 'records inputs'
-  llm_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol')
 
-  def __init__(self):
-    super().__init__(system_prompt='record')
+  def __init__(self, **kwargs):
+    super().__init__(**kwargs, system_prompt='record')
+    self.recipe = llm_llms_openai.Recipe(model='gpt-6.1-sol')
 
 
 class _FastlessBro(Bro):
   name = 'fastless'
   description = 'has a spec without fast support'
-  llm_spec = _FastlessSpec(model='whatever')
 
-  def __init__(self):
-    super().__init__(system_prompt='fastless')
+  def __init__(self, **kwargs):
+    super().__init__(**kwargs, system_prompt='fastless')
+    self.recipe = _FastlessSpec(model='whatever')
 
 
 def _chat(argv: list[str]):
@@ -404,7 +418,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi']) is None
-  spec = built[0].bro.llm_spec
+  spec = built[0].recipe
   assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier is None
 
@@ -420,7 +434,7 @@ def test_bro_chat_fast_flag_is_explicit(monkeypatch):
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi', '--fast']) is None
-  spec = built[0].bro.llm_spec
+  spec = built[0].recipe
   assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier == 'priority'
 
@@ -437,7 +451,7 @@ def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi', '--resolved-llm', json.dumps(resolved.dump())]) is None
-  assert built[0].bro.llm_spec == resolved
+  assert built[0].recipe == resolved
 
 
 def test_bro_chat_refuses_a_resolved_recipe_beside_a_selection(monkeypatch):
@@ -547,7 +561,7 @@ def test_fork_runs_the_recorded_history_under_the_current_spec(monkeypatch, caps
   assert _chat(['bro', 'record', '--fork', 'trail-1', '--at', '7']) is None
   assert captured['trail_ref'] == 'trail-1'
   assert captured['at'] == 7
-  assert captured['llm_spec'] == _ChatBro.llm_spec
+  assert captured['llm_spec'] == _ChatBro().recipe
   assert captured['runner'] is forked_runner
   assert captured['initial'] is None
   assert captured['history'] is history
@@ -1235,14 +1249,15 @@ def test_managed_continuation_requires_the_resolved_recipe(monkeypatch, caplog):
   assert '--continue-trail requires --resolved-llm' in caplog.text
 
 
-def test_native_launch_without_a_recipe_is_refused(monkeypatch):
+def test_native_launch_without_a_recipe_is_refused(monkeypatch, register_test_bros):
   from bro.launch.run import run_llm_spec
-  from bro.llm.providers import LLMSelection, LLMSelectionError
+  from bro.llm.providers import LLMSelection
 
   class NoRecipeBro(Bro):
     name = 'no-recipe'
     description = 'fixture without a recipe'
 
+  register_test_bros(NoRecipeBro)
   monkeypatch.setattr('bro.registry.get_class', lambda name: NoRecipeBro)
-  with pytest.raises(LLMSelectionError, match='no-recipe declares no LLM recipe: pass --llm'):
+  with pytest.raises(ValueError, match='no-recipe has no recipe for harness bro'):
     run_llm_spec('no-recipe', LLMSelection())

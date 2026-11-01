@@ -1,12 +1,8 @@
-import json
-
 import pytest
 
-from bro.base import host_config
 from bro.base.args import Parser
 from bro.launch import llm_flags
-from bro.llm.providers import LLMSelection, LLMSelectionError
-from bro.workspace.project import ProjectConfig
+from bro.llm.providers import LLMSelection
 
 
 def _parser() -> Parser:
@@ -56,76 +52,6 @@ class TestCanonicalize:
     llm_flags.canonicalize(args, llm_flags.selection_from_args(args))
     llm_flags.drop_piece_flags(args)
     assert args == {'llm': '+fast'}
-
-
-class TestPresets:
-  @pytest.fixture(autouse=True)
-  def _stores(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', tmp_path / 'bro.json')
-    monkeypatch.setattr(
-      'bro.workspace.project.project_sections',
-      lambda: {'llm': {'sharp': 'openai:sol:max', 'cheap': ':terra'}},
-    )
-    self.host_file = tmp_path / 'bro.json'
-
-  def test_a_project_preset_expands(self):
-    args = _args(['--llm', 'sharp'])
-    assert llm_flags.selection_from_args(args) == LLMSelection('openai', 'sol', 'max')
-
-  def test_an_already_read_project_config_supplies_presets(self):
-    config = ProjectConfig(sections={'llm': {'remote': ':terra'}})
-    assert llm_flags.selection_from_args(
-      _args(['--llm', 'remote']), project=config
-    ) == LLMSelection(model='terra')
-
-  def test_the_host_table_overrides_the_project_per_name(self):
-    self.host_file.write_text(json.dumps({'llm': {'sharp': ':fable5'}}))
-    args = _args(['--llm', 'sharp'])
-    assert llm_flags.selection_from_args(args) == LLMSelection(model='fable5')
-    # the name the host doesn't restate still comes from the project
-    assert llm_flags.selection_from_args(_args(['--llm', 'cheap'])) == LLMSelection(model='terra')
-
-  def test_a_name_no_table_carries_is_read_as_a_recipe(self):
-    assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
-
-  def test_a_recipe_is_read_without_reaching_for_a_table(self, monkeypatch):
-    def unreachable():
-      raise AssertionError('a recipe must resolve on its own')
-
-    monkeypatch.setattr('bro.workspace.project.project_sections', unreachable)
-
-    assert llm_flags.selection_from_args(_args(['--llm', ':terra'])) == LLMSelection(model='terra')
-
-  def test_the_host_names_stay_in_scope_outside_a_project(self, monkeypatch):
-    monkeypatch.setattr('bro.workspace.project.project_sections', dict)
-    self.host_file.write_text(json.dumps({'llm': {'sharp': ':fable5'}}))
-
-    assert llm_flags.selection_from_args(_args(['--llm', 'sharp'])) == LLMSelection(model='fable5')
-
-  def test_a_malformed_preset_names_itself_in_the_error(self):
-    self.host_file.write_text(json.dumps({'llm': {'broken': '::ludicrous'}}))
-    with pytest.raises(LLMSelectionError, match="preset 'broken'"):
-      llm_flags.selection_from_args(_args(['--llm', 'broken']))
-
-  def test_an_installed_provider_cannot_be_shadowed(self):
-    self.host_file.write_text(json.dumps({'llm': {'openai': 'anthropic:opus5'}}))
-    assert llm_flags.selection_from_args(_args(['--llm', 'openai'])) == LLMSelection(
-      provider='openai'
-    )
-
-  def test_an_unknown_word_lists_providers_and_presets(self):
-    with pytest.raises(
-      LLMSelectionError, match='installed providers:.*openai.*presets: cheap, sharp'
-    ):
-      llm_flags.selection_from_args(_args(['--llm', 'missing']))
-
-  def test_provider_and_model_flags_validate_grammar_only(self):
-    assert llm_flags.selection_from_args(
-      _args(['--provider', 'future', '--model', 'unlisted'])
-    ) == LLMSelection('future', 'unlisted')
-    assert llm_flags.selection_from_args(_args(['--llm', 'future:unlisted'])) == LLMSelection(
-      'future', 'unlisted'
-    )
 
 
 def test_passthrough_piece_flag_canonicalizes_and_excludes_whole_recipe():

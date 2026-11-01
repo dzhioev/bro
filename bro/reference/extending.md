@@ -110,14 +110,12 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   See `bro/reference/conditions.md`.
   Declarations skip the `ClassVar` annotation, since BaseBro's class-level declarations carry the types;
   a ruff configuration selecting RUF012 ignores it for persona modules.
-- `llm_spec = openai.Recipe(...)` (imported from `bro.openai.declaration`, with a dependency on `bro-openai`) declares the recipe the native engine runs the bro under;
-  a Claude Code session runs under the recipe its own launch names.
-  A persona may omit it; a native launch then needs an explicit provider recipe.
-  Per-instance overrides go through `YourBro.create(spec)`.
+- Model recipes live in configuration, not persona declarations.
+  The native launcher passes the resolved run recipe explicitly to the runner.
 - `extra_secrets = ('github',)` declares credentials no component expresses (a bro's environment needs).
   MRO-walked and unioned;
   folded into `bro.needed_secrets()`, which the host hydrates into the scoped container store.
-  Most secrets come from the declared MCP servers / data sources / `llm_spec` and need no entry here
+  Most secrets come from the declared MCP servers / data sources and need no entry here
   — see `bro/AGENTS.md`, "Credential manifest".
 - `features = {'brog': creds.contains('brog')}` declares named optional capabilities
   — feature name → the gate deciding whether it's on:

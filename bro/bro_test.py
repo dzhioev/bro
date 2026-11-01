@@ -935,11 +935,10 @@ class TestNeededSecrets:
 
     from bro.openai.declaration import Recipe
 
-    bro = ManifestBro.create(Recipe())
+    bro = ManifestBro()
     # the llm key is NOT in needed_secrets() — surfaces that run the bro add it
     assert bro.needed_secrets('bro') == ('alpha', 'beta', 'delta', 'gamma')
-    assert bro.llm_spec is not None
-    assert bro.llm_spec.needed_secrets() == ('openai',)
+    assert Recipe().needed_secrets() == ('openai',)
 
   def test_extra_secrets_mro_unioned(self):
     class Base(BaseBro):
@@ -1144,10 +1143,10 @@ class TestEmptyManifest:
     class Bare(BaseBro):
       name = 'bare'
       description = 'd'
-      llm_spec = llm_llms_echo.Recipe()
 
       def __init__(self):
         super().__init__(system_prompt='')
+        self.recipe = llm_llms_echo.Recipe()
 
     assert Bare().needed_secrets('bro') == ()
 
@@ -1254,12 +1253,16 @@ class TestOptionalSecrets:
     class OptionalBro(BaseBro):
       name = 'optional'
       description = 'no required secrets'
-      llm_spec = llm_llms_echo.Recipe()
+
+      def __init__(self):
+        super().__init__()
+        self.recipe = llm_llms_echo.Recipe()
+
       tools: ClassVar = [mcp.source(OptionalSource())]
 
     optional_bro = OptionalBro()
     assert optional_bro.optional_secrets('bro') == ('gamma',)
-    assert optional_bro.missing_secrets('bro') == ()
+    assert optional_bro.missing_secrets('bro', llm_llms_echo.Recipe()) == ()
 
 
 class TestProvisioning:

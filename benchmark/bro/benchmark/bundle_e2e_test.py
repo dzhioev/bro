@@ -13,13 +13,15 @@ roster:
 """
 
 import contextlib
+import json
+import shlex
 import subprocess
 from collections.abc import Generator
 
 import pytest
 
 from bro.benchmark.bundle import build, host_mismatch, workspace_root
-from bro.benchmark.harbor_agent import ride_command
+from bro.benchmark.harbor_agent import ride_command, trial_host_config
 
 IMAGE = 'ubuntu:24.04'
 INSTALL_DIRECTORY = '/installed-agent'
@@ -80,8 +82,9 @@ def test_the_bundle_rides_a_bro_where_no_python_is_installed(tmp_path):
       '-c',
       'from bro.claude.provisioning import claude_code_version; print(claude_code_version())',
     )
-    # the trial's own launch, on the provider that answers without a key
-    ride = ride_command(bro='terminal', instruction='say hello', harness='bro', llm='echo:')
+    configuration = json.dumps(trial_host_config('bro', 'echo:echo'))
+    _in(container, 'sh', '-c', f'printf %s {shlex.quote(configuration)} > /root/.bro.json')
+    ride = ride_command(bro='terminal', instruction='say hello')
     _in(
       container,
       'env',

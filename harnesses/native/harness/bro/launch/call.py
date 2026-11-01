@@ -36,7 +36,7 @@ from bro.trails.display import (
 FORK_HELP = (
   'fork a recorded conversation into a new trail: pass any trail id, or omit the value to fork '
   "the bro's newest recorded call. prior exchanges are rendered as history and the fork uses "
-  "the bro class's current LLM recipe"
+  "the installation's configured LLM recipe"
 )
 
 INTERRUPTED_NOTICE = '⨯ interrupted'
@@ -313,12 +313,11 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     history: Optional[list[DisplayRecord]] = None
     if args['fork'] is not None or continuing:
       from bro.launch.resume import resume
-      from bro.registry import get_class
       from bro.trails.store import default_store
 
       trail_ref = args['continue_trail'] if continuing else args['fork']
       assert trail_ref is not None
-      fork_spec = run_spec if run_spec is not None else get_class(args['bro']).llm_spec
+      fork_spec = run_spec
       with default_store() as client:
         try:
           fork_arguments = {
@@ -339,7 +338,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       from bro.registry import create_bro
 
       log.verbose('creating bro %s', args['bro'])
-      runner = Runner(create_bro(args['bro'], run_spec), activity_file=args['activity_file'])
+      runner = Runner(create_bro(args['bro']), run_spec, activity_file=args['activity_file'])
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 

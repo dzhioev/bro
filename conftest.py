@@ -50,7 +50,7 @@ pytest_plugins = ['bro.dev.sharding']
 @pytest.fixture(autouse=True)
 def _pin_credential_gate_open(request, monkeypatch):
   if request.node.get_closest_marker('credential_gate') is None:
-    monkeypatch.setattr('bro.bro.BaseBro.missing_secrets', lambda self, harness=None: ())
+    monkeypatch.setattr('bro.bro.BaseBro.missing_secrets', lambda self, harness, recipe: ())
 
 
 @pytest.fixture(autouse=True)

@@ -1,4 +1,3 @@
-import bro.openai.declaration as llm_llms_openai
 from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.local.prompts import FRAMEWORK_PROJECT
 from bro.mcp import man
@@ -15,7 +14,6 @@ checks.
 class BroDev(Dev):
   name = 'bro-dev'
   description = 'bro framework development: task → implement → verify → land'
-  llm_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high')
   features = {'brog': True}
   extra_secrets = ('github',)
   tools = [

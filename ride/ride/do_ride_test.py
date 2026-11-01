@@ -16,14 +16,6 @@ from ride.workspace.model import Workspace
 
 
 @pytest.fixture(autouse=True)
-def native_persona_recipe(monkeypatch):
-  from bro.openai.declaration import Recipe
-  from bros.dev import Dev
-
-  monkeypatch.setattr(Dev, 'llm_spec', Recipe(reasoning_effort='medium'))
-
-
-@pytest.fixture(autouse=True)
 def isolated_environ():
   with patch.dict(os.environ, {'RIDE_ISOLATION': 'boxed'}, clear=False):
     yield

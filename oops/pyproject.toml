@@ -9,7 +9,6 @@ description = "deployment infrastructure and operations helpers for bro"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "bro-openai",
   "bro",
   "bro-dev",
 ]
@@ -26,12 +25,10 @@ devoops = "bros.devoops:Devoops"
 infra = "bro.oops.mcp:toolset"
 
 [tool.uv.sources]
-bro-openai = { workspace = true }
 bro = { workspace = true }
 bro-dev = { workspace = true }
 
 [tool.deptry.package_module_name_map]
-bro-openai = ["bro"]
 bro = ["bro", "bros"]
 bro-dev = ["bros"]
 

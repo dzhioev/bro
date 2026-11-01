@@ -28,7 +28,7 @@ def report_scope(
     reading = Reading.take(repository)
     if bro is None:
       bro = reading.default_bro
-    harness = reading.resolve_harness(harness)
+    harness = reading.resolve_harness(harness, target=bro)
     fields = {'target': bro, 'harness': harness, **(recipe_options or {})}
     if llm is not None:
       fields['llm'] = llm
@@ -50,10 +50,18 @@ def report_scope(
     manifest = existence(
       descriptor, reading, present_kinds, check_presence=False, require_recipe=False
     )
+    from bro.llm.providers import format_recipe
+    from ride.authority_scope import checked_recipe, resolve_recipe
+
+    resolved = checked_recipe(requested, descriptor, reading)
+    configured = (
+      resolve_recipe(reading, bro, harness) if llm is None and not recipe_options else None
+    )
     print(
       'descriptor: '
       + json.dumps(dump_values(descriptor.values), ensure_ascii=False, sort_keys=True)
     )
+    print(f'llm: {format_recipe(resolved)} ({configured.source if configured else "--llm"})')
     view = mission_view(mission)
     for key in ('summon_entries', 'permits', 'may_give'):
       print(f'{key}: ' + (', '.join(view[key]) or '(none)'))

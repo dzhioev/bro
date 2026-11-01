@@ -89,6 +89,26 @@ pytestmark = [
 _NAME_PREFIX = 'ride-e2e-'
 _RUNTIME_PYTHON = '/var/ride/runtime/venv/bin/python'
 _WEDGED_MISSION_TIMEOUT = 2
+_LAUNCH_RECIPES = {'bro': 'echo:echo', 'claude': 'anthropic:claude-opus-5'}
+
+
+@pytest.fixture(autouse=True)
+def launch_recipes(monkeypatch, tmp_path):
+  from bro.base import host_config
+
+  path = tmp_path / 'launch-recipes.json'
+  path.write_text(
+    json.dumps(
+      {
+        'defaults': {
+          'harness': 'bro',
+          'summon-harness': 'bro',
+          'llm': _LAUNCH_RECIPES,
+        }
+      }
+    )
+  )
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(path))
 
 
 def _root_mission(
@@ -105,7 +125,12 @@ def _root_mission(
 ) -> Mission:
   reading = Reading.take(repository)
   if depth is not None:
-    reading = replace(reading, settings=replace(reading.settings, summon_depth=depth))
+    reading = replace(
+      reading,
+      home_policy=replace(
+        reading.home_policy, config=replace(reading.home_policy.config, summon_depth=depth)
+      ),
+    )
   if types is not None:
     reading = replace(
       reading,
@@ -1338,8 +1363,16 @@ def _do_ride_command(*inner: str) -> list[str]:
   return ['bash', '-ec', _DO_RIDE_WRAPPER, 'ride-e2e-wrapper', *inner]
 
 
-def _admitted_recipe(harness: str, llm: Optional[str], bro: str) -> dict[str, str]:
-  recipe = get_harness(harness).resolve_llm(llm, bro).dump()
+def _admitted_recipe(harness: str, llm: Optional[str]) -> dict[str, str]:
+  from bro.llm.providers import LLMSelection, bind_recipe, parse
+
+  base = bind_recipe(_LAUNCH_RECIPES[harness])
+  recipe = (
+    get_harness(harness)
+    .scope_recipe()
+    .harness.resolve_recipe(base, LLMSelection() if llm is None else parse(llm))
+    .dump()
+  )
   return {RESOLVED_LLM_ENV: encode_resolved_llm(recipe)}
 
 
@@ -1389,7 +1422,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
     extra_env={
       'RIDE_BRO': 'bro-dev',
       'RIDE_E2E_SECRETS': '["brog"]',
-      **_admitted_recipe('claude', '::+fast', 'bro-dev'),
+      **_admitted_recipe('claude', '::+fast'),
     },
   )
   request.addfinalizer(driver.close)
@@ -1462,7 +1495,7 @@ def test_claude_summoner_receives_a_child_question_and_end_through_its_session_w
       'RIDE_E2E_QUEST_ROUTE': 'summoner',
       'RIDE_E2E_TARGETS': '["bro"]',
       'RIDE_E2E_CHILD_COMMAND': json.dumps(_session_broxy_probe(_SESSION_WATCH_QUESTION_CHILD)),
-      **_admitted_recipe('claude', None, 'bro-dev'),
+      **_admitted_recipe('claude', None),
     },
   )
   request.addfinalizer(driver.close)
@@ -1511,7 +1544,7 @@ def test_a_launched_native_session_records_the_git_header(
       extra_env={
         'RIDE_BRO': 'bro',
         'RIDE_E2E_LOCAL_TRAILS': '1',
-        **_admitted_recipe('bro', 'echo', 'bro'),
+        **_admitted_recipe('bro', 'echo'),
       },
     )
     request.addfinalizer(driver.close)
@@ -1556,7 +1589,7 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
       'bro-dev',
       'e2e',
     ),
-    extra_env={'RIDE_E2E_SECRETS': '["brog"]', **_admitted_recipe('claude', None, 'bro-dev')},
+    extra_env={'RIDE_E2E_SECRETS': '["brog"]', **_admitted_recipe('claude', None)},
   )
   request.addfinalizer(driver.close)
   _wait_ready(env, name, driver)
@@ -1969,8 +2002,8 @@ def test_spawned_summon_pass_overrides_the_targets_configured_credential(
   config.write_text(
     json.dumps(
       {
-        'projects': {
-          str(env.project): {
+        'homes': {
+          installation_home(): {
             'bros': {
               'bro': {
                 'creds': [
@@ -2312,8 +2345,8 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   config.write_text(
     json.dumps(
       {
-        'projects': {
-          str(env.project): {
+        'homes': {
+          installation_home(): {
             'bros': {
               'bro': {
                 'creds': ['github+configured'],
@@ -2450,6 +2483,7 @@ import time
 from pathlib import Path
 
 from bro.bro import BaseBro
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.runner import Runner
 from bro.summon import summon_detached
 
@@ -2461,7 +2495,7 @@ class WatchBro(BaseBro):
 started = time.monotonic()
 deadline = started + 30
 notifications = []
-with Runner(WatchBro()) as runner:
+with Runner(WatchBro(), EchoSpec()) as runner:
   runner.watch_store.start('mission watch')
   quest_id = summon_detached(
     'bro', 'raise for the native watch route', llm='echo', harness='bro', timeout=120
@@ -2486,6 +2520,7 @@ import json
 import time
 
 from bro.bro import BaseBro
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.runner import Runner
 from bro.run_lifecycle import RunLifecycle
 from bro.quest import history, say
@@ -2509,7 +2544,7 @@ def wait_for_incoming(text, deadline):
 
 wait_for_incoming('before arm', time.monotonic() + 30)
 notifications = []
-with Runner(WatchBro()) as runner:
+with Runner(WatchBro(), EchoSpec()) as runner:
   runner.watch_store.start('mission watch')
   deadline = time.monotonic() + 30
   while not any('before the watch: summoner says before arm' in text for text in notifications):
@@ -2722,7 +2757,6 @@ class AskingBro(BaseBro):
   name = 'e2e-asking-child'
   description = 'asks its summoner and ends its turn'
   system_prompt = 'wait for the reply'
-  llm_spec = EchoSpec()
 
 class ScriptedLLM(LLM):
   def __init__(self, inbox, mcp_servers):
@@ -2758,7 +2792,7 @@ class ScriptedRunner(Runner):
     servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
-asyncio.run(ScriptedRunner(AskingBro()).run('go', surface='e2e', tracker=NullTracker()))
+asyncio.run(ScriptedRunner(AskingBro(), EchoSpec()).run('go', surface='e2e', tracker=NullTracker()))
 """
 
 
@@ -2852,7 +2886,6 @@ class RemindBro(BaseBro):
   name = 'e2e-remind-child'
   description = 'ends its turn with a grandchild in flight'
   system_prompt = 'observe the reminder'
-  llm_spec = EchoSpec()
 
 class ScriptedLLM(LLM):
   def __init__(self, inbox, mcp_servers):
@@ -2925,7 +2958,7 @@ class ScriptedRunner(Runner):
     servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
-asyncio.run(ScriptedRunner(RemindBro()).run('go', surface='e2e', tracker=NullTracker()))
+asyncio.run(ScriptedRunner(RemindBro(), EchoSpec()).run('go', surface='e2e', tracker=NullTracker()))
 """
 
 _NATIVE_REMIND_ROOT = """
@@ -3543,7 +3576,7 @@ def test_resume_rechecks_operator_rules_and_recomputes_the_default_credential_pi
   repository = _permission_repository(env, 'resume')
 
   def policy(instance, *, restricted=False):
-    result: dict = {'projects': {repository.identity: {'creds': ['github+' + instance]}}}
+    result: dict = {'homes': {installation_home(): {'creds': ['github+' + instance]}}}
     if restricted:
       result['operator'] = {'revoke': ['bro.cred=github+' + instance]}
     return result
@@ -3638,6 +3671,7 @@ from bro import authority_view, watches
 from bro.bro import BaseBro
 from bro.harness import get_harness
 from bro.monitor import SESSION_DIR_ENV
+from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.runner import Runner
 from bro.prompts import save_deferred_contract, session_fragment
 from bro.quest import QuestError
@@ -3667,7 +3701,7 @@ with tempfile.TemporaryDirectory() as directory:
   os.environ[SESSION_DIR_ENV] = directory
   authority_view.capture_initial()
   save_deferred_contract(harness=get_harness('bro'), hold='unattended')
-  with watches.Owner.for_session(), Runner(OverrideBro()) as runner:
+  with watches.Owner.for_session(), Runner(OverrideBro(), EchoSpec()) as runner:
     runner.watch_store.start(watches.SESSION_WATCH_COMMAND)
     Path('/workspace/.override-ready').touch()
     receive(runner, '# Summoning session')
