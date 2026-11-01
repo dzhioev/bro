@@ -56,7 +56,7 @@ backward compatibility is not a constraint (`AGENTS.md`, "Conventions"), and oth
 
 - **Provider** — a vendor's model API as one plug-in declares it (`openai`, `deepseek`, `anthropic`, `echo`; `bro/llm/providers.py`).
 - **Recipe** — a complete choice of how to call a model: a provider, a model id, the framework flags (§3.3) and the provider's fields (§3.2).
-  In code it is an instance of the provider's recipe class, a subclass of `LLMSpec` (`bro/llm/llm.py`).
+  In code it is an instance of the provider's recipe class, a subclass of `Recipe` (`bro/llm/llm.py`).
 - **Field** — one knob of a provider's recipe class other than the model and the flags, under the provider's own name: OpenAI's `reasoning_effort`, Anthropic's `effort`.
 - **Framework flag** — a property of a recipe that the framework itself interprets and no provider declares; `passthrough` is the only one (§3.3).
 - **Recipe text** — a recipe written as a string in the grammar of §3.1, the one form a recipe takes on the command line and in every configuration file.
@@ -82,7 +82,8 @@ backward compatibility is not a constraint (`AGENTS.md`, "Conventions"), and oth
 - **Reading** — the snapshot of the installation, its home settings and the host configuration that a root takes at its start (`ride/ride/authority_reading.py`);
   its summons reuse it (§6.4).
 - **Resolved recipe** — the recipe a start admits (§6.1), together with its **source**: the path of the layer that named it, or the launch surface that passed it.
-- **Allowance** — how many more generations of summons a bro may start below itself (§5.6).
+  One record carries both everywhere (§7): `{"recipe": <the recipe's dump>, "source": <the source>}`.
+- **Allowance** — how many more generations of summons a bro may start below itself, lowered by its **cap** (§5.6).
 
 ## 3. Recipes
 
@@ -147,24 +148,25 @@ It is stored as the base class's keyword-only field, which no provider may decla
 `provider:model`, then `+passthrough` when set, then `,field=value` for each field whose value differs from the class's default, in the order the class declares its fields, with `bool` written `true` or `false` and `int` in decimal.
 For every recipe, `bind_recipe(format_recipe(recipe)) == recipe`.
 
-`LLMSpec.dump()` is defined once in the base class:
+`Recipe.dump()` is defined once in the base class:
 `{"type": <provider>, "model": <model>, <field>: <value> for every field}`, plus `"passthrough": true` when set.
-`LLMSpec.from_dict(data)` builds the named provider's class from those keys and refuses any other key.
+`Recipe.from_dict(data)` builds the named provider's class from those keys and refuses any other key.
 Providers no longer implement `_dump_impl` and `_from_dict_impl`.
 The dumps of OpenAI, DeepSeek and echo recipes keep their keys;
 an Anthropic dump always carries a model, since the class no longer takes `None` (§3.6).
 
 ### 3.5 Recipe classes and their tables
 
-A provider's declaration module exports `LLMSpec`, `RETIRED_MODELS`, `FAILURE_SIGNATURES`, `price`, `PRICE_TABLE`, `PRICE_TABLE_SHA256`, `price_table_from_content` where it persists tables, and `MODEL_SLUG` with `model_family` where it has them.
+A provider's declaration module exports `Recipe`, `FAILURE_SIGNATURES`, `price`, `PRICE_TABLE`, `PRICE_TABLE_SHA256`, `price_table_from_content` where it persists tables, and `MODEL_SLUG` with `model_family` where it has them.
 It no longer exports `DEFAULT_MODEL`, `MODELS` or `MODEL_ID`.
 
-The recipe class declares `TYPE`, `WIRE`, `ENDPOINT` and `MODEL_INPUTS` as today, `model: str` with no default as its first field, and its provider fields, each with a default.
+The recipe class declares `TYPE`, `WIRE`, `ENDPOINT` and `MODEL_INPUTS` as today, and `RETIRED_MODELS` beside `MODEL_INPUTS`, so every per-model fact sits on the class;
+it declares `model: str` with no default as its first field, and its provider fields, each with a default.
 The base class no longer declares `selection_fields`, `deferred_fields`, `effort_values`, `selection()`, `with_selection()`, `fast()` or `with_effort()`, and `EFFORT_LEVELS` leaves core.
 
 - **R1.** A recipe is admitted when it carries `passthrough` or its model is a key of `MODEL_INPUTS`.
   `providers.require_admitted` checks it at `bind_recipe` and at `wires.open`, the two points #1143 enforces it at, with `bind_recipe` in place of `providers.resolve`.
-- **R2.** `RETIRED_MODELS` maps each retired model id to its retirement date, the day the framework stopped admitting it.
+- **R2.** The class's `RETIRED_MODELS` maps each retired model id to its retirement date, the day the framework stopped admitting it.
 - **R3.** The models of the price table are exactly the listed models together with the retired ones, and no model is both listed and retired.
   Loading a declaration refuses a declaration that breaks R2 or R3, as it refuses a malformed table.
 - **R4.** Refusing a retired model without `+passthrough` names its retirement date:
@@ -308,7 +310,8 @@ For a bro `B` whose home is `H`, launched from an installation whose home is `I`
 
 The launch's own choices then apply over the stack.
 
-- **L1.** For `default`, `harness` and `summon-harness`, the last layer setting the key wins.
+- **L1.** For `default`, `harness`, `summon-harness` and `summon-depth`, the last layer setting the key wins;
+  §5.6 says how the `summon-depth` winners make an allowance.
 - **L2.** For `llm`, the last layer whose map has the harness as a key wins, harness by harness:
   a bro layer that names only `bro` leaves the `claude` recipe to the layers before it.
 - **L3.** `creds` keeps today's rule:
@@ -393,11 +396,11 @@ At a root's start, the reading reads the installation's marker, its home setting
 
 - **D1.** A bro's allowance is how many more generations of summons may start below it;
   a bro may summon only while its allowance is at least 1.
-- **D2.** A root's allowance is the `summon-depth` of its stack's home settings, `defaults` and `homes.I`, the last of them setting it winning,
-  then capped by the root bro's own bro layers' `summon-depth`.
-- **D3.** A summoned bro's allowance is its summoner's allowance minus 1, capped by the child's own bro layers' `summon-depth`.
-- **D4.** A bro layer's `summon-depth` only lowers the allowance a bro receives, never raises it;
-  where both of a bro's layers set one, the lower applies.
+- **D2.** A bro's **cap** is the `summon-depth` of its bro layers, `homes.H.bros.B` and `homes.I.bros.B`, the last setting it winning, as for every key (L1):
+  the installation's own entry overrides a foreign one.
+- **D3.** A root's allowance is the `summon-depth` of its stack's home settings, `defaults` and `homes.I`, the last setting it winning, lowered to its cap when it has one.
+- **D4.** A summoned bro's allowance is its summoner's allowance minus 1, lowered to its cap when it has one.
+  A cap only lowers the allowance a bro receives, never raises it.
 - **D5.** With no `summon-depth` anywhere, a root's allowance is 2, today's default.
 - **D6.** Each mission records its allowance, and launch control checks it in place of today's `owner.depth + 1 > summon_depth`.
 
@@ -437,7 +440,7 @@ an explicit text replaces the configured one whole, and two layers never combine
   it no longer needs `--repo` to see configuration, since configuration follows the installation.
 - **S2.** `bro run` and `bro chat` resolve through the same function and stack as a managed launch, on the bro harness.
   They read only the stack's `llm`; their credentials stay ambient, as today.
-  The managed native session passes `--resolved-llm`, the dump of the recipe its launcher resolved, which `bro run` and `bro chat` take verbatim and still check at `wires.open`.
+  The managed native session passes `--resolved-recipe`, the resolved-recipe record its launcher wrote (§7), which `bro run` and `bro chat` take verbatim and still check at `wires.open`.
 - **S3.** `bro.fork.fork` called without a recipe rebuilds the trail header's, as today, and `wires.open` admits it.
 - **S4.** `bro.native.llm`, the provider diagnostic, takes a required `--llm` and reads no configuration.
 - **S5.** `mu` binds its material's recipe texts (`llm` and each role's) with `bind_recipe`, with no layers and no harness;
@@ -463,9 +466,10 @@ Its summons resolve against that reading, so an edit made later reaches only roo
 
 ## 7. Into the session
 
-The start carries the resolved recipe as `resolved_llm`, and the session receives its dump in `RIDE_RESOLVED_LLM` and its source in `RIDE_RESOLVED_LLM_SOURCE`.
+The resolved-recipe record `{"recipe": <dump>, "source": <source>}` has one shape wherever it travels:
+the start's `resolved_recipe`, a manual summon's commit, the resume record (E1), and the session's `RIDE_RECIPE`.
 
-- The native harness passes `--resolved-llm` to `bro run` or `bro chat`, which uses the recipe verbatim.
+- The native harness passes the record to `bro run` or `bro chat` as `--resolved-recipe`, which runs its recipe verbatim.
 - The Claude harness passes `--model <model>` always, `--effort <effort>` when the recipe sets `effort`, and `"fastMode": <fast_mode>` in its `--settings`.
   A recipe without `effort` leaves effort to Claude Code, as an unset field leaves it to the vendor (B4).
 - The Claude recorder records the recipe in the trail header, as today;
@@ -473,7 +477,7 @@ The start carries the resolved recipe as `resolved_llm`, and the session receive
 
 ## 8. Resume
 
-- **E1.** A session's resume record keeps its resolved recipe's dump and source.
+- **E1.** A session's resume record keeps its resolved-recipe record (§7).
 - **E2.** `ride resume` runs the recorded recipe unless `--llm` replaces it;
   a replacement is resolved as on `ride along`, on the recorded harness.
 - **E3.** A recorded recipe whose model has since been retired is refused at binding (R4);
@@ -514,6 +518,7 @@ The start carries the resolved recipe as `resolved_llm`, and the session receive
 |---|---|
 | `LLMSelection`, `over`, `parse`, `parse_with_presets`, `is_preset`, `resolve`, `resolve_model`, `default_spec`, `carriers`, `provider_of_model` | `parse_recipe`, `bind_recipe`, `format_recipe` (§3) |
 | `LLMSelectionError` | `RecipeError`, raised by every refusal of §3 |
+| the names `LLMSpec`, `llm_spec`, `resolved_llm`, `RIDE_RESOLVED_LLM` and `--resolved-llm` | `Recipe`, `recipe`, `resolved_recipe`, `RIDE_RECIPE` and `--resolved-recipe`, carrying the record of §7; the user-facing `--llm` and the `llm` key keep their names |
 | `--provider`, `--model`, `--effort`, `--fast`, `--passthrough` | `--llm` with complete recipe text |
 | `[tool.bro.llm]` and the host's top-level `llm` presets | nothing, until presets return |
 | `MODELS`, `DEFAULT_MODEL`, `MODEL_ID` | full model ids in recipe text, admitted by `MODEL_INPUTS`; retired ones in `RETIRED_MODELS` |
@@ -538,7 +543,7 @@ The start carries the resolved recipe as `resolved_llm`, and the session receive
   `rewind`, cost and the benchmark read their fields as stored, and only `bro.fork.fork` rebuilds a header's recipe, from native trails, whose recipes always name a model.
   An Anthropic header recorded with `model: null` is never rebuilt.
 - Every model a recorded trail ran is listed or retired, so its cost is still priced (R3).
-- Resume records gain the resolved recipe and its source (E1);
+- Resume records gain the resolved-recipe record (E1);
   older ones are refused (E4).
 - Benchmark retention keeps the trial's `model_name` as written.
 
@@ -621,7 +626,7 @@ The examples read the file of §5.5 from this repository's installation (`I` = `
 11. `homes.core.bros.eyebro.llm.bro` = `openai:gpt-6.1-sol,effort=xhigh`:
     every launch from this repository's installation is refused (V7), since `effort` is not an OpenAI field.
 12. A root `lead` summons `bro-dev`, which summons `eyebro`:
-    `lead`'s allowance is 2, `bro-dev`'s 1, and `eyebro`'s 0 both by D3 and by its own `summon-depth` 0;
+    `lead`'s allowance is 2, `bro-dev`'s 1, and `eyebro`'s 0, both as its summoner's allowance minus 1 and as its cap (D4);
     a summon by `eyebro` is refused (D6).
 13. `ride resume <workspace>` of a session that ran `openai:gpt-6.1-sol,reasoning_effort=high`:
     it runs the same recipe, whatever the configuration now says;
@@ -652,8 +657,11 @@ The decisions below were raised while designing;
 | N4 | a home ships settings through a `bro.settings` entry naming the package that holds `bro-settings.toml` (G1 to G4) | settled |
 | N5 | the installation names its home in the marker `<environment>/bro-installation-home`, written by setup, with no command and no fallback (I1 to I6) | settled |
 | N6 | foreign entries are shape-checked at the start, bound at use, shadowed by the installation's own bro entry, and answered with `revoke` for grants (V3 to V6) | settled |
-| N7 | `summon-depth` is an allowance that bro layers can only lower (§5.6) | settled |
+| N7 | `summon-depth` is an allowance that a bro's cap can only lower, the cap taken from its bro layers by the usual last-wins rule (§5.6) | settled |
 | N8 | the interactive configuration step runs on the pre-rollout runtime and writes beside the current files, validated with the landed code (§12.4) | settled |
+| N22 | the code names the concept a recipe: `Recipe`, `recipe`, `resolved_recipe`, `RIDE_RECIPE`, `--resolved-recipe` (§11) | settled |
+| N23 | one resolved-recipe record of recipe and source travels everywhere (§7) | settled |
+| N24 | `RETIRED_MODELS` is a class attribute beside `MODEL_INPUTS` (§3.5) | settled |
 | N9 | this repository's home is named `core` | proposed |
 | N10 | `harness`, `summon-harness` and `summon-depth` are keys of every layer, and the host's top-level copies go (§5.1, K4) | proposed |
 | N11 | home settings are the least specific layer, below `defaults` (§5.2), so the host overrides what a home ships; today a repository's `harness` beats the host's | proposed |
@@ -662,7 +670,7 @@ The decisions below were raised while designing;
 | N14 | the recipe grammar has no whitespace and no `+` or `,` in a model id; fields are typed by their declarations and unset by omission; the canonical text omits default values (§3.1 to §3.4) | proposed |
 | N15 | `dump` and `from_dict` are defined once over the recipe class's fields (§3.4) | proposed |
 | N16 | the resume record keeps the resolved recipe and its source, `ride resume` takes `--llm`, and older records are refused (§8) | proposed |
-| N17 | the banner shows the source beside the recipe, and the session receives it in `RIDE_RESOLVED_LLM_SOURCE` (§7, §9) | proposed |
+| N17 | the banner shows the source beside the recipe (§9) | proposed |
 | N18 | `passthrough` stays an open authority option (§6.3) | proposed |
 | N19 | `bro.native.llm` takes a required `--llm` (S4) | proposed |
 | N20 | recipes under a harness the installation lacks are checked for grammar only (V2) | proposed |
@@ -670,12 +678,12 @@ The decisions below were raised while designing;
 
 ## 15. Implementation mapping
 
-- `bro/llm/llm.py` — the base class of §3.5: the required `model`, generic `dump` and `from_dict`, `admitted` without the deferred clause;
+- `bro/llm/llm.py` — the base class of §3.5, renamed `Recipe`: the required `model`, generic `dump` and `from_dict`, `admitted` without the deferred clause;
   `EFFORT_LEVELS`, `selection_fields`, `deferred_fields`, `effort_values`, `selection`, `with_selection`, `fast` and `with_effort` go.
 - `bro/llm/providers.py` — `parse_recipe`, `bind_recipe`, `format_recipe`, `require_admitted`, `RecipeError`;
   declaration validation without `DEFAULT_MODEL` and `MODELS`, with R2 and R3;
   the mechanisms of §11's first rows go.
-- `llms/openai`, `llms/deepseek`, `llms/anthropic`, `harnesses/native/harness/bro/native/echo_declaration.py` — explicit `MODEL_INPUTS` keys, `RETIRED_MODELS`, the fields of §3.5, no `_dump_impl` or `_from_dict_impl`;
+- `llms/openai`, `llms/deepseek`, `llms/anthropic`, `harnesses/native/harness/bro/native/echo_declaration.py` — `Recipe` with explicit `MODEL_INPUTS` keys and `RETIRED_MODELS`, the fields of §3.5, no `_dump_impl` or `_from_dict_impl`;
   echo's zero price row.
 - `bro/harness/__init__.py`, `ride/ride/harness.py` — `check_recipe`; `resolve_recipe(base, selection)`, `runs` and `resolve_llm` go.
 - `bro/bro.py`, `bro/registry.py` — `llm_spec` leaves the declaration;
@@ -695,7 +703,7 @@ The decisions below were raised while designing;
   the resume record and `ride resume --llm` (§8); scope's output (S1); the stack in place of attachment identities.
 - `ride/ride/runtime_bundle.py` — the frozen bundle carries the marker (I3).
 - `bro/summon.py` — the payload's `llm` alone.
-- `bro/workspace/banner.py`, `ride/ride/do_ride.py` — the banner line and `RIDE_RESOLVED_LLM_SOURCE`.
+- `bro/workspace/banner.py`, `ride/ride/do_ride.py`, `ride/ride/session.py`, `launch_control.py`, `bro_worker.py` — the banner line, and the resolved-recipe record of §7 under its new names.
 - `harnesses/native/harness/bro/launch/run.py`, `call.py`, `native/llm.py`, `native/runner.py`, `native/harness.py`, `fork.py` — S2 to S4;
   the runner takes the run's recipe explicitly.
 - `harnesses/claude/harness/bro/claude/harness.py`, `claude_argv.py` — §7.
@@ -712,7 +720,7 @@ The decisions below were raised while designing;
 
 ## 16. Documentation
 
-- `bro/reference/ride.md` — "Harness selection", "Recipe selection", "Per-project defaults" (renamed for homes), the lifecycle verbs (`ride resume --llm`, `ride scope`), the banner, `RIDE_RESOLVED_LLM_SOURCE`, the summon-depth allowance.
+- `bro/reference/ride.md` — "Harness selection", "Recipe selection", "Per-project defaults" (renamed for homes), the lifecycle verbs (`ride resume --llm`, `ride scope`), the banner, `RIDE_RECIPE` and its record, the summon-depth allowance.
 - `bro/setup/AGENTS.md`, "Host config", and `bro/base/host_config.py`'s docstring — the schema of §5.
 - `bro/reference/llm_providers.md` — the declaration contract (§3.5), recipe text, admission without deferred models, retiring a model.
 - `bro/reference/extending.md` — "Registering a bro" with `bro.bros.<home>`, home settings, the installation's marker, and declaring a bro without a recipe.
