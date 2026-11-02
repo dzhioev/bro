@@ -203,7 +203,7 @@ class TestRun:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -216,7 +216,7 @@ class TestRun:
             'start',
             {
               'bro': bro,
-              'llm_spec': llm_spec,
+              'recipe': recipe,
               'system_prompt': system_prompt,
               'interactive': interactive,
               'surface': surface,
@@ -250,7 +250,7 @@ class TestRun:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -629,7 +629,7 @@ class TestSend:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -663,7 +663,7 @@ class TestSend:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,
@@ -994,7 +994,7 @@ class _GatedBro(BaseBro):
 @pytest.mark.credential_gate
 class TestCredentialGate:
   """the run-start credential gate: every name in `needed_secrets()` plus
-  `llm_spec.needed_secrets()` must resolve before any machinery runs."""
+  `recipe.needed_secrets()` must resolve before any machinery runs."""
 
   def _gated(self) -> tuple[StubRunner, MockLLM]:
     llm = MockLLM(response='ran')
@@ -1083,7 +1083,7 @@ class _TrailIDTracker(NullTracker):
   def start_trail(
     self,
     bro,
-    llm_spec,
+    recipe,
     system_prompt,
     forked_from,
     interactive,
@@ -1144,7 +1144,7 @@ class TestRunLifecycle:
       def start_trail(
         self,
         bro,
-        llm_spec,
+        recipe,
         system_prompt,
         forked_from,
         interactive,

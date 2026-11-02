@@ -19,7 +19,7 @@ from ride.harness import get_harness
 from ride.repository import as_repository
 from ride.scope import (
   LaunchScopeError,
-  launch_llm_spec,
+  launch_recipe,
   launch_scope_errors,
   launch_view_store,
   scoped_secrets,
@@ -102,7 +102,7 @@ def _task_system(
         bro_name,
         driver.scope_recipe(),
         attachment=str(repo),
-        llm_spec=launch_llm_spec(driver, str(repo), bro_name, llm),
+        recipe=launch_recipe(driver, str(repo), bro_name, llm),
         cred=cred,
         grant=grant,
         revoke=revoke,

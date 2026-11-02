@@ -24,7 +24,7 @@ class Tracker(ABC):
   def start_trail(
     self,
     bro: str,
-    llm_spec: dict,
+    recipe: dict,
     system_prompt: str,
     forked_from: Optional[Any],
     interactive: bool,
@@ -52,7 +52,7 @@ class NullTracker(Tracker):
   def start_trail(
     self,
     bro: str,
-    llm_spec: dict,
+    recipe: dict,
     system_prompt: str,
     forked_from: Optional[Any],
     interactive: bool,

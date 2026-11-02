@@ -380,15 +380,15 @@ class TestTaskSystem:
           return read()
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
 
-    def fake_scoped_secrets(bro_name, surface, *, attachment, llm_spec, cred, grant, revoke):
+    def fake_scoped_secrets(bro_name, surface, *, attachment, recipe, cred, grant, revoke):
       calls['scoped'] = (bro_name, surface, cred, grant, revoke)
-      calls['llm_spec'] = llm_spec
+      calls['recipe'] = recipe
       return 'base-scope'
 
     monkeypatch.setattr(dive_in, 'scoped_secrets', fake_scoped_secrets)
     monkeypatch.setattr(
       dive_in,
-      'launch_llm_spec',
+      'launch_recipe',
       lambda driver, attachment, bro, llm: bind_recipe(
         llm or ('openai:gpt-5.6-terra' if driver.name == 'bro' else 'anthropic:claude-opus-5')
       ),
@@ -451,14 +451,14 @@ class TestTaskSystem:
     )
     monkeypatch.setattr('bro.base.host_config.HOST_CONFIG_FILE', str(config))
     calls: dict = {}
-    from ride.scope import launch_llm_spec
+    from ride.scope import launch_recipe
 
     self._fake_wiring(monkeypatch, calls)
-    monkeypatch.setattr(dive_in, 'launch_llm_spec', launch_llm_spec)
+    monkeypatch.setattr(dive_in, 'launch_recipe', launch_recipe)
     dive_in._task_system(
       tmp_path, [], [], [], None, 'bro', 'openai:gpt-6.1-sol,reasoning_effort=low'
     )
-    assert calls['llm_spec'] == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low')
+    assert calls['recipe'] == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError

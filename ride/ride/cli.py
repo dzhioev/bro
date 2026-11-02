@@ -102,6 +102,9 @@ def build_parser() -> Parser:
     'resume', help='resume the last harness session in a workspace under its recorded recipe'
   )
   add_scope_flags(resume)
+  from bro.launch.llm_flags import add_llm_flags
+
+  add_llm_flags(resume)
   resume.add_argument('name', help='workspace to resume, as `ride list` shows it')
 
   subparsers.add_parser('list', help='list workspaces ([o]/[-]=boxed, .o./.-.=unboxed; live/idle)')
@@ -180,14 +183,14 @@ def build_parser() -> Parser:
   scope.add_argument(
     '--repo', default=None, metavar='PATH|URL', help='attach an existing checkout path or git URL'
   )
-  scope.add_argument('--bro', default=None, help='bro to scope (required when detached)')
+  scope.add_argument(
+    '--bro', default=None, help="bro to scope (default: the installation's default-bro)"
+  )
   add_harness_flags(scope)
-  from bro.launch.llm_flags import add_llm_flags
-
   add_llm_flags(scope)
 
   banner_parser = subparsers.add_parser('banner', help='print the session banner')
-  banner_parser.add_argument('--llm', action='store_true', help='emit plain key:value lines')
+  banner_parser.add_argument('--plain', action='store_true', help='emit plain key:value lines')
   return parser
 
 
@@ -301,7 +304,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if session_log is not None:
     # after the party's additions: a manual child's own launch owns its level
     args['env'][log.LEVEL_ENV] = session_log.upper()
-  resolved_llm = {}
+  resolved_recipe = {}
   name = workspace if workspace is not None else fresh_workspace_name(f'ride-{bro}')
   spec = SessionSpec(
     name=name,
@@ -313,7 +316,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
     bro=bro,
     prompt=prompt,
     subject=prompt,
-    resolved_llm=resolved_llm,
+    resolved_recipe=resolved_recipe,
     solo=solo,
     resume=False,
     harness_set=selected_harness is not None,
@@ -451,6 +454,7 @@ def main(argv: list[str]) -> Optional[int]:
       grant=args['grant'] or [],
       revoke=args['revoke'] or [],
       limit=args['limit'] or [],
+      llm=args['llm'],
     )
   if command == 'clean':
     return clean_workspaces(force=args['force'], dry_run=args['dry_run'], names=args['names'])
@@ -476,8 +480,6 @@ def main(argv: list[str]) -> Optional[int]:
       repository = None if args['repo'] is None else _resolve_repository_argument(args['repo'])
     except (RuntimeError, ValueError) as error:
       parser.error(str(error))
-    if repository is None and args['bro'] is None:
-      parser.error('ride scope requires --bro when detached')
     return report_scope(
       repo=repository,
       bro=args['bro'],
@@ -485,4 +487,4 @@ def main(argv: list[str]) -> Optional[int]:
       llm=args['llm'],
     )
   assert command == 'banner'
-  return banner(llm=args['llm'])
+  return banner(plain=args['plain'])

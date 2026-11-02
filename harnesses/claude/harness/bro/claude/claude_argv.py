@@ -5,7 +5,7 @@ ride-injected append prompt, and its bro's session-local MCP namespaces mounted
 as its only MCP servers. Model, the merged `--settings` (fastMode + statusLine +
 attribution + hooks, kept on), `--effort`, a resume, and prompt seeding are
 handled once, identically wherever the session runs. Model, effort and fast mode
-come off the session's anthropic `Recipe` (`SessionRun.llm_spec`); unset
+come off the session's anthropic `Recipe` (`SessionRun.recipe`); unset
 effort is Claude Code's own default.
 """
 
@@ -20,7 +20,7 @@ from bro.base import spawn
 from bro.brash_policy import finite
 from bro.claude import native_tools
 from bro.claude.assembly import persona_servers
-from bro.claude.harness import llm_spec
+from bro.claude.harness import recipe
 from bro.claude.mcp import MCPEndpoint, http_mcp_config
 from bro.claude.session_end_state import ANSWER_TOOL, RAISE_TOOL
 from bro.claude.statusline import REFRESH_SECONDS, statusline_command
@@ -171,7 +171,7 @@ def build_claude_launch(
   """
   from bro.registry import create_bro
 
-  llm = llm_spec(spec)
+  llm = recipe(spec)
   settings: dict = {
     'fastMode': llm.fast_mode,
     'statusLine': {

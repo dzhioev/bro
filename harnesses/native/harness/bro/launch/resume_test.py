@@ -305,7 +305,7 @@ class TestResume:
   def test_resumes_the_latest_call_trail_at_its_latest_fork_point(self):
     spec = Recipe(model='gpt-5', service_tier='priority')
     with patch('bro.launch.resume.fork') as fork_stub:
-      resumed = resume(cast(Any, self._client()), 'record', RESUME_LATEST, llm_spec=spec)
+      resumed = resume(cast(Any, self._client()), 'record', RESUME_LATEST, recipe=spec)
     assert resumed.trail_id == 'trail-1'
     assert _conversation_text(resumed.history) == [
       (UserInput, 'hello'),
@@ -314,7 +314,7 @@ class TestResume:
     (trail, step_id), kwargs = fork_stub.call_args
     assert trail.header.id == 'trail-1'
     assert step_id == 2
-    assert kwargs['llm_spec'] is spec
+    assert kwargs['recipe'] is spec
     assert kwargs['surface'] == 'call'
     # the fetch_forked_from seam resolves ancestors through the same client
     assert kwargs['fetch_forked_from']('trail-1').header.id == 'trail-1'
@@ -323,7 +323,7 @@ class TestResume:
   def test_an_explicit_at_overrides_the_latest_fork_point(self):
     spec = Recipe(model='gpt-5', service_tier='priority')
     with patch('bro.launch.resume.fork') as fork_stub:
-      resume(cast(Any, self._client()), 'record', 'trail-1', llm_spec=spec, at=1)
+      resume(cast(Any, self._client()), 'record', 'trail-1', recipe=spec, at=1)
     (_, step_id), _ = fork_stub.call_args
     assert step_id == 1
 
@@ -333,9 +333,9 @@ class TestResume:
       steps={'trail-1': _forked_from_steps()},
     )
     with pytest.raises(ValueError, match="belongs to bro 'other'"):
-      resume(cast(Any, client), 'record', 'trail-1', llm_spec=Recipe(model='gpt-5'))
+      resume(cast(Any, client), 'record', 'trail-1', recipe=Recipe(model='gpt-5'))
 
   def test_raises_when_the_bro_has_nothing_to_resume(self):
     client = FakeTrailsStore(headers=[], steps={})
     with pytest.raises(ValueError, match='no call conversation found'):
-      resume(cast(Any, client), 'record', RESUME_LATEST, llm_spec=Recipe(model='gpt-5'))
+      resume(cast(Any, client), 'record', RESUME_LATEST, recipe=Recipe(model='gpt-5'))

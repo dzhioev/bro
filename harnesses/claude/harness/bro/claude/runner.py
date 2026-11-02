@@ -284,7 +284,7 @@ def run_session(spec: 'SessionRun') -> int:
     )
     if os.environ.get('TRAILS_DISABLED') is None:
       try:
-        recorder = start_session_recorder(tree, os.environ, llm=spec.llm_spec.dump())
+        recorder = start_session_recorder(tree, os.environ, llm=spec.recipe.dump())
       except RuntimeError as error:
         log.error('%s', error)
         return 1

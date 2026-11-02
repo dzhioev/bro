@@ -6,6 +6,7 @@ from typing import Optional
 
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import Recipe
+from bro.llm.resolved import ResolvedRecipe
 from bro.native.runner import Runner
 from bro.trails.display import DisplayRecord, RecordedAdapter
 from bro.trails.store import TrailsStore, fetch_recorded_trail
@@ -41,7 +42,7 @@ def resume(
   bro_name: str,
   trail_ref: str,
   *,
-  llm_spec: Recipe,
+  recipe: Recipe | ResolvedRecipe | None = None,
   at: Optional[int] = None,
   hold: Optional[str] = None,
   activity_file: Optional[Path] = None,
@@ -64,7 +65,7 @@ def resume(
   runner = fork(
     trail,
     fork_step_id,
-    llm_spec=llm_spec,
+    recipe=recipe,
     surface=_CALL_ENTRY_POINT,
     hold=hold,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),

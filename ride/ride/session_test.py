@@ -24,7 +24,7 @@ from bro.authority.records import dump_request, dump_values
 from bro.authority.rules import Request
 from bro.base import credentials
 from bro.llm.providers import bind_recipe
-from bro.monitor import workspace_party_dir, workspace_session_dir
+from bro.monitor import trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
   CONTAINER_PARTY_DIR,
@@ -85,7 +85,10 @@ def _spec(
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
     llm=llm,
-    resolved_llm=bind_recipe(llm or 'anthropic:claude-opus-5').dump(),
+    resolved_recipe={
+      'recipe': bind_recipe(llm or 'anthropic:claude-opus-5').dump(),
+      'source': '--llm',
+    },
     solo=solo,
     resume=resume,
     into=into,
@@ -253,7 +256,7 @@ class _ContainerHarness:
       'request': dump_request(requested, record.descriptor),
       'required': list(self.secrets),
       'optional': list(self.optional_secrets),
-      'resolved_llm': spec.resolved_llm,
+      'resolved_recipe': spec.resolved_recipe,
       'commit': 'commit-' + token,
     }
 
@@ -858,7 +861,7 @@ class TestResumeSpecRecord:
     assert loaded.authority_request == spec.authority_request
     assert loaded.env == spec.env
     assert (
-      not {'cred', 'grant', 'revoke', 'llm', 'resolved_llm', 'summon_depth', 'summon_harness'}
+      not {'cred', 'grant', 'revoke', 'llm', 'summon_depth', 'summon_harness'}
       & loaded.dump().keys()
     )
 
@@ -914,7 +917,7 @@ class TestResumeSpecRecord:
     workspace.resume_file.write_text(json.dumps({**spec.resume_variant().dump(), 'arguments': []}))
 
     assert ride_session.load_resume_spec(workspace) is None
-    assert ride_session.harness_for_workspace(workspace) is None
+    assert ride_session.harness_for_workspace(workspace) is claude_harness.CLAUDE
 
   def test_a_record_carrying_harness_arguments_is_unreadable(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
@@ -1918,7 +1921,7 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
       {
         'workspace': workspace.name,
         'credential': selected.get('github'),
-        'recipe': json.loads(launch.env[ride_session.RESOLVED_LLM_ENV]),
+        'recipe': json.loads(launch.env[ride_session.RESOLVED_RECIPE_ENV]),
         'isolation': launch.env['RIDE_ISOLATION'],
         'talk': launch.env['BROKER_TALK'],
       }
@@ -1940,7 +1943,7 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
       grant=[],
       revoke=[],
       llm='echo:echo',
-      resolved_llm={},
+      resolved_recipe={},
       solo=True,
       resume=False,
       into=None,
@@ -1977,29 +1980,6 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
   )
 
 
-def test_resume_refuses_a_descriptor_that_differs_from_the_configured_recipe(tmp_path, caplog):
-  recorded = _spec(bro='dev')
-  recorded = replace(
-    recorded,
-    harness='bro',
-    llm='openai:gpt-7',
-    authority_request={
-      **recorded.authority_request,
-      'values': {
-        **recorded.authority_request['values'],
-        'harness': 'bro',
-        'provider': 'openai',
-        'model': 'gpt-7',
-      },
-    },
-  )
-  ride_session.record_resume_spec(_workspace(tmp_path), recorded)
-  with _ContainerHarness() as host:
-    assert _resume() == 1
-    host.run_started_party.assert_not_called()
-  assert 'descriptor model differs from the resolved recipe' in caplog.text
-
-
 @pytest.mark.parametrize('passthrough', [False, True])
 def test_root_launch_admits_the_final_recipe_before_starting_a_party(passthrough, caplog):
   spec = replace(
@@ -2013,3 +1993,235 @@ def test_root_launch_admits_the_final_recipe_before_starting_a_party(passthrough
     assert host.run_started_party.called is passthrough
   if not passthrough:
     assert 'gpt-7' in caplog.text and '+passthrough' in caplog.text
+
+
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+@pytest.mark.parametrize('layer', ['settings', 'defaults', 'home', 'foreign-bro', 'bro', '--llm'])
+def test_configured_record_reaches_harness_argv_and_banner(
+  harness, layer, monkeypatch, tmp_path, home_settings_file
+):
+  from bro.base import host_config
+  from bro.claude.claude_argv import build_claude_launch
+  from bro.claude.mcp import MCPEndpoint
+  from bro.llm.providers import format_recipe
+  from bro.llm.resolved import ResolvedRecipe
+  from bro.native.harness import BRO
+  from bro.workspace.banner import render_banner
+  from ride import do_ride
+
+  text = (
+    'openai:gpt-6.1-sol,reasoning_effort=high,compact_threshold=12345'
+    if harness == 'bro'
+    else 'anthropic:claude-opus-5-5,effort=high,fast_mode=true'
+  )
+  baseline = 'openai:gpt-5.6-terra' if harness == 'bro' else 'anthropic:claude-opus-5'
+  home_settings_file.write_text(f'harness = "{harness}"\n[llm]\n{harness} = "{baseline}"\n')
+  config: dict = {'defaults': {'llm': {harness: baseline}}}
+  selected = {'llm': {harness: text}}
+  if layer == 'settings':
+    home_settings_file.write_text(f'harness = "{harness}"\n[llm]\n{harness} = "{text}"\n')
+    config = {}
+    source = 'test-home home settings'
+  elif layer == 'defaults':
+    config['defaults'] = selected
+    source = 'defaults'
+  elif layer == 'home':
+    config['homes'] = {'test-home': selected}
+    source = 'homes.test-home'
+  elif layer == 'foreign-bro':
+    config['homes'] = {'bro': {'bros': {'bro': selected}}}
+    source = 'homes.bro.bros.bro'
+  elif layer == 'bro':
+    config['homes'] = {'test-home': {'bros': {'bro': selected}}}
+    source = 'homes.test-home.bros.bro'
+  else:
+    source = '--llm'
+  host_file = tmp_path / 'host.json'
+  host_file.write_text(json.dumps(config))
+  monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', host_file)
+  real_reading = ride_session.Reading.take
+  spec = replace(
+    _spec(bro='bro'),
+    repo=None,
+    harness=None,
+    harness_set=False,
+    authority_request={},
+    resolved_recipe={},
+    llm=text if layer == '--llm' else None,
+  )
+  with _ContainerHarness() as host:
+    host.take_reading.side_effect = real_reading
+    assert ride_session.start_session(spec) == 0
+  launch = host.run_started_party.call_args.args[0]
+  for name, value in launch.env.items():
+    monkeypatch.setenv(name, value)
+  _, run = do_ride._session_run(do_ride._parse(launch.command))
+  resolved = ResolvedRecipe.from_dict(run.resolved_recipe)
+  assert resolved.recipe == bind_recipe(text)
+  assert resolved.source == source
+  assert f'llm: {format_recipe(resolved.recipe)} ({source})' in render_banner(plain=True)
+  assert resolved.display() in render_banner()
+  if harness == 'bro':
+    spawned = []
+    monkeypatch.setattr('bro.native.harness.spawn.console_script', lambda name: '/venv/bin/bro')
+    monkeypatch.setattr(do_ride, 'run_agent', lambda argv: spawned.append(argv) or 0)
+    assert BRO.run_session(run) == 0
+    [argv] = spawned
+    assert json.loads(argv[argv.index('--resolved-recipe') + 1]) == run.resolved_recipe
+  else:
+    built = build_claude_launch(
+      run,
+      resume_session=None,
+      endpoint=MCPEndpoint(port=1234, token='test'),
+      brash_policy=None,
+      activity_file=run.activity_file,
+      plugin_dir=None,
+    )
+    assert built.argv[built.argv.index('--model') + 1] == resolved.recipe.model
+    assert built.argv[built.argv.index('--effort') + 1] == 'high'
+    assert json.loads(built.argv[built.argv.index('--settings') + 1])['fastMode'] is True
+
+
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+@pytest.mark.parametrize('replacement', [False, True])
+def test_resume_keeps_the_recorded_recipe_unless_replaced(
+  harness, replacement, monkeypatch, tmp_path
+):
+  from bro.llm.resolved import ResolvedRecipe
+
+  text = (
+    'openai:gpt-6.1-sol,reasoning_effort=high'
+    if harness == 'bro'
+    else 'anthropic:claude-opus-5-5,effort=high'
+  )
+  recorded = ResolvedRecipe(bind_recipe(text), 'homes.test-home.bros.bro')
+  spec = replace(_spec(bro='bro'), harness=harness, resolved_recipe=recorded.dump())
+  workspace = _workspace(tmp_path)
+  ride_session.record_resume_spec(workspace, spec)
+  source = reading()
+  if harness == 'bro':
+    trail_pointer.write(trail_pointer.session_pointer(workspace.path), 'old-trail')
+  monkeypatch.setattr(ride_session.get_harness(harness), 'session_exists', lambda workspace: True)
+  changed = 'openai:gpt-5.6-terra' if harness == 'bro' else 'anthropic:claude-opus-5'
+  with _ContainerHarness() as host:
+    host.take_reading.side_effect = lambda repository: source
+    assert (
+      ride_session.resume_session(
+        'w', cred=[], grant=[], revoke=[], llm=changed if replacement else None
+      )
+      == 0
+    )
+  launched = host.run_started_party.call_args.args[0]
+  actual = ResolvedRecipe.from_dict(json.loads(launched.env[ride_session.RESOLVED_RECIPE_ENV]))
+  expected = ResolvedRecipe(bind_recipe(changed), '--llm') if replacement else recorded
+  assert actual == expected
+  saved = ride_session.load_resume_spec(workspace)
+  assert saved is not None and saved.resolved_recipe == expected.dump()
+
+
+@pytest.mark.parametrize('replacement_kind', [None, 'listed', 'passthrough'])
+def test_resume_checks_recorded_admission_but_only_checks_replacement_when_supplied(
+  replacement_kind, tmp_path, monkeypatch, caplog
+):
+  from bro.llm.resolved import ResolvedRecipe
+  from bro.openai.declaration import Recipe
+
+  retired = next(iter(Recipe.RETIRED_MODELS))
+  replacement = (
+    None
+    if replacement_kind is None
+    else 'openai:gpt-6.1-sol'
+    if replacement_kind == 'listed'
+    else f'openai:{retired}+passthrough'
+  )
+  recorded = ResolvedRecipe(Recipe(model=retired), 'defaults')
+  spec = replace(_spec(bro='bro'), harness='bro', resolved_recipe=recorded.dump())
+  workspace = _workspace(tmp_path)
+  ride_session.record_resume_spec(workspace, spec)
+  monkeypatch.setattr(ride_session.get_harness('bro'), 'session_exists', lambda workspace: True)
+  with _ContainerHarness() as host:
+    assert ride_session.resume_session('w', cred=[], grant=[], revoke=[], llm=replacement) == (
+      1 if replacement is None else 0
+    )
+    if replacement is None:
+      host.run_started_party.assert_not_called()
+      assert f'retired on {Recipe.RETIRED_MODELS[retired]}' in caplog.text
+    else:
+      actual = json.loads(
+        host.run_started_party.call_args.args[0].env[ride_session.RESOLVED_RECIPE_ENV]
+      )
+      assert actual == ResolvedRecipe(bind_recipe(replacement), '--llm').dump()
+
+
+def test_resume_refuses_a_replacement_on_another_wire_before_starting(
+  tmp_path, monkeypatch, caplog
+):
+  from bro.llm.resolved import ResolvedRecipe
+
+  spec = replace(
+    _spec(bro='bro'),
+    harness='bro',
+    resolved_recipe=ResolvedRecipe(bind_recipe('openai:gpt-5.6-terra'), 'defaults').dump(),
+  )
+  ride_session.record_resume_spec(_workspace(tmp_path), spec)
+  with _ContainerHarness() as host:
+    assert ride_session.resume_session('w', cred=[], grant=[], revoke=[], llm='echo:echo') == 1
+    host.run_started_party.assert_not_called()
+  assert "cannot resume wire 'responses' with target wire 'echo'" in caplog.text
+
+
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+def test_pre_design_records_are_listed_but_refused_with_recovery_routes(
+  harness, tmp_path, monkeypatch, caplog, capsys
+):
+  from ride.listing import list_workspaces
+
+  workspace = _workspace(tmp_path)
+  data = replace(_spec(bro='bro'), harness=harness).resume_variant().dump()
+  del data['resolved_recipe']
+  data['authority_request']['values']['effort'] = 'high'
+  workspace.resume_file.write_text(json.dumps(data))
+  trail_pointer.write(trail_pointer.session_pointer(workspace.path), 'old-trail')
+  monkeypatch.setattr('ride.listing.running_mounts', lambda: set())
+  assert list_workspaces() == 0
+  assert workspace.name in capsys.readouterr().out
+  with _ContainerHarness() as host:
+    assert ride_session.resume_session('w', cred=[], grant=[], revoke=[]) == 1
+    host.run_started_party.assert_not_called()
+  assert 'record predates resolved recipes' in caplog.text
+  assert 'start a new session' in caplog.text
+  if harness == 'bro':
+    assert 'bro chat bro --fork old-trail' in caplog.text
+
+
+def test_resume_replacement_survives_runtime_reexec(tmp_path, monkeypatch):
+  spec = _spec(bro='bro')
+  ride_session.record_resume_spec(_workspace(tmp_path), spec)
+  seen = []
+
+  def reexec(reference, arguments):
+    seen.append(arguments)
+    raise _Replaced
+
+  monkeypatch.setattr(ride_session, 'reexec_from_runtime', reexec)
+  with pytest.raises(_Replaced):
+    ride_session.resume_session('w', cred=[], grant=[], revoke=[], llm='anthropic:claude-opus-5-5')
+  assert seen == [['ride', 'resume', '--llm', 'anthropic:claude-opus-5-5', 'w']]
+
+
+@pytest.mark.parametrize('replacement', [None, 'anthropic:claude-opus-5-5'])
+def test_resume_checks_support_on_the_recorded_harness(tmp_path, monkeypatch, caplog, replacement):
+  from bro.llm.resolved import ResolvedRecipe
+
+  spec = replace(
+    _spec(bro='bro'), resolved_recipe=ResolvedRecipe(bind_recipe('echo:echo'), 'defaults').dump()
+  )
+  ride_session.record_resume_spec(_workspace(tmp_path), spec)
+  monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
+  with _ContainerHarness() as host:
+    assert ride_session.resume_session('w', cred=[], grant=[], revoke=[], llm=replacement) == (
+      1 if replacement is None else 0
+    )
+    if replacement is None:
+      host.run_started_party.assert_not_called()
+      assert 'claude harness cannot run' in caplog.text

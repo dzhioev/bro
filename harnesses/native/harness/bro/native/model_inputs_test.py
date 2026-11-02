@@ -218,13 +218,15 @@ def test_diagnostic_command_refuses_unlisted_models(endpoint, monkeypatch):
   assert endpoint == []
 
 
-def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
-  endpoint, monkeypatch, tmp_path, register_test_bros
+@pytest.mark.parametrize('explicit', [False, True])
+def test_chat_fork_preserves_the_recorded_recipe_unless_explicitly_replaced(
+  endpoint, monkeypatch, tmp_path, register_test_bros, explicit
 ):
   import asyncio
   from contextlib import nullcontext
 
   from bro.launch.call import chat_main
+  from bro.llm.resolved import ResolvedRecipe
   from bro.native import runner as native_runner
   from bro.native.runner import Runner
   from bro.registry import create_bro
@@ -234,10 +236,6 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
 
   class Reader(Bro):
     name = 'admission-reader'
-
-    def __init__(self, **kwargs):
-      super().__init__(**kwargs)
-      self.recipe = ResponsesRecipe(model='gpt-5.6-terra')
 
   register_test_bros(Reader)
   from bro.base import host_config
@@ -257,16 +255,30 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
   asyncio.run(recorded_runner.run('start', surface='test', hold='guided'))
   assert recorded_runner.trail_id is not None
 
+  expected = (
+    ResolvedRecipe(ResponsesRecipe(model='gpt-5.6-terra'), '--llm')
+    if explicit
+    else ResolvedRecipe(recorded_runner.recipe, f'trail {recorded_runner.trail_id}')
+  )
+
   async def continue_chat(runner, initial, history=None, hold='guided', preset_name=None):
+    assert runner.resolved_recipe == expected
     await runner.send('continue', surface='test', hold=hold)
 
   monkeypatch.setattr('bro.launch.call.call_text', continue_chat)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
   assert (
-    chat_main(['bro', Reader.name, '--fork', recorded_runner.trail_id], program=['bro', 'chat'])
+    chat_main(
+      [
+        'bro',
+        Reader.name,
+        '--fork',
+        recorded_runner.trail_id,
+        *(['--llm', 'openai:gpt-5.6-terra'] if explicit else []),
+      ],
+      program=['bro', 'chat'],
+    )
     is None
   )
-  declared = Reader().recipe
-  assert declared is not None
-  assert endpoint[-1][1]['model'] == declared.model
-  assert endpoint[0][1]['model'] == 'gpt-7'
+  assert endpoint[-1][1]['model'] == expected.recipe.model
+  assert endpoint[0][1]['model'] == recorded_runner.recipe.model

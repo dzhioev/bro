@@ -366,7 +366,7 @@ class LaunchControl:
         'request': dump_request(mission.request, mission.descriptor),
         'required': sorted(scoped.required),
         'optional': sorted(scoped.optional),
-        'resolved_llm': resolved.dump(),
+        'resolved_recipe': resolved.dump(),
       }
       previous = self._commits.get(token)
       value['commit'] = (

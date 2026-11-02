@@ -88,7 +88,7 @@ class TestRecorderStartTrail:
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     trail_id = tracker.start_trail(
       bro='dev',
-      llm_spec={'type': 'openai', 'model': 'gpt-5'},
+      recipe={'type': 'openai', 'model': 'gpt-5'},
       system_prompt='do the thing',
       forked_from=None,
       interactive=False,
@@ -128,7 +128,7 @@ class TestRecorderStartTrail:
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b',
-      llm_spec={},
+      recipe={},
       system_prompt='p',
       forked_from=forked_from,
       interactive=True,
@@ -144,7 +144,7 @@ class TestRecorderStartTrail:
     with pytest.raises(TransientUnavailable):
       tracker.start_trail(
         bro='b',
-        llm_spec={},
+        recipe={},
         system_prompt='',
         forked_from=None,
         interactive=False,
@@ -160,7 +160,7 @@ class TestRecorderStep:
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
       bro='b',
-      llm_spec={},
+      recipe={},
       system_prompt='p',
       forked_from=None,
       interactive=False,
@@ -282,7 +282,7 @@ class TestRecorderEndTrail:
     fake.queue((201, b'{"id": "T1", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
-      bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
+      bro='b', recipe={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
     )
     return tracker, fake
 
@@ -317,7 +317,7 @@ class TestRecorderKeepalive:
     fake.queue((201, b'{"id": "T1", "extent": 1}'))
     tracker = Recorder(NetworkStore('https://bro.trails.example', 'tok'))
     tracker.start_trail(
-      bro='b', llm_spec={}, system_prompt='', forked_from=None, interactive=False, surface='x'
+      bro='b', recipe={}, system_prompt='', forked_from=None, interactive=False, surface='x'
     )
     return tracker, fake
 
@@ -383,7 +383,7 @@ class TestRecorderStampsTheManagedSession:
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1", "extent": 1}'))
     Recorder(NetworkStore('https://bro.trails.example', 'tok')).start_trail(
-      bro='b', llm_spec={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
+      bro='b', recipe={}, system_prompt='p', forked_from=None, interactive=False, surface='x'
     )
     return _request_payload(fake.requests[0])
 

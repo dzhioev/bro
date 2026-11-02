@@ -124,7 +124,7 @@ def _session(prompt: str, activity_file: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    resolved_llm=Recipe(model='haiku').dump(),
+    resolved_recipe={'recipe': Recipe(model='haiku').dump(), 'source': '--llm'},
     solo=True,
     resume=False,
     bro='bro',

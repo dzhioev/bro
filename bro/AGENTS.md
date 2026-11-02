@@ -189,7 +189,7 @@ the spell tools and `cast` render spell bodies under that hold.
 `_build_service_server` decides core's roster from the surface and the process environment, then appends `Harness.own_tools` and renders the combined roster as the `#tools` universe:
 
 - `banner`, always:
-  the session facts of `ride banner --llm` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and the run's trail id passed explicitly since an in-process run's environment carries the launcher's;
+  the session facts of `ride banner --plain` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name, resolved recipe and trail id passed explicitly since an in-process run's environment carries the launcher's;
   the playbook is `bro/prompts/environment.md`.
 - `page` and `results`, always:
   `page` returns `char_limit` characters of a kept result from `char_offset`, and `results` lists the kept results newest first, those kept before `before` when given.

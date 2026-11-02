@@ -11,7 +11,6 @@ import ride.cli as ride_cli
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
 from bro.base import configs, credentials, host_config
-from bro.native.echo_declaration import Recipe as EchoRecipe
 from bro.workspace.paths import workspace_dir
 from bros.bro import Bro
 from ride import pending_launch
@@ -24,7 +23,6 @@ class HydrationBro(Bro):
   name = 'hydration-test'
   description = 'credential hydration route fixture'
   extra_secrets = ('github',)
-  llm_spec = EchoRecipe(model='echo')
 
 
 @pytest.fixture(autouse=True)
@@ -243,7 +241,7 @@ class TestConfiguredRecipe:
       )
     spec = start.call_args.args[0]
     assert spec.llm == 'openai:gpt-6.1-sol,reasoning_effort=low'
-    assert spec.resolved_llm == {}
+    assert spec.resolved_recipe == {}
 
   def test_cli_does_not_parse_host_policy_before_the_runtime_start(self):
     self._entry('::ludicrous')
@@ -385,7 +383,7 @@ class TestCredentialHydrationRoutes:
       route.launch('--llm', text, '--grant', 'openai', '--cred', 'harbor+launch', mode='along') == 0
     )
     spec, _ = route.captures[-1]
-    assert spec.llm_spec == bind_recipe(text)
+    assert spec.recipe == bind_recipe(text)
 
   @pytest.mark.parametrize('text', [':sol', 'openai', 'openai:gpt-7', 'openai:gpt-5.5'])
   def test_along_refuses_incomplete_unlisted_and_retired_recipes(self, route, text, caplog):
@@ -807,6 +805,7 @@ class TestLifecycle:
       'grant': ['@dev'],
       'revoke': [],
       'limit': ['@dev for *'],
+      'llm': None,
     }
 
   def test_check_harness_starts_its_runtime_probe(self):

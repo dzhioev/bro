@@ -82,7 +82,7 @@ async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path)
   assert [step.extras['wire'] for step in calls] == [recipe.WIRE]
   assert any(event['type'] == 'assistant' for event in store.iter_messages(recorded.header.id))
 
-  resumed = resume(store, 'bro', recorded.header.id, llm_spec=recipe, hold='unattended')
+  resumed = resume(store, 'bro', recorded.header.id, recipe=recipe, hold='unattended')
   with resumed.runner:
     assert await resumed.runner.send('reply', surface='test') == 'reply'
   assert resumed.runner.trail_id is not None
@@ -153,7 +153,7 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
     store,
     'bro',
     recorded.header.id,
-    llm_spec=ResponsesSpec(model='gpt-6.1-sol'),
+    recipe=ResponsesSpec(model='gpt-6.1-sol'),
     hold='unattended',
   )
   with resumed.runner:

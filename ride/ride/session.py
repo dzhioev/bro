@@ -21,7 +21,9 @@ from bro.authority.rules import Mission
 from bro.base import configs, credentials, log
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM, Talk
 from bro.harness import harness_name
+from bro.llm import providers
 from bro.llm.llm import Recipe
+from bro.llm.resolved import ResolvedRecipe
 from bro.monitor import (
   SESSION_DIR_ENV,
   party_member_dir,
@@ -50,9 +52,9 @@ from ride.bro_worker import PendingBro
 from ride.do_ride import (
   CONTAINER_INSTALL_DIRECTORY,
   INSTALL_DIRECTORY_ENV,
-  RESOLVED_LLM_ENV,
+  RESOLVED_RECIPE_ENV,
   command as do_ride_command,
-  encode_resolved_llm,
+  encode_resolved_recipe,
 )
 from ride.harness import SessionHarness, get_harness
 from ride.identity import human_git_identity_env
@@ -98,7 +100,6 @@ _SESSION_INPUT_FIELDS = frozenset(
     'revoke',
     'limit',
     'llm',
-    'resolved_llm',
     'summon_depth',
     'summon_harness',
     'mission',
@@ -123,7 +124,7 @@ class SessionSpec:
   grant: list[str]
   revoke: list[str]
   llm: Optional[str]
-  resolved_llm: dict
+  resolved_recipe: dict
   solo: bool
   resume: bool
   into: Optional[str]
@@ -173,8 +174,8 @@ class SessionSpec:
     return self.harness
 
   @property
-  def llm_spec(self) -> Recipe:
-    return Recipe.from_dict(self.resolved_llm)
+  def recipe(self) -> Recipe:
+    return ResolvedRecipe.from_dict(self.resolved_recipe).recipe
 
   @property
   def tty(self) -> bool:
@@ -183,7 +184,7 @@ class SessionSpec:
 
   def to_command_argv(self) -> list[str]:
     if self.resume:
-      return ['ride', 'resume', self.name]
+      return ['ride', 'resume', *([] if self.llm is None else ['--llm', self.llm]), self.name]
     flags = {
       '--unboxed': self.isolation is Isolation.UNBOXED,
       '--no-trails': self.no_trails,
@@ -259,13 +260,13 @@ class SessionSpec:
       raise ValueError(
         f'unreadable session record: unexpected fields {sorted(data.keys() ^ fields)}'
       )
+    ResolvedRecipe.from_dict(data['resolved_recipe'])
     return cls(
       **{**data, 'isolation': Isolation(data['isolation'])},
       cred=[],
       grant=[],
       revoke=[],
       llm=None,
-      resolved_llm={},
     )
 
 
@@ -281,11 +282,21 @@ def record_resume_spec(workspace: Workspace, spec: SessionSpec) -> None:
   workspace.resume_file.write_text(json.dumps(spec.resume_variant().dump(), indent=2))
 
 
-def load_resume_spec(workspace: Workspace) -> Optional[SessionSpec]:
-  try:
-    data = json.loads(workspace.resume_file.read_text())
-  except FileNotFoundError:
+def load_resume_spec(workspace: Workspace, *, for_resume: bool = False) -> Optional[SessionSpec]:
+  data = resume_metadata(workspace)
+  if data is None:
     return None
+  if for_resume and 'resolved_recipe' not in data:
+    trail = trail_pointer.read(trail_pointer.session_pointer(workspace.path))
+    native = (
+      f'bro chat {data["bro"]} --fork {trail} or '
+      if data.get('harness') == 'bro' and data.get('bro') and trail is not None
+      else ''
+    )
+    raise ValueError(
+      f'cannot resume workspace {workspace.name!r}: record predates resolved recipes; '
+      f'{native}start a new session'
+    )
   try:
     spec = SessionSpec.load(data)
     get_harness(spec.resolved_harness)
@@ -309,9 +320,25 @@ def recorded_runtime_reference(name: str) -> Optional[str]:
   return reference
 
 
+def resume_metadata(workspace: Workspace) -> dict | None:
+  try:
+    data = json.loads(workspace.resume_file.read_text())
+  except FileNotFoundError:
+    return None
+  if not isinstance(data, dict):
+    raise ValueError(f'unreadable session record for {workspace.name!r}: expected an object')
+  return data
+
+
 def harness_for_workspace(workspace: Workspace) -> SessionHarness | None:
-  spec = load_resume_spec(workspace)
-  return None if spec is None else get_harness(spec.resolved_harness)
+  data = resume_metadata(workspace)
+  if data is None or 'harness' not in data:
+    return None
+  try:
+    return get_harness(data['harness'])
+  except ValueError as error:
+    log.warning('unavailable harness for %s: %s', workspace.name, error)
+    return None
 
 
 def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
@@ -403,7 +430,7 @@ def container_launch(
     'RIDE_BRO': spec.bro,
     'RIDE_COMMAND': spec.ride_command,
     ISOLATION_ENV: Isolation.BOXED.value,
-    RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
+    RESOLVED_RECIPE_ENV: encode_resolved_recipe(spec.resolved_recipe),
     INSTALL_DIRECTORY_ENV: CONTAINER_INSTALL_DIRECTORY,
     SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
     **human_env,
@@ -474,7 +501,7 @@ def boxed_member_launch(
     'RIDE_HOST_WORKSPACE': str(workspace.tree),
     'RIDE_HOST': socket.gethostname(),
     ISOLATION_ENV: Isolation.BOXED.value,
-    RESOLVED_LLM_ENV: encode_resolved_llm(spec.resolved_llm),
+    RESOLVED_RECIPE_ENV: encode_resolved_recipe(spec.resolved_recipe),
     INSTALL_DIRECTORY_ENV: str(member_install_dir(member)),
     SESSION_DIR_ENV: str(workspace_session_dir(member_root)),
     # a local-trails member records under its own party records rather than the
@@ -535,7 +562,7 @@ def prepared_unboxed_session_launch(
   runner_env['BRO_STORE'] = str(store_directory)
   runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
   runner_env[INSTALL_DIRECTORY_ENV] = str(install_directory)
-  runner_env[RESOLVED_LLM_ENV] = encode_resolved_llm(spec.resolved_llm)
+  runner_env[RESOLVED_RECIPE_ENV] = encode_resolved_recipe(spec.resolved_recipe)
   runner_env[SESSION_DIR_ENV] = str(workspace_session_dir(records_directory))
   if spec.no_trails:
     runner_env['TRAILS_DISABLED'] = '1'
@@ -821,10 +848,20 @@ def _prepare_session(
           raise ValueError(f'existence check: into: cannot resolve {spec.into!r}')
         repository = replace(repository, tree_ref=commit)
       reading = Reading.take(repository)
+      resolved = None
       if spec.authority_request:
         requested = load_request(spec.authority_request, reading.syntax)
+        resolved = resume_recipe(spec, reading)
+        values = {
+          name: value
+          for name, value in requested.values.items()
+          if name not in {'provider', 'model', 'passthrough'}
+        }
+        from ride.authority_scope import recipe_values
+
         requested = replace(
-          requested, values={**requested.values, 'harness': spec.resolved_harness}
+          requested,
+          values={**values, **recipe_values(resolved.recipe), 'harness': spec.resolved_harness},
         )
         if spec.cred or spec.grant or spec.revoke or spec.limit:
           from ride.authority_launch import resume_request
@@ -880,9 +917,10 @@ def _prepare_session(
         hold=cast(str, values['hold']),
         isolation=Isolation(cast(str, values['placement'])),
       )
-      resolved = checked_recipe(
-        mission.descriptor, reading, None if spec.llm is None else (spec.llm, '--llm')
-      )
+      if resolved is None:
+        resolved = checked_recipe(
+          mission.descriptor, reading, None if spec.llm is None else (spec.llm, '--llm')
+        )
       scoped = credentials_for(mission, recording=not spec.no_trails)
       files, kinds = hydrate(scoped)
       spec = replace(
@@ -893,7 +931,7 @@ def _prepare_session(
         authority_request=dump_request(requested, mission.descriptor),
         operator_gift=dump_authority(operator_gift, mission.descriptor),
         operator_cap=dump_authority(operator_cap, mission.descriptor),
-        resolved_llm=resolved.dump(),
+        resolved_recipe=resolved.dump(),
         summon_depth=reading.summon_depth,
         summon_harness=reading.summon_harness,
       )
@@ -922,7 +960,7 @@ def _prepare_session(
         harness=cast(str, values['harness']),
         harness_set=True,
         hold=cast(str, values['hold']),
-        resolved_llm=committed['resolved_llm'],
+        resolved_recipe=committed['resolved_recipe'],
         authority_request=committed['request'],
         operator_values=committed['operator_values'],
         runtime_bundle=None,
@@ -996,10 +1034,34 @@ def _prepare_session(
   )
 
 
+def resume_recipe(spec: SessionSpec, reading: Reading) -> ResolvedRecipe:
+  from ride.authority_scope import resolve_recipe
+
+  recorded = ResolvedRecipe.from_dict(spec.resolved_recipe)
+  if spec.llm is None:
+    providers.require_admitted(recorded.recipe)
+    reading.installation.check_provider(recorded.recipe.TYPE)
+    reading.installation.harnesses[spec.resolved_harness].harness.check_recipe(recorded.recipe)
+    return recorded
+  replacement = resolve_recipe(reading, spec.bro, spec.resolved_harness, (spec.llm, '--llm'))
+  if spec.resolved_harness == 'bro' and replacement.recipe.WIRE != recorded.recipe.WIRE:
+    raise ValueError(
+      f'cannot resume wire {recorded.recipe.WIRE!r} with target wire {replacement.recipe.WIRE!r}; '
+      f'select a recipe on recorded wire {recorded.recipe.WIRE!r}'
+    )
+  return replacement
+
+
 def _resume_argv(
-  name: str, *, cred: list[str], grant: list[str], revoke: list[str], limit: list[str]
+  name: str,
+  *,
+  cred: list[str],
+  grant: list[str],
+  revoke: list[str],
+  limit: list[str],
+  llm: str | None,
 ) -> list[str]:
-  parts = ['ride', 'resume']
+  parts = ['ride', 'resume', *([] if llm is None else ['--llm', llm])]
   for flag, values in (
     ('--cred', cred),
     ('--grant', grant),
@@ -1013,10 +1075,16 @@ def _resume_argv(
 
 
 def resume_session(
-  name: str, *, cred: list[str], grant: list[str], revoke: list[str], limit: list[str] | None = None
+  name: str,
+  *,
+  cred: list[str],
+  grant: list[str],
+  revoke: list[str],
+  limit: list[str] | None = None,
+  llm: str | None = None,
 ) -> int:
   limit = [] if limit is None else limit
-  reexec_argv = _resume_argv(name, cred=cred, grant=grant, revoke=revoke, limit=limit)
+  reexec_argv = _resume_argv(name, cred=cred, grant=grant, revoke=revoke, limit=limit, llm=llm)
   try:
     workspace = Workspace.open(name)
   except ValueError as error:
@@ -1027,7 +1095,7 @@ def resume_session(
   try:
     with workspace.hold_session_lock():
       settle_resume(workspace.path)
-      spec = load_resume_spec(workspace)
+      spec = load_resume_spec(workspace, for_resume=True)
   except (RuntimeError, ValueError, OSError) as error:
     log.error('%s', error)
     return 1
@@ -1035,7 +1103,9 @@ def resume_session(
     log.error('no session recorded for %s; start a new one instead', name)
     return 1
   try:
-    spec = replace(spec.with_scope_overrides(cred=cred, grant=grant, revoke=revoke), limit=limit)
+    spec = replace(
+      spec.with_scope_overrides(cred=cred, grant=grant, revoke=revoke), limit=limit, llm=llm
+    )
   except ValueError as error:
     log.error('%s', error)
     return 1
