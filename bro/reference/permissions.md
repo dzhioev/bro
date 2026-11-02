@@ -67,12 +67,6 @@ Scalar families include finite/cofinite strings, whole-number interval unions, a
 For example, `bro.timeout=1..3600|none` includes both seconds and the literal sentinel `none`; a range alone excludes the sentinel.
 Names must satisfy their option's base grammar even when written as quoted strings.
 
-`~default` is a typed symbol for a deferred model or effort, not a model ID.
-`default` and `"~default"` are literal model strings.
-A recipe's deferred value is authorized as this symbol before it becomes an omitted provider argument.
-When a provider has no effort control, effort stays unset; concrete provider effort strings, including OpenAI `none` and `minimal`, remain distinct and round-trip exactly.
-The neutral `--llm` recipe grammar is unchanged; `~default` belongs to permission syntax, not that recipe grammar.
-
 ### Patterns and qualified entries
 
 A pattern is `type{conditions}`.
@@ -113,10 +107,8 @@ Defaults never depend on the starter's authority.
 | `target` | Bro names `[a-z][a-z0-9-]*` | Required | No | No |
 | `placement` | `boxed`, `unboxed`, `join` | `boxed` | No | No |
 | `harness` | Harness names | Reading's summon harness | Yes | No |
-| `provider` | Provider names | Selected recipe | Yes | No |
-| `model` | Strings or `~default` | Selected recipe | Yes | No |
-| `effort` | Provider effort strings or `~default` | Selected recipe, if it has effort control | Yes | No |
-| `fast` | Flag | Set only for fast mode | Yes | No |
+| `provider` | Provider names | Resolved recipe | Yes | No |
+| `model` | Strings | Resolved recipe | Yes | No |
 | `passthrough` | Flag | Send model and content unchecked by the model-input table | Yes | No |
 | `hold` | `unattended`, `detached`, `attended`, `guided` | `unattended` | Yes | No |
 | `talk` | Subset of the four talk rights | `[worker.say]` | Yes | No |
@@ -129,6 +121,9 @@ The four talk rights are `owner.say`, `owner.question`, `worker.say`, and `worke
 The wire mapping adds `worker.say` to requested talk.
 Recipe selection follows [ride's home-layer rules](ride.md#recipe-selection).
 The child's home-layer stack supplies its configured recipe and credential picks.
+The ungoverned `llm` field, when present, replaces that recipe whole with complete recipe text.
+The descriptor's `provider`, `model` and `passthrough` describe the resolved recipe, including a configured one.
+Caps refuse that recipe rather than changing it, and admission refuses a descriptor that differs from it.
 A requested recipe the harness cannot run fails rather than switching harnesses.
 
 A start holds the configured kinds for its target, harness, and provider, plus `add`, minus `drop`.
@@ -224,11 +219,11 @@ For example:
 
 ```json
 {
-  "llm": "openai:terra:low",
+  "llm": "openai:gpt-5.6-terra,reasoning_effort=low",
   "credential": {"$cred": "openai+"},
   "roles": {
-    "summary": {"llm": "openai:luna5.6:low", "credential": {"$cred": "openai+"}},
-    "reader": {"llm": "openai:luna5.6", "credential": {"$cred": "openai+"}}
+    "summary": {"llm": "openai:gpt-5.6-luna,reasoning_effort=low", "credential": {"$cred": "openai+"}},
+    "reader": {"llm": "openai:gpt-5.6-luna", "credential": {"$cred": "openai+"}}
   }
 }
 ```
@@ -244,8 +239,8 @@ Drop `mu` to disable these auxiliary routes, or select an instance whose entries
 
 | Surface | Values | Gift and cap |
 |---|---|---|
-| `ride along`, `ride solo` | Mode flags, LLM/harness flags, `--cred`, credential `--grant`/`--revoke` | Permission `--grant`, `--revoke`, `--limit` |
-| `summon` | Target, placement flags, `--pass`, credential `--grant`/`--revoke`, driving-loop flags | `--grant`, `--revoke`, `--limit` |
+| `ride along`, `ride solo` | Mode flags, `--llm`, `--harness`, `--cred`, credential `--grant`/`--revoke` | Permission `--grant`, `--revoke`, `--limit` |
+| `summon` | Target, placement flags, `--pass`, credential `--grant`/`--revoke`, `--harness`, `--llm` | `--grant`, `--revoke`, `--limit` |
 | `bro::summon` | `target`, `placement`, `passes`, `harness`, `llm`, `hold`, `timeout`, `talk` | `grant`, `revoke`, `limit` lists |
 | `launch {type: …}` | Type's wire fields | `grant`, `revoke`, `limit` lists |
 | `webview open` / `webview::open` | VNC, port, downloads, cookies, timeout | Checked as a webview start |

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import dataclasses
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Self, get_args
+from typing import Any, ClassVar, Literal, Optional, get_args
 
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
@@ -19,17 +18,6 @@ _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 # sync test asserts the values against the SDK's type.
 ReasoningEffort = Literal['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 _VALID_REASONING_EFFORTS: frozenset[str] = frozenset(get_args(ReasoningEffort))
-
-DEFAULT_MODEL = 'gpt-5.6-terra'
-
-# `--model` short names for this provider's models.
-MODELS: dict[str, str] = {
-  'sol': 'gpt-6.1-sol',
-  'luna': 'gpt-6-luna',
-  'astra': 'gpt-6-astra',
-  'terra': 'gpt-5.6-terra',
-  'luna5.6': 'gpt-5.6-luna',
-}
 
 # how this provider's client failures read in a run's error output
 FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = (
@@ -777,23 +765,12 @@ def price(
   ) / _ONE_MILLION
 
 
-# neutral effort level (`Recipe.with_effort`) → Responses API reasoning_effort.
-_EFFORT_TO_REASONING_EFFORT: dict[str, ReasoningEffort] = {
-  'low': 'low',
-  'medium': 'medium',
-  'high': 'high',
-  'xhigh': 'xhigh',
-  'max': 'max',
-}
-
-
 @dataclass(frozen=True)
 class Recipe(llm_llm.Recipe):
   """spec for the OpenAI Responses API.
 
   service_tier='priority' is the analog of Claude Code's /fast — same model
   and quality, higher per-token price, faster and more consistent generation.
-  Toggle it through `.fast()` rather than constructing a new spec by hand.
 
   compact_threshold (opt-in) bounds context growth in long runs: the native
   client passes it as server-side context-management policy. None (the default)
@@ -810,7 +787,7 @@ class Recipe(llm_llm.Recipe):
   # OpenAI model pages, images guide and file-inputs guide, read 2026-10-31.
   # https://developers.openai.com/api/docs/guides/file-inputs
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = dict.fromkeys(
-    MODELS.values(),
+    ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna'],
     frozenset(
       [
         'application/csv',
@@ -993,11 +970,7 @@ class Recipe(llm_llm.Recipe):
     ],
     date(2026, 11, 1),
   )
-  selection_fields = MappingProxyType({'model': 'model', 'effort': 'reasoning_effort'})
-  deferred_fields = frozenset({'effort'})
-  effort_values = _VALID_REASONING_EFFORTS
 
-  model: str = DEFAULT_MODEL
   reasoning_effort: Optional[ReasoningEffort] = None
   service_tier: Optional[ServiceTier] = None
   compact_threshold: Optional[int] = None
@@ -1008,17 +981,6 @@ class Recipe(llm_llm.Recipe):
       raise ValueError(
         f'invalid compact_threshold {self.compact_threshold!r}; expected a positive int or None'
       )
-
-  def fast(self) -> Self:
-    return dataclasses.replace(self, service_tier='priority')
-
-  def with_effort(self, effort: str) -> Self:
-    reasoning_effort = _EFFORT_TO_REASONING_EFFORT.get(effort)
-    if reasoning_effort is None:
-      raise ValueError(
-        f'unknown effort level {effort!r}; expected one of {list(_EFFORT_TO_REASONING_EFFORT)}'
-      )
-    return dataclasses.replace(self, reasoning_effort=reasoning_effort)
 
   def request_options(self) -> dict:
     options: dict = {}

@@ -1,13 +1,4 @@
-"""the LLM provider roster: which providers exist, what a launch calls them, and
-how a `provider:model:effort+fast+passthrough` selection resolves to a `Recipe`.
-
-A provider name is the whole vocabulary for one provider — the `--provider`
-value, its spec's `TYPE` discriminator, and (where it reads one) its credential
-kind — so a launch, a stored spec, and a hydrated scope all spell it the same.
-
-Provider declarations are discovered through installation metadata and loaded only
-when selected or searched for their advertised capabilities.
-"""
+"""Provider declarations, complete recipe text, admission and pricing."""
 
 import dataclasses
 import functools
@@ -22,7 +13,6 @@ from typing import Any, Literal, Optional, get_args, get_origin
 
 from bro.base import log
 from bro.llm.llm import (
-  EFFORT_LEVELS,
   FailureSignature,
   Recipe,
   field_type,
@@ -33,19 +23,9 @@ from bro.llm.wire import MIME_TYPE
 
 ENTRY_POINT_GROUP = 'bro.llm.providers'
 
-SELECTION_FLAGS = ('fast', 'passthrough')
-SELECTION_OPTIONS = ('provider', 'model', 'effort', *SELECTION_FLAGS)
-_SEPARATOR = ':'
-_SLOTS = 3
-
 
 class RecipeError(ValueError):
   """Recipe text or a provider declaration cannot be bound."""
-
-
-class LLMSelectionError(RecipeError):
-  """a launch named an LLM that cannot be resolved: an unknown provider, model,
-  or preset, or a malformed `--llm` value. The message is operator-facing."""
 
 
 @functools.cache
@@ -71,7 +51,7 @@ def known_names() -> tuple[str, ...]:
 def declaration(provider: str) -> ModuleType:
   entries = _entries()
   if provider not in entries:
-    raise LLMSelectionError(
+    raise RecipeError(
       f'unknown provider {provider!r}; installed providers: {", ".join(entries) or "(none)"}; '
       'install the plug-in that provides it'
     )
@@ -81,13 +61,8 @@ def declaration(provider: str) -> ModuleType:
       raise TypeError('entry must load a declaration module')
     if not issubclass(module.Recipe, Recipe) or module.Recipe.TYPE != provider:
       raise ValueError('declaration Recipe.TYPE must equal the entry name')
-    if not isinstance(module.DEFAULT_MODEL, str) or not isinstance(module.Recipe.WIRE, str):
-      raise TypeError('declaration must name a default model and a wire')
-    if not isinstance(module.MODELS, Mapping) or any(
-      not isinstance(name, str) or not isinstance(model, str)
-      for name, model in module.MODELS.items()
-    ):
-      raise TypeError('declaration MODELS must map short names to model ids')
+    if not isinstance(module.Recipe.WIRE, str):
+      raise TypeError('declaration must name a wire')
     inputs = module.Recipe.MODEL_INPUTS
     if not isinstance(inputs, Mapping) or any(
       not isinstance(model, str)
@@ -101,8 +76,6 @@ def declaration(provider: str) -> ModuleType:
       raise TypeError(
         'declaration MODEL_INPUTS must map model ids to frozensets of lowercase MIME types'
       )
-    if any(model not in inputs for model in (module.DEFAULT_MODEL, *module.MODELS.values())):
-      raise ValueError('declaration MODEL_INPUTS must cover DEFAULT_MODEL and MODELS')
     _check_recipe_class(module.Recipe, module.PRICE_TABLE)
     if not isinstance(module.FAILURE_SIGNATURES, tuple) or any(
       not isinstance(signature, FailureSignature) for signature in module.FAILURE_SIGNATURES
@@ -115,7 +88,7 @@ def declaration(provider: str) -> ModuleType:
     if hasattr(module, 'MODEL_SLUG') and not callable(module.model_family):
       raise TypeError('declaration MODEL_SLUG requires model_family')
   except Exception as error:
-    raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
+    raise RecipeError(f'provider {provider!r} is unavailable: {error}') from error
   return module
 
 
@@ -125,28 +98,10 @@ def declarations(among: Collection[str] | None = None) -> Iterator[tuple[str, Mo
       continue
     try:
       module = declaration(name)
-    except LLMSelectionError as error:
+    except RecipeError as error:
       log.warning('%s', error)
       continue
     yield name, module
-
-
-def models(provider: str) -> dict[str, str]:
-  """the provider's short model names, each mapped to the full id it stands for."""
-  return declaration(provider).MODELS
-
-
-def default_spec(provider: str) -> Recipe:
-  """the provider's own default recipe — its default model and no knobs."""
-  module = declaration(provider)
-  try:
-    return module.Recipe()
-  except Exception as error:
-    raise LLMSelectionError(f'provider {provider!r} is unavailable: {error}') from error
-
-
-def effort_values() -> frozenset[str]:
-  return frozenset(value for _, module in declarations() for value in module.Recipe.effort_values)
 
 
 def failure_signatures(provider: str) -> tuple[FailureSignature, ...]:
@@ -181,207 +136,16 @@ def price_table_from_content(
   return factory(source, as_of, models)
 
 
-def resolve_model(provider: str, model: str) -> str:
-  """the full model id `model` names within `provider`.
-
-  An unlisted name is the id itself when it fits the provider's `MODEL_ID`,
-  where declared. Resolution does not admit a recipe; `require_admitted` checks
-  the final recipe before it drives a run.
-  """
-  table = models(provider)
-  resolved = table.get(model, model)
-  shape = getattr(declaration(provider), 'MODEL_ID', None)
-  if shape is not None and shape.fullmatch(resolved) is None:
-    raise LLMSelectionError(
-      f'{model!r} names no {provider} model id; name a full id or one of: {", ".join(table)}'
-    )
-  return resolved
-
-
-def carriers(model: str, among: Collection[str]) -> tuple[str, ...]:
-  """the providers in `among` whose rosters carry `model`, by short name or full id."""
-  return tuple(
-    provider
-    for provider, module in declarations(among)
-    if model in module.MODELS or model in module.MODELS.values()
-  )
-
-
-def provider_of_model(model: str, among: Collection[str]) -> str:
-  """the one provider in `among` whose roster carries `model`.
-
-  Raises when none of them claims it or more than one does — either way the
-  launch has to name the provider itself.
-  """
-  matches = carriers(model, among)
-  if len(matches) == 1:
-    return matches[0]
-  if len(matches) == 0:
-    raise LLMSelectionError(
-      f'unknown model {model!r}; name its provider, or use one of: {", ".join(_short_names(among))}'
-    )
-  raise LLMSelectionError(
-    f'model {model!r} is served by more than one provider ({", ".join(matches)}); name one'
-  )
-
-
-def _short_names(among: Collection[str]) -> list[str]:
-  return sorted(name for _, module in declarations(among) for name in module.MODELS)
-
-
-@dataclass(frozen=True)
-class LLMSelection:
-  """a launch's LLM choice as its flags spell it.
-
-  Every field is optional, and an unset one leaves the standing recipe's own
-  value — the bro's `llm_spec` on a native launcher, the surface's default on a
-  claude session.
-  """
-
-  provider: Optional[str] = None
-  model: Optional[str] = None
-  effort: Optional[str] = None
-  fast: bool = False
-  passthrough: bool = False
-
-  def __post_init__(self):
-    if self.provider is not None and re.fullmatch(r'[a-z][a-z0-9-]*', self.provider) is None:
-      raise LLMSelectionError(f'invalid provider name {self.provider!r}')
-    if self.model is not None and re.fullmatch(r'[^\s:+]+', self.model) is None:
-      raise LLMSelectionError(f'invalid model name {self.model!r}')
-    if self.effort is not None and self.effort not in EFFORT_LEVELS:
-      raise LLMSelectionError(
-        f'unknown effort level {self.effort!r}; expected one of {", ".join(EFFORT_LEVELS)}'
-      )
-
-  def is_empty(self) -> bool:
-    return self == LLMSelection()
-
-  def providers(self, among: Collection[str]) -> tuple[str, ...]:
-    """the providers in `among` this selection can run on: the one it names, or
-    those whose rosters carry its model — all of `among` when it names neither,
-    leaving the standing recipe's provider."""
-    if self.provider is not None:
-      return (self.provider,) if self.provider in among else ()
-    if self.model is not None:
-      return carriers(self.model, among)
-    return tuple(among)
-
-  def over(self, base: 'LLMSelection') -> 'LLMSelection':
-    """this selection with `base` filling what it leaves unnamed — a launch's
-    flags over a configured default.
-
-    A named provider is a complete recipe. A model-only override inherits the
-    base provider; effort and flags otherwise fill independently.
-    """
-    if self.provider is not None:
-      return self
-    return LLMSelection(
-      provider=base.provider,
-      model=self.model if self.model is not None else base.model,
-      effort=self.effort if self.effort is not None else base.effort,
-      **{name: getattr(self, name) or getattr(base, name) for name in SELECTION_FLAGS},
-    )
-
-  def format(self) -> str:
-    """this selection as a canonical `--llm` value, which `parse` reads back.
-
-    What a launch surface forwards inward, so the inner run resolves nothing —
-    no preset table, no guessing, the same recipe whichever side reads it.
-    """
-    slots = [self.provider or '', self.model or '', self.effort or '']
-    while len(slots) > 0 and slots[-1] == '':
-      slots.pop()
-    return _SEPARATOR.join(slots) + ''.join(
-      '+' + name for name in SELECTION_FLAGS if getattr(self, name)
-    )
-
-
-def parse(value: str) -> LLMSelection:
-  """read a `--llm` value: `provider:model:effort`, any slot left empty, with an
-  optional `+fast` and `+passthrough` suffixes, once each in either order."""
-  body, *suffixes = value.split('+')
-  if any(name not in SELECTION_FLAGS for name in suffixes) or len(set(suffixes)) != len(suffixes):
-    raise LLMSelectionError(
-      f'malformed --llm value {value!r}: supported suffixes are '
-      + ', '.join('+' + name for name in SELECTION_FLAGS)
-      + ', each at most once'
-    )
-  slots = body.split(_SEPARATOR)
-  if len(slots) > _SLOTS:
-    raise LLMSelectionError(
-      f'malformed --llm value {value!r}: expected at most {_SLOTS} '
-      f'{_SEPARATOR!r}-separated fields (provider, model, effort)'
-    )
-  slots += [''] * (_SLOTS - len(slots))
-  provider, model, effort = (slot.strip() or None for slot in slots)
-  selection = LLMSelection(
-    provider=provider,
-    model=model,
-    effort=effort,
-    **{name: name in suffixes for name in SELECTION_FLAGS},
-  )
-  if selection.is_empty():
-    raise LLMSelectionError(f'--llm value {value!r} names nothing')
-  return selection
-
-
-def is_preset(value: str) -> bool:
-  return re.fullmatch(r'[^\s:+]+', value) is not None and value not in known_names()
-
-
-def parse_with_presets(value: str, presets: Mapping[str, str]) -> LLMSelection:
-  if not is_preset(value):
-    return parse(value)
-  if value not in presets:
-    raise LLMSelectionError(
-      f'unknown --llm provider or preset {value!r}; '
-      f'installed providers: {", ".join(known_names()) or "(none)"}; '
-      f'presets: {", ".join(sorted(presets)) or "(none)"}; '
-      'install the plug-in that provides it or define a preset'
-    )
-  try:
-    return parse(presets[value])
-  except LLMSelectionError as error:
-    raise LLMSelectionError(f'--llm preset {value!r} ({presets[value]}): {error}') from error
-
-
-def resolve(base: Recipe | None, selection: LLMSelection, among: Collection[str]) -> Recipe:
-  """Apply a selection to a base; only a named provider starts a new recipe.
-
-  Fast is a best-effort preference; an unsupported effort override raises.
-  """
-  spec = default_spec(selection.provider) if selection.provider is not None else base
-  if spec is None:
-    raise LLMSelectionError('no LLM recipe: pass --llm provider:model')
-  if spec.TYPE not in among:
-    raise LLMSelectionError(
-      f'provider {spec.TYPE!r} is not served; expected one of {", ".join(among)}'
-    )
-  if selection.model is not None:
-    spec = dataclasses.replace(spec, model=resolve_model(spec.TYPE, selection.model))
-  if selection.fast:
-    try:
-      spec = spec.fast()
-    except NotImplementedError:
-      log.verbose('%s has no fast mode; running with the plain recipe', spec.TYPE)
-  if selection.effort is not None:
-    spec = spec.with_effort(selection.effort)
-  if selection.passthrough:
-    spec = dataclasses.replace(spec, passthrough=True)
-  return spec
-
-
 def require_admitted(recipe: Recipe) -> None:
   if not recipe.admitted():
-    model = recipe.selection()['model']
-    if model is not None and model in recipe.RETIRED_MODELS:
-      raise LLMSelectionError(
+    model = recipe.model
+    if model in recipe.RETIRED_MODELS:
+      raise RecipeError(
         f'{model} was retired on {recipe.RETIRED_MODELS[model].isoformat()}; '
         f'listed {recipe.TYPE} models: {", ".join(recipe.MODEL_INPUTS)}; '
         'add +passthrough to run it anyway'
       )
-    raise LLMSelectionError(
+    raise RecipeError(
       f'model {model!r} is not listed by provider {recipe.TYPE!r}; '
       f'choose one of: {", ".join(recipe.MODEL_INPUTS)}; '
       'or add +passthrough to send the model and content unchecked'
@@ -409,6 +173,13 @@ def _check_recipe_class(recipe_class: type[Recipe], price_table: Any) -> None:
   if 'passthrough' in recipe_class.__annotations__:
     raise ValueError('provider must not declare passthrough')
   annotations = field_types(recipe_class)
+  model_field = next(item for item in dataclasses.fields(recipe_class) if item.name == 'model')
+  if (
+    annotations['model'] is not str
+    or model_field.default is not dataclasses.MISSING
+    or model_field.default_factory is not dataclasses.MISSING
+  ):
+    raise TypeError('recipe model must be a required str')
   for item in dataclasses.fields(recipe_class):
     if item.name in {'model', 'passthrough'}:
       continue
@@ -506,9 +277,7 @@ def bind_recipe(text: str) -> Recipe:
 
 
 def format_recipe(recipe: Recipe) -> str:
-  model = recipe.selection()['model']
-  if model is None:
-    raise RecipeError('a deferred model has no complete recipe text')
+  model = recipe.model
   text = f'{recipe.TYPE}:{model}'
   if recipe.passthrough:
     text += '+passthrough'

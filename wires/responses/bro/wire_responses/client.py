@@ -104,7 +104,7 @@ class Responses(Wire):
   ) -> Leg:
     new_items = [self._encode(item) for item in inputs]
     request: dict = {
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'input': self._input_prefix + new_items,
       'tools': tools_to_openai_format(tools),
       **self.recipe.request_options(),
@@ -156,7 +156,7 @@ class Responses(Wire):
       assert schema is not None
       request = {
         **self.recipe.request_options(),
-        'model': self.recipe.selection()['model'],
+        'model': self.recipe.model,
         'input': [self._encode(SystemPrompt(instructions)), self._encode(UserMessage(content))],
         'text': {
           'format': {

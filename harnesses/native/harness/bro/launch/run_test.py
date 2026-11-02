@@ -65,29 +65,37 @@ def test_native_surfaces_refuse_an_absent_or_incomplete_recipe(
   arguments = ['bro', 'recipe-less', 'hello'] + ([] if recipe is None else ['--llm', recipe])
   main = run_main if surface == 'run' else chat_main
   assert main(arguments, program=['bro', surface]) == 1
-  assert 'recipe-less has no recipe for harness bro' in caplog.text
-  assert '~/.bro.json' in caplog.text
+  if recipe is None:
+    assert 'recipe-less has no recipe for harness bro' in caplog.text
+    assert '~/.bro.json' in caplog.text
+  else:
+    assert 'recipe' in caplog.text
 
 
-def test_resolved_recipe_excludes_passthrough_piece_flag():
+def test_resolved_and_explicit_recipes_are_exclusive(capsys):
   with pytest.raises(SystemExit):
     run_main(
-      ['bro', 'dev', 'read', '--resolved-llm', '{}', '--passthrough'], program=['bro', 'run']
+      ['bro', 'dev', 'read', '--resolved-llm', '{}', '--llm', 'openai:gpt-6.1-sol'],
+      program=['bro', 'run'],
     )
+
+  assert 'arguments --resolved-llm and --llm are mutually exclusive' in capsys.readouterr().err
 
 
 def test_bro_run_uses_the_live_installation_stack(monkeypatch, tmp_path, home_settings_file):
   import json
 
   from bro.base import host_config
-  from bro.launch.run import run_llm_spec
-  from bro.llm.providers import LLMSelection, bind_recipe
+  from bro.launch.run import launch_llm_spec
+  from bro.llm.providers import bind_recipe
 
   home_settings_file.write_text('[llm]\nbro = "openai:gpt-5.6-terra"\n')
   text = 'openai:gpt-6.1-sol,reasoning_effort=high,compact_threshold=12345'
   path = tmp_path / 'host.json'
   path.write_text(json.dumps({'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': text}}}}}}))
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', path)
-  recipe = run_llm_spec('dev', LLMSelection())
+  recipe = launch_llm_spec('dev', {'llm': None, 'resolved_llm': None})
   assert recipe == bind_recipe(text)
-  assert run_llm_spec('eyebro', LLMSelection()) == bind_recipe('openai:gpt-5.6-terra')
+  assert launch_llm_spec('eyebro', {'llm': None, 'resolved_llm': None}) == bind_recipe(
+    'openai:gpt-5.6-terra'
+  )

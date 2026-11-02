@@ -83,7 +83,7 @@ class RecordBro(Bro):
 
   def __init__(self, **kwargs):
     super().__init__(**kwargs, system_prompt='record')
-    self.recipe = llm_llms_echo.Recipe()
+    self.recipe = llm_llms_echo.Recipe(model='echo')
 
 
 @pytest.fixture(autouse=True)
@@ -105,7 +105,7 @@ class _MockRunner(Runner):
   need no provider."""
 
   def __init__(self, bro: Optional[BaseBro] = None, response: str = 'reply'):
-    super().__init__(bro if bro is not None else RecordBro(), llm_llms_echo.Recipe())
+    super().__init__(bro if bro is not None else RecordBro(), llm_llms_echo.Recipe(model='echo'))
     self.mock_llm = MockLLM(response=response)
 
   def _create_llm(self, *, hold: str) -> LLM:
@@ -423,7 +423,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
   assert spec.service_tier is None
 
 
-def test_bro_chat_fast_flag_is_explicit(monkeypatch):
+def test_bro_chat_runs_explicit_service_tier(monkeypatch):
   built: list[Runner] = []
 
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
@@ -433,7 +433,9 @@ def test_bro_chat_fast_flag_is_explicit(monkeypatch):
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
-  assert _chat(['bro', 'record', 'hi', '--fast']) is None
+  assert (
+    _chat(['bro', 'record', 'hi', '--llm', 'openai:gpt-5.6-terra,service_tier=priority']) is None
+  )
   spec = built[0].recipe
   assert isinstance(spec, llm_llms_openai.Recipe)
   assert spec.service_tier == 'priority'
@@ -445,7 +447,9 @@ def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
   async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
     built.append(runner)
 
-  resolved = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='high').fast()
+  resolved = llm_llms_openai.Recipe(
+    model='gpt-6.1-sol', reasoning_effort='high', service_tier='priority'
+  )
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
@@ -454,11 +458,12 @@ def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
   assert built[0].recipe == resolved
 
 
-def test_bro_chat_refuses_a_resolved_recipe_beside_a_selection(monkeypatch):
+def test_bro_chat_refuses_resolved_and_explicit_recipes_together(monkeypatch, capsys):
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
-  resolved = json.dumps(llm_llms_openai.Recipe().dump())
+  resolved = json.dumps(llm_llms_openai.Recipe(model='gpt-5.6-terra').dump())
   with pytest.raises(SystemExit):
-    _chat(['bro', 'record', 'hi', '--resolved-llm', resolved, '--fast'])
+    _chat(['bro', 'record', 'hi', '--resolved-llm', resolved, '--llm', 'openai:gpt-6.1-sol'])
+  assert 'arguments --resolved-llm and --llm are mutually exclusive' in capsys.readouterr().err
 
 
 def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
@@ -1250,8 +1255,7 @@ def test_managed_continuation_requires_the_resolved_recipe(monkeypatch, caplog):
 
 
 def test_native_launch_without_a_recipe_is_refused(monkeypatch, register_test_bros):
-  from bro.launch.run import run_llm_spec
-  from bro.llm.providers import LLMSelection
+  from bro.launch.run import launch_llm_spec
 
   class NoRecipeBro(Bro):
     name = 'no-recipe'
@@ -1260,4 +1264,4 @@ def test_native_launch_without_a_recipe_is_refused(monkeypatch, register_test_br
   register_test_bros(NoRecipeBro)
   monkeypatch.setattr('bro.registry.get_class', lambda name: NoRecipeBro)
   with pytest.raises(ValueError, match='no-recipe has no recipe for harness bro'):
-    run_llm_spec('no-recipe', LLMSelection())
+    launch_llm_spec('no-recipe', {'llm': None, 'resolved_llm': None})

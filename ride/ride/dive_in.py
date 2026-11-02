@@ -10,7 +10,6 @@ import bro.brog.model as brog_model
 import bro.brog.system as brog_system
 from bro.base import log
 from bro.base.args import Parser
-from bro.launch.llm_flags import selection_from_args
 from bro.workspace.git import fetch_ref
 from bro.workspace.paths import fresh_workspace_name, project_root
 from ride.authority_reading import Reading
@@ -233,12 +232,15 @@ def main(argv: list[str]) -> Optional[int]:
       args['into'] = base_ref
   # the prefetch binds to the same scope the session launches with, so the
   # scope-shaping flags are read here as well as forwarded
-  try:
-    selection = selection_from_args(args)
-  except ValueError as error:
-    parser.error(str(error))
+  if args['llm'] is not None:
+    from bro.llm.providers import parse_recipe
+
+    try:
+      parse_recipe(args['llm'])
+    except ValueError as error:
+      parser.error(str(error))
   scope_args = {key: args[key] for key in ('cred', 'grant', 'revoke', 'bro', 'harness')}
-  scope_args['llm'] = None if selection.is_empty() else selection.format()
+  scope_args['llm'] = args['llm']
   args['bro'] = None
   forwarded = extract_forwarded_argv(args)
   return dive_in(

@@ -49,8 +49,7 @@ Uncommitted host changes never transfer.
 A session runs with what its bro declares and ride's own flags set:
 neither mode verb forwards arguments to the harness program, on either harness, and a launch carrying a `--` tail fails before any workspace exists.
 
-Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--limit`, `--into`, `--no-trails`, `--env`, `--session-log`, and the LLM selection set.
-The LLM selection flags are `--provider`, `--model`, `--effort`, `--fast`, `--passthrough`, and `--llm`.
+Shared launch flags are `--repo`, `--boxed`, `--unboxed`, `--hold`, `--cred`, `--grant`, `--revoke`, `--limit`, `--into`, `--no-trails`, `--env`, `--session-log`, and `--llm`.
 `--cred KIND+INSTANCE` selects an instance and holds that kind.
 `--grant`, `--revoke`, and `--limit` shape authority, while bare kinds in grants/revokes add or drop session credentials.
 The [permission reference](permissions.md) defines the grammar, checks, and shipped worker options.
@@ -117,14 +116,14 @@ Personas declare no recipe.
 In-process `bro run` and `bro chat` read the live installation's same stack on the bro harness;
 they read only its recipe, leaving credentials ambient.
 `ride scope` prints the recipe and source or the refusal a launch would meet.
-With no configured recipe or explicit provider selection, a launch refuses before running, naming `--llm` and the configuration key.
+With no configured recipe or explicit recipe, a launch refuses before running, naming `--llm` and the configuration key.
 
 Configuration recipes use `provider:model[+passthrough][,field=value]...`, with provider-native fields, such as `openai:gpt-6.1-sol,reasoning_effort=high`.
 Models must be listed unless the recipe carries `+passthrough`.
-The launch's explicit selection lays over the configured recipe.
-The transitional `--llm provider:model:effort[+fast][+passthrough]` and piece flags retain their partial-selection behavior:
-naming a provider selects its own pair, while model-only, effort-only and flag-only selections require a configured base.
-There are no project or host preset tables.
+An explicit `--llm` uses the same recipe text and replaces the configured recipe whole.
+A summon's `llm` does the same, within the child's selected harness.
+Every recipe names a model id; incomplete texts such as `:sol` and `openai` are refused.
+There are no piece flags or preset tables.
 
 ### Harness seam
 
@@ -1037,7 +1036,7 @@ the handle treats that record — or the client’s exit — as the started hand
 An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 A boxed member’s kill follows the same TERM → grace → KILL shape through `docker exec`, signaling only while the container’s `/proc` still shows the recorded start time, so a late kill finds no target and never a reused pid.
-The request’s `llm` selection, laid over the child’s configured recipe, resolves within that harness and never switches it;
+The request’s complete `llm` text replaces the child’s configured recipe within that harness and never switches it;
 the child runs with the root session’s attachment.
 A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
 a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
@@ -1315,7 +1314,7 @@ The bro harness's runner resolves a resume's trail from the session's current-tr
 ### The claude argv
 
 The builder (`harnesses/claude/harness/bro/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks, kept on over a repository's `disableAllHooks`),
-a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's anthropic recipe, a model or effort the recipe leaves unnamed passed as no flag,
+a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's anthropic recipe, `--model` always passed and `--effort` passed only when set,
 the ride-injected `--append-system-prompt` (see "Auto-injected system prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below,
 `--strict-mcp-config`, so that config is the session's only MCP source and a repository's `.mcp.json` loads nothing,

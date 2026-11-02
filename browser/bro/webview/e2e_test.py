@@ -68,7 +68,7 @@ refused = subprocess.run(['webview', 'open', '--cookies', 'e2e'], capture_output
 assert refused.returncode == 1, refused
 assert 'use rule: webview:' in refused.stderr, refused.stderr
 launched = subprocess.run(
-  ['summon', '--grant', 'webview.cred=cookies+e2e', '--llm', 'echo', '--harness', 'bro',
+  ['summon', '--grant', 'webview.cred=cookies+e2e', '--llm', 'echo:echo', '--harness', 'bro',
    'browser', 'Open the authenticated page and report its profile state.'],
   capture_output=True, text=True,
 )
@@ -86,7 +86,7 @@ answer = summon_and_wait(
   'bro',
   'open the granted webview',
   grant=['webview'],
-  llm='echo',
+  llm='echo:echo',
   harness='bro',
   timeout=300,
 )
@@ -207,7 +207,7 @@ try:
   answer = summon_and_wait(
     'browser',
     'Open the request page and report how to complete it.',
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=600,
   )
@@ -299,7 +299,7 @@ class ScriptedRunner(Runner):
 
 
 asyncio.run(
-  ScriptedRunner(Browser(), EchoSpec()).run(
+  ScriptedRunner(Browser(), EchoSpec(model='echo')).run(
     'Open the request page and report how to complete it.',
     surface='webview-e2e',
     tracker=NullTracker(),
@@ -333,7 +333,7 @@ try:
   quest_id = summon_detached(
     'browser',
     '[[browse]]',
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=600,
     talk=['owner.question', 'worker.question'],
@@ -574,7 +574,7 @@ class ScriptedRunner(Runner):
 
 
 asyncio.run(
-  ScriptedRunner(Browser(), EchoSpec()).run(
+  ScriptedRunner(Browser(), EchoSpec(model='echo')).run(
     '[[browse]]', surface='webview-e2e', tracker=NullTracker()
   )
 )

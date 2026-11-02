@@ -46,7 +46,7 @@ class TestCommand:
       isolation=Isolation.UNBOXED,
       hold='attended',
       drop=True,
-      llm='::xhigh+fast',
+      llm='anthropic:claude-opus-5,effort=xhigh,fast_mode=true',
       bro='dev',
       grant=['aws'],
       revoke=['brog'],

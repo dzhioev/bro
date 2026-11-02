@@ -68,7 +68,7 @@ def server(monkeypatch, replies):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-  'recipe', [EchoSpec(), ResponsesSpec(model='gpt-6.1-sol')], ids=['echo', 'responses']
+  'recipe', [EchoSpec(model='echo'), ResponsesSpec(model='gpt-6.1-sol')], ids=['echo', 'responses']
 )
 async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path):
   store = LocalStore(tmp_path)
@@ -221,7 +221,7 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
   monkeypatch.setattr(
     native_loop, 'create', lambda spec, inbox, **kwargs: native_loop.Loop(wire, inbox, **kwargs)
   )
-  runner = Runner(create_bro('bro'), EchoSpec())
+  runner = Runner(create_bro('bro'), EchoSpec(model='echo'))
   if refusals == 3:
     assert await runner.run('original', surface='test') == 'reply'
   else:

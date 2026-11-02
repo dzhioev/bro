@@ -69,7 +69,7 @@ def test_open_refuses_a_wire_without_a_client():
   from bro.anthropic.declaration import Recipe
 
   with pytest.raises(wires.WireUnavailable, match='messages.*no client'):
-    wires.open(Recipe(), {})
+    wires.open(Recipe(model='claude-opus-5-5'), {})
 
 
 def test_open_refuses_wire_owned_recipe_options():
@@ -80,7 +80,7 @@ def test_open_refuses_wire_owned_recipe_options():
       return {'previous_response_id': 'foreign-chain'}
 
   with pytest.raises(ValueError, match='wire-owned.*previous_response_id'):
-    wires.open(Collision(), {})
+    wires.open(Collision(model='gpt-5.6-terra'), {})
 
 
 def test_client_roster_reads_metadata_without_loading(monkeypatch):
@@ -129,5 +129,5 @@ def test_open_names_the_wire_and_distribution_extra_when_the_sdk_is_missing(tmp_
   with pytest.raises(
     wires.WireUnavailable, match=r"wire 'fixture'.*fixture-wire\[client\]"
   ) as refused:
-    wires.open(FixtureRecipe(), {})
+    wires.open(FixtureRecipe(model='echo'), {})
   assert isinstance(refused.value.__cause__, ModuleNotFoundError)

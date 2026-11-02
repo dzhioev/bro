@@ -28,13 +28,7 @@ import bro.base.args as base_args
 from bro import mission, quest
 from bro.base import log
 from bro.harness import installed_harness_names
-from bro.launch.llm_flags import (
-  EFFORT_HELP,
-  FAST_HELP,
-  add_llm_flags,
-)
-from bro.llm import providers
-from bro.llm.providers import LLMSelectionError
+from bro.launch.llm_flags import add_llm_flags
 from bro.mcp import HOLDS
 from bro.quest import BRO, LAUNCH, QuestError
 
@@ -209,11 +203,6 @@ def _payload(
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
-  provider: Optional[str] = None,
-  model: Optional[str] = None,
-  effort: Optional[str] = None,
-  fast: Optional[bool] = None,
-  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -243,11 +232,8 @@ def _payload(
     payload['share'] = list(share)
   if llm is not None:
     payload['llm'] = llm
-  options = locals()
-  for name in (*providers.SELECTION_OPTIONS, 'export'):
-    value = options[name]
-    if value is not None:
-      payload[name] = value
+  if export is not None:
+    payload['export'] = export
   if harness is not None:
     payload['harness'] = harness
   if placement is not None:
@@ -339,11 +325,6 @@ def summon_and_wait(
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
-  provider: Optional[str] = None,
-  model: Optional[str] = None,
-  effort: Optional[str] = None,
-  fast: Optional[bool] = None,
-  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -369,11 +350,6 @@ def summon_and_wait(
     passes=passes,
     share=share,
     llm=llm,
-    provider=provider,
-    model=model,
-    effort=effort,
-    fast=fast,
-    passthrough=passthrough,
     export=export,
     harness=harness,
     placement=placement,
@@ -423,11 +399,6 @@ def summon_detached(
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
-  provider: Optional[str] = None,
-  model: Optional[str] = None,
-  effort: Optional[str] = None,
-  fast: Optional[bool] = None,
-  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -450,11 +421,6 @@ def summon_detached(
     passes=passes,
     share=share,
     llm=llm,
-    provider=provider,
-    model=model,
-    effort=effort,
-    fast=fast,
-    passthrough=passthrough,
     export=export,
     harness=harness,
     placement=placement,
@@ -512,11 +478,6 @@ def relay_summon(
   passes: Optional[list[str]] = None,
   share: Optional[list[str]] = None,
   llm: Optional[str] = None,
-  provider: Optional[str] = None,
-  model: Optional[str] = None,
-  effort: Optional[str] = None,
-  fast: Optional[bool] = None,
-  passthrough: Optional[bool] = None,
   export: Optional[bool] = None,
   harness: Optional[str] = None,
   placement: Optional[str] = None,
@@ -541,11 +502,6 @@ def relay_summon(
     passes=passes,
     share=share,
     llm=llm,
-    provider=provider,
-    model=model,
-    effort=effort,
-    fast=fast,
-    passthrough=passthrough,
     export=export,
     harness=harness,
     placement=placement,
@@ -612,7 +568,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument('target', help='bro to summon')
   parser.add_argument('prompt', help='request the summoned bro answers')
-  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
+  add_llm_flags(parser)
   parser.add_argument('--grant', action='append', default=None, metavar='NAME', help=GRANT_HELP)
   parser.add_argument('--revoke', action='append', default=None, metavar='NAME', help=REVOKE_HELP)
   parser.add_argument(
@@ -673,10 +629,9 @@ def main(argv: list[str]) -> Optional[int]:
   args = parser.parse(argv)
   try:
     args['talk'] = parse_talk(args['talk'])
-  except (LLMSelectionError, ValueError) as error:
+  except ValueError as error:
     log.error('%s', error)
     return 1
-  recipe_options = {name: args[name] for name in providers.SELECTION_OPTIONS if args.get(name)}
   if args['placement'] == 'join' and args['into'] is not None:
     log.error('--join shares the summoner’s tree; drop --into')
     return 1
@@ -687,7 +642,6 @@ def main(argv: list[str]) -> Optional[int]:
       '--harness': args['harness'],
       '--llm': args['llm'],
       '--export': args['export'] or None,
-      **{f'--{name}': value for name, value in recipe_options.items()},
       '--start/--join': args['placement'],
       '--boxed/--unboxed': args['placement'],
     }
@@ -727,7 +681,6 @@ def main(argv: list[str]) -> Optional[int]:
           llm=args['llm'],
           harness=args['harness'],
           placement=args['placement'],
-          **recipe_options,
           export=args['export'] or None,
           talk=args['talk'],
         )
@@ -750,7 +703,6 @@ def main(argv: list[str]) -> Optional[int]:
     llm=args['llm'],
     harness=args['harness'],
     placement=args['placement'],
-    **recipe_options,
     export=args['export'] or None,
     talk=args['talk'],
     manual=args['manual'],

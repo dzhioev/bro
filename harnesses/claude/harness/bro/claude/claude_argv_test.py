@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 
 import bro.claude.claude_argv as ride_claude_argv
-from bro.anthropic import declaration as anthropic
 from bro.authority_view_test_helper import publish
 from bro.base.spawn import console_script, module_argv
 from bro.bro import BaseBro
@@ -80,7 +79,8 @@ def _declaring(*layers: ToolLayer) -> BaseBro:
 class TestRideSessionLaunch:
   def test_basic_shape(self):
     argv = _ride_session_launch(_spec()).argv
-    assert '--model' not in argv and '--effort' not in argv
+    assert argv[:2] == ['--model', _spec().llm_spec.model]
+    assert '--effort' not in argv
     assert '--bare' not in argv and '--resume' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'
     assert argv[argv.index('--append-system-prompt') + 1] == 'append text'
@@ -213,7 +213,12 @@ class TestRideSessionLaunch:
     assert 'bro.claude.watch_waiter' in shlex.split(hooks['Stop'][0]['hooks'][0]['command'])
 
   def test_fast_mode_lands_in_settings(self):
-    assert _settings(_ride_session_launch(_spec(llm='+fast')).argv)['fastMode'] is True
+    assert (
+      _settings(_ride_session_launch(_spec(llm='anthropic:claude-opus-5-5,fast_mode=true')).argv)[
+        'fastMode'
+      ]
+      is True
+    )
     assert _settings(_ride_session_launch(_spec()).argv)['fastMode'] is False
 
   def test_status_line_lands_in_settings(self):
@@ -221,22 +226,22 @@ class TestRideSessionLaunch:
     assert status_line['type'] == 'command'
     assert status_line['command'] == statusline_command()
 
-  @pytest.mark.parametrize('selection', ['anthropic', 'anthropic:opus55'])
+  @pytest.mark.parametrize('selection', ['anthropic:claude-opus-5', 'anthropic:claude-opus-5-5'])
   def test_unset_provider_effort_leaves_claude_to_choose(self, selection):
     argv = _ride_session_launch(_spec(llm=selection)).argv
     assert '--effort' not in argv
 
   def test_effort_injected(self):
-    argv = _ride_session_launch(_spec(llm='::xhigh')).argv
+    argv = _ride_session_launch(_spec(llm='anthropic:claude-opus-5-5,effort=xhigh')).argv
     assert argv[argv.index('--effort') + 1] == 'xhigh'
 
   def test_a_named_model_is_passed_on(self):
-    argv = _ride_session_launch(_spec(llm=':opus55')).argv
-    assert argv[:2] == ['--model', anthropic.MODELS['opus55']]
+    argv = _ride_session_launch(_spec(llm='anthropic:claude-opus-5-5')).argv
+    assert argv[:2] == ['--model', 'claude-opus-5-5']
 
-  def test_the_providers_default_model_is_passed_on(self):
-    argv = _ride_session_launch(_spec(llm='anthropic')).argv
-    assert argv[:2] == ['--model', anthropic.DEFAULT_MODEL]
+  def test_an_explicit_model_without_effort_is_passed_on(self):
+    argv = _ride_session_launch(_spec(llm='anthropic:claude-opus-5')).argv
+    assert argv[:2] == ['--model', 'claude-opus-5']
 
   @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
   def test_non_guided_holds_skip_permissions(self, hold):

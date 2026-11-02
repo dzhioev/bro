@@ -306,6 +306,7 @@ class LaunchControl:
       if not isinstance(message.args['fields'], Mapping):
         raise ValueError('commit check: fields: expected an object')
       fields = dict(message.args['fields'])
+      fields['target'] = prepared.request.values['target']
       fields['harness'] = self.reading.resolve_harness(
         fields.get('harness'), target=cast(str, prepared.request.values['target'])
       )
@@ -354,13 +355,18 @@ class LaunchControl:
         raise ValueError(
           'execution check: bro.timeout: finite manual deadlines require a supervised start'
         )
+      resolved = checked_recipe(
+        mission.descriptor,
+        self.reading,
+        None if fields.get('llm') is None else (fields['llm'], '--llm'),
+      )
       scoped = credentials_for(mission)
       value = {
         **mission_view(mission),
         'request': dump_request(mission.request, mission.descriptor),
         'required': sorted(scoped.required),
         'optional': sorted(scoped.optional),
-        'resolved_llm': checked_recipe(mission.request, mission.descriptor, self.reading).dump(),
+        'resolved_llm': resolved.dump(),
       }
       previous = self._commits.get(token)
       value['commit'] = (

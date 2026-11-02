@@ -120,7 +120,7 @@ class Chat(Wire):
       ]
     request = {
       **self.recipe.request_options(),
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'messages': self._history + new_items,
       'tools': tools_to_chat_format(tools),
     }
@@ -166,7 +166,7 @@ class Chat(Wire):
     schema = json.dumps(result.model_json_schema(), ensure_ascii=False)
     request = {
       **self.recipe.request_options(),
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'messages': [
         self._encode(SystemPrompt(f'{instructions}\nReturn JSON matching this schema:\n{schema}')),
         self._encode(UserMessage(content)),

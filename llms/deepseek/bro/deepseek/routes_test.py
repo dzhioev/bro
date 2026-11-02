@@ -17,7 +17,6 @@ from bro.bro import BaseBro
 from bro.deepseek.declaration import Recipe
 from bro.fork import fork, latest_fork_point
 from bro.launch.resume import resume
-from bro.llm import providers
 from bro.llm.llm import Recipe as BaseRecipe
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
 from bro.llm.mu import mu
@@ -113,7 +112,7 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   monkeypatch.setattr(native_loop, 'create', with_tools)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro'), Recipe(reasoning_effort='high'))
+  runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro', reasoning_effort='high'))
   assert await runner.run('start', surface='test') == 'answer'
   assert called == [True]
   assert requests[1]['messages'][2] == {
@@ -142,7 +141,9 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   result = next(step for step in recorded.steps if step.kind == 'tool_result')
   assert result.extras['call_id'] == tool_call['call_id']
   assert tool_call['source'] == {'step_id': calls[0].step_id, 'index': 2}
-  assert recorded.header.native['usage'][Recipe().model]['completion_tokens'] == 6
+  assert (
+    recorded.header.native['usage'][Recipe(model='deepseek-v4-pro').model]['completion_tokens'] == 6
+  )
 
   resumed = resume(
     store,
@@ -182,7 +183,7 @@ async def test_http_errors_follow_provider_retry_policy(server, monkeypatch, sta
     waits.append(seconds)
 
   monkeypatch.setattr('bro.base.retry.asyncio_sleep', wait)
-  runner = Runner(create_bro('bro'), Recipe())
+  runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro'))
   if status == 402:
     with pytest.raises(openai.APIStatusError) as caught:
       await runner.run('go', surface='test')
@@ -211,7 +212,7 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
   monkeypatch.setattr('bro.llm.retry.asyncio_sleep', wait)
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro'), Recipe())
+  runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro'))
   assert await runner.run('go', surface='test') == 'reply'
   assert waits == [10]
   assert requests[0] == requests[1]
@@ -255,7 +256,18 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
     (tmp_path / 'creds').mkdir()
     (tmp_path / 'creds' / 'deepseek.cred').write_text('{"api_key":"fixture-key"}')
   assert (
-    cli.main(['ride', 'scope', '--bro', 'child', '--harness', 'bro', '--llm', 'deepseek:pro:high'])
+    cli.main(
+      [
+        'ride',
+        'scope',
+        '--bro',
+        'child',
+        '--harness',
+        'bro',
+        '--llm',
+        'deepseek:deepseek-v4-pro,reasoning_effort=high',
+      ]
+    )
     == 0
   )
   output = capsys.readouterr().out
@@ -263,24 +275,32 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
   assert f'deepseek+: {"PRESENT" if present else "MISSING"}' in output
   requested, _ = request(
     BroType,
-    {'target': 'child', 'llm': 'deepseek:pro:high'},
+    {'target': 'child', 'llm': 'deepseek:deepseek-v4-pro,reasoning_effort=high'},
     reading,
     reading.operator(),
     forward=False,
   )
   descriptor = reading.rules.normalize(requested, reading)
   assert descriptor.values['provider'] == 'deepseek'
-  assert descriptor.values['model'] == Recipe().model
-  assert descriptor.values['effort'] == 'high'
+  assert descriptor.values['model'] == Recipe(model='deepseek-v4-pro').model
+  assert 'effort' not in descriptor.values
   assert descriptor.values['cred.deepseek'] == ''
-  assert checked_recipe(requested, descriptor, reading) == Recipe(reasoning_effort='high')
+  assert checked_recipe(
+    descriptor, reading, ('deepseek:deepseek-v4-pro,reasoning_effort=high', 'summon llm')
+  ) == Recipe(model='deepseek-v4-pro', reasoning_effort='high')
 
 
 DEEPSEEK_KEY = 'host-deepseek-key'
 OPENAI_KEY = 'host-openai-key'
 MU_BACKINGS = {
-  'openai': ('', {'llm': 'openai:terra:low', 'credential': {'$cred': 'openai+'}}),
-  'deepseek': ('deepseek', {'llm': 'deepseek:flash:low', 'credential': {'$cred': 'deepseek+'}}),
+  'openai': (
+    '',
+    {'llm': 'openai:gpt-5.6-terra,reasoning_effort=low', 'credential': {'$cred': 'openai+'}},
+  ),
+  'deepseek': (
+    'deepseek',
+    {'llm': 'deepseek:deepseek-flash,reasoning_effort=low', 'credential': {'$cred': 'deepseek+'}},
+  ),
 }
 
 
@@ -296,7 +316,9 @@ class Stage:
   argv: list[str]
 
 
-def summoned_stage(tmp_path, monkeypatch, backing: str, llm: str = 'deepseek:pro:high') -> Stage:
+def summoned_stage(
+  tmp_path, monkeypatch, backing: str, llm: str = 'deepseek:deepseek-v4-pro,reasoning_effort=high'
+) -> Stage:
   instance, mu_material = MU_BACKINGS[backing]
   host = tmp_path / 'host'
   (host / 'creds').mkdir(parents=True)
@@ -321,7 +343,7 @@ def summoned_stage(tmp_path, monkeypatch, backing: str, llm: str = 'deepseek:pro
   mission = reading.rules.start(requested, reading.operator(), reading)
   from ride.bro_worker import SummonLaunchSpec, _child_session_spec
 
-  launch = SummonLaunchSpec(mission, 'go', 'parent', tmp_path, None)
+  launch = SummonLaunchSpec(mission, 'go', 'parent', tmp_path, None, llm=llm)
   session_spec = _child_session_spec(launch, 'stage', None)
   recipe = session_spec.llm_spec
   files, _ = hydrate(credentials_for(mission))
@@ -363,7 +385,7 @@ def test_a_stage_summoned_onto_deepseek_starts_without_the_openai_key(
   monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
   with credentials.as_default_store(stage.session):
     assert bro_run.main(stage.argv) is None
-  assert requests[0]['model'] == stage.recipe.selection()['model']
+  assert requests[0]['model'] == stage.recipe.model
   assert set(authorizations) == {f'Bearer {DEEPSEEK_KEY}'}
 
 
@@ -378,7 +400,7 @@ def test_a_deepseek_backed_mu_serves_a_stage_that_holds_no_openai_material(
     assert mu('which answer?', Answer, Text('the record'), role='dispatch').answer == '42'
   sent = requests[0]
   assert sent['response_format'] == {'type': 'json_object'}
-  assert sent['model'] == providers.models('deepseek')['flash']
+  assert sent['model'] == 'deepseek-flash'
   assert sent['reasoning_effort'] == 'low'
   assert authorizations == [f'Bearer {DEEPSEEK_KEY}']
 
@@ -393,7 +415,7 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
   )
   store = LocalStore(tmp_path)
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(create_bro('bro'), Recipe())
+  runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro'))
   runner.inbox.post('notice')
   events = []
 
@@ -411,9 +433,14 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     assert len(rejected) == 1
     assert rejected[0].extras['stopped'] == 'failed'
     assert rejected[0].body['response']['choices'][0]['message']['reasoning_content'] == 'discard'
-    assert recorded.header.native['usage'][Recipe().model]['completion_tokens'] == 3
+    assert (
+      recorded.header.native['usage'][Recipe(model='deepseek-v4-pro').model]['completion_tokens']
+      == 3
+    )
     assert latest_fork_point(recorded) < rejected[0].step_id
-    resumed = resume(store, 'bro', runner.trail_id, llm_spec=Recipe(), hold='unattended')
+    resumed = resume(
+      store, 'bro', runner.trail_id, llm_spec=Recipe(model='deepseek-v4-pro'), hold='unattended'
+    )
     with resumed.runner:
       assert await resumed.runner.send('continue', surface='test') == 'reply'
     assert await runner.send('continue', surface='test') == 'reply'
@@ -426,7 +453,10 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
   ]
   assert runner.trail_id is not None
   continued = fetch_recorded_trail(store, runner.trail_id)
-  assert continued.header.native['usage'][Recipe().model]['completion_tokens'] == 6
+  assert (
+    continued.header.native['usage'][Recipe(model='deepseek-v4-pro').model]['completion_tokens']
+    == 6
+  )
 
 
 @pytest.mark.asyncio
@@ -440,14 +470,14 @@ async def test_live_probe_roster_includes_the_managed_summoned_service_schemas(m
   monkeypatch.setattr(credentials, 'get_json', lambda kind: pytest.fail('credential material read'))
   monkeypatch.setattr(Client, 'from_env', lambda: pytest.fail('broker connection'))
   standalone = None
-  with Runner(create_bro('bro-dev'), Recipe()) as runner:
+  with Runner(create_bro('bro-dev'), Recipe(model='deepseek-v4-pro')) as runner:
     standalone = tools_to_chat_format(
       await ToolRegistry(
         runner.bro.assemble(harness=BRO, hold='unattended', live_run=runner)
       ).resolve()
     )
   assert standalone is not None
-  managed = await managed_roster(monkeypatch, Recipe())
+  managed = await managed_roster(monkeypatch, Recipe(model='deepseek-v4-pro'))
   standalone_by_name = {tool['function']['name']: tool for tool in standalone}
   managed_by_name = {tool['function']['name']: tool for tool in managed}
   assert {name: managed_by_name[name] for name in standalone_by_name} == standalone_by_name
@@ -492,7 +522,7 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   )
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
-  runner = Runner(ShellBro(), Recipe())
+  runner = Runner(ShellBro(), Recipe(model='deepseek-v4-pro'))
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
   *history, notification = requests[2]['messages']

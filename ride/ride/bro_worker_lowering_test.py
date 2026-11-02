@@ -33,7 +33,7 @@ from bro.bro import BaseBro
 from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import LOCAL_HOST, Endpoint
-from bro.llm.providers import parse
+from bro.llm.providers import bind_recipe
 from bro.monitor import (
   SESSION_DIR_ENV,
   party_member_dir,
@@ -97,7 +97,7 @@ def _do_ride_environment(
   return {
     ride.do_ride.INSTALL_DIRECTORY_ENV: ride.do_ride.CONTAINER_INSTALL_DIRECTORY,
     ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(
-      checked_recipe(record.request, record.descriptor, record.reading).dump()
+      checked_recipe(record.descriptor, record.reading).dump()
     ),
     'RIDE_ISOLATION': 'boxed',
     'RIDE_BRANCH': workspace.metadata.branch,
@@ -155,7 +155,8 @@ def _launch(**fields) -> ride.bro_worker.SummonLaunchSpec:
   owned = {
     name: value
     for name, value in fields.items()
-    if name in {'prompt', 'parent', 'parent_tree', 'summoner', 'repo', 'into', 'share', 'env'}
+    if name
+    in {'prompt', 'llm', 'parent', 'parent_tree', 'summoner', 'repo', 'into', 'share', 'env'}
   }
   return ride.bro_worker.SummonLaunchSpec(record=record, **owned)
 
@@ -195,7 +196,7 @@ def lowering_harness(monkeypatch, tmp_path, register_test_bros):
 
   class Dev(BaseBro):
     name = 'dev'
-    llm_spec = Recipe(reasoning_effort='medium')
+    llm_spec = Recipe(model='gpt-5.6-terra', reasoning_effort='medium')
 
   register_test_bros(Dev)
 
@@ -324,13 +325,15 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       harness='bro',
-      llm='openai:sol:high+fast',
+      llm='openai:gpt-6.1-sol,reasoning_effort=high,service_tier=priority',
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert (
       json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
       == checked_recipe(
-        launch.record.request, launch.record.descriptor, cast(Reading, launch.record.reading)
+        launch.record.descriptor,
+        cast(Reading, launch.record.reading),
+        None if launch.llm is None else (launch.llm, 'summon llm'),
       ).dump()
     )
 
@@ -358,12 +361,12 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       harness='bro',
-      llm='::low',
+      llm='openai:gpt-6.1-sol,reasoning_effort=low',
       source=source,
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
-    assert resolved == native_harness.BRO.resolve_recipe(None, parse('openai:sol:low')).dump()
+    assert resolved == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low').dump()
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
@@ -381,7 +384,7 @@ class TestSummonLowering:
       repo=Path('/proj'),
       summoner=SUMMONER,
       harness='bro',
-      llm='echo',
+      llm='echo:echo',
     )
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert captured == [launch.record]
@@ -397,7 +400,7 @@ class TestSummonLowering:
       summoner=SUMMONER,
       harness='bro',
       hold='guided',
-      llm='openai:sol:high',
+      llm='openai:gpt-6.1-sol,reasoning_effort=high',
       grant=('@reviewer',),
       passes=('github+passed',),
     )
@@ -1213,7 +1216,7 @@ class TestClaudeSummonLowering:
     assert lowered.launch.tty is False
 
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
-    launch = self._launch(llm=':fable5', summon_depth=5, summon_harness='claude')
+    launch = self._launch(llm='anthropic:claude-fable-5', summon_depth=5, summon_harness='claude')
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
     assert spec is not None
@@ -1251,18 +1254,22 @@ class TestClaudeSummonLowering:
       Workspace.open('broker-CH')
 
   def test_a_native_recipe_fails_the_claude_spawn(self, claude_harness, tmp_path):
-    with pytest.raises(ValueError, match="the claude harness cannot run recipe 'openai:sol'"):
-      _lower_boxed(self._launch(llm='openai:sol'), 'broker-CH', _container_runtime(), _artifacts())
+    with pytest.raises(ValueError, match="the claude harness cannot run provider 'openai'"):
+      _lower_boxed(
+        self._launch(llm='openai:gpt-6.1-sol'), 'broker-CH', _container_runtime(), _artifacts()
+      )
     with pytest.raises(ValueError, match='broker-CH'):
       Workspace.open('broker-CH')
 
   def test_a_claude_recipe_reaches_the_resolved_environment(self, claude_harness):
-    launch = self._launch(llm=':fable5:high')
+    launch = self._launch(llm='anthropic:claude-fable-5,effort=high')
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert (
       json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
       == checked_recipe(
-        launch.record.request, launch.record.descriptor, cast(Reading, launch.record.reading)
+        launch.record.descriptor,
+        cast(Reading, launch.record.reading),
+        None if launch.llm is None else (launch.llm, 'summon llm'),
       ).dump()
     )
 

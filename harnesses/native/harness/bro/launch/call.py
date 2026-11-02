@@ -15,7 +15,7 @@ import bro.base.args as base_args
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
-from bro.launch.llm_flags import EFFORT_HELP, FAST_HELP, add_llm_flags
+from bro.launch.llm_flags import add_llm_flags
 from bro.launch.resume import RESUME_LATEST
 from bro.launch.run import HOLD_HELP, add_resolved_llm_flag, launch_llm_spec
 from bro.llm.observer import Observer
@@ -284,7 +284,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     metavar='STEP_ID',
     help='with --fork: fork the conversation at this step instead of the latest consistent point',
   )
-  add_llm_flags(parser, effort_help=EFFORT_HELP, fast_help=FAST_HELP)
+  add_llm_flags(parser)
   add_resolved_llm_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
   args = parser.parse(argv)

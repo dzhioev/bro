@@ -83,46 +83,6 @@ async def test_claude_harness_terminates_when_raise_delivery_fails(monkeypatch):
   terminate_session.assert_called_once_with(status=RAISE_EXIT_STATUS)
 
 
-def test_claude_resolution_refuses_an_api_recipe_naming_the_harness_serving_it():
-  from bro.llm.providers import LLMSelectionError
-
-  with pytest.raises(
-    LLMSelectionError,
-    match="the claude harness cannot run recipe 'openai': it serves anthropic; "
-    'openai runs on the bro harness',
-  ):
-    claude_harness.CLAUDE.resolve_llm('openai:', 'bro')
-
-
-def test_claude_resolution_refuses_a_model_its_providers_do_not_carry():
-  from bro.llm.providers import LLMSelectionError
-
-  with pytest.raises(LLMSelectionError, match='names no anthropic model id'):
-    claude_harness.CLAUDE.resolve_llm(':sol', 'bro')
-
-
-@pytest.mark.parametrize('recipe', ['anthropic:opus:high+fast', 'anthropic:fable:high'])
-def test_claude_resolution_refuses_a_family_alias(recipe):
-  from bro.llm.providers import LLMSelectionError
-
-  with pytest.raises(LLMSelectionError, match='names no anthropic model id'):
-    claude_harness.CLAUDE.resolve_llm(recipe, 'bro')
-
-
-def test_claude_resolution_names_no_model_or_effort_by_default():
-  from bro.anthropic.declaration import Recipe
-
-  assert claude_harness.CLAUDE.resolve_llm(None, 'bro') == Recipe(model=None, effort=None)
-
-
-def test_claude_resolution_keeps_the_picked_model_under_an_effort_alone():
-  from bro.anthropic.declaration import MODELS, Recipe
-
-  assert claude_harness.CLAUDE.resolve_llm(':opus55:low', 'bro') == Recipe(
-    model=MODELS['opus55'], effort='low'
-  )
-
-
 def test_claude_bundle_provisioning_copies_a_verified_executable(monkeypatch, tmp_path):
   import hashlib
 

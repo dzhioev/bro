@@ -17,61 +17,25 @@ from bro.openai.declaration import Recipe
 
 
 class TestRecipe:
-  def test_default_spec_has_no_optional_knobs(self):
-    spec = Recipe()
-    assert spec.model == openai_llm.DEFAULT_MODEL
-    assert spec.reasoning_effort is None
-    assert spec.service_tier is None
-    assert spec.compact_threshold is None
+  def test_optional_fields_are_unset_when_omitted(self):
+    spec = Recipe(model='gpt-5.6-terra')
+    assert spec.request_options() == {}
 
   def test_invalid_service_tier_rejected(self):
     with pytest.raises(ValueError, match='invalid service_tier'):
-      Recipe(service_tier='nope')  # type: ignore[arg-type]
+      Recipe(model='gpt-5.6-terra', service_tier='nope')  # type: ignore[arg-type]
 
   def test_invalid_reasoning_effort_rejected(self):
     with pytest.raises(ValueError, match='invalid reasoning_effort'):
-      Recipe(reasoning_effort='ludicrous')  # type: ignore[arg-type]
+      Recipe(model='gpt-5.6-terra', reasoning_effort='ludicrous')  # type: ignore[arg-type]
 
   @pytest.mark.parametrize('threshold', [0, -1])
   def test_invalid_compact_threshold_rejected(self, threshold: int):
     with pytest.raises(ValueError, match='invalid compact_threshold'):
-      Recipe(compact_threshold=threshold)
-
-  def test_fast_returns_new_spec_with_priority_tier(self):
-    spec = Recipe(model='gpt-5.4-mini', reasoning_effort='medium', compact_threshold=50_000)
-    fast = spec.fast()
-    assert fast.service_tier == 'priority'
-    # original untouched (frozen) and a distinct instance
-    assert spec.service_tier is None
-    assert fast is not spec
-    # other fields preserved
-    assert fast.model == 'gpt-5.4-mini'
-    assert fast.reasoning_effort == 'medium'
-    assert fast.compact_threshold == 50_000
-
-  @pytest.mark.parametrize('level', ['low', 'medium', 'high', 'xhigh', 'max'])
-  def test_with_effort_maps_shared_levels_through(self, level: str):
-    assert Recipe().with_effort(level).reasoning_effort == level
-
-  def test_with_effort_rejects_a_level_outside_the_neutral_vocabulary(self):
-    # 'minimal' is a valid reasoning_effort but not a neutral level — with_effort
-    # speaks only the neutral vocabulary
-    with pytest.raises(ValueError, match='unknown effort level'):
-      Recipe().with_effort('minimal')
-
-  def test_with_effort_returns_new_spec_preserving_other_knobs(self):
-    spec = Recipe(model='gpt-5.4-mini', service_tier='priority')
-    with_effort = spec.with_effort('high')
-    assert with_effort.reasoning_effort == 'high'
-    # original untouched (frozen) and a distinct instance
-    assert spec.reasoning_effort is None
-    assert with_effort is not spec
-    # other fields preserved — composes with fast()'s service_tier
-    assert with_effort.model == 'gpt-5.4-mini'
-    assert with_effort.service_tier == 'priority'
+      Recipe(model='gpt-5.6-terra', compact_threshold=threshold)
 
   def test_frozen_rejects_mutation(self):
-    spec = Recipe()
+    spec = Recipe(model='gpt-5.6-terra')
     # frozen dataclass raises FrozenInstanceError, a subclass of AttributeError
     with pytest.raises(AttributeError):
       spec.service_tier = 'priority'  # type: ignore[misc]
@@ -125,7 +89,7 @@ class TestRecipe:
     script = (
       'import sys; '
       'from bro.llm import providers; '
-      "spec = providers.default_spec('openai'); "
+      "spec = providers.bind_recipe('openai:gpt-5.6-terra'); "
       "assert spec.TYPE == 'openai'; "
       "assert 'bro.llm.mcp' not in sys.modules; "
       "assert not any(name == 'bro.native' or name.startswith('bro.native.') for name in sys.modules); "
@@ -145,7 +109,7 @@ class TestRecipe:
     script = (
       'import sys; '
       'import bro.openai.declaration; '
-      "bro.openai.declaration.Recipe(reasoning_effort='medium'); "
+      "bro.openai.declaration.Recipe(model='gpt-5.6-terra', reasoning_effort='medium'); "
       "assert 'openai' not in sys.modules"
     )
     result = subprocess.run(

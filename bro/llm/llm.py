@@ -1,16 +1,11 @@
 import re
 import types
 from collections.abc import Mapping
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from datetime import date
-from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Self, Union, get_args, get_origin, get_type_hints
+from typing import Any, ClassVar, Literal, Union, get_args, get_origin, get_type_hints
 
 from bro.llm.records import Stop
-
-# the neutral reasoning-effort vocabulary `Recipe.with_effort` accepts; each
-# provider maps these levels onto its own scale.
-EFFORT_LEVELS = ('low', 'medium', 'high', 'xhigh', 'max')
 
 # the neutral vocabulary a provider classifies its failures into; a consumer
 # (e.g. a retry policy) maps these categories onto its own exception taxonomy.
@@ -70,22 +65,19 @@ class Recipe:
   RETIRED_MODELS: ClassVar[Mapping[str, date]]
   WIRE: ClassVar[str]
   ENDPOINT: ClassVar[str | None] = None
-  selection_fields: ClassVar[Mapping[str, str]] = MappingProxyType({'model': 'model'})
-  deferred_fields: ClassVar[frozenset[str]] = frozenset()
-  effort_values: ClassVar[frozenset[str]] = frozenset()
-
+  model: str
   passthrough: bool = field(default=False, kw_only=True)
 
   def __post_init__(self):
     for name, annotation in field_types(type(self)).items():
       value = getattr(self, name)
       validate_field(name, value, annotation)
-      if name == 'model' and value is not None and re.fullmatch(r'[^+,\s]+', value) is None:
+      if name == 'model' and re.fullmatch(r'[^+,\s]+', value) is None:
         raise ValueError(f'invalid model {value!r}: recipe text cannot write it')
 
   def admitted(self) -> bool:
-    model = self.selection()['model']
-    return self.passthrough or model is None or model in self.MODEL_INPUTS
+    model = self.model
+    return self.passthrough or model in self.MODEL_INPUTS
 
   def request_options(self) -> dict:
     return {}
@@ -94,41 +86,10 @@ class Recipe:
     return False
 
   def accepts(self, mime_type: str) -> bool:
-    model = self.selection()['model']
+    model = self.model
     return self.passthrough or (
-      model is not None and model in self.MODEL_INPUTS and mime_type in self.MODEL_INPUTS[model]
+      model in self.MODEL_INPUTS and mime_type in self.MODEL_INPUTS[model]
     )
-
-  def selection(self) -> dict[str, str | None]:
-    return {name: getattr(self, field) for name, field in self.selection_fields.items()}
-
-  def with_selection(self, values: Mapping[str, str | None]) -> Self:
-    if values.keys() != self.selection_fields.keys():
-      raise ValueError(f'{self.TYPE} selection fields must be {sorted(self.selection_fields)}')
-    for name, value in values.items():
-      if value is None and name not in self.deferred_fields:
-        raise ValueError(f'{self.TYPE} cannot defer {name}')
-      if value is not None and type(value) is not str:
-        raise ValueError(f'{self.TYPE} {name} must be a string or a deferred value')
-    return replace(self, **{self.selection_fields[name]: value for name, value in values.items()})
-
-  def fast(self) -> Self:
-    """return a copy of self with the provider's 'fast' knob set.
-
-    raises NotImplementedError when the provider has no fast-mode equivalent —
-    callers should treat that as 'this LLM type does not support fast mode'.
-    """
-    raise NotImplementedError(f'{self.TYPE} does not support fast mode')
-
-  def with_effort(self, effort: str) -> Self:
-    """return a copy of self with the provider's reasoning-effort knob set to the
-    given neutral level (`EFFORT_LEVELS`); each provider maps the neutral
-    vocabulary onto its own scale.
-
-    raises NotImplementedError when the provider has no effort equivalent, and
-    ValueError on a level outside the neutral vocabulary.
-    """
-    raise NotImplementedError(f'{self.TYPE} does not support an effort override')
 
   @classmethod
   def needed_secrets(cls) -> tuple[str, ...]:

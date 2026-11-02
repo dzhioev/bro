@@ -543,26 +543,6 @@ def test_explicit_presence_never_initializes_ambient_store(installation, monkeyp
   )
 
 
-def test_model_alias_is_mapped_before_use_checks(installation):
-  from bro.openai.declaration import Recipe as OpenAISpec
-
-  source = recipe_reading(installation, 'native', OpenAISpec(reasoning_effort='medium'))
-  from bro.llm.providers import resolve_model
-
-  canonical = resolve_model('openai', 'sol')
-  starter = Authority.top().meet(
-    source.syntax.layer(parse_layer(revoke=[f'bro.model={canonical}'])).cap
-  )
-  worker = installed_types()['bro']
-  for model in ('sol', canonical):
-    mapped = worker.option_values({'target': 'child', 'llm': f'openai:{model}'}, source)
-    assert mapped.values['model'] == canonical
-    with pytest.raises(Refusal, match='use rule'):
-      source.rules.start(Request('bro', mapped.values), starter, source)
-  with pytest.raises(ValueError, match='canonical model id'):
-    normalized(source, provider='openai', model='sol')
-
-
 def recipe_reading(installation, harness, spec):
   from bro.llm.providers import format_recipe
 
@@ -574,69 +554,6 @@ def recipe_reading(installation, harness, spec):
     provider_needs={spec.TYPE: frozenset({'provider_key'})},
   )
   return reading(installed, {'defaults': {'llm': {harness: format_recipe(spec)}}})
-
-
-def test_opaque_literal_model_ids_do_not_collide_with_default_state(installation):
-  from bro.openai.declaration import Recipe as OpenAISpec
-  from ride.authority_scope import DEFAULT, checked_recipe
-
-  source = recipe_reading(installation, 'native', OpenAISpec())
-  for model in ('default', '~default', 'vendor-private-variant'):
-    request = Request(
-      'bro', {'target': 'child', 'provider': 'openai', 'model': model, 'passthrough': True}
-    )
-    descriptor = source.rules.normalize(request, source)
-    assert descriptor.values['model'] == model and descriptor.values['model'] != DEFAULT
-    source.rules.use(Authority.top(), descriptor)
-    assert checked_recipe(request, descriptor, source).selection()['model'] == model
-  with pytest.raises(ValueError, match='cannot defer model'):
-    normalized(source, provider='openai', model=DEFAULT)
-
-
-@pytest.mark.parametrize('effort', ['none', 'minimal', None])
-def test_provider_efforts_reconstruct_exactly_and_remain_governed(installation, effort):
-  from bro.authority.syntax import render_values
-  from bro.openai.declaration import Recipe as OpenAISpec
-  from ride.authority_scope import checked_recipe
-
-  standing = OpenAISpec(
-    model='vendor-private-variant',
-    passthrough=True,
-    reasoning_effort=effort,
-    service_tier='flex',
-    compact_threshold=12345,
-  )
-  source = recipe_reading(installation, 'native', standing)
-  request = Request('bro', {'target': 'child'})
-  descriptor = source.rules.normalize(request, source)
-  domain = source.installation.declarations['bro'].options['effort'].domain
-  cap = source.syntax.layer(
-    parse_layer(
-      revoke=['bro.effort=' + render_values(domain.singleton(descriptor.values['effort']))]
-    )
-  ).cap
-  with pytest.raises(Refusal, match='use rule'):
-    source.rules.use(Authority.top().meet(cap), descriptor)
-  source.rules.use(Authority.top(), descriptor)
-  assert checked_recipe(request, descriptor, source) == standing
-  value = 'minimal' if effort is None else effort
-  explicit = Request(
-    'bro',
-    {
-      'target': 'child',
-      'provider': 'openai',
-      'model': 'vendor-private-variant',
-      'effort': value,
-      'passthrough': True,
-    },
-  )
-  explicit_descriptor = source.rules.normalize(explicit, source)
-  source.rules.use(Authority.top(), explicit_descriptor)
-  assert checked_recipe(explicit, explicit_descriptor, source).selection()['effort'] == value
-  from bro.llm.providers import parse
-
-  with pytest.raises(ValueError, match='effort level'):
-    parse('openai:vendor-private-variant:' + value)
 
 
 def test_cheatsheet_examples_use_shipped_configuration_and_permission_grammar():
@@ -786,7 +703,8 @@ def test_later_starts_under_a_reading_do_no_per_target_work(installation, monkey
 def test_unset_harness_does_not_prevent_reading_or_explicit_summons(installation):
   source = Reading(Configuration.parse({}), {}, installation)
   assert source.harness is None and source.summon_harness is None
-  assert normalized(source, harness='native').values['harness'] == 'native'
+  with pytest.raises(ValueError, match='no recipe'):
+    normalized(source, harness='native')
   with pytest.raises(ValueError) as failure:
     normalized(source)
   assert 'summon-harness' in str(failure.value)
@@ -865,7 +783,7 @@ def test_layer_winners_are_per_harness_for_roots_and_summons(installation):
   child = resolve_recipe(source, 'child', cast(str, descriptor.values['harness']))
   assert child.recipe.dump()['model'] == 'child'
   assert child.source == 'homes.test-home.bros.child'
-  assert checked_recipe(requested, descriptor, source) == child.recipe
+  assert checked_recipe(descriptor, source) == child.recipe
   assert resolve_recipe(source, 'other', 'native').source == 'defaults'
 
 
@@ -996,7 +914,7 @@ def test_other_homes_are_not_read_and_missing_harness_recipes_are_grammar_only(i
     installation,
     {
       'homes': {'unrelated': {'broken': True, 'bros': {'other': None}}},
-      'defaults': {'llm': {'absent': 'uninstalled:model,unknown=value'}},
+      'defaults': {'llm': {'native': 'echo:echo', 'absent': 'uninstalled:model,unknown=value'}},
     },
   )
   source.rules.start(Request('bro', {'target': 'child'}), Authority.top(), source)
@@ -1068,7 +986,7 @@ def test_explicit_recipe_replaces_an_unbound_foreign_recipe(installation):
     {'homes': {'foreign': {'bros': {'child': {'llm': {'native': 'uninstalled:model'}}}}}},
   )
   resolved = resolve_recipe(source, 'child', 'native', ('echo:echo', '--llm'))
-  assert resolved.recipe == Recipe() and resolved.source == '--llm'
+  assert resolved.recipe == Recipe(model='echo') and resolved.source == '--llm'
   requested = Request('bro', {'target': 'child', 'provider': 'echo', 'model': 'echo'})
   source.rules.start(requested, Authority.top(), source)
 
@@ -1078,3 +996,46 @@ def test_explicit_harness_existence_is_not_exposed_before_authorization(installa
   source = reading(installation)
   with pytest.raises(Refusal, match='use rule: bro:'):
     source.rules.start(Request('bro', {'target': 'child', 'harness': harness}), Authority(), source)
+
+
+def test_explicit_text_replaces_configured_fields_whole(installation):
+  from bro.openai.declaration import Recipe as OpenAIRecipe
+  from ride.authority_scope import checked_recipe, option_values, resolve_recipe
+
+  source = recipe_reading(
+    installation,
+    'native',
+    OpenAIRecipe(model='gpt-5.6-terra', reasoning_effort='high', compact_threshold=12345),
+  )
+  text = 'openai:gpt-6.1-sol'
+  mapped = option_values({'target': 'child', 'harness': 'native', 'llm': text}, source)
+  request = Request('bro', mapped.values)
+  descriptor = source.rules.normalize(request, source)
+  recipe = checked_recipe(descriptor, source, (mapped.content['llm'], 'summon llm'))
+  assert isinstance(recipe, OpenAIRecipe)
+  assert recipe.model == 'gpt-6.1-sol'
+  assert recipe.reasoning_effort is None and recipe.compact_threshold is None
+  assert resolve_recipe(source, 'child', 'native', (text, 'summon llm')).source == 'summon llm'
+
+
+def test_configured_model_cap_refuses_without_selecting_another_model(installation):
+  from bro.openai.declaration import Recipe as OpenAIRecipe
+
+  source = recipe_reading(installation, 'native', OpenAIRecipe(model='gpt-6.1-sol'))
+  cap = source.syntax.layer(parse_layer(revoke=['bro.model=gpt-6.1-sol'])).cap
+  with pytest.raises(Refusal, match='use rule: bro.model'):
+    source.rules.start(Request('bro', {'target': 'child'}), Authority.top().meet(cap), source)
+
+
+@pytest.mark.parametrize(
+  'option,value', [('provider', 'other'), ('model', 'different'), ('passthrough', True)]
+)
+def test_admission_refuses_a_descriptor_that_differs_from_the_recipe(installation, option, value):
+  from ride.authority_scope import checked_recipe
+
+  source = reading(installation)
+  request = Request('bro', {'target': 'child'})
+  descriptor = source.rules.normalize(request, source)
+  altered = Descriptor('bro', {**descriptor.values, option: value})
+  with pytest.raises(ValueError, match=f'descriptor {option} differs'):
+    checked_recipe(altered, source)

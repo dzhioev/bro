@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import asyncio
-import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from pathlib import Path
@@ -61,15 +60,13 @@ class LLM(ABC):
     return None
 
 
-async def llm_main(request: str, provider: str, model: Optional[str], attachments: list[str]):
-  from bro.llm import providers as llm_providers
+async def llm_main(request: str, llm: str, attachments: list[str]):
+  from bro.llm.providers import bind_recipe
   from bro.native import loop
 
-  spec = llm_providers.default_spec(provider)
+  spec = bind_recipe(llm)
   if spec.WIRE not in wires.client_names():
-    raise ValueError(f'provider {provider!r} wire {spec.WIRE!r} has no client')
-  if model is not None:
-    spec = dataclasses.replace(spec, model=llm_providers.resolve_model(provider, model))
+    raise ValueError(f'provider {spec.TYPE!r} wire {spec.WIRE!r} has no client')
   instance = loop.create(spec, Inbox())
   inputs = [UserMessage((Text(request), *(File.from_path(path) for path in attachments)))]
   print(f'> {request}')
@@ -79,15 +76,10 @@ async def llm_main(request: str, provider: str, model: Optional[str], attachment
 
 
 def main(argv: list[str]) -> Optional[int]:
-  from bro.llm import providers as llm_providers
+  from bro.launch.llm_flags import add_llm_flags
 
   parser = base_args.Parser(description='chat with LLM')
   parser.add_argument('--attach', '-a', dest='attachments', nargs='*', default=[])
-  parser.add_argument(
-    '--provider', '-p', choices=llm_providers.known_names(), required=True, help='LLM provider'
-  )
-  parser.add_argument(
-    '--model', '-m', default=None, help='model short name or id within --provider'
-  )
+  add_llm_flags(parser, required=True)
   parser.add_argument('request')
   return asyncio.run(llm_main(**parser.parse(argv)))

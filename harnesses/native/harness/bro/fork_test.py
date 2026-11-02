@@ -19,7 +19,7 @@ from bro.wire_responses.client import Responses
 
 
 def replay_messages(trail, step_id, **kwargs):
-  wire = Responses(OpenAISpec(), {'api_key': 'dummy'})
+  wire = Responses(OpenAISpec(model='gpt-5.6-terra'), {'api_key': 'dummy'})
   wire.restore(replay_prefix(trail, step_id, **kwargs))
   return wire._input_prefix
 
@@ -687,7 +687,7 @@ def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, anc
   if ancestor_mismatch:
     trail = RecordedTrail(
       header=dataclasses.replace(
-        _trail_header(trail_id='child', llm_spec=EchoSpec().dump()),
+        _trail_header(trail_id='child', llm_spec=EchoSpec(model='echo').dump()),
         forked_from=ForkedFrom(parent.header.id, 2),
       ),
       steps=[_step('system_prompt', 'child prompt', step_id=0)],
@@ -701,7 +701,7 @@ def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, anc
     fork(
       trail,
       0 if ancestor_mismatch else 2,
-      llm_spec=EchoSpec(),
+      llm_spec=EchoSpec(model='echo'),
       surface='test',
       fetch_forked_from=lambda trail_id: parent,
     )
@@ -829,7 +829,7 @@ class TestForkSpec:
     )
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert created[0].wire.recipe.selection()['model'] == 'gpt-6.1-sol'
+    assert created[0].wire.recipe.model == 'gpt-6.1-sol'
     assert tracker.headers[0]['llm_spec'] == {
       'type': 'openai',
       'model': 'gpt-6.1-sol',
@@ -847,7 +847,7 @@ class TestForkSpec:
     )
     with context:
       fork(forked_from_trail, 2, llm_spec=override, tracker=tracker, surface='test')
-    assert created[0].wire.recipe.selection()['model'] == 'gpt-5.6-terra'
+    assert created[0].wire.recipe.model == 'gpt-5.6-terra'
     assert created[0].wire.recipe.request_options()['reasoning']['effort'] == 'medium'
     assert tracker.headers[0]['llm_spec']['model'] == 'gpt-5.6-terra'
     assert tracker.headers[0]['llm_spec']['reasoning_effort'] == 'medium'
@@ -1214,9 +1214,9 @@ def test_explicit_fork_at_stopped_call_restores_instead_of_seeding_its_response_
 
 def test_fork_without_an_override_refuses_a_recorded_unlisted_model(monkeypatch):
   monkeypatch.setattr('bro.base.credentials.get_json', lambda _: {'api_key': 'fixture-key'})
-  from bro.llm.providers import LLMSelectionError
+  from bro.llm.providers import RecipeError
 
   recorded = _simple_trail()
   recorded.header.native['llm'] = OpenAISpec(model='gpt-7').dump()
-  with pytest.raises(LLMSelectionError, match='gpt-7.*passthrough'):
+  with pytest.raises(RecipeError, match='gpt-7.*passthrough'):
     fork(recorded, 2, record=False, surface='test')

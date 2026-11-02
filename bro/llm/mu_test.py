@@ -5,7 +5,6 @@ from pydantic import BaseModel
 
 import bro.llm.mu as mu_module
 from bro.base import credentials
-from bro.llm import providers
 from bro.llm.llm import LLMStopped
 from bro.llm.mu import mu
 from bro.llm.wire import File, Text, Wire
@@ -17,7 +16,10 @@ class _Answer(BaseModel):
 
 @pytest.fixture
 def material(monkeypatch):
-  value = {'llm': 'openai:terra:low', 'credential': {'api_key': 'default-key'}}
+  value = {
+    'llm': 'openai:gpt-5.6-terra,reasoning_effort=low',
+    'credential': {'api_key': 'default-key'},
+  }
 
   def read(name):
     assert name == 'mu'
@@ -55,7 +57,7 @@ def test_call_resolves_the_default_recipe_and_encodes_neutral_text(material, cal
     mu('what is it?', _Answer, Text('the record'), File(b'pdf', 'application/pdf')).answer == '42'
   )
   recipe, secrets, prompt, contents, timeout = calls[0]
-  assert recipe.selection()['model'] == providers.models('openai')['terra']
+  assert recipe.model == 'gpt-5.6-terra'
   assert recipe.request_options()['reasoning']['effort'] == 'low'
   assert secrets == material['credential']
   assert prompt == 'what is it?'
@@ -66,11 +68,14 @@ def test_call_resolves_the_default_recipe_and_encodes_neutral_text(material, cal
 @pytest.mark.asyncio
 async def test_aio_selects_a_defined_role_and_defaults_for_an_unknown_role(material, calls):
   material['roles'] = {
-    'reader': {'llm': 'openai:luna5.6:high', 'credential': {'api_key': 'reader-key'}}
+    'reader': {
+      'llm': 'openai:gpt-5.6-luna,reasoning_effort=high',
+      'credential': {'api_key': 'reader-key'},
+    }
   }
   assert (await mu.aio('question', _Answer, Text('input'), role='reader')).answer == '42'
   await mu.aio('question', _Answer, Text('input'), role='dispatch')
-  assert calls[0][0].selection()['model'] == providers.models('openai')['luna5.6']
+  assert calls[0][0].model == 'gpt-5.6-luna'
   assert calls[0][0].request_options()['reasoning']['effort'] == 'high'
   assert calls[0][1] == {'api_key': 'reader-key'}
   assert calls[1][1] == material['credential']
@@ -83,8 +88,8 @@ async def test_aio_selects_a_defined_role_and_defaults_for_an_unknown_role(mater
     ({}, 'llm'),
     ({'llm': 7, 'credential': {'api_key': 'key'}}, 'llm'),
     ({'llm': 'unknown:model', 'credential': {'api_key': 'key'}}, 'unknown provider'),
-    ({'llm': 'openai:a:b:c', 'credential': {'api_key': 'key'}}, 'malformed'),
-    ({'llm': '::high', 'credential': {'api_key': 'key'}}, 'must name a provider'),
+    ({'llm': 'openai:a:b:c', 'credential': {'api_key': 'key'}}, 'not listed'),
+    ({'llm': '::high', 'credential': {'api_key': 'key'}}, 'expected provider:model'),
     ({'llm': 'openai', 'credential': {}}, 'credential'),
     ({'llm': 'openai', 'credential': []}, 'credential'),
     ({'llm': 'openai'}, 'credential'),
@@ -102,9 +107,9 @@ def test_bad_material_names_mu_and_never_reaches_a_wire(monkeypatch, value, faul
 @pytest.mark.parametrize(
   ('recipe', 'secret', 'fault'),
   [
-    ('anthropic', {'api_key': 'key'}, 'has no client'),
-    ('echo', {'api_key': 'key'}, 'has no structured'),
-    ('openai', {'wrong': 'key'}, 'api_key'),
+    ('anthropic:claude-opus-5-5', {'api_key': 'key'}, 'has no client'),
+    ('echo:echo', {'api_key': 'key'}, 'has no structured'),
+    ('openai:gpt-5.6-terra', {'wrong': 'key'}, 'api_key'),
   ],
 )
 def test_unusable_wire_or_provider_credential_is_a_mu_error(material, recipe, secret, fault):
@@ -149,7 +154,7 @@ def test_references_follow_explicit_instances_or_the_hydrating_selection(
   (directory / 'creds' / 'openai.cred').write_text('{"api_key":"empty-key"}')
   (directory / 'creds' / 'openai+work.cred').write_text('{"api_key":"work-key"}')
   (directory / 'creds' / 'mu+cheap.cred').write_text(
-    json.dumps({'llm': 'openai:terra', 'credential': {'$cred': reference}})
+    json.dumps({'llm': 'openai:gpt-5.6-terra', 'credential': {'$cred': reference}})
   )
   host = credentials.Store(credentials.default_registry(), directory, {'mu': 'cheap', **selection})
   files, hydrated = credentials.build_scoped_store(host, ['mu'])

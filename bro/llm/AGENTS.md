@@ -22,34 +22,25 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 ## Modules
 
 - `llm.py` — the `Recipe` base:
-  a frozen recipe (model + provider knobs) with class-level `needed_secrets`, optional `.fast()` / `.with_effort(level)` transforms (a level from `EFFORT_LEVELS`, the neutral low/medium/high/xhigh/max vocabulary),
-  and one field-driven `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
+  a frozen recipe with a required model, provider-native fields and framework flags, and one field-driven `dump` / `from_dict` round-trip keyed by a `TYPE` discriminator.
   Field types and writable values are validated by the base; providers add combination checks.
   Records require `type` and `model`, omit unset `passthrough`, use defaults for missing fields and refuse unknown keys.
   Reading a record does not check admission.
-  `WIRE` names the recipe’s recorded protocol.
-  `selection` and `with_selection` project and reconstruct model/effort choices, with each recipe declaring its concrete effort vocabulary and deferrable fields.
+  `WIRE` names the recipe's recorded protocol.
   `LLMUnavailable` is the provider-neutral failure a client raises once its provider stays down through the client's retries.
   `LLMStopped` carries the neutral stop and the provider's own stop reason for an uncompleted leg.
 - `providers.py` — the provider roster.
-  `bro.llm.providers` entry points name declaration modules exporting `Recipe`, `DEFAULT_MODEL`, `MODELS`, and `FAILURE_SIGNATURES`.
+  `bro.llm.providers` entry points name declaration modules exporting `Recipe` and `FAILURE_SIGNATURES`.
   `parse_recipe`, `bind_recipe` and `format_recipe` own complete recipe text, typed binding and canonical formatting; their operator-facing failures are `RecipeError`.
   `RETIRED_MODELS` holds dates beside each class's `MODEL_INPUTS`; price rows cover exactly both tables, and a refusal names a retired model's date.
   Declaration loading checks these tables and the field schema.
   `known_names()` reads sorted metadata without imports; `declaration(name)` loads and validates only the named provider.
   Searches warn and skip broken declarations; an explicit selection fails by name.
-  Model resolution tries the short name, then full id, then verbatim;
-  a provider whose surface also takes names that are not model ids declares `MODEL_ID`, the shape a verbatim name must have.
-  `require_admitted` checks the driven recipe at authority settlement, native launch and wire opening; discovery and resolution remain unchecked.
-  `carriers` and `provider_of_model` search model declarations among a supplied set of providers.
-  Launch resolution inherits the provider of its standing recipe for a model-only selection; a named provider starts a complete recipe.
+  `require_admitted` checks recipes bound from text and every recipe entering a run, including one rebuilt from a record.
   `failure_signatures` exposes how a provider's client failures read in a run's error output, classified into `llm.py`'s neutral `FAILURE_CATEGORIES`.
   `price` prices one call from the provider's raw usage record and effective service tier.
   `price_table` exposes the current provider-owned table and its provenance.
-  `LLMSelection` owns the `provider:model:effort` grammar with its `+fast` and `+passthrough` suffixes, and `over` lays one selection over another
-  — a launch's flags over a configured default.
-  `LLMSelectionError` is the operator-facing failure.
-  The flags themselves are `bro/launch/llm_flags.py`.
+  The shared `--llm` flag is `bro/launch/llm_flags.py`.
 - `mu.py` — typed one-shot calls configured by the `mu` credential.
   `mu(instructions, result, *content, role=None)` blocks; `mu.aio(...)` is awaitable.
   The material's default recipe and credential, or the named role's pair, open a wire through `wires.open` and call `structured`.

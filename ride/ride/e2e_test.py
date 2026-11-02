@@ -157,7 +157,7 @@ def _root_mission(
     {
       'target': target,
       'harness': 'bro',
-      'llm': 'echo',
+      'llm': 'echo:echo',
       'grant': entries,
       'placement': placement,
       'timeout': None,
@@ -277,12 +277,12 @@ from pathlib import Path
 from bro.summon import summon_and_wait
 
 try:
-  denied = summon_and_wait('bro', 'denied', llm='echo', harness='bro', timeout=120)
+  denied = summon_and_wait('bro', 'denied', llm='echo:echo', harness='bro', timeout=120)
   accepted = summon_and_wait(
     'bro',
     'accepted',
     grant=['benchmark'],
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=120,
   )
@@ -548,7 +548,7 @@ if quest_route is not None:
       'bro',
       'ask through the session watch',
       talk=['worker.question'],
-      llm='echo',
+      llm='echo:echo',
       harness='bro',
       timeout=120,
     )
@@ -678,7 +678,7 @@ reading = Reading.take(workspace.repository)
 operator = reading.operator()
 request, _ = authority_request(
     BroType,
-    {'target': 'bro-dev', 'harness': 'bro', 'llm': 'echo', 'timeout': None,
+    {'target': 'bro-dev', 'harness': 'bro', 'llm': 'echo:echo', 'timeout': None,
      'grant': ['@' + target for target in json.loads(os.environ.get('RIDE_E2E_TARGETS', '[]'))]},
     reading, operator, forward=False,
 )
@@ -1364,15 +1364,11 @@ def _do_ride_command(*inner: str) -> list[str]:
 
 
 def _admitted_recipe(harness: str, llm: Optional[str]) -> dict[str, str]:
-  from bro.llm.providers import LLMSelection, bind_recipe, parse
+  from bro.llm.providers import bind_recipe
 
-  base = bind_recipe(_LAUNCH_RECIPES[harness])
-  recipe = (
-    get_harness(harness)
-    .scope_recipe()
-    .harness.resolve_recipe(base, LLMSelection() if llm is None else parse(llm))
-    .dump()
-  )
+  recipe = bind_recipe(_LAUNCH_RECIPES[harness] if llm is None else llm)
+  get_harness(harness).check_recipe(recipe)
+  recipe = recipe.dump()
   return {RESOLVED_LLM_ENV: encode_resolved_llm(recipe)}
 
 
@@ -1422,7 +1418,7 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
     extra_env={
       'RIDE_BRO': 'bro-dev',
       'RIDE_E2E_SECRETS': '["brog"]',
-      **_admitted_recipe('claude', '::+fast'),
+      **_admitted_recipe('claude', 'anthropic:claude-opus-5,fast_mode=true'),
     },
   )
   request.addfinalizer(driver.close)
@@ -1544,7 +1540,7 @@ def test_a_launched_native_session_records_the_git_header(
       extra_env={
         'RIDE_BRO': 'bro',
         'RIDE_E2E_LOCAL_TRAILS': '1',
-        **_admitted_recipe('bro', 'echo'),
+        **_admitted_recipe('bro', 'echo:echo'),
       },
     )
     request.addfinalizer(driver.close)
@@ -2052,7 +2048,7 @@ answer = summon_and_wait(
   'bro',
   'read the passed credential',
   passes=['github+passed'],
-  llm='openai:sol',
+  llm='openai:gpt-6.1-sol',
   harness='bro',
   placement={child_placement!r},
   timeout=120,
@@ -2252,7 +2248,7 @@ def test_manual_summon_commits_over_the_operator_channel_through_credential_pick
       '--harness',
       'bro',
       '--llm',
-      'echo',
+      'echo:echo',
       '--unboxed',
     ]
     assert ride_cli.main([*arguments, '--cred', 'github+forbidden', 'bro']) == 1
@@ -2293,7 +2289,7 @@ if prompt == 'boxed-member':
     'unboxed-owner',
     placement='unboxed',
     grant=['@bro', 'bro.placement=join'],
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=120,
   )
@@ -2303,7 +2299,7 @@ elif prompt == 'unboxed-owner':
     'unboxed-member',
     placement='join',
     grant=['@bro'],
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=120,
   )
@@ -2312,7 +2308,7 @@ elif prompt == 'unboxed-member':
     'bro',
     'boxed-final',
     placement='boxed',
-    llm='echo',
+    llm='echo:echo',
     harness='bro',
     timeout=120,
   )
@@ -2421,7 +2417,7 @@ answer = summon_and_wait(
   placement='join',
   passes=['github+passed'],
   grant=['@bro', 'bro.placement=unboxed', 'bro.placement=join'],
-  llm='echo',
+  llm='echo:echo',
   harness='bro',
   timeout=120,
 )
@@ -2495,10 +2491,10 @@ class WatchBro(BaseBro):
 started = time.monotonic()
 deadline = started + 30
 notifications = []
-with Runner(WatchBro(), EchoSpec()) as runner:
+with Runner(WatchBro(), EchoSpec(model='echo')) as runner:
   runner.watch_store.start('mission watch')
   quest_id = summon_detached(
-    'bro', 'raise for the native watch route', llm='echo', harness='bro', timeout=120
+    'bro', 'raise for the native watch route', llm='echo:echo', harness='bro', timeout=120
   )
   while not any('ended failed:raised' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
@@ -2544,7 +2540,7 @@ def wait_for_incoming(text, deadline):
 
 wait_for_incoming('before arm', time.monotonic() + 30)
 notifications = []
-with Runner(WatchBro(), EchoSpec()) as runner:
+with Runner(WatchBro(), EchoSpec(model='echo')) as runner:
   runner.watch_store.start('mission watch')
   deadline = time.monotonic() + 30
   while not any('before the watch: summoner says before arm' in text for text in notifications):
@@ -2580,7 +2576,7 @@ quest_id = summon_detached(
   'bro',
   'receive steering through the native own-quest watch',
   talk=['owner.say'],
-  llm='echo',
+  llm='echo:echo',
   harness='bro',
   timeout=120,
 )
@@ -2792,7 +2788,7 @@ class ScriptedRunner(Runner):
     servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
-asyncio.run(ScriptedRunner(AskingBro(), EchoSpec()).run('go', surface='e2e', tracker=NullTracker()))
+asyncio.run(ScriptedRunner(AskingBro(), EchoSpec(model='echo')).run('go', surface='e2e', tracker=NullTracker()))
 """
 
 
@@ -2820,7 +2816,7 @@ def test_a_summoned_native_child_waits_on_its_own_question_and_wakes_on_the_repl
     isolated_env,
     monkeypatch,
     case='native-asker',
-    root_source=_asking_child_summoner('bro', 'echo'),
+    root_source=_asking_child_summoner('bro', 'echo:echo'),
     child_launch=_child_probe(_NATIVE_ASKING_CHILD),
     report_name='.asking-child-report',
   )
@@ -2902,7 +2898,7 @@ class ScriptedLLM(LLM):
       {
         'target': 'bro',
         'prompt': 'grandchild result',
-        'llm': 'echo',
+        'llm': 'echo:echo',
         'harness': 'bro',
         'timeout': 120,
         'talk': ['worker.question'],
@@ -2958,7 +2954,7 @@ class ScriptedRunner(Runner):
     servers = self.bro.assemble(harness='bro', hold='unattended', live_run=self)
     return ScriptedLLM(self.inbox, servers)
 
-asyncio.run(ScriptedRunner(RemindBro(), EchoSpec()).run('go', surface='e2e', tracker=NullTracker()))
+asyncio.run(ScriptedRunner(RemindBro(), EchoSpec(model='echo')).run('go', surface='e2e', tracker=NullTracker()))
 """
 
 _NATIVE_REMIND_ROOT = """
@@ -2970,7 +2966,7 @@ from bro.quest import check
 from bro.summon import summon_detached
 
 quest_id = summon_detached(
-  'bro', 'remind-child', grant=['@bro'], llm='echo', harness='bro', timeout=180
+  'bro', 'remind-child', grant=['@bro'], llm='echo:echo', harness='bro', timeout=180
 )
 deadline = time.monotonic() + 150
 while True:
@@ -3122,7 +3118,7 @@ question = summon_and_wait(
   'bro',
   'ask the summoner',
   talk=['worker.question', 'owner.say'],
-  llm='echo',
+  llm='echo:echo',
   harness='bro',
   timeout=120,
   on_sent=quest_ids.append,
@@ -3214,7 +3210,7 @@ from bro.quest import cancel, history
 from bro.summon import summon_detached
 
 quest_id = summon_detached(
-  'bro', 'hang until cancelled', llm='echo', harness='bro', timeout=600
+  'bro', 'hang until cancelled', llm='echo:echo', harness='bro', timeout=600
 )
 running = history(quest_id, wait=True, timeout=120)
 assert not running.ended and running.chat_seq > 0, running
@@ -3468,7 +3464,7 @@ from bro.quest import QuestError
 
 refusals = {}
 cli = subprocess.run(
-  ['summon', '--detach', '--harness', 'bro', '--llm', 'echo', 'bro', 'refuse this'],
+  ['summon', '--detach', '--harness', 'bro', '--llm', 'echo:echo', 'bro', 'refuse this'],
   capture_output=True, text=True,
 )
 assert cli.returncode == 1, cli
@@ -3477,7 +3473,7 @@ refusals['cli'] = cli.stderr
 async def tool_refusal():
   try:
     await _summon_tool({}, None).call({
-      'target': 'bro', 'prompt': 'refuse this', 'harness': 'bro', 'llm': 'echo',
+      'target': 'bro', 'prompt': 'refuse this', 'harness': 'bro', 'llm': 'echo:echo',
     })
   except QuestError as error:
     return str(error)
@@ -3489,13 +3485,13 @@ assert client is not None
 with client:
   refused = client.call('launch', {
     'type': 'bro', 'target': 'bro', 'prompt': 'refuse this',
-    'harness': 'bro', 'llm': 'echo',
+    'harness': 'bro', 'llm': 'echo:echo',
   }, 30)
   assert refused.payload['outcome'] == 'denied', refused.payload
   refusals['wire'] = refused.payload['error']
   gift = client.call('launch', {
     'type': 'bro', 'target': 'browser', 'prompt': 'refuse the gift',
-    'harness': 'bro', 'llm': 'echo', 'grant': ['webview.cred=cookies+e2e'],
+    'harness': 'bro', 'llm': 'echo:echo', 'grant': ['webview.cred=cookies+e2e'],
   }, 30)
   assert gift.payload['outcome'] == 'denied', gift.payload
   refusals['gift'] = gift.payload['error']
@@ -3576,7 +3572,10 @@ def test_resume_rechecks_operator_rules_and_recomputes_the_default_credential_pi
   repository = _permission_repository(env, 'resume')
 
   def policy(instance, *, restricted=False):
-    result: dict = {'homes': {installation_home(): {'creds': ['github+' + instance]}}}
+    result: dict = {
+      'defaults': {'llm': {'bro': 'echo:echo'}},
+      'homes': {installation_home(): {'creds': ['github+' + instance]}},
+    }
     if restricted:
       result['operator'] = {'revoke': ['bro.cred=github+' + instance]}
     return result
@@ -3602,7 +3601,7 @@ def test_resume_rechecks_operator_rules_and_recomputes_the_default_credential_pi
         '--harness',
         'bro',
         '--llm',
-        'echo',
+        'echo:echo',
         '--no-trails',
         '--grant',
         'github',
@@ -3650,7 +3649,7 @@ def test_root_flags_are_checked_against_the_operator_authority(
         '--harness',
         'bro',
         '--llm',
-        'echo',
+        'echo:echo',
         'bro',
         'refuse this',
       ]
@@ -3701,7 +3700,7 @@ with tempfile.TemporaryDirectory() as directory:
   os.environ[SESSION_DIR_ENV] = directory
   authority_view.capture_initial()
   save_deferred_contract(harness=get_harness('bro'), hold='unattended')
-  with watches.Owner.for_session(), Runner(OverrideBro(), EchoSpec()) as runner:
+  with watches.Owner.for_session(), Runner(OverrideBro(), EchoSpec(model='echo')) as runner:
     runner.watch_store.start(watches.SESSION_WATCH_COMMAND)
     Path('/workspace/.override-ready').touch()
     receive(runner, '# Summoning session')
@@ -3709,12 +3708,12 @@ with tempfile.TemporaryDirectory() as directory:
     assert '# One-shot turn end' in '\n'.join(notifications)
     assert 'bro' in authority_view.read()['may_summon']
     assert 'may_summon: @bro' in render_banner(llm=True)
-    assert summon_and_wait('bro', 'answer', harness='bro', llm='echo', timeout=120) == 'granted child'
+    assert summon_and_wait('bro', 'answer', harness='bro', llm='echo:echo', timeout=120) == 'granted child'
     Path('/workspace/.override-summoned').touch()
     receive(runner, '--revoke @bro')
     assert authority_view.read()['may_summon'] == []
     try:
-      summon_and_wait('bro', 'must refuse', harness='bro', llm='echo', timeout=120)
+      summon_and_wait('bro', 'must refuse', harness='bro', llm='echo:echo', timeout=120)
     except QuestError as error:
       assert 'use rule: @bro:' in str(error), error
     else:
@@ -4132,7 +4131,7 @@ from bro.run_lifecycle import RunLifecycle
 from bro.summon import summon_and_wait
 with contextlib.closing(RunLifecycle.from_env()) as channel:
   Path('.credential-parent-ready').touch()
-  assert summon_and_wait('bro', 'credential probe', placement={placement!r}, harness='bro', llm='echo', timeout=180, passes={passes!r}) == 'credential override verified'
+  assert summon_and_wait('bro', 'credential probe', placement={placement!r}, harness='bro', llm='echo:echo', timeout=180, passes={passes!r}) == 'credential override verified'
   channel.completed('parent verified', 'ok')
 """
   root_mission = _root_mission(
@@ -4169,7 +4168,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
           '--harness',
           'bro',
           '--llm',
-          'echo',
+          'echo:echo',
         ]
         if isolation == 'unboxed':
           arguments.append('--unboxed')

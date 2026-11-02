@@ -233,7 +233,6 @@ def commit_launch(root: str, token: str, spec: Any) -> dict[str, Any]:
     'grant': spec.grant,
     'revoke': spec.revoke,
   }
-  fields.update(spec.recipe_options)
   if spec.export:
     fields['export'] = True
   if spec.llm is not None:

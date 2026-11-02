@@ -23,6 +23,7 @@ from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_request, dump_values
 from bro.authority.rules import Request
 from bro.base import credentials
+from bro.llm.providers import bind_recipe
 from bro.monitor import workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
@@ -84,7 +85,7 @@ def _spec(
     grant=grant if grant is not None else [],
     revoke=revoke if revoke is not None else [],
     llm=llm,
-    resolved_llm=claude_harness.CLAUDE.resolve_llm(llm, resolved_bro).dump(),
+    resolved_llm=bind_recipe(llm or 'anthropic:claude-opus-5').dump(),
     solo=solo,
     resume=resume,
     into=into,
@@ -108,6 +109,7 @@ def _spec(
       'grant': spec.grant,
       'revoke': spec.revoke,
       'pass': spec.cred,
+      **({'llm': llm} if llm is not None else {}),
     },
     source,
     source.operator(),
@@ -544,7 +546,14 @@ class TestContainerCommand:
     # the docker command is the same do-ride executable unboxed isolation spawns; the
     # argv/MCP/spell-delivery work happens inside the container, next to claude
     with _ContainerHarness() as h:
-      rc = ride_session.start_session(_spec(drop=True, bro='dev', llm='::xhigh+fast', prompt='go'))
+      rc = ride_session.start_session(
+        _spec(
+          drop=True,
+          bro='dev',
+          llm='anthropic:claude-opus-5-5,effort=xhigh,fast_mode=true',
+          prompt='go',
+        )
+      )
     assert rc == 0
     command = h.run_started_party.call_args.args[0].command
     assert command == [
@@ -736,7 +745,7 @@ class TestCommandArgv:
     parts = _spec(
       hold='attended',
       drop=True,
-      llm='::xhigh+fast',
+      llm='anthropic:claude-opus-5-5,effort=xhigh,fast_mode=true',
       bro='dev',
       cred=['github+work'],
       grant=['aws', '@bro'],
@@ -744,7 +753,7 @@ class TestCommandArgv:
       into='feature',
     ).to_command_argv()
     assert parts == [
-      'ride', 'along', '--drop', '--repo', str(Path.cwd()), '--hold', 'attended', '--llm', '::xhigh+fast',
+      'ride', 'along', '--drop', '--repo', str(Path.cwd()), '--hold', 'attended', '--llm', 'anthropic:claude-opus-5-5,effort=xhigh,fast_mode=true',
       '--harness', 'claude', '--workspace', 'w', '--cred', 'github+work',
       '--grant', 'aws', '--grant', '@bro', '--revoke', 'brog', '--into', 'feature', 'dev',
     ]  # fmt: skip
@@ -832,7 +841,7 @@ class TestResumeSpecRecord:
     spec = _spec(
       hold='attended',
       drop=True,
-      llm='::xhigh',
+      llm='anthropic:claude-opus-5-5,effort=xhigh',
       bro='dev',
       cred=['github+work'],
       grant=['aws'],
@@ -1095,7 +1104,7 @@ class TestUnboxedSession:
     spec = _spec(
       isolation=Isolation.UNBOXED,
       hold='attended',
-      llm='::xhigh',
+      llm='anthropic:claude-opus-5-5,effort=xhigh',
       prompt='go',
     )
 
@@ -1805,7 +1814,12 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
   source = ride_session.Reading.take()
   root_request, _ = request(
     BroType,
-    {'target': 'bro', 'harness': 'bro', 'llm': 'echo', 'grant': ['@bro', 'bro.cred=github+{a,b}']},
+    {
+      'target': 'bro',
+      'harness': 'bro',
+      'llm': 'echo:echo',
+      'grant': ['@bro', 'bro.cred=github+{a,b}'],
+    },
     source,
     source.operator(),
     forward=False,
@@ -1925,7 +1939,7 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
       cred=['github+' + instance],
       grant=[],
       revoke=[],
-      llm='echo',
+      llm='echo:echo',
       resolved_llm={},
       solo=True,
       resume=False,
@@ -1958,11 +1972,12 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
   assert set(executed['talk'].split(',')) == host.descriptor.values['talk']
   assert journal.records[token].talk == host.descriptor.values['talk']
   assert (
-    executed['recipe'] == ride_session.checked_recipe(host.request, host.descriptor, source).dump()
+    executed['recipe']
+    == ride_session.checked_recipe(host.descriptor, source, ('echo:echo', '--llm')).dump()
   )
 
 
-def test_resume_refuses_a_recorded_unlisted_selection_under_the_new_reading(tmp_path, caplog):
+def test_resume_refuses_a_descriptor_that_differs_from_the_configured_recipe(tmp_path, caplog):
   recorded = _spec(bro='dev')
   recorded = replace(
     recorded,
@@ -1982,33 +1997,16 @@ def test_resume_refuses_a_recorded_unlisted_selection_under_the_new_reading(tmp_
   with _ContainerHarness() as host:
     assert _resume() == 1
     host.run_started_party.assert_not_called()
-  assert 'gpt-7' in caplog.text and '+passthrough' in caplog.text
+  assert 'descriptor model differs from the resolved recipe' in caplog.text
 
 
-def test_session_piece_flags_reconstruct_as_flags():
-  spec = replace(
-    _spec(), recipe_options={'provider': 'openai', 'model': 'gpt-7', 'passthrough': True}
-  )
-  argv = spec.to_command_argv()
-  assert '--passthrough' in argv and 'True' not in argv
-
-
-@pytest.mark.parametrize('pieces', [False, True])
 @pytest.mark.parametrize('passthrough', [False, True])
-def test_root_launch_admits_the_final_recipe_before_starting_a_party(pieces, passthrough, caplog):
+def test_root_launch_admits_the_final_recipe_before_starting_a_party(passthrough, caplog):
   spec = replace(
     _spec(bro='dev'),
     harness='bro',
     authority_request={},
-    llm=None if pieces else 'openai:gpt-7:high' + ('+passthrough' if passthrough else ''),
-    recipe_options={
-      'provider': 'openai',
-      'model': 'gpt-7',
-      'effort': 'high',
-      **({'passthrough': True} if passthrough else {}),
-    }
-    if pieces
-    else {},
+    llm='openai:gpt-7' + ('+passthrough' if passthrough else '') + ',reasoning_effort=high',
   )
   with _ContainerHarness() as host:
     assert ride_session.start_session(spec) == (0 if passthrough else 1)

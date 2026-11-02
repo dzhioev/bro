@@ -1,7 +1,6 @@
 """Render a prospective descriptor, base authority, and credential presence."""
 
 import json
-from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -20,8 +19,6 @@ def report_scope(
   bro: str | None,
   harness: str | None,
   llm: str | None = None,
-  *,
-  recipe_options: Mapping[str, object] | None = None,
 ) -> int:
   try:
     repository = None if repo is None else as_repository(repo)
@@ -29,7 +26,7 @@ def report_scope(
     if bro is None:
       bro = reading.default_bro
     harness = reading.resolve_harness(harness, target=bro)
-    fields = {'target': bro, 'harness': harness, **(recipe_options or {})}
+    fields = {'target': bro, 'harness': harness}
     if llm is not None:
       fields['llm'] = llm
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
@@ -53,10 +50,8 @@ def report_scope(
     from bro.llm.providers import format_recipe
     from ride.authority_scope import checked_recipe, resolve_recipe
 
-    resolved = checked_recipe(requested, descriptor, reading)
-    configured = (
-      resolve_recipe(reading, bro, harness) if llm is None and not recipe_options else None
-    )
+    resolved = checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm'))
+    configured = resolve_recipe(reading, bro, harness) if llm is None else None
     print(
       'descriptor: '
       + json.dumps(dump_values(descriptor.values), ensure_ascii=False, sort_keys=True)

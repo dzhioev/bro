@@ -171,9 +171,7 @@ def require_accepted(recipe: Recipe, content: tuple[Content, ...]) -> None:
 
   for item in content:
     if isinstance(item, File) and not recipe.accepts(item.mime_type):
-      raise UnsupportedContent(
-        f'{item.mime_type} content is not supported by {recipe.selection()["model"]}'
-      )
+      raise UnsupportedContent(f'{item.mime_type} content is not supported by {recipe.model}')
 
 
 @dataclass(frozen=True)

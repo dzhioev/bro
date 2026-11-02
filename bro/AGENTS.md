@@ -111,7 +111,7 @@ A subpackage with a map of its own is pointed at, not described here.
   Its typed facts supply prompt capabilities and passages, and terminal service-tool results pass through its session-ending methods.
   `owned_environment()` names the environment variables carrying its session state.
   `llm_providers` exposes the providers whose recipes it runs, computed from the installed roster for wire-driven harnesses;
-  `resolve_recipe` lays an LLM selection over a standing recipe among them and refuses one it does not serve, naming the installed harnesses that do.
+  `check_recipe` refuses a provider it does not serve, naming the installed harnesses that do.
   `Harness.serve(reach)` returns a `Service`:
   the server specs the harness mounts for the reach's tool groups, and the groups it leaves unserved, which `bro show` marks.
   The tools a harness serves a group with on its own, Claude's natives or the bro harness's job tools, are its own code, built from the same reach.

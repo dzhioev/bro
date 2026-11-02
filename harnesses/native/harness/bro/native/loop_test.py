@@ -488,7 +488,7 @@ class TestSendTrackerEmission:
     _, body, extras = llm_calls[0]
     assert body['response']['extra'] == 'retained'
     assert body['response']['output'][0]['content'][0]['text'] == 'reply'
-    assert body['request']['model'] == gpt.wire.recipe.selection()['model']
+    assert body['request']['model'] == gpt.wire.recipe.model
     # request kwargs round-tripped, including the input list passed to the API.
     assert body['request']['input'] == captured[0]['input']
     assert extras == {
