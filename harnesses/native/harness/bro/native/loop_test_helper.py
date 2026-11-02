@@ -28,10 +28,9 @@ def make_loop(
   agent: Optional[str] = None,
   activity_file: Optional[Path] = None,
 ) -> ResponsesLoop:
-  from bro.openai.declaration import DEFAULT_MODEL
 
   recipe = Recipe(
-    model=model if model is not None else DEFAULT_MODEL,
+    model=model if model is not None else 'gpt-5.6-terra',
     reasoning_effort=reasoning_effort,
     service_tier=service_tier,
     compact_threshold=compact_threshold,

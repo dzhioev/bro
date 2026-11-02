@@ -33,7 +33,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   At each one-shot turn end, `Runner` applies the shared `bro.turn_end` rule:
   it reports running jobs as harness background work, posts notices through the inbox, ends by returning the last reply, and otherwise idles on the inbox until job or watch news, or a job's silence notice, wakes the next turn.
   `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/reference/ride.md`, "Bro harness").
-  `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires `--provider`.
+  `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires complete recipe text in `--llm`.
   `loop.py` opens the recipe's wire through core's roster and owns the provider-neutral loop:
   tool execution, inbox drains, observer events, recorded steps, interrupted inputs and cumulative usage.
   Cancellation after a leg arrives completes its recording and answers every unanswered call with an interrupted error result.

@@ -14,7 +14,7 @@ import bro.workspace.paths as workspace_paths
 import ride.cli as ride_cli
 import ride.dive_in as dive_in
 from bro.base import credentials
-from bro.llm.providers import parse
+from bro.llm.providers import bind_recipe
 from ride.harness import get_harness
 
 UUID = '35ad38d8-5a6d-81ea-bce6-e4caf17ece7f'
@@ -224,7 +224,16 @@ class TestTaskMode:
 
     monkeypatch.setattr(dive_in, '_task_system', fake_task_system)
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
-    argv = ['dive-in', '-n', '-t', UUID, '--cred', 'brog+github', '--effort', 'high']
+    argv = [
+      'dive-in',
+      '-n',
+      '-t',
+      UUID,
+      '--cred',
+      'brog+github',
+      '--llm',
+      'anthropic:claude-opus-5-5,effort=high',
+    ]
     rc = dive_in.main([*argv, '--bro', 'dev'])
     assert rc == 0
     assert captured == {
@@ -233,15 +242,14 @@ class TestTaskMode:
       'revoke': [],
       'bro': 'dev',
       'harness': 'claude',
-      'llm': '::high',
+      'llm': 'anthropic:claude-opus-5-5,effort=high',
     }
     # the flags still ride into the forwarded `ride along` untouched
     args = _parse_emitted(shlex.split(capsys.readouterr().out.strip()))
     assert args['cred'] == ['brog+github']
     assert args['grant'] is None
     assert args['revoke'] is None
-    assert args['effort'] == 'high'
-    assert args['llm'] is None
+    assert args['llm'] == 'anthropic:claude-opus-5-5,effort=high'
 
   def test_a_malformed_llm_selection_is_a_cli_error(self, fake_proj, capsys):
     with pytest.raises(SystemExit):
@@ -381,8 +389,8 @@ class TestTaskSystem:
     monkeypatch.setattr(
       dive_in,
       'launch_llm_spec',
-      lambda driver, attachment, bro, llm: driver.scope_recipe().harness.resolve_recipe(
-        None, parse(llm or ('openai:terra' if driver.name == 'bro' else 'anthropic:opus5'))
+      lambda driver, attachment, bro, llm: bind_recipe(
+        llm or ('openai:gpt-5.6-terra' if driver.name == 'bro' else 'anthropic:claude-opus-5')
       ),
     )
 
@@ -447,10 +455,10 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, calls)
     monkeypatch.setattr(dive_in, 'launch_llm_spec', launch_llm_spec)
-    dive_in._task_system(tmp_path, [], [], [], None, 'bro', '::low')
-    assert calls['llm_spec'] == get_harness('bro').scope_recipe().harness.resolve_recipe(
-      None, parse('openai:sol:low')
+    dive_in._task_system(
+      tmp_path, [], [], [], None, 'bro', 'openai:gpt-6.1-sol,reasoning_effort=low'
     )
+    assert calls['llm_spec'] == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError

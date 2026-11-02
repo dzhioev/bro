@@ -17,7 +17,6 @@ from bro.authority.records import (
 )
 from bro.authority.rules import Refusal, Request
 from bro.authority.syntax import parse_layer
-from bro.authority.values import Symbol
 from bro.base import credentials, host_config
 from bro.bro import BaseBro
 from bro.broker.brotocol import request as message
@@ -128,7 +127,7 @@ def test_request_records_round_trip_typed_values_and_forwarded_gifts(source):
     atom, Descriptor('webview'), source.installation.declarations
   ).use.matches(Descriptor('webview'))
   values = {
-    'model': Symbol('default'),
+    'model': 'full-model-id',
     'literal': '~default',
     'talk': frozenset({'owner.say'}),
     'timeout': 5,
@@ -250,14 +249,14 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
         'placement': 'unboxed',
         'hold': 'unattended',
         'timeout': None,
-        'llm': 'echo',
+        'llm': 'echo:echo',
         'pass': ['github+operator'],
       },
     },
   )
   control.commit(cast(Any, context), 'operator', commit)
   control.commit(cast(Any, context), 'operator', commit)
-  assert [reply['outcome'] for reply in replies] == ['ok', 'ok']
+  assert [reply['outcome'] for reply in replies] == ['ok', 'ok'], replies
   assert replies[0]['value']['descriptor'] == replies[1]['value']['descriptor']
   assert replies[0]['value']['commit'] == replies[1]['value']['commit']
   assert replies[1]['value']['descriptor']['values']['cred.github'] == 'operator'

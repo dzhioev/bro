@@ -125,7 +125,10 @@ class TestScopedSecrets:
       )
 
   def test_operator_caps_apply_to_the_root_request(self, scoped_installation):
-    Path(host_config.HOST_CONFIG_FILE).write_text(json.dumps({'operator': {'revoke': ['@scoped']}}))
+    path = Path(host_config.HOST_CONFIG_FILE)
+    config = json.loads(path.read_text())
+    config['operator'] = {'revoke': ['@scoped']}
+    path.write_text(json.dumps(config))
     with pytest.raises(scope.LaunchScopeError, match='use rule.*scoped'):
       scope.scoped_secrets('scoped', _recipe(scoped_installation))
 

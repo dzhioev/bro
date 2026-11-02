@@ -24,7 +24,7 @@ class HydrationBro(Bro):
   name = 'hydration-test'
   description = 'credential hydration route fixture'
   extra_secrets = ('github',)
-  llm_spec = EchoRecipe()
+  llm_spec = EchoRecipe(model='echo')
 
 
 @pytest.fixture(autouse=True)
@@ -227,13 +227,22 @@ class TestConfiguredRecipe:
     with patch('ride.cli.start_session', return_value=0) as start:
       assert (
         ride_cli.main(
-          ['ride', 'along', '--repo', '/repo', '--harness', 'bro', '--effort', 'low', 'dev']
+          [
+            'ride',
+            'along',
+            '--repo',
+            '/repo',
+            '--harness',
+            'bro',
+            '--llm',
+            'openai:gpt-6.1-sol,reasoning_effort=low',
+            'dev',
+          ]
         )
         == 0
       )
     spec = start.call_args.args[0]
-    assert spec.llm is None
-    assert spec.recipe_options == {'effort': 'low'}
+    assert spec.llm == 'openai:gpt-6.1-sol,reasoning_effort=low'
     assert spec.resolved_llm == {}
 
   def test_cli_does_not_parse_host_policy_before_the_runtime_start(self):
@@ -359,6 +368,32 @@ class TestCredentialHydrationRoutes:
     return SimpleNamespace(
       material=material, captures=captures, launch=launch, repository=repository, config=config
     )
+
+  @pytest.mark.parametrize(
+    'text',
+    [
+      'openai:gpt-6.1-sol,reasoning_effort=high',
+      'openai:gpt-7+passthrough,reasoning_effort=high',
+      'openai:gpt-5.5+passthrough',
+    ],
+  )
+  def test_along_runs_the_explicit_recipe_whole(self, route, text):
+    from bro.llm.providers import bind_recipe
+
+    (route.material / 'openai.cred').write_text('{"api_key":"fixture"}')
+    assert (
+      route.launch('--llm', text, '--grant', 'openai', '--cred', 'harbor+launch', mode='along') == 0
+    )
+    spec, _ = route.captures[-1]
+    assert spec.llm_spec == bind_recipe(text)
+
+  @pytest.mark.parametrize('text', [':sol', 'openai', 'openai:gpt-7', 'openai:gpt-5.5'])
+  def test_along_refuses_incomplete_unlisted_and_retired_recipes(self, route, text, caplog):
+    assert route.launch('--llm', text, mode='along') == 1
+    assert route.captures == []
+    assert text in caplog.text
+    if text == 'openai:gpt-5.5':
+      assert 'retired on' in caplog.text
 
   def test_root_launch_folds_every_layer_and_hydrates_by_selected_name(self, route):
     assert (
@@ -688,8 +723,8 @@ class TestAlong:
 
   def test_cli_defers_provider_compatibility_to_normalization(self):
     with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', '--provider', 'openai', 'dev']) == 0
-    assert start.call_args.args[0].recipe_options == {'provider': 'openai'}
+      assert ride_cli.main(['ride', 'along', '--llm', 'openai:gpt-6.1-sol', 'dev']) == 0
+    assert start.call_args.args[0].llm == 'openai:gpt-6.1-sol'
 
   def test_cli_defers_target_existence_to_the_authorized_start(self):
     for harness in ('claude', 'bro'):
@@ -789,7 +824,6 @@ class TestLifecycle:
       'bro': 'dev',
       'harness': 'claude',
       'llm': None,
-      'recipe_options': {},
     }
 
   def test_scope_reports_malformed_home_settings(self, tmp_path, capsys, home_settings_file):
@@ -969,24 +1003,13 @@ class TestSummonedLaunch:
     assert 'requires a prompt unless --summoned supplies it' in capsys.readouterr().err
 
 
-@pytest.mark.parametrize(
-  'flags, llm, options',
-  [
-    (['--llm', 'uninstalled:future:high'], 'uninstalled:future:high', {}),
-    (
-      ['--provider', 'uninstalled', '--model', 'future', '--effort', 'high', '--fast'],
-      None,
-      {'provider': 'uninstalled', 'model': 'future', 'effort': 'high', 'fast': True},
-    ),
-  ],
-)
-def test_scope_forwards_llm_flags_to_the_prospective_reading(flags, llm, options):
+def test_scope_forwards_recipe_text_to_the_prospective_reading():
+  text = 'uninstalled:future,native_field=high'
   with patch('ride.scope_report.report_scope', return_value=0) as report:
-    assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', *flags]) == 0
-  assert report.call_args.kwargs['llm'] == llm
-  assert report.call_args.kwargs['recipe_options'] == options
+    assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'bro', '--llm', text]) == 0
+  assert report.call_args.kwargs['llm'] == text
 
 
 def test_scope_llm_excludes_piece_flags():
   with pytest.raises(SystemExit):
-    ride_cli.main(['ride', 'scope', '--bro', 'dev', '--llm', 'echo', '--fast'])
+    ride_cli.main(['ride', 'scope', '--bro', 'dev', '--llm', 'echo:echo', '--fast'])

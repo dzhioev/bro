@@ -108,7 +108,11 @@ def cases() -> dict[str, dict[str, Case]]:
   return {
     'responses': cases,
     'chat': chat_cases(),
-    'echo': {'plain': Case(EchoSpec(), {'model': 'echo', 'text': 'reply'}, (Message(1, 'reply'),))},
+    'echo': {
+      'plain': Case(
+        EchoSpec(model='echo'), {'model': 'echo', 'text': 'reply'}, (Message(1, 'reply'),)
+      )
+    },
   }
 
 
@@ -141,7 +145,7 @@ def capture_requests(monkeypatch, sent: list[dict]) -> None:
 
 
 def chat_cases() -> dict[str, Case]:
-  recipe = ChatSpec()
+  recipe = ChatSpec(model='deepseek-v4-pro')
   usage = {'input': 6, 'cache_read': 4, 'cache_write': 0, 'output': 3}
   cases = {
     'plain': Case(recipe, chat_response(), (Message(1, 'reply'),), counts=usage),

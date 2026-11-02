@@ -37,7 +37,7 @@ async def test_history_preserves_reasoning_null_content_and_raw_arguments(
   transport, first_reasoning, second_reasoning
 ):
   requests, replies = transport
-  wire = Chat(Recipe(reasoning_effort='high'), {'api_key': 'fixture-key'})
+  wire = Chat(Recipe(model='deepseek-v4-pro', reasoning_effort='high'), {'api_key': 'fixture-key'})
   replies.extend(
     [
       response(None, reasoning=first_reasoning, calls=[call('')], stop='tool_calls'),
@@ -93,7 +93,7 @@ async def test_history_preserves_reasoning_null_content_and_raw_arguments(
 async def test_uncompleted_response_does_not_advance_history(transport, stop):
   requests, replies = transport
   replies.extend([response('discard', reasoning='discard', stop=stop), response()])
-  wire = Chat(Recipe(), {'api_key': 'fixture-key'})
+  wire = Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'})
   assert (await wire.exchange([UserMessage((Text('retry'),))], [], None)).stop != 'completed'
   await wire.exchange([UserMessage((Text('retry'),))], [], None)
   assert requests[0] == requests[1]
@@ -114,7 +114,7 @@ async def test_unusable_completion_raises_without_advancing(transport, message):
   raw = response()
   raw['choices'][0]['message'] = message
   replies.extend([raw, response()])
-  wire = Chat(Recipe(), {'api_key': 'fixture-key'})
+  wire = Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'})
   with pytest.raises(RuntimeError):
     await wire.exchange([UserMessage((Text('retry'),))], [], None)
   await wire.exchange([UserMessage((Text('retry'),))], [], None)
@@ -125,7 +125,7 @@ async def test_unusable_completion_raises_without_advancing(transport, message):
 async def test_cancelled_exchange_keeps_history(transport):
   requests, replies = transport
   replies.extend([asyncio.CancelledError(), response()])
-  wire = Chat(Recipe(), {'api_key': 'fixture-key'})
+  wire = Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'})
   with pytest.raises(asyncio.CancelledError):
     await wire.exchange([UserMessage((Text('retry'),))], [], None)
   await wire.exchange([UserMessage((Text('retry'),))], [], None)
@@ -150,11 +150,11 @@ async def test_silent_completion_ends_the_turn_and_replays_as_sent_live(
 ):
   requests, replies = transport
   replies.extend([silent, response(), response()])
-  live = Chat(Recipe(), {'api_key': 'fixture-key'})
+  live = Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'})
   leg = await live.exchange([SystemPrompt('system'), UserMessage((Text('go'),))], [], None)
   assert leg.reply == ''
   await live.exchange([Notification('news')], [], None)
-  restored = Chat(Recipe(), {'api_key': 'fixture-key'})
+  restored = Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'})
   restored.restore(Prefix('system', (step('user_input', 'go'), step('llm_call', leg.record))))
   await restored.exchange([Notification('news')], [], None)
   assert (
@@ -183,7 +183,7 @@ async def test_restore_uses_steps_not_recorded_requests_and_omits_stopped_legs(
   requests, replies = transport
   raw = response(None, reasoning=reasoning, calls=[call('')], stop='tool_calls')
   raw['choices'][0]['message'].update(refusal=None, annotations=[], audio=None)
-  wire = Chat(Recipe(), {'api_key': 'fixture-key'})
+  wire = Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'})
   wire.restore(
     Prefix(
       'system',
@@ -231,7 +231,7 @@ async def test_structured_json_schema_validation_capacity_and_no_history(
   monkeypatch.setattr('bro.llm.retry.asyncio_sleep', wait)
   capacity = response(stop='insufficient_system_resource')
   replies.extend([capacity] * 7 if exhausted else [capacity, response('{"answer":42}')])
-  wire = Chat(Recipe(reasoning_effort='none'), {'api_key': 'fixture-key'})
+  wire = Chat(Recipe(model='deepseek-v4-pro', reasoning_effort='none'), {'api_key': 'fixture-key'})
   wire.restore(Prefix('not part of structured', ()))
   if exhausted:
     with pytest.raises(LLMStopped, match='capacity'):
@@ -264,7 +264,7 @@ async def test_structured_rejects_invalid_or_uncompleted_reply(transport, text, 
   _, replies = transport
   replies.append(response(text, stop=stop))
   with pytest.raises(error):
-    await Chat(Recipe(), {'api_key': 'fixture-key'}).structured(
+    await Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'}).structured(
       'question', Answer, (Text('input'),), None
     )
 
@@ -274,7 +274,9 @@ async def test_vision_is_gated_before_sending_and_encodes_permitted_image(transp
   requests, replies = transport
   content = (File(b'image fixture', 'image/png'),)
   with pytest.raises(UnsupportedContent, match='image.*not supported'):
-    await Chat(Recipe(), {'api_key': 'fixture-key'}).exchange([UserMessage(content)], [], None)
+    await Chat(Recipe(model='deepseek-v4-pro'), {'api_key': 'fixture-key'}).exchange(
+      [UserMessage(content)], [], None
+    )
   assert not requests
   replies.append(response())
   await Chat(Recipe(model='deepseek-flash'), {'api_key': 'fixture-key'}).exchange(

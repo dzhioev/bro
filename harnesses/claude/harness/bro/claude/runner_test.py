@@ -12,7 +12,6 @@ import pytest
 
 import bro.claude.runner as ride_runner
 from bro import brash_policy, watches
-from bro.anthropic import declaration as anthropic
 from bro.brash import Policy
 from bro.bro import BaseBro
 from bro.claude.claude_argv import ClaudeLaunch
@@ -246,10 +245,7 @@ class TestSessionRun:
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
       assert h.start_recorder.call_args.args[0] == tmp_path
-      # the launch recipe lands on the trail header as native.llm
-      assert h.start_recorder.call_args.kwargs['llm'] == (
-        anthropic.Recipe(model=None, effort=None).dump()
-      )
+      assert h.start_recorder.call_args.kwargs['llm'] == _spec().llm_spec.dump()
       assert h.start_recorder.return_value.stop.call_count == 1
 
   def test_claude_and_its_tool_server_read_usage_from_the_file_the_runner_keeps_current(
@@ -305,7 +301,7 @@ class TestSessionRun:
   def test_recorder_carries_the_launch_recipe(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     with _Harness(tmp_path) as h:
-      assert ride_runner.run_session(_spec(llm=':fable5:high')) == 0
+      assert ride_runner.run_session(_spec(llm='anthropic:claude-fable-5,effort=high')) == 0
       assert h.start_recorder.call_args.kwargs['llm'] == {
         'type': 'anthropic',
         'model': 'claude-fable-5',

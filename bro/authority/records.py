@@ -7,28 +7,19 @@ from .authority import Authority, Entry, LazyEntry, Pair
 from .patterns import Descriptor, PatternSet
 from .rules import Request
 from .syntax import Syntax, parse_pattern, parse_permission, render_pattern, render_permission
-from .values import Symbol, Value
+from .values import Value
 
 
 def dump_values(values: Mapping[str, Value]) -> dict[str, Any]:
   return {
-    name: {'symbol': value.name}
-    if isinstance(value, Symbol)
-    else sorted(value)
-    if isinstance(value, frozenset)
-    else value
-    for name, value in values.items()
+    name: sorted(value) if isinstance(value, frozenset) else value for name, value in values.items()
   }
 
 
 def load_values(values: Mapping[str, Any]) -> dict[str, Value]:
   result = {}
   for name, value in values.items():
-    if isinstance(value, dict):
-      if set(value) != {'symbol'} or not isinstance(value['symbol'], str):
-        raise ValueError(f'invalid recorded value for {name}')
-      result[name] = Symbol(value['symbol'])
-    elif isinstance(value, list):
+    if isinstance(value, list):
       if any(type(member) is not str for member in value) or len(set(value)) != len(value):
         raise ValueError(f'invalid recorded subset for {name}')
       result[name] = frozenset(value)

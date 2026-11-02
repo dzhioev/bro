@@ -250,15 +250,15 @@ def test_a_gift_of_an_absent_instance_is_admitted_without_reading_its_material(t
 
 
 def test_harness_and_llm_choices_do_not_answer_to_the_summoners_credentials(tmp_path):
-  admitted = _request(tmp_path, harness='claude', llm=':opus5')
+  admitted = _request(tmp_path, harness='claude', llm='anthropic:claude-opus-5')
   launch = cast(SummonLaunchSpec, cast(Spawn, BroType(Host()).launch(admitted)).launch)
   assert launch.harness == 'claude'
   assert launch.record.descriptor.values['provider'] == 'anthropic'
 
 
 def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
-  with pytest.raises(LaunchDenied, match="the claude harness cannot run recipe 'openai:sol'"):
-    _request(tmp_path, harness='claude', llm='openai:sol')
+  with pytest.raises(LaunchDenied, match="the claude harness cannot run provider 'openai'"):
+    _request(tmp_path, harness='claude', llm='openai:gpt-6.1-sol')
 
 
 def _host_recipes(recipe):
@@ -311,7 +311,7 @@ def test_manual_preparation_publishes_the_bro_default_talk(tmp_path):
 
 @pytest.mark.parametrize('passthrough', [False, True])
 def test_summon_admission_and_join_command_forward_passthrough(tmp_path, passthrough):
-  text = 'openai:gpt-7:high' + ('+passthrough' if passthrough else '')
+  text = 'openai:gpt-7' + ('+passthrough' if passthrough else '') + ',reasoning_effort=high'
   if not passthrough:
     with pytest.raises(LaunchDenied, match='gpt-7.*passthrough'):
       _request(tmp_path, llm=text)
@@ -321,6 +321,7 @@ def test_summon_admission_and_join_command_forward_passthrough(tmp_path, passthr
   launch = cast(SummonLaunchSpec, cast(Spawn, BroType(host).launch(admitted)).launch)
   spec = bro_worker._child_session_spec(launch, 'child', None)
   assert spec.llm_spec.passthrough
-  assert spec.llm_spec.selection()['model'] == 'gpt-7'
+  assert spec.llm_spec.model == 'gpt-7'
   command = bro_worker._joined_ride_command(launch)
-  assert '--passthrough' in command and '--model gpt-7' in command
+  assert '--llm ' + text in command
+  assert '--model' not in command and '--passthrough' not in command

@@ -63,7 +63,7 @@ def configure(monkeypatch, recipe):
 
 @pytest.mark.asyncio
 async def test_mu_pdf_route_from_path_returns_validated_result(endpoint, monkeypatch, tmp_path):
-  configure(monkeypatch, 'openai:terra:low')
+  configure(monkeypatch, 'openai:gpt-5.6-terra,reasoning_effort=low')
   path = tmp_path / 'march.pdf'
   path.write_bytes(b'pdf fixture')
   result = await mu.aio(
@@ -91,7 +91,8 @@ async def test_mu_pdf_route_from_path_returns_validated_result(endpoint, monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-  'recipe,model', [('deepseek:pro', 'deepseek-v4-pro'), ('deepseek:flash', 'deepseek-flash')]
+  'recipe,model',
+  [('deepseek:deepseek-v4-pro', 'deepseek-v4-pro'), ('deepseek:deepseek-flash', 'deepseek-flash')],
 )
 async def test_mu_model_gate_refuses_pdf_without_a_request(endpoint, monkeypatch, recipe, model):
   configure(monkeypatch, recipe)
@@ -107,9 +108,12 @@ async def test_mu_chat_protocol_gate_refuses_model_accepted_pdf(endpoint, monkey
   monkeypatch.setattr(
     ChatRecipe,
     'MODEL_INPUTS',
-    {**ChatRecipe.MODEL_INPUTS, ChatRecipe().model: frozenset({'application/pdf'})},
+    {
+      **ChatRecipe.MODEL_INPUTS,
+      ChatRecipe(model='deepseek-v4-pro').model: frozenset({'application/pdf'}),
+    },
   )
-  configure(monkeypatch, 'deepseek:pro')
+  configure(monkeypatch, 'deepseek:deepseek-v4-pro')
   with pytest.raises(UnsupportedContent, match='Chat cannot carry application/pdf'):
     await mu.aio('Extract totals.', Totals, File(b'pdf', 'application/pdf'))
   assert endpoint == []
@@ -120,7 +124,7 @@ async def test_mu_chat_protocol_gate_refuses_model_accepted_pdf(endpoint, monkey
   'filename,encoded', [(None, 'file'), ('scans/march.pdf', 'scans/march.pdf')]
 )
 async def test_mu_preserves_filename_or_sends_placeholder(endpoint, monkeypatch, filename, encoded):
-  configure(monkeypatch, 'openai:terra:low')
+  configure(monkeypatch, 'openai:gpt-5.6-terra,reasoning_effort=low')
   await mu.aio('Extract totals.', Totals, File(b'pdf', 'application/pdf', filename))
   assert endpoint[0][1]['input'][1]['content'] == [
     {
@@ -133,28 +137,26 @@ async def test_mu_preserves_filename_or_sends_placeholder(endpoint, monkeypatch,
 
 
 def test_mu_empty_content_sends_nothing(endpoint, monkeypatch):
-  configure(monkeypatch, 'openai:terra:low')
+  configure(monkeypatch, 'openai:gpt-5.6-terra,reasoning_effort=low')
   with pytest.raises(ValueError, match='must not be empty'):
     mu('Extract totals.', Totals)
   assert endpoint == []
 
 
-@pytest.mark.parametrize('model', ['flash', 'pro'])
+@pytest.mark.parametrize('model', ['deepseek-flash', 'deepseek-v4-pro'])
 def test_diagnostic_command_attachment_route(endpoint, monkeypatch, tmp_path, model):
-  configure(monkeypatch, 'deepseek:flash')
+  configure(monkeypatch, 'deepseek:deepseek-flash')
   path = tmp_path / 'chart.png'
   path.write_bytes(b'png')
   arguments = [
     'llm',
-    '--provider',
-    'deepseek',
-    '--model',
-    model,
+    '--llm',
+    f'deepseek:{model}',
     'Describe this.',
     '--attach',
     str(path),
   ]
-  if model == 'pro':
+  if model == 'deepseek-v4-pro':
     with pytest.raises(UnsupportedContent, match='image/png.*deepseek-v4-pro'):
       main(arguments)
     assert endpoint == []
@@ -180,7 +182,7 @@ def test_diagnostic_command_attachment_route(endpoint, monkeypatch, tmp_path, mo
 async def test_mu_tiff_passes_the_model_gate_only_with_passthrough(
   endpoint, monkeypatch, passthrough
 ):
-  configure(monkeypatch, 'openai:sol' + ('+passthrough' if passthrough else ''))
+  configure(monkeypatch, 'openai:gpt-6.1-sol' + ('+passthrough' if passthrough else ''))
   content = File(b'tiff fixture', 'image/tiff', 'scan.tiff')
   if not passthrough:
     with pytest.raises(UnsupportedContent, match='image/tiff'):
@@ -195,24 +197,24 @@ async def test_mu_tiff_passes_the_model_gate_only_with_passthrough(
 
 @pytest.mark.asyncio
 async def test_mu_unlisted_material_requires_passthrough_before_opening_wire(endpoint, monkeypatch):
-  from bro.llm.providers import LLMSelectionError
+  from bro.llm.providers import RecipeError
 
-  configure(monkeypatch, 'openai:gpt-7:low')
+  configure(monkeypatch, 'openai:gpt-7,reasoning_effort=low')
   with pytest.raises(ValueError, match='mu credential:.*gpt-7.*passthrough') as caught:
     await mu.aio('Extract totals.', Totals, Text('Read this.'))
   assert endpoint == []
-  assert isinstance(caught.value.__cause__, LLMSelectionError)
-  configure(monkeypatch, 'openai:gpt-7:low+passthrough')
+  assert isinstance(caught.value.__cause__, RecipeError)
+  configure(monkeypatch, 'openai:gpt-7+passthrough,reasoning_effort=low')
   assert await mu.aio('Extract totals.', Totals, Text('Read this.')) == Totals(total=42)
   assert endpoint[0][1]['model'] == 'gpt-7'
 
 
 def test_diagnostic_command_refuses_unlisted_models(endpoint, monkeypatch):
-  from bro.llm.providers import LLMSelectionError
+  from bro.llm.providers import RecipeError
 
-  configure(monkeypatch, 'openai:sol')
-  with pytest.raises(LLMSelectionError, match='gpt-7.*passthrough'):
-    main(['llm', '--provider', 'openai', '--model', 'gpt-7', 'Read this.'])
+  configure(monkeypatch, 'openai:gpt-6.1-sol')
+  with pytest.raises(RecipeError, match='gpt-7.*passthrough'):
+    main(['llm', '--llm', 'openai:gpt-7', 'Read this.'])
   assert endpoint == []
 
 
@@ -235,7 +237,7 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
 
     def __init__(self, **kwargs):
       super().__init__(**kwargs)
-      self.recipe = ResponsesRecipe()
+      self.recipe = ResponsesRecipe(model='gpt-5.6-terra')
 
   register_test_bros(Reader)
   from bro.base import host_config
@@ -244,7 +246,7 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
     json.dumps({'defaults': {'llm': {'bro': 'openai:gpt-5.6-terra'}}})
   )
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', tmp_path / 'bro-config.json')
-  configure(monkeypatch, 'openai:sol')
+  configure(monkeypatch, 'openai:gpt-6.1-sol')
   store = LocalStore(tmp_path / 'trails')
   monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   monkeypatch.setattr('bro.trails.store.default_store', lambda: store)
@@ -266,5 +268,5 @@ def test_chat_fork_selects_the_persona_recipe_over_recorded_unlisted_model(
   )
   declared = Reader().recipe
   assert declared is not None
-  assert endpoint[-1][1]['model'] == declared.selection()['model']
+  assert endpoint[-1][1]['model'] == declared.model
   assert endpoint[0][1]['model'] == 'gpt-7'

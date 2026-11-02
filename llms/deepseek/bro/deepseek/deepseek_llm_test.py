@@ -23,7 +23,7 @@ async def test_deepseek_protocol_shapes_and_native_tool_roster(tmp_path, request
   with host_credential_store():
     if not credentials.available('deepseek'):
       pytest.skip('needs the deepseek credential')
-    recipe = Recipe(reasoning_effort='low')
+    recipe = Recipe(model='deepseek-v4-pro', reasoning_effort='low')
     roster = await managed_roster(monkeypatch, recipe)
     client = openai.AsyncOpenAI(
       api_key=credentials.get_json('deepseek')['api_key'], base_url=recipe.ENDPOINT, max_retries=0

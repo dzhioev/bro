@@ -6,7 +6,6 @@ from typing import Optional
 
 from bro.base import log
 from bro.base.args import REMAINDER, Parser
-from bro.llm import providers
 from bro.workspace.banner import banner
 from bro.workspace.paths import fresh_workspace_name, project_root
 from ride import operator, pending_launch
@@ -185,7 +184,7 @@ def build_parser() -> Parser:
   add_harness_flags(scope)
   from bro.launch.llm_flags import add_llm_flags
 
-  add_llm_flags(scope, effort_help='reasoning effort level', fast_help='enable fast mode')
+  add_llm_flags(scope)
 
   banner_parser = subparsers.add_parser('banner', help='print the session banner')
   banner_parser.add_argument('--llm', action='store_true', help='emit plain key:value lines')
@@ -279,12 +278,6 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if args['hold'] is None:
     args['hold'] = default_hold(solo=solo, isolation=isolation)
   selected_harness = args.pop('harness')
-  recipe_options = {name: args.pop(name) for name in providers.SELECTION_OPTIONS if name in args}
-  recipe_options = {
-    name: value
-    for name, value in recipe_options.items()
-    if value is not None and value is not False
-  }
   try:
     args['env'] = env_assignments(args['env'])
   except ValueError as error:
@@ -323,7 +316,6 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
     resolved_llm=resolved_llm,
     solo=solo,
     resume=False,
-    recipe_options=recipe_options,
     harness_set=selected_harness is not None,
     tree=tree,
     runtime_bundle=runtime_bundle,
@@ -491,7 +483,6 @@ def main(argv: list[str]) -> Optional[int]:
       bro=args['bro'],
       harness=args['harness'],
       llm=args['llm'],
-      recipe_options={key: args[key] for key in providers.SELECTION_OPTIONS if args[key]},
     )
   assert command == 'banner'
   return banner(llm=args['llm'])

@@ -13,23 +13,23 @@ Core imports no other workspace member.
 The following modules ship from `bro-native`:
 
 - `run.py` — parser and execution for `bro run <bro> <input>`.
-  It accepts the native LLM flags and `--hold`.
+  It accepts the `--llm` recipe text and `--hold`.
   It creates the bro under the resolved native recipe, runs it under the ask display preset, and records with surface `ask`.
 - `call.py` — parser and UI for `bro chat <bro> [what]`.
   An omitted message opens an empty REPL.
   The stream UI owns stdin through one daemon reader and races its line queue against the run inbox without abandoning a read.
   The Textual UI awaits the same inbox in a worker;
   either calls `Runner.wake()` when background news arrives while idle.
-  `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the bro class's current recipe;
+  `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the installation's configured recipe;
   omitting the id selects the bro's newest recorded call.
   The suppressed `--resolved-llm` (here and on `bro run`) is the managed bro harness's exact-recipe contract:
-  it carries the recipe the launch admitted and excludes the selection flags;
+  it carries the recipe the launch admitted and excludes `--llm`;
   the suppressed `--continue-trail` requires it and continues a recorded trail under it.
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.
 
-Core's `llm_flags.py` provides shared `--provider` / `--model` / `--effort` / `--fast` / `--passthrough` / `--llm` registration, preset expansion, and canonicalization.
-Recipe resolution belongs to each harness implementation.
+Core's `llm_flags.py` registers `--llm` with complete recipe text.
+Recipe resolution belongs to `ride.authority_scope.resolve_recipe`.
 `bro-native`'s `bro/run.py` is the lightweight dispatcher;
 it imports `run.py` or `call.py` only after selecting a launch verb, so metadata commands do not pull in the launcher stack.
 
@@ -51,12 +51,12 @@ A recorded conversation's exit hint names `bro chat <bro> --fork <trail-id>`.
 
 The human aliases are not part of this distribution:
 `bro-ride` declares `ask` as `ride solo` and `call` as `ride along`.
-They add no implied `--fast` or other defaults.
+They add no implied recipe or other defaults.
 
 ## Naming the LLM
 
-Every native run and every managed mode registers one flag set from `llm_flags.py`.
-`--llm` takes the explicit-selection grammar in `bro/reference/ride.md`, “Recipe selection”.
+Every native run and every managed mode registers `--llm` from `llm_flags.py`.
+`--llm` takes the complete recipe grammar in `bro/reference/ride.md`, “Recipe selection”.
 Managed and in-process launches resolve their configured recipe through the installation's home-layer stack.
 The managed launch passes its admitted recipe to the inner session verbatim.
 A recipe for a provider the harness does not serve is refused, naming the installed harnesses that serve it.

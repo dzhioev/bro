@@ -12,7 +12,6 @@ if TYPE_CHECKING:
   from bro.bro import BaseBro, LiveRun
   from bro.llm.llm import Recipe
   from bro.llm.mcp import Tool
-  from bro.llm.providers import LLMSelection
   from bro.mcp import MCPServerSpec, Reach
 
 SessionEndReason = Literal['ok', 'raised']
@@ -88,11 +87,6 @@ class Harness:
     del result, end_reason
     raise RuntimeError(f'harness {self.name!r} cannot end this session')
 
-  def runs(self, selection: 'LLMSelection') -> bool:
-    """Whether `selection` names a recipe this harness runs, a model named alone
-    looked up among `llm_providers`."""
-    return len(selection.providers(self.llm_providers)) > 0
-
   def check_recipe(self, recipe: 'Recipe') -> None:
     from bro.llm.providers import RecipeError
 
@@ -102,30 +96,6 @@ class Harness:
         f'it serves {", ".join(self.llm_providers) or "no provider"}; '
         f'{recipe.TYPE} runs on {_harnesses_running(recipe.TYPE)}'
       )
-
-  def resolve_recipe(self, base: 'Recipe | None', selection: 'LLMSelection') -> 'Recipe':
-    """`selection` over the standing `base`, among `llm_providers`; a recipe this
-    harness does not run is refused, naming the installed harnesses that do."""
-    from bro.llm.providers import LLMSelectionError, default_spec, known_names, resolve
-
-    selected = default_spec(selection.provider) if selection.provider is not None else None
-    if selection.provider is not None and not self.runs(selection):
-      served = ', '.join(self.llm_providers) or 'no provider'
-      elsewhere = '; '.join(
-        f'{provider} runs on {_harnesses_running(provider)}'
-        for provider in selection.providers(known_names())
-      )
-      raise LLMSelectionError(
-        f'the {self.name} harness cannot run recipe {selection.format()!r}: '
-        f'it serves {served}; {elsewhere}'
-        + (f'; wire {selected.WIRE!r} is not served' if selected is not None else '')
-      )
-    spec = resolve(base, selection, self.llm_providers)
-    if spec.TYPE not in self.llm_providers:
-      raise LLMSelectionError(
-        f'the {self.name} harness cannot run provider {spec.TYPE!r} on wire {spec.WIRE!r}'
-      )
-    return spec
 
 
 def _harnesses_running(provider: str) -> str:

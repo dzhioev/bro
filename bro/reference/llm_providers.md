@@ -39,16 +39,12 @@ The shared interfaces are [Recipe](../llm/llm.py) and the [provider roster](../l
   add `price_table_from_content` for retained benchmark tables.
   Record source and effective date, use the provider's raw billing vocabulary, and leave unknown models unpriced.
   Export `MODEL_SLUG` and `model_family(slug)` only when the generic dated-slug label is insufficient.
-- The launch selection API also requires `DEFAULT_MODEL`, `MODELS` (short names to full ids), and `MODEL_ID` when verbatim model ids need a pattern.
-  The default and alias targets must be listed in `MODEL_INPUTS`.
-  `selection_fields`, `deferred_fields` and `effort_values` support selection and reconstruction;
-  `with_effort()` maps neutral levels onto the provider's documented scale, and `fast()` is implemented only when supported.
-  This selection API is separate from complete recipe text below.
-  `require_admitted` checks the final recipe at authority settlement, native launch and wire opening;
-  a listed selection can override an unlisted declaration.
-  The deferred Anthropic session model remains admitted for this API.
+- A recipe's `model: str` is required, with no default.
+  Provider fields use their native vocabulary; there is no neutral effort vocabulary.
+  `require_admitted` checks bound text and every recipe entering a run, including one rebuilt from a record.
+  `Harness.check_recipe` refuses a provider it does not serve without changing the harness.
 - `known_names()` reads sorted metadata without imports.
-  Explicit selection loads only the named declaration and fails by name if it is unavailable;
+  Explicit recipe binding loads only the named declaration and fails by name if it is unavailable;
   searches warn and skip broken declarations, without breaking unrelated launches.
   Stored recipes resolve by their `type` through `Recipe.from_dict()`.
   A native launch requires a client entry for the recipe's wire;
@@ -79,7 +75,7 @@ Whitespace, empty slots, unknown fields and values of the wrong type are refused
 
 For example, `openai:gpt-5.6-terra,service_tier=priority,reasoning_effort=high` canonicalizes to `openai:gpt-5.6-terra,reasoning_effort=high,service_tier=priority`.
 Anthropic's native fast knob is `fast_mode=true`; `+fast` is not a framework flag in this grammar.
-Launch flags and configuration still take the selection API described under [operator adoption](#operator-adoption), not this complete text API.
+Launch flags, configuration, `mu` material and the required `bro.native.llm --llm` diagnostic all use this text.
 
 `Recipe.dump()` stores `type`, `model` and every provider field, adding `passthrough` only when true.
 `Recipe.from_dict(data)` requires `type` and `model`, uses class defaults for omitted fields and refuses unknown keys or wrongly typed values.
@@ -208,7 +204,7 @@ an unknown wire degrades to a forensic event without losing its record.
    - [run_tests.py](../../local/bro/local/run_tests.py): `DISTRIBUTIONS`, unit files and the opt-in live probe in `LLM_PYTEST_FILES`;
    - [environment_policy_test.py](../../local/bro/local/environment_policy_test.py): source sweep coverage (the `llms` and `wires` directory families are already included);
    - root [uv.lock](../../uv.lock): relock and sync with all packages, groups and extras so entry points are installed.
-3. **Declare credentials and recipes.** Add the import-free credential dictionary, model aliases, id shape, effort mapping,
+3. **Declare credentials and recipes.** Add the import-free credential dictionary, model input and retirement tables, native fields,
    provider request options, transient-error classifier, failure signatures and provenance-bearing price table.
    Round-trip recipes and tables, test invalid inputs and content rejection, and verify bare installation imports no SDK or harness.
    [DeepSeek's declaration tests](../../llms/deepseek/bro/deepseek/declaration_test.py) and the distribution tests exercise these boundaries.
@@ -243,14 +239,14 @@ an unknown wire degrades to a forensic event without losing its record.
 
 ## Adding a model to an existing provider
 
-Use the existing declaration: add a `MODELS` alias, a `MODEL_INPUTS` row copied from the vendor’s input-format documentation, and a price row, and check the vendor's returned snapshot ids remain priced.
+Use the existing declaration: add a `MODEL_INPUTS` row copied from the vendor’s input-format documentation, and a price row, and check the vendor's returned snapshot ids remain priced.
 Add newly documented filename suffixes to `EXTENSION_TYPES` in `bro.llm.wire`, choosing a MIME type every vendor accepting that format lists.
 When no single type serves them all, leave the suffix out and require callers to pass `mime_type` explicitly.
-Test knob defaults, effort mapping, content support, usage and pricing for any model-specific differences.
+Test knob defaults, native field delivery, content support, usage and pricing for any model-specific differences.
 A new model need not require a new wire, credential or provider distribution.
 Update and run the provider's live probe, refresh captured fixtures, and adjust presets and operator recipes that select the model.
 An unlisted model is refused unless the recipe carries `+passthrough`, which also bypasses its model-input checks, but not the wire’s protocol constraints.
-To retire a model, remove its aliases and `MODEL_INPUTS` row, add its id to `RETIRED_MODELS` with the date the framework stops admitting it, and keep its price row.
+To retire a model, remove its `MODEL_INPUTS` row, add its id to `RETIRED_MODELS` with the date the framework stops admitting it, and keep its price row.
 OpenAI's dated snapshot ids remain priced through its table's snapshot mapping.
 Models outside both tables can run under `+passthrough` but remain unpriced.
 
@@ -278,7 +274,7 @@ An older installation refuses that suffix; a root and all its children retain th
    An unsupported foreign value fails only the starts that use it, naming the plug-in to install and the installation's own bro layer as an override.
    See [ride](ride.md#recipe-selection) for flags and harness selection.
 4. Check without starting a session:
-   `ride scope --bro bro-dev --harness bro --llm deepseek:pro:high` must show the selected provider and key presence.
+   `ride scope --bro bro-dev --harness bro --llm deepseek:deepseek-v4-pro,reasoning_effort=high` must show the selected provider and key presence.
    Then run the opt-in live probe before a full task, and confirm a recorded tool loop and same-wire resume.
    Do not infer capability from an offline fixture pass.
 5. For auxiliary calls, configure a `mu` credential with a default `{llm, credential}` pair and optional role pairs.
@@ -306,7 +302,7 @@ such a completion is rejected without advancing history, so its inputs survive c
 The route tests compare live continuation and restored requests through those failures and through a silent turn end.
 The live probe saves evidence for the protocol details that documented fixtures cannot establish.
 
-Select `deepseek:pro:high` for any suitable persona rather than copying it into a provider-specific persona.
+Select `deepseek:deepseek-v4-pro,reasoning_effort=high` for any suitable persona rather than copying it into a provider-specific persona.
 The [cross-provider summon example](permissions_cheatsheet.md#run-a-child-on-another-provider) covers credential picks and launch authority.
 DeepSeek's costs are peak-rate upper bounds, not timestamp-aware bills;
 its data terms and weaker safeguards require deliberate routing of inputs and normal review.

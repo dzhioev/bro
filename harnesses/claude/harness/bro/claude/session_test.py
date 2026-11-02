@@ -77,7 +77,7 @@ def _session(tmp_path: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    resolved_llm=Recipe(model=None, effort=None).dump(),
+    resolved_llm=Recipe(model='claude-opus-5-5', effort=None).dump(),
     solo=True,
     resume=False,
     bro='bro',

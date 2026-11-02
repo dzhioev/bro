@@ -83,12 +83,7 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     'every level but guided skips permission prompts (unsandboxed when combined with --unboxed). '
     'defaults: unattended for ride solo; attended for boxed ride along and dive-in, guided when unboxed',
   )
-  add_llm_flags(
-    parser,
-    effort_help='reasoning effort level, resolved within the selected harness and provider',
-    fast_help='enable the selected recipe’s fast mode; support and behavior depend on the '
-    'harness and provider',
-  )
+  add_llm_flags(parser)
   add_scope_flags(parser)
   parser.add_argument(
     '--export',

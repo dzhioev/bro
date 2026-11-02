@@ -21,7 +21,6 @@ from bro.claude.claude_config import (
 )
 from bro.claude.provisioning import claude_code_version
 from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
-from bro.llm.providers import LLMSelection, parse
 from bro.mcp import Reach
 from bro.run_lifecycle import RunLifecycle
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
@@ -37,8 +36,6 @@ if TYPE_CHECKING:
 
 
 _AUTH_SECRET = 'claude_code'
-# names neither model nor effort, so Claude Code runs its own current default
-_SESSION_DEFAULT = Recipe(model=None, effort=None)
 
 
 def llm_spec(spec: 'SessionSpec | SessionRun') -> Recipe:
@@ -131,14 +128,6 @@ class ClaudeHarness(Harness):
 
   def scope_recipe(self) -> ScopeRecipe:
     return _SCOPE
-
-  def resolve_llm(self, value: str | None, bro_name: str) -> Recipe:
-    del bro_name
-    selection = LLMSelection() if value is None else parse(value)
-    resolved = self.resolve_recipe(_SESSION_DEFAULT, selection)
-    if not isinstance(resolved, Recipe):
-      raise TypeError(f'the claude harness resolved an incompatible recipe: {resolved.TYPE}')
-    return resolved
 
   def preflight_auth(self, spec: 'SessionSpec', scoped: ScopedSecrets) -> Optional[str]:
     del spec

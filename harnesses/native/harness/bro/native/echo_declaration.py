@@ -8,11 +8,6 @@ from typing import Any, ClassVar, Optional
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
 
-DEFAULT_MODEL = 'echo'
-
-# Echo answers whatever it is asked with, so it has no model roster to name.
-MODELS: dict[str, str] = {}
-
 # and no API to fail against
 FAILURE_SIGNATURES: tuple[llm_llm.FailureSignature, ...] = ()
 
@@ -22,7 +17,7 @@ class PriceTable:
   models: Mapping[str, Decimal]
 
 
-PRICE_TABLE = PriceTable(MappingProxyType({DEFAULT_MODEL: Decimal(0)}))
+PRICE_TABLE = PriceTable(MappingProxyType({'echo': Decimal(0)}))
 PRICE_TABLE_SHA256 = pricing.content_sha256(
   {model: str(rate) for model, rate in PRICE_TABLE.models.items()}
 )
@@ -44,8 +39,6 @@ class Recipe(llm_llm.Recipe):
 
   TYPE: ClassVar[str] = 'echo'
   WIRE: ClassVar[str] = 'echo'
-  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {DEFAULT_MODEL: frozenset()}
+  MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {'echo': frozenset()}
 
   RETIRED_MODELS: ClassVar[Mapping[str, date]] = {}
-
-  model: str = DEFAULT_MODEL

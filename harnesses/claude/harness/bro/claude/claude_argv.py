@@ -5,8 +5,8 @@ ride-injected append prompt, and its bro's session-local MCP namespaces mounted
 as its only MCP servers. Model, the merged `--settings` (fastMode + statusLine +
 attribution + hooks, kept on), `--effort`, a resume, and prompt seeding are
 handled once, identically wherever the session runs. Model, effort and fast mode
-come off the session's anthropic `Recipe` (`SessionRun.llm_spec`); a model or
-effort it leaves unnamed is Claude Code's own default.
+come off the session's anthropic `Recipe` (`SessionRun.llm_spec`); unset
+effort is Claude Code's own default.
 """
 
 import contextlib
@@ -182,7 +182,7 @@ def build_claude_launch(
     'attribution': _ATTRIBUTION,
     **HOOKS_ON,
   }
-  argv = [] if llm.model is None else ['--model', llm.model]
+  argv = ['--model', llm.model]
   bro = create_bro(spec.bro)
   with contextlib.ExitStack() as server_stack:
     servers = persona_servers(bro, spec.hold)

@@ -54,7 +54,7 @@ def launch_llm_spec(
       fields['llm'] = llm
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     descriptor = reading.rules.normalize(requested, reading)
-    return checked_recipe(requested, descriptor, reading)
+    return checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm'))
 
 
 def scoped_secrets(
@@ -87,15 +87,7 @@ def scoped_secrets(
       'revoke': list(revoke),
     }
     if llm_spec is not None:
-      fields.update(provider=llm_spec.TYPE, **llm_spec.selection())
-      fields.update(
-        {
-          name: True
-          for name in providers.SELECTION_FLAGS
-          if name != 'fast' and getattr(llm_spec, name)
-        }
-      )
-      fields = {name: value for name, value in fields.items() if value is not None}
+      fields['llm'] = providers.format_recipe(llm_spec)
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     return credentials_for(
       reading.rules.start(requested, reading.operator(), reading), recording=recording

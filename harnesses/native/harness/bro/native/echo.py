@@ -42,7 +42,7 @@ class Echo(Wire):
   ) -> Leg:
     items = [self._encode(item) for item in inputs]
     request = {
-      'model': self.recipe.selection()['model'],
+      'model': self.recipe.model,
       'input': self.history + items,
       'tools': [],
     }

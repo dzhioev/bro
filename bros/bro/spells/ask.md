@@ -51,7 +51,7 @@ Optional knobs normally follow only from the request:
 - `into` bases a started child on a git ref rather than this workspace's current `HEAD`.
   Uncommitted changes never transfer.
 - `hold` sets the child's user-involvement level and defaults to unattended.
-- `harness` selects `bro` or `claude`, and `llm` selects the recipe within it.
+- `harness` selects `bro` or `claude`, and `llm` supplies complete recipe text within it, replacing the configured recipe whole.
 - `placement` selects `boxed`, `unboxed`, or `join`.
   An unmarked request is boxed; it never falls back to unboxed or joins implicitly.
   A join is only for intended concurrent work in the same tree and refuses `into` and `manual`.

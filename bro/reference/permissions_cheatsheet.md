@@ -201,18 +201,18 @@ Install `bro-deepseek[client]` in the runtime and place the `deepseek` credentia
 Check the prospective recipe on the host:
 
 ```sh
-ride scope --bro bro-dev --harness bro --llm deepseek:pro:high
+ride scope --bro bro-dev --harness bro --llm deepseek:deepseek-v4-pro,reasoning_effort=high
 ```
 
 The descriptor names `provider: deepseek`, and the credentials show `deepseek+: PRESENT` or `MISSING`.
 Inside a coordinator allowed to summon `bro-dev`:
 
 ```sh
-summon --harness bro --llm deepseek:pro:high bro-dev 'Work on the repository-local task.'
+summon --harness bro --llm deepseek:deepseek-v4-pro,reasoning_effort=high bro-dev 'Work on the repository-local task.'
 ```
 
-Or call `bro::summon(target='bro-dev', harness='bro', llm='deepseek:pro:high', prompt='Work on the repository-local task.')`.
-No new persona or provider grant is needed: provider, model and effort are open launch options.
+Or call `bro::summon(target='bro-dev', harness='bro', llm='deepseek:deepseek-v4-pro,reasoning_effort=high', prompt='Work on the repository-local task.')`.
+No new persona or provider grant is needed: provider, model and passthrough are open launch options.
 The selected provider's LLM credential is held automatically at the configured pick;
 `--pass deepseek+work` selects a different stored instance, and a missing key refuses the start.
 A running root uses its frozen installation, so restart it after installing the plug-in.

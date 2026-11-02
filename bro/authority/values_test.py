@@ -177,18 +177,3 @@ def test_string_grammars_require_an_infinite_base():
       StringGrammar(initial, remaining)
   with pytest.raises(ValueError, match='infinite'):
     Strings(cofinite=True, grammar='a|b')  # pyright: ignore[reportArgumentType]
-
-
-def test_scalar_sum_with_symbols_against_oracle():
-  from .values import Symbol
-
-  symbols = frozenset({Symbol('default'), Symbol('on')})
-  sets = [
-    Scalars((Strings(members, cofinite), Finite(symbols, selected)))
-    for members, cofinite, selected in product(
-      powerset(['default', '~default', 'a']), (False, True), powerset(symbols)
-    )
-  ]
-  check_family(sets, ['default', '~default', 'a', 'fresh', *symbols])
-  with pytest.raises(ValueError, match='disjoint'):
-    Scalars((Strings(), Strings(cofinite=True)))

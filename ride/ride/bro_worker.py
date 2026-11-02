@@ -18,7 +18,6 @@ from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_request
 from bro.authority.rules import Mission, Prepared
 from bro.base import log
-from bro.llm import providers
 from bro.quest import BRO
 from bro.summon import (
   DEFAULT_TALK,
@@ -136,6 +135,7 @@ class SummonLaunchSpec:
   parent: str
   parent_tree: Path
   summoner: dict[str, Any] | None
+  llm: str | None = None
   repo: Repository | Path | None = None
   into: str | None = None
   share: tuple[str, ...] = ()
@@ -174,8 +174,7 @@ def _child_session_spec(
   *,
   isolation: Optional[Isolation] = None,
 ) -> SessionSpec:
-  """The summoned child's run as an unpinned solo `SessionSpec`, its `llm`
-  settled over the host's per-bro default like a launch's own.
+  """The summoned child as an unpinned solo `SessionSpec` on its admitted recipe.
 
   A started party records its resume variant;
   a joined member uses the spec only to build its `do-ride` argv and environment."""
@@ -189,7 +188,9 @@ def _child_session_spec(
     raise ValueError('summoned session isolation is unresolved')
   repo = None if launch.repo is None else as_repository(launch.repo).identity
   spec = checked_recipe(
-    launch.record.request, launch.record.descriptor, cast('Reading', launch.record.reading)
+    launch.record.descriptor,
+    cast('Reading', launch.record.reading),
+    None if launch.llm is None else (launch.llm, 'summon llm'),
   )
   return SessionSpec(
     name=workspace_name,
@@ -335,6 +336,8 @@ def _joined_ride_command(launch: SummonLaunchSpec) -> str:
 
   parts = ['summon', '--join', '--hold', launch.hold, '--harness', launch.harness]
   requested = launch.record.request
+  if launch.llm is not None:
+    parts.extend(['--llm', launch.llm])
   reading = cast('Reading', launch.record.reading)
   types = tuple(reading.installation.declarations)
   for flag, authority in (('--grant', requested.gift), ('--limit', requested.cap)):
@@ -349,11 +352,6 @@ def _joined_ride_command(launch: SummonLaunchSpec) -> str:
     if name.startswith('cred.'):
       kind = name.removeprefix('cred.')
       parts.extend(['--pass', f'{kind}+{value}'])
-    elif name in providers.SELECTION_OPTIONS:
-      if name not in providers.SELECTION_FLAGS:
-        parts.extend(['--' + name, str(value)])
-      elif value is True:
-        parts.append('--' + name)
     elif name == 'export' and value is True:
       parts.append('--export')
     elif name in ('add', 'drop'):
@@ -585,6 +583,7 @@ class BroType(WorkerType):
     return Spawn(
       SummonLaunchSpec(
         prompt=prompt,
+        llm=args.get('llm'),
         parent=request.owner.workspace,
         parent_tree=request.owner.tree,
         repo=self.host.workspace.repository,

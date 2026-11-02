@@ -14,8 +14,6 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.llm.llm import Recipe
-from bro.llm.providers import LLMSelection
 from bro.monitor import trail_pointer
 from bro.native import dev_mcp, loop
 from ride.harness import ContainerExtras, RuntimeImage
@@ -28,11 +26,6 @@ if TYPE_CHECKING:
   from bro.mcp import Reach
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
-
-
-def resolve_native(base: Recipe | None, selection: LLMSelection) -> Recipe:
-  """Resolve an explicit selection over a configured recipe on the native harness."""
-  return BRO.resolve_recipe(base, selection)
 
 
 class _NativeRun(Protocol):

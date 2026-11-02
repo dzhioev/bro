@@ -5,36 +5,16 @@ Anthropic list pricing.
 The recipe has no in-process client: a session surface reads the fields off it.
 """
 
-import dataclasses
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Self
+from typing import Any, ClassVar, Literal, Optional
 
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
-
-DEFAULT_MODEL = 'claude-opus-5-5'
-
-# Claude Code's `--model` also takes family aliases (`opus`, `sonnet`, …), each
-# standing for whichever model it currently defaults the family to; a recipe
-# names the model itself
-MODEL_ID = re.compile(r'claude-[a-z0-9-]+')
-
-# `--model` short names for this provider's models.
-MODELS: dict[str, str] = {
-  'opus5': 'claude-opus-5',
-  'opus55': 'claude-opus-5-5',
-  'sonnet5': 'claude-sonnet-5',
-  'sonnet55': 'claude-sonnet-5-5',
-  'fable5': 'claude-fable-5',
-  'fable51': 'claude-fable-5-1',
-  'haiku45': 'claude-haiku-4-5-20251001',
-  'haiku55': 'claude-haiku-5-5',
-}
 
 # the harness drives its own loop and surfaces failures as session output, not
 # as exception spellings a caller's error scan could classify
@@ -487,20 +467,22 @@ def price(
 
 @dataclass(frozen=True)
 class Recipe(llm_llm.Recipe):
-  """spec for an Anthropic model.
-
-  `model` and `effort` None name none, leaving the choice to the session that
-  runs the recipe. `effort` is a neutral level (`llm.EFFORT_LEVELS`), which
-  claude's own `--effort` takes unmapped. `fast_mode` is claude's /fast — the
-  field is spelled apart from the `fast()` knob setter it backs, which a
-  same-named field would shadow.
-  """
+  """An Anthropic model and Claude Code request fields."""
 
   TYPE: ClassVar[str] = 'anthropic'
   WIRE: ClassVar[str] = 'messages'
   # Anthropic vision and PDF-support guides, read 2026-10-31.
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = dict.fromkeys(
-    MODELS.values(),
+    [
+      'claude-opus-5',
+      'claude-opus-5-5',
+      'claude-sonnet-5',
+      'claude-sonnet-5-5',
+      'claude-fable-5',
+      'claude-fable-5-1',
+      'claude-haiku-4-5-20251001',
+      'claude-haiku-5-5',
+    ],
     frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf'}),
   )
   RETIRED_MODELS: ClassVar[Mapping[str, date]] = dict.fromkeys(
@@ -520,23 +502,9 @@ class Recipe(llm_llm.Recipe):
     ],
     date(2026, 11, 1),
   )
-  selection_fields = MappingProxyType({'model': 'model', 'effort': 'effort'})
-  deferred_fields = frozenset({'model', 'effort'})
-  effort_values = frozenset(llm_llm.EFFORT_LEVELS)
 
-  model: Optional[str] = DEFAULT_MODEL
   effort: Literal['low', 'medium', 'high', 'xhigh', 'max'] | None = None
   fast_mode: bool = False
-
-  def fast(self) -> Self:
-    return dataclasses.replace(self, fast_mode=True)
-
-  def with_effort(self, effort: str) -> Self:
-    if effort not in llm_llm.EFFORT_LEVELS:
-      raise ValueError(
-        f'unknown effort level {effort!r}; expected one of {list(llm_llm.EFFORT_LEVELS)}'
-      )
-    return dataclasses.replace(self, effort=effort)
 
 
 MODEL_SLUG = re.compile(r'^claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d+))?')

@@ -13,7 +13,7 @@ from bro.base.suite_environment import host_credential_store
 from bro.deepseek.declaration import Recipe as ChatRecipe
 from bro.llm import providers, wires
 from bro.llm.wire import File, Text
-from bro.openai.declaration import MODELS, Recipe as ResponsesRecipe
+from bro.openai.declaration import Recipe as ResponsesRecipe
 
 
 class Answer(BaseModel):
@@ -63,7 +63,7 @@ async def test_model_file_inputs_live(case, tmp_path, monkeypatch):
       recipe = ChatRecipe(model='deepseek-flash', reasoning_effort='none')
       if (
         credentials.available('mu')
-        and providers.parse(credentials.get_json('mu')['llm']).provider == recipe.TYPE
+        and providers.parse_recipe(credentials.get_json('mu')['llm']).provider == recipe.TYPE
       ):
         secret = credentials.get_json('mu')['credential']
       elif credentials.available('deepseek'):
@@ -71,7 +71,7 @@ async def test_model_file_inputs_live(case, tmp_path, monkeypatch):
       else:
         pytest.skip('needs deepseek or a mu credential selecting deepseek (mu+deepseek)')
     else:
-      recipe = ResponsesRecipe(model=MODELS['terra'], reasoning_effort='low')
+      recipe = ResponsesRecipe(model='gpt-5.6-terra', reasoning_effort='low')
       if not credentials.available('openai'):
         pytest.skip('needs the openai credential')
       secret = credentials.get_json('openai')

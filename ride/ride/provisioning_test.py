@@ -149,7 +149,7 @@ def test_native_help_does_not_describe_another_harness(capsys):
   help_text = capsys.readouterr().out
   assert 'claude --effort' not in help_text
   assert "Claude's own fast-mode" not in help_text
-  assert '--effort' in help_text and '--fast' in help_text
+  assert '--llm' in help_text and '--fast' not in help_text
 
 
 def test_shared_launch_flags_import_no_harness_implementation():
@@ -162,11 +162,11 @@ class RejectHarness(importlib.abc.MetaPathFinder):
       raise AssertionError('harness implementation imported: ' + fullname)
 sys.meta_path.insert(0, RejectHarness())
 from bro.base.args import Parser
-from bro.launch.llm_flags import add_llm_flags, selection_from_args
+from bro.launch.llm_flags import add_llm_flags
 parser = Parser(add_help=False)
-add_llm_flags(parser, effort_help='effort', fast_help='fast')
-selection = selection_from_args(parser.parse(['test', '--llm', 'echo:']))
-assert selection.provider == 'echo'
+add_llm_flags(parser)
+arguments = parser.parse(['test', '--llm', 'echo:echo'])
+assert arguments['llm'] == 'echo:echo'
 """
   subprocess.run([sys.executable, '-c', script], check=True)
 

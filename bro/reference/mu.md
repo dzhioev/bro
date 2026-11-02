@@ -2,7 +2,7 @@
 
 `mu` runs a stateless call on a configured recipe and returns a validated pydantic model.
 Install the selected provider with its `client` extra.
-The `mu` credential supplies the default recipe and provider credential, plus optional role-specific pairs;
+The `mu` credential supplies complete recipe text and provider credential material, plus optional role-specific pairs;
 see [Auxiliary LLM credentials](permissions.md#auxiliary-llm-credentials) for material and hydration rules.
 
 ## Interface
@@ -36,6 +36,7 @@ For JSON input, pass `Text(json.dumps(value))` with the caller's desired seriali
 `role` selects a named pair from the credential's `roles` mapping.
 An absent or unknown role uses the default pair.
 The framework uses `dispatch` for spell interpretation, `summary` for source summaries, and `reader` for focused page reading.
+Each pair is bound with `bind_recipe`, without configuration layers or a harness.
 A call never falls back to a different provider or key.
 
 ## Content

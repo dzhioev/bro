@@ -25,7 +25,7 @@ A distribution contributes through these `[project.entry-points]` groups of its 
 - `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
   each object is a `bro.files.FileType` whose `name` matches the entry ("Adding a file type" below)
 - `bro.llm.providers` — provider declaration modules, `<name> = "bro.<name>.declaration"`;
-  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `Recipe`, `DEFAULT_MODEL`, `MODELS`, failure signatures and pricing.
+  the recipe's `TYPE` matches the entry name (`[a-z][a-z0-9-]*`), and the module exports `Recipe`, failure signatures and pricing.
   A provider contributes its credential kind separately through `bro.credentials` from an import-free literal module.
   Provider package hubs import nothing, and declarations import no SDK at module level and no harness.
   Explicit selection loads only that declaration; searches warn and skip a broken declaration.

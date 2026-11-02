@@ -69,7 +69,7 @@ class _FullBro(BaseBro):
 
   def __init__(self):
     super().__init__(system_prompt='YOU ARE FULL')
-    self.recipe = llm_llms_openai.Recipe(reasoning_effort='medium')
+    self.recipe = llm_llms_openai.Recipe(model='gpt-5.6-terra', reasoning_effort='medium')
 
 
 class TestFormatCard:
@@ -236,7 +236,7 @@ class TestFormatCard:
 
       def __init__(self):
         super().__init__(system_prompt='hi')
-        self.recipe = llm_llms_echo.Recipe()
+        self.recipe = llm_llms_echo.Recipe(model='echo')
 
     card = await format_card(_KeylessBro())
     assert '## Secrets' not in card

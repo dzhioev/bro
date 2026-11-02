@@ -21,7 +21,6 @@ from bro.authority.rules import Mission
 from bro.base import configs, credentials, log
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM, Talk
 from bro.harness import harness_name
-from bro.llm import providers
 from bro.llm.llm import Recipe
 from bro.monitor import (
   SESSION_DIR_ENV,
@@ -103,7 +102,6 @@ _SESSION_INPUT_FIELDS = frozenset(
     'summon_depth',
     'summon_harness',
     'mission',
-    'recipe_options',
     'export',
     'harness_set',
   }
@@ -139,7 +137,6 @@ class SessionSpec:
   runtime_bundle: Optional[str] = None
   env: dict[str, str] = field(default_factory=dict)
   limit: list[str] = field(default_factory=list)
-  recipe_options: dict[str, str | bool] = field(default_factory=dict)
   export: bool = False
   harness_set: bool = True
   authority_request: dict = field(default_factory=dict)
@@ -209,10 +206,6 @@ class SessionSpec:
       parts.extend(['--llm', self.llm])
     if self.harness_set:
       parts.extend(['--harness', self.resolved_harness])
-    for name, value in self.recipe_options.items():
-      parts.extend(
-        ['--' + name] if name in providers.SELECTION_FLAGS else ['--' + name, str(value)]
-      )
     if self.workspace_pinned:
       parts.extend(['--workspace', self.name])
     for value in self.cred:
@@ -862,7 +855,6 @@ def _prepare_session(
           'revoke': spec.revoke,
           'limit': spec.limit,
         }
-        fields.update(spec.recipe_options)
         if spec.export:
           fields['export'] = True
         if spec.llm is not None:
@@ -888,6 +880,9 @@ def _prepare_session(
         hold=cast(str, values['hold']),
         isolation=Isolation(cast(str, values['placement'])),
       )
+      resolved = checked_recipe(
+        mission.descriptor, reading, None if spec.llm is None else (spec.llm, '--llm')
+      )
       scoped = credentials_for(mission, recording=not spec.no_trails)
       files, kinds = hydrate(scoped)
       spec = replace(
@@ -898,7 +893,7 @@ def _prepare_session(
         authority_request=dump_request(requested, mission.descriptor),
         operator_gift=dump_authority(operator_gift, mission.descriptor),
         operator_cap=dump_authority(operator_cap, mission.descriptor),
-        resolved_llm=checked_recipe(requested, mission.descriptor, reading).dump(),
+        resolved_llm=resolved.dump(),
         summon_depth=reading.summon_depth,
         summon_harness=reading.summon_harness,
       )

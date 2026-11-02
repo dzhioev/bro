@@ -142,7 +142,10 @@ def test_scope_llm_override_reports_selected_provider_key(report_environment, ca
   repository, _, material = report_environment
   if present:
     (material / 'openai.cred').write_text('{}')
-  assert report_scope(repository, 'report-test', 'bro', 'openai:terra:high') == 0
+  assert (
+    report_scope(repository, 'report-test', 'bro', 'openai:gpt-5.6-terra,reasoning_effort=high')
+    == 0
+  )
   output = capsys.readouterr().out
   descriptor = json.loads(
     next(line for line in output.splitlines() if line.startswith('descriptor: ')).removeprefix(
@@ -158,7 +161,7 @@ def test_scope_without_a_configured_recipe_refuses(report_environment, capsys, h
   home_settings_file.write_text('default-bro = "report-test"\n')
   assert report_scope(repository, 'report-test', 'bro') == 1
   assert 'has no recipe for harness bro' in capsys.readouterr().out
-  assert report_scope(repository, 'report-test', 'bro', 'openai:terra') == 0
+  assert report_scope(repository, 'report-test', 'bro', 'openai:gpt-5.6-terra') == 0
 
 
 def test_detached_scope_uses_the_installation_default(report_environment, capsys):

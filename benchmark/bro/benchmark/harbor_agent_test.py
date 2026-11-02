@@ -326,7 +326,11 @@ def test_the_bundle_follows_the_host_store_default(bundle_interpreter, store):
 
 def test_the_bundle_hydrates_auxiliary_configuration_beside_the_llm_key(bundle_interpreter, store):
   material = store / 'creds' / 'mu+benchmark.cred'
-  material.write_text(json.dumps({'llm': 'openai:terra:low', 'credential': {'$cred': INSTANCE}}))
+  material.write_text(
+    json.dumps(
+      {'llm': 'openai:gpt-5.6-terra,reasoning_effort=low', 'credential': {'$cred': INSTANCE}}
+    )
+  )
   with scoped_store([INSTANCE, 'mu+benchmark']) as directory:
     config = json.loads((directory / 'creds.json').read_text())
     assert set(config['defaults']) == {INSTANCE, 'mu+benchmark'}
@@ -600,8 +604,8 @@ patterns = {pattern.pattern for pattern in BroAgent.ERROR_PATTERNS}
 assert {signature.pattern for signature in healthy.FAILURE_SIGNATURES} <= patterns
 assert llm_recipe('openai/gpt-5.6-terra') == 'openai:gpt-5.6-terra'
 try:
-  providers.default_spec('faulty')
-except providers.LLMSelectionError as error:
+  providers.declaration('faulty')
+except providers.RecipeError as error:
   assert 'faulty' in str(error) and 'unavailable' in str(error)
 else:
   raise AssertionError('explicit selection accepted a broken provider')
@@ -662,7 +666,7 @@ def test_trial_configuration_resolves_the_preset_for_root_and_summon(preset_name
   root = resolve_recipe(reading, bro.name, root_harness)
   requested = Request('bro', {'target': bro.name})
   child = reading.rules.start(requested, Authority.top(), reading)
-  assert checked_recipe(requested, child.descriptor, reading) == root.recipe == expected
+  assert checked_recipe(child.descriptor, reading) == root.recipe == expected
   assert (
     resolve_recipe(reading, bro.name, cast(str, child.descriptor.values['harness'])).source
     == root.source

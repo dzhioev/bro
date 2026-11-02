@@ -77,7 +77,7 @@ class Declared(BaseBro):
   def __init__(self, name: str = 'runner-bro', system_prompt: str = ''):
     self.name = name
     super().__init__(system_prompt=system_prompt)
-    self.recipe = EchoSpec()
+    self.recipe = EchoSpec(model='echo')
 
 
 class StubRunner(Runner):
@@ -94,7 +94,7 @@ class StubRunner(Runner):
   ):
     super().__init__(
       bro if bro is not None else Declared(name=name, system_prompt=system_prompt),
-      recipe if recipe is not None else EchoSpec(),
+      recipe if recipe is not None else EchoSpec(model='echo'),
     )
     self.llm = llm if llm is not None else MockLLM()
 
@@ -988,7 +988,7 @@ class _GatedBro(BaseBro):
 
   def __init__(self):
     super().__init__(system_prompt='gated')
-    self.recipe = OpenAISpec()
+    self.recipe = OpenAISpec(model='gpt-5.6-terra')
 
 
 @pytest.mark.credential_gate
@@ -998,7 +998,7 @@ class TestCredentialGate:
 
   def _gated(self) -> tuple[StubRunner, MockLLM]:
     llm = MockLLM(response='ran')
-    return StubRunner(llm, bro=_GatedBro(), recipe=OpenAISpec()), llm
+    return StubRunner(llm, bro=_GatedBro(), recipe=OpenAISpec(model='gpt-5.6-terra')), llm
 
   @pytest.mark.asyncio
   async def test_run_refuses_listing_every_missing_name(self, monkeypatch):
@@ -1226,9 +1226,9 @@ class TestAgentIdentity:
     class PlainBro(Declared):
       def __init__(self, name):
         super().__init__(name=name)
-        self.recipe = EchoSpec()
+        self.recipe = EchoSpec(model='echo')
 
     assert (
-      Runner(PlainBro(name='plain'), EchoSpec())._create_llm(hold='unattended').agent
+      Runner(PlainBro(name='plain'), EchoSpec(model='echo'))._create_llm(hold='unattended').agent
       == 'bro//plain'
     )

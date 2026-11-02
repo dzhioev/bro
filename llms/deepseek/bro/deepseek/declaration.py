@@ -1,17 +1,14 @@
 """DeepSeek recipes and peak list pricing."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Self
+from typing import Any, ClassVar, Literal
 
 from bro.llm import pricing
-from bro.llm.llm import EFFORT_LEVELS, FailureSignature, Recipe as BaseRecipe
-
-DEFAULT_MODEL = 'deepseek-v4-pro'
-MODELS = {'pro': DEFAULT_MODEL, 'flash': 'deepseek-flash'}
+from bro.llm.llm import FailureSignature, Recipe as BaseRecipe
 
 FAILURE_SIGNATURES = (
   FailureSignature(r'Error code: 402', 'usage-limit'),
@@ -125,22 +122,13 @@ class Recipe(BaseRecipe):
   WIRE: ClassVar[str] = 'chat'
   # DeepSeek models/pricing page and vision guide, read 2026-10-31.
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = {
-    DEFAULT_MODEL: frozenset(),
-    MODELS['flash']: frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'}),
+    'deepseek-v4-pro': frozenset(),
+    'deepseek-flash': frozenset({'image/jpeg', 'image/png', 'image/gif', 'image/webp'}),
   }
   RETIRED_MODELS: ClassVar[Mapping[str, date]] = {}
   ENDPOINT: ClassVar[str] = 'https://api.deepseek.com'
-  selection_fields = MappingProxyType({'model': 'model', 'effort': 'reasoning_effort'})
-  deferred_fields = frozenset({'effort'})
-  effort_values = frozenset({'none', 'low', 'high', 'max'})
 
-  model: str = DEFAULT_MODEL
   reasoning_effort: Literal['none', 'low', 'high', 'max'] | None = None
-
-  def with_effort(self, effort: str) -> Self:
-    if effort not in EFFORT_LEVELS:
-      raise ValueError(f'unknown effort level {effort!r}')
-    return replace(self, reasoning_effort='high' if effort in {'medium', 'xhigh'} else effort)
 
   def request_options(self) -> dict:
     if self.reasoning_effort is None:
