@@ -54,7 +54,7 @@ def launch_llm_spec(
       fields['llm'] = llm
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     descriptor = reading.rules.normalize(requested, reading)
-    return checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm'))
+    return checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm')).recipe
 
 
 def scoped_secrets(

@@ -783,7 +783,7 @@ def test_layer_winners_are_per_harness_for_roots_and_summons(installation):
   child = resolve_recipe(source, 'child', cast(str, descriptor.values['harness']))
   assert child.recipe.dump()['model'] == 'child'
   assert child.source == 'homes.test-home.bros.child'
-  assert checked_recipe(descriptor, source) == child.recipe
+  assert checked_recipe(descriptor, source).recipe == child.recipe
   assert resolve_recipe(source, 'other', 'native').source == 'defaults'
 
 
@@ -1011,7 +1011,7 @@ def test_explicit_text_replaces_configured_fields_whole(installation):
   mapped = option_values({'target': 'child', 'harness': 'native', 'llm': text}, source)
   request = Request('bro', mapped.values)
   descriptor = source.rules.normalize(request, source)
-  recipe = checked_recipe(descriptor, source, (mapped.content['llm'], 'summon llm'))
+  recipe = checked_recipe(descriptor, source, (mapped.content['llm'], 'summon llm')).recipe
   assert isinstance(recipe, OpenAIRecipe)
   assert recipe.model == 'gpt-6.1-sol'
   assert recipe.reasoning_effort is None and recipe.compact_threshold is None

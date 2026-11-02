@@ -162,11 +162,11 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
 
 
 def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[str]:
-  from ride.do_ride import encode_resolved_llm
+  from ride.do_ride import encode_resolved_recipe
 
   options = [
-    '--resolved-llm',
-    encode_resolved_llm(spec.resolved_llm),
+    '--resolved-recipe',
+    encode_resolved_recipe(spec.resolved_recipe),
     '--hold',
     spec.hold,
     '--activity-file',
@@ -251,10 +251,10 @@ class BroHarness(Harness):
     )
 
   def read_subject(self, workspace: Workspace) -> str | None:
-    from ride.session import load_resume_spec
+    from ride.session import resume_metadata
 
-    spec = load_resume_spec(workspace)
-    return None if spec is None else spec.subject
+    data = resume_metadata(workspace)
+    return None if data is None else data.get('subject')
 
   def prepare_session(self, run: 'SessionRun') -> None:
     del run

@@ -168,3 +168,22 @@ def test_detached_scope_uses_the_installation_default(report_environment, capsys
   assert report_scope(None, None, 'claude') == 0
   descriptor = json.loads(capsys.readouterr().out.splitlines()[0].removeprefix('descriptor: '))
   assert descriptor['target'] == ReportBro.name
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+def test_scope_cli_prints_canonical_recipe_and_source_with_default_bro(
+  report_environment, capsys, explicit
+):
+  from ride.cli import main
+
+  flags = ['--llm', 'echo:echo+passthrough'] if explicit else []
+  assert main(['ride', 'scope', '--harness', 'bro', *flags]) == 0
+  expected = 'echo:echo+passthrough (--llm)' if explicit else 'echo:echo (test-home home settings)'
+  assert f'llm: {expected}' in capsys.readouterr().out
+
+
+def test_scope_cli_prints_resolution_refusal_and_exits_nonzero(report_environment, capsys):
+  from ride.cli import main
+
+  assert main(['ride', 'scope', '--harness', 'bro', '--llm', 'echo:not-listed']) == 1
+  assert 'add +passthrough' in capsys.readouterr().out

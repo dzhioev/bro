@@ -666,7 +666,7 @@ def test_trial_configuration_resolves_the_preset_for_root_and_summon(preset_name
   root = resolve_recipe(reading, bro.name, root_harness)
   requested = Request('bro', {'target': bro.name})
   child = reading.rules.start(requested, Authority.top(), reading)
-  assert checked_recipe(child.descriptor, reading) == root.recipe == expected
+  assert checked_recipe(child.descriptor, reading).recipe == root.recipe == expected
   assert (
     resolve_recipe(reading, bro.name, cast(str, child.descriptor.values['harness'])).source
     == root.source

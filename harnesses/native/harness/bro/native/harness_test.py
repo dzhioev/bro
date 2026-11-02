@@ -25,7 +25,7 @@ from bro.native import dev_mcp
 from bro.openai.declaration import Recipe
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
-from ride.do_ride import SessionRun, encode_resolved_llm
+from ride.do_ride import SessionRun, encode_resolved_recipe
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -53,7 +53,7 @@ def _spec(**overrides) -> SessionSpec:
     'grant': [],
     'revoke': [],
     'llm': None,
-    'resolved_llm': Recipe(model='gpt-5.6-terra').dump(),
+    'resolved_recipe': {'recipe': Recipe(model='gpt-5.6-terra').dump(), 'source': '--llm'},
     'solo': False,
     'resume': False,
     'no_trails': False,
@@ -76,7 +76,7 @@ def _run(**overrides) -> SessionRun:
     repo=spec.repo,
     harness=spec.resolved_harness,
     hold=spec.hold,
-    resolved_llm=spec.resolved_llm,
+    resolved_recipe=spec.resolved_recipe,
     solo=spec.solo,
     resume=spec.resume,
     bro=spec.bro,
@@ -165,15 +165,18 @@ class TestNativeArgv:
 
   def test_chat_runs_the_resolved_recipe(self, monkeypatch):
     run = _run(
-      resolved_llm=Recipe(
-        model='gpt-6.1-sol', reasoning_effort='high', service_tier='priority'
-      ).dump()
+      resolved_recipe={
+        'recipe': Recipe(
+          model='gpt-6.1-sol', reasoning_effort='high', service_tier='priority'
+        ).dump(),
+        'source': '--llm',
+      }
     )
     assert self._argv(run, monkeypatch) == [
       '/venv/bin/bro',
       'chat',
-      '--resolved-llm',
-      encode_resolved_llm(run.resolved_llm),
+      '--resolved-recipe',
+      encode_resolved_recipe(run.resolved_recipe),
       '--hold',
       'attended',
       '--activity-file',
@@ -211,7 +214,7 @@ class TestNativeArgv:
     argv = self._argv(run, monkeypatch)
     assert argv[:2] == ['/venv/bin/bro', 'chat'] and argv[-2:] == ['--', 'dev']
     assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
-    assert json.loads(argv[argv.index('--resolved-llm') + 1]) == run.resolved_llm
+    assert json.loads(argv[argv.index('--resolved-recipe') + 1]) == run.resolved_recipe
 
   def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
@@ -273,7 +276,7 @@ class TestContainerSession:
       'RIDE_BASE_SHA': 'abc123',
       ride_session.RUNTIME_ENV: str(_runtime_bundle(tmp_path).host_root),
       ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
-      ride_session.RESOLVED_LLM_ENV: ride_session.encode_resolved_llm(spec.resolved_llm),
+      ride_session.RESOLVED_RECIPE_ENV: ride_session.encode_resolved_recipe(spec.resolved_recipe),
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
     }
     assert launch.base_ref == 'abc123'
@@ -460,6 +463,7 @@ class _ShellBro(BaseBro):
 class _NativeRun:
   def __init__(self, brash_policy: Optional[Path] = None):
     self.trail_id = None
+    self.resolved_recipe = None
     self.current_tool_step_id = None
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)

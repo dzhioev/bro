@@ -17,7 +17,7 @@ from bro.base.offload import off_loop
 from bro.bro import RAISE_EXIT_STATUS, AnswerDelivered, BroRaised
 from bro.launch.llm_flags import add_llm_flags
 from bro.launch.resume import RESUME_LATEST
-from bro.launch.run import HOLD_HELP, add_resolved_llm_flag, launch_llm_spec
+from bro.launch.run import HOLD_HELP, add_resolved_recipe_flag, launch_recipe
 from bro.llm.observer import Observer
 from bro.mcp import HOLDS
 from bro.native.runner import Runner
@@ -198,7 +198,7 @@ async def call_text(
     session.consume(
       _surface_notice(
         'surface:banner',
-        render_banner(llm=False, bro=runner.bro.name),
+        render_banner(plain=False, bro=runner.bro.name, resolved_recipe=runner.resolved_recipe),
         now(),
         trusted_visual=True,
       )
@@ -285,13 +285,13 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     help='with --fork: fork the conversation at this step instead of the latest consistent point',
   )
   add_llm_flags(parser)
-  add_resolved_llm_flag(parser)
+  add_resolved_recipe_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
   args = parser.parse(argv)
 
   continuing = args['continue_trail'] is not None
-  if continuing and args['resolved_llm'] is None:
-    log.error('--continue-trail requires --resolved-llm')
+  if continuing and args['resolved_recipe'] is None:
+    log.error('--continue-trail requires --resolved-recipe')
     return 1
   if continuing and (args['fork'] is not None or args['what'] is not None):
     log.error('--continue-trail cannot be combined with --fork or an initial message')
@@ -301,7 +301,13 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     return 1
 
   try:
-    run_spec = launch_llm_spec(args['bro'], args)
+    if args['fork'] is not None and args['llm'] is None and args['resolved_recipe'] is None:
+      from ride.authority_reading import Reading
+
+      Reading.take()
+      run_spec = None
+    else:
+      run_spec = launch_recipe(args['bro'], args)
   except (KeyError, NotImplementedError, ValueError) as error:
     log.error('%s', error)
     return 1
@@ -338,6 +344,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
       from bro.registry import create_bro
 
       log.verbose('creating bro %s', args['bro'])
+      assert run_spec is not None
       runner = Runner(create_bro(args['bro']), run_spec, activity_file=args['activity_file'])
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()

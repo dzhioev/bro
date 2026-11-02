@@ -320,8 +320,8 @@ def test_summon_admission_and_join_command_forward_passthrough(tmp_path, passthr
   admitted = _request(tmp_path, host=host, llm=text)
   launch = cast(SummonLaunchSpec, cast(Spawn, BroType(host).launch(admitted)).launch)
   spec = bro_worker._child_session_spec(launch, 'child', None)
-  assert spec.llm_spec.passthrough
-  assert spec.llm_spec.model == 'gpt-7'
+  assert spec.recipe.passthrough
+  assert spec.recipe.model == 'gpt-7'
   command = bro_worker._joined_ride_command(launch)
   assert '--llm ' + text in command
   assert '--model' not in command and '--passthrough' not in command

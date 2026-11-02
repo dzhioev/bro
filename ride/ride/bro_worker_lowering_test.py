@@ -96,7 +96,7 @@ def _do_ride_environment(
   assert workspace.metadata.branch is not None
   return {
     ride.do_ride.INSTALL_DIRECTORY_ENV: ride.do_ride.CONTAINER_INSTALL_DIRECTORY,
-    ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(
+    ride.do_ride.RESOLVED_RECIPE_ENV: ride.do_ride.encode_resolved_recipe(
       checked_recipe(record.descriptor, record.reading).dump()
     ),
     'RIDE_ISOLATION': 'boxed',
@@ -316,7 +316,9 @@ class TestSummonLowering:
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert lowered.launch.command[-5:] == ['--hold', 'attended', '--', 'dev', 'deploy the thing']
 
-  def test_the_llm_recipe_reaches_the_childs_resolved_environment(self, lowering_harness):
+  def test_the_llm_recipe_reaches_the_childs_resolved_environment(
+    self, lowering_harness, monkeypatch
+  ):
     launch = _launch(
       target='dev',
       prompt='deploy the thing',
@@ -329,12 +331,22 @@ class TestSummonLowering:
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert (
-      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
+      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV])
       == checked_recipe(
         launch.record.descriptor,
         cast(Reading, launch.record.reading),
         None if launch.llm is None else (launch.llm, 'summon llm'),
       ).dump()
+    )
+
+    from bro.llm.providers import format_recipe
+    from bro.workspace.banner import render_banner
+
+    encoded = lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV]
+    monkeypatch.setenv('RIDE_RESOLVED_RECIPE', encoded)
+    assert launch.llm is not None
+    assert f'llm: {format_recipe(bind_recipe(launch.llm))} (summon llm)' in render_banner(
+      plain=True
     )
 
   def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
@@ -365,8 +377,11 @@ class TestSummonLowering:
       source=source,
     )
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
-    resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
-    assert resolved == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low').dump()
+    resolved = json.loads(lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV])
+    assert resolved == {
+      'recipe': bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low').dump(),
+      'source': 'summon llm',
+    }
 
   def test_the_llm_recipe_selects_the_childs_hydrated_llm_key(self, lowering_harness, monkeypatch):
     captured: list = []
@@ -691,7 +706,7 @@ class TestSummonLowering:
         'work beside me',
       ]
     )
-    resolved = resolve_recipe(reading(), 'dev', 'bro').recipe
+    resolved = resolve_recipe(reading(), 'dev', 'bro')
     assert member.env == {
       **workspace_docker.MEMBER_BASELINE_ENV,
       'RIDE_BRO': 'dev',
@@ -699,7 +714,7 @@ class TestSummonLowering:
       'RIDE_HOST_WORKSPACE': str(workspace.tree),
       'RIDE_HOST': socket.gethostname(),
       'RIDE_ISOLATION': 'boxed',
-      ride.do_ride.RESOLVED_LLM_ENV: ride.do_ride.encode_resolved_llm(resolved.dump()),
+      ride.do_ride.RESOLVED_RECIPE_ENV: ride.do_ride.encode_resolved_recipe(resolved.dump()),
       ride.do_ride.INSTALL_DIRECTORY_ENV: '/home/ride/.bro-party/broker-CH/environment',
       SESSION_DIR_ENV: '/var/ride/party/broker-CH/session',
       'RIDE_TRAILS_ROOT': '/var/ride/party/broker-CH/trails',
@@ -1265,7 +1280,7 @@ class TestClaudeSummonLowering:
     launch = self._launch(llm='anthropic:claude-fable-5,effort=high')
     lowered = _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     assert (
-      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_LLM_ENV])
+      json.loads(lowered.launch.env[ride.do_ride.RESOLVED_RECIPE_ENV])
       == checked_recipe(
         launch.record.descriptor,
         cast(Reading, launch.record.reading),

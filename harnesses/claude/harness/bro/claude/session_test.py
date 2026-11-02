@@ -77,7 +77,10 @@ def _session(tmp_path: Path) -> SessionRun:
     repo=None,
     harness='claude',
     hold='unattended',
-    resolved_llm=Recipe(model='claude-opus-5-5', effort=None).dump(),
+    resolved_recipe={
+      'recipe': Recipe(model='claude-opus-5-5', effort=None).dump(),
+      'source': '--llm',
+    },
     solo=True,
     resume=False,
     bro='bro',
@@ -166,7 +169,7 @@ def test_managed_claude_launch_hooks_recording_and_resume(
       if earlier:
         assert resumed['id'] == earlier[0]['id']
       assert resumed['end']['reason'] == 'ok'
-      assert resumed['native']['llm'] == spec.resolved_llm
+      assert resumed['native']['llm'] == spec.resolved_recipe['recipe']
       assert resumed.get('git') is None
       assert [
         message['content'] for message in store.iter_messages(resumed['id'], types={'assistant'})

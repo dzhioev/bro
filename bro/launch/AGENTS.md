@@ -20,10 +20,10 @@ The following modules ship from `bro-native`:
   The stream UI owns stdin through one daemon reader and races its line queue against the run inbox without abandoning a read.
   The Textual UI awaits the same inbox in a worker;
   either calls `Runner.wake()` when background news arrives while idle.
-  `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the installation's configured recipe;
+  `--fork [TRAIL_ID] [--at STEP_ID]` forks recorded history under the trail's recorded recipe unless `--llm` replaces it;
   omitting the id selects the bro's newest recorded call.
-  The suppressed `--resolved-llm` (here and on `bro run`) is the managed bro harness's exact-recipe contract:
-  it carries the recipe the launch admitted and excludes `--llm`;
+  The suppressed `--resolved-recipe` (here and on `bro run`) is the managed bro harness's exact-recipe contract:
+  it carries the resolved-recipe record the launch admitted and excludes `--llm`;
   the suppressed `--continue-trail` requires it and continues a recorded trail under it.
 - `call_tui.py` — Textual `ChatApp`, turn cancellation, message input, and the display-session integration.
 - `resume.py` — recorded-history projection and `bro.fork.fork` orchestration used by public history forks and managed native continuation.

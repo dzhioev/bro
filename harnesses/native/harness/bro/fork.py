@@ -6,6 +6,8 @@ from typing import Optional
 
 from bro.llm import wires
 from bro.llm.llm import Recipe
+from bro.llm.providers import require_admitted
+from bro.llm.resolved import IN_PROCESS_SOURCE, ResolvedRecipe
 from bro.llm.tracker import NullTracker, Tracker
 from bro.llm.wire import Prefix
 from bro.native.harness import BRO
@@ -113,7 +115,7 @@ def fork(
   forked_from_trail: RecordedTrail,
   up_to_step_id: int,
   *,
-  llm_spec: Optional[Recipe] = None,
+  llm_spec: Recipe | ResolvedRecipe | None = None,
   system_prompt: Optional[str] = None,
   record: bool = True,
   tracker: Optional[Tracker] = None,
@@ -132,7 +134,18 @@ def fork(
   bro_name = forked_from_trail.header.bro
   if bro_name is None:
     raise ValueError(f'trail {forked_from_trail.header.id!r} has no bro persona')
-  spec = llm_spec if llm_spec is not None else Recipe.from_dict(forked_from_trail.header.llm_spec)
+  if llm_spec is None:
+    resolved = ResolvedRecipe(
+      Recipe.from_dict(forked_from_trail.header.llm_spec), f'trail {forked_from_trail.header.id}'
+    )
+  else:
+    resolved = (
+      llm_spec
+      if isinstance(llm_spec, ResolvedRecipe)
+      else ResolvedRecipe(llm_spec, IN_PROCESS_SOURCE)
+    )
+  spec = resolved.recipe
+  require_admitted(spec)
   if spec.WIRE not in wires.client_names():
     raise ValueError(
       f'trail {forked_from_trail.header.id!r} was recorded under {spec.TYPE!r}, whose harness '
@@ -170,7 +183,7 @@ def fork(
   # pre-assigning it bypasses the runner's fresh-run fragment append.
   bro._system_prompt_override = effective_system_prompt
 
-  runner = Runner(bro, spec, activity_file=activity_file)
+  runner = Runner(bro, resolved, activity_file=activity_file)
   runner._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else runner._make_tracker())
   )
