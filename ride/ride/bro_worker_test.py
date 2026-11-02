@@ -18,6 +18,7 @@ from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 from ride.authority_test_helper import mission, reading
 from ride.bro_worker import BroFacts, BroType, Placement, SummonLaunchSpec
 from ride.launch_control import LaunchControl
+from ride.peer_facts import WorkerFacts
 from ride.workspace.metadata import Isolation
 
 
@@ -30,6 +31,12 @@ def installed_dev(register_test_bros):
 
 
 class Peers:
+  def __init__(self, allowance):
+    self.allowance = allowance
+
+  def for_mission(self, mission):
+    return WorkerFacts('bro', 'ws', allowance=self.allowance)
+
   def attribution_for_mission(self, journal, mission):
     return {'workspace': 'ws', 'type': 'bro', 'bro': 'bro-dev', 'trail_id': 'trail'}
 
@@ -42,14 +49,14 @@ class Host:
       metadata=SimpleNamespace(repo=None),
       repository=None,
     )
-    self.peers = Peers()
+    self.peers = Peers(self.reading.root_allowance('bro-dev'))
     self.journal = MagicMock()
     self.session_env = {'ONE': '1'}
     self.summon_spawner = object()
     self.artifacts = MagicMock()
 
 
-def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), depth=0, source=None):
+def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), source=None):
   return PeerDescription(
     mission='root',
     workspace='ws',
@@ -61,7 +68,7 @@ def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), depth=0, s
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
-    depth=depth,
+    depth=0,
     extension=BroFacts('bro-dev') if type == 'bro' else None,
   )
 
@@ -170,9 +177,10 @@ def test_owner_of_another_type_may_summon_with_authority(tmp_path):
   assert isinstance(run, Spawn)
 
 
-def test_depth_cap_is_enforced_at_the_host_boundary(tmp_path):
-  with pytest.raises(LaunchDenied, match='depth cap'):
-    _request(tmp_path, owner=_owner(tmp_path, depth=2))
+def test_allowance_is_enforced_at_the_host_boundary(tmp_path):
+  host = Host(reading(config={'defaults': {'summon-depth': 0}}))
+  with pytest.raises(LaunchDenied, match='summon allowance.*allowance 0'):
+    _request(tmp_path, host=host)
 
 
 def test_target_requires_use_authority(tmp_path):

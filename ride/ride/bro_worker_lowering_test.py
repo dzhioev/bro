@@ -1229,7 +1229,7 @@ class TestClaudeSummonLowering:
     assert lowered.launch.tty is False
 
   def test_records_the_claude_resume_spec(self, claude_harness, tmp_path):
-    launch = self._launch(llm='anthropic:claude-fable-5', summon_depth=5, summon_harness='claude')
+    launch = self._launch(llm='anthropic:claude-fable-5')
     _lower_boxed(launch, 'broker-CH', _container_runtime(), _artifacts())
     spec = ride.session.load_resume_spec(Workspace.open('broker-CH'))
     assert spec is not None

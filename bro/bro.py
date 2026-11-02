@@ -192,7 +192,7 @@ def _answer_tool(harness: Harness, variables: Variables) -> llm_mcp.Tool:
 _SUMMON_DESCRIPTION = (
   'summon another bro with a self-contained `prompt`, returning its quest id after host '
   'acceptance. `target` names the bro; the host checks the use rule for the start and '
-  'every option, the gift rule, and the depth cap. The banner reports your live authority. '
+  'every option, the gift rule, and the summon allowance. The banner reports your live authority. '
   f'`timeout` bounds the run in whole seconds (default {summon.DEFAULT_TIMEOUT}); size it '
   'in hours for a long-running review or deployment. `into` bases a new workspace on '
   'a git ref instead of your current HEAD; uncommitted changes never transfer. `hold` '
