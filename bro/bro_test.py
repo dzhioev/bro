@@ -27,6 +27,7 @@ from bro.datasources.man import ManSource
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.harness import Harness, Service, SessionEndReason
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
+from bro.llm.resolved import ResolvedRecipe
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
 from bro.monitor import SESSION_DIR_ENV
@@ -45,6 +46,7 @@ class StubRun:
   """the `LiveRun` an assembly test binds the service tools to."""
 
   def __init__(self, trail_id: Optional[str] = None, tool_step: Optional[ToolStepSource] = None):
+    self.resolved_recipe: ResolvedRecipe | None = None
     self.trail_id = trail_id
     self.current_tool_step_id = tool_step
     self.watch_store: watches.Store = MagicMock(spec=watches.Store)
@@ -1513,8 +1515,8 @@ class TestBannerTool:
 
     captured: dict = {}
 
-    def fake_render_banner(llm=False, bro=None, trail_id=None):
-      captured['llm'] = llm
+    def fake_render_banner(plain=False, bro=None, trail_id=None, resolved_recipe=None):
+      captured['plain'] = plain
       captured['bro'] = bro
       captured['trail_id'] = trail_id
       return 'isolation: boxed'
@@ -1523,11 +1525,23 @@ class TestBannerTool:
     run = StubRun()
     tool = await _find_tool(EchoBro(), 'banner', run=run)
     assert await tool.call({}) == 'isolation: boxed'
-    assert captured == {'llm': True, 'bro': 'echo', 'trail_id': None}
+    assert captured == {'plain': True, 'bro': 'echo', 'trail_id': None}
     # the run's trail opens after the tool is built, so it is read per call
     run.trail_id = '01trail'
     await tool.call({})
     assert captured['trail_id'] == '01trail'
+
+  @pytest.mark.asyncio
+  async def test_banner_uses_the_in_process_recipe_not_the_outer_sessions(self, monkeypatch):
+    outer = ResolvedRecipe(llm_llms_echo.Recipe(model='echo', passthrough=True), 'outer')
+    own = ResolvedRecipe(llm_llms_echo.Recipe(model='echo'), '--llm')
+    monkeypatch.setenv('RIDE_RESOLVED_RECIPE', outer.encode())
+    run = StubRun()
+    run.resolved_recipe = own
+    tool = await _find_tool(EchoBro(), 'banner', run=run)
+    text = await tool.call({})
+    assert f'llm: {own.display()}' in text
+    assert outer.display() not in text
 
 
 _QUEST_TOOLS = {

@@ -107,7 +107,7 @@ class _RecordingTracker(Tracker):
   def start_trail(
     self,
     bro,
-    llm_spec,
+    recipe,
     system_prompt,
     forked_from,
     interactive,
@@ -118,7 +118,7 @@ class _RecordingTracker(Tracker):
     self.headers.append(
       {
         'bro': bro,
-        'llm_spec': llm_spec,
+        'recipe': recipe,
         'system_prompt': system_prompt,
         'forked_from': forked_from,
         'interactive': interactive,
@@ -381,7 +381,7 @@ class TestSendTrackerEmission:
     with closing(Recorder(store)) as tracker:
       tracker.start_trail(
         bro='dev',
-        llm_spec={'type': 'openai', 'model': 'gpt-5'},
+        recipe={'type': 'openai', 'model': 'gpt-5'},
         system_prompt='test',
         forked_from=None,
         interactive=False,

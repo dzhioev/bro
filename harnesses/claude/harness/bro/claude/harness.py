@@ -38,8 +38,8 @@ if TYPE_CHECKING:
 _AUTH_SECRET = 'claude_code'
 
 
-def llm_spec(spec: 'SessionSpec | SessionRun') -> Recipe:
-  resolved = spec.llm_spec
+def recipe(spec: 'SessionSpec | SessionRun') -> Recipe:
+  resolved = spec.recipe
   if not isinstance(resolved, Recipe):
     raise TypeError(f'claude harness resolved an incompatible recipe: {type(resolved).__name__}')
   return resolved

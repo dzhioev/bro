@@ -26,7 +26,7 @@ class Recorder(Tracker):
   def start_trail(
     self,
     bro: str,
-    llm_spec: dict,
+    recipe: dict,
     system_prompt: str,
     forked_from: Optional[Any],
     interactive: bool,
@@ -37,7 +37,7 @@ class Recorder(Tracker):
     if forked_from is not None and not isinstance(forked_from, ForkedFrom):
       raise TypeError('forked_from must be a ForkedFrom')
     session = managed_session()
-    native: dict[str, Any] = {'llm': llm_spec}
+    native: dict[str, Any] = {'llm': recipe}
     body: dict[str, Any] = {
       'records': [{'kind': 'system_prompt', 'body': system_prompt, 'turn_index': 0}]
     }

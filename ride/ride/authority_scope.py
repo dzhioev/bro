@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
 from functools import cache
 from typing import cast
 
@@ -26,6 +25,7 @@ from bro.bro import CredentialManifest
 from bro.broker.environment import TALK_RIGHTS
 from bro.llm import providers
 from bro.llm.llm import Recipe
+from bro.llm.resolved import ResolvedRecipe
 from bro.mcp import HOLDS
 from bro.summon import DEFAULT_TALK, DEFAULT_TIMEOUT
 from ride.authority_reading import Reading
@@ -48,12 +48,6 @@ def _reading(value: object) -> Reading:
   if not isinstance(value, Reading):
     raise TypeError('bro declarations require a Reading')
   return value
-
-
-@dataclass(frozen=True)
-class ResolvedRecipe:
-  recipe: Recipe
-  source: str
 
 
 def no_recipe(target: str, harness: str = 'bro') -> str:
@@ -456,7 +450,7 @@ def checked_recipe(
   descriptor: Descriptor,
   reading: Reading,
   explicit: tuple[str, str] | None = None,
-) -> Recipe:
+) -> ResolvedRecipe:
   target = cast(str, descriptor.values['target'])
   harness = cast(str, descriptor.values['harness'])
   resolved = resolve_recipe(reading, target, harness, explicit)
@@ -464,4 +458,4 @@ def checked_recipe(
   for name in ('provider', 'model', 'passthrough'):
     if descriptor.values.get(name) != expected.get(name):
       raise ValueError(f'descriptor {name} differs from the resolved recipe')
-  return resolved.recipe
+  return resolved

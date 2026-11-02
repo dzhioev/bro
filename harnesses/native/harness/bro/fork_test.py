@@ -31,7 +31,7 @@ def _trail_header(
   *,
   trail_id: str = 'trail-1',
   bro: str = 'bro',
-  llm_spec: Optional[dict] = None,
+  recipe: Optional[dict] = None,
   harness: str = 'bro',
   hold: Optional[str] = 'guided',
 ) -> Trail:
@@ -40,9 +40,7 @@ def _trail_header(
     harness=harness,
     bro=bro,
     version='1',
-    native={
-      'llm': llm_spec if llm_spec is not None else {'type': 'openai', 'model': 'gpt-6.1-sol'}
-    },
+    native={'llm': recipe if recipe is not None else {'type': 'openai', 'model': 'gpt-6.1-sol'}},
     started_at='2026-06-07T00:00:00.000000Z',
     interactive=False,
     surface='ask',
@@ -553,7 +551,7 @@ class _RecordingTracker(Tracker):
   def start_trail(
     self,
     bro,
-    llm_spec,
+    recipe,
     system_prompt,
     forked_from,
     interactive,
@@ -564,7 +562,7 @@ class _RecordingTracker(Tracker):
     self.headers.append(
       {
         'bro': bro,
-        'llm_spec': llm_spec,
+        'recipe': recipe,
         'system_prompt': system_prompt,
         'forked_from': forked_from,
         'interactive': interactive,
@@ -687,7 +685,7 @@ def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, anc
   if ancestor_mismatch:
     trail = RecordedTrail(
       header=dataclasses.replace(
-        _trail_header(trail_id='child', llm_spec=EchoSpec(model='echo').dump()),
+        _trail_header(trail_id='child', recipe=EchoSpec(model='echo').dump()),
         forked_from=ForkedFrom(parent.header.id, 2),
       ),
       steps=[_step('system_prompt', 'child prompt', step_id=0)],
@@ -701,7 +699,7 @@ def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, anc
     fork(
       trail,
       0 if ancestor_mismatch else 2,
-      llm_spec=EchoSpec(model='echo'),
+      recipe=EchoSpec(model='echo'),
       surface='test',
       fetch_forked_from=lambda trail_id: parent,
     )
@@ -830,7 +828,7 @@ class TestForkSpec:
     with context:
       fork(forked_from_trail, 2, tracker=tracker, surface='test')
     assert created[0].wire.recipe.model == 'gpt-6.1-sol'
-    assert tracker.headers[0]['llm_spec'] == {
+    assert tracker.headers[0]['recipe'] == {
       'type': 'openai',
       'model': 'gpt-6.1-sol',
       'reasoning_effort': None,
@@ -846,11 +844,11 @@ class TestForkSpec:
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
-      fork(forked_from_trail, 2, llm_spec=override, tracker=tracker, surface='test')
+      fork(forked_from_trail, 2, recipe=override, tracker=tracker, surface='test')
     assert created[0].wire.recipe.model == 'gpt-5.6-terra'
     assert created[0].wire.recipe.request_options()['reasoning']['effort'] == 'medium'
-    assert tracker.headers[0]['llm_spec']['model'] == 'gpt-5.6-terra'
-    assert tracker.headers[0]['llm_spec']['reasoning_effort'] == 'medium'
+    assert tracker.headers[0]['recipe']['model'] == 'gpt-5.6-terra'
+    assert tracker.headers[0]['recipe']['reasoning_effort'] == 'medium'
 
 
 class TestForkServerSidePath:
@@ -1056,7 +1054,7 @@ class TestForkClientSideReplay:
       [_fake_response(output=[_message_item('ok')])]
     )
     with context:
-      runner = fork(forked_from_trail, 2, llm_spec=override, record=False, surface='test')
+      runner = fork(forked_from_trail, 2, recipe=override, record=False, surface='test')
       await runner.send('next', surface='test')
     assert captured[0].get('previous_response_id') is None
     api_input = captured[0]['input']
@@ -1220,3 +1218,13 @@ def test_fork_without_an_override_refuses_a_recorded_unlisted_model(monkeypatch)
   recorded.header.native['llm'] = OpenAISpec(model='gpt-7').dump()
   with pytest.raises(RecipeError, match='gpt-7.*passthrough'):
     fork(recorded, 2, record=False, surface='test')
+
+
+def test_a_retired_recorded_recipe_is_readable_but_cannot_fork_without_replacement():
+  retired = next(iter(OpenAISpec.RETIRED_MODELS))
+  trail = RecordedTrail(
+    header=_trail_header(recipe=OpenAISpec(model=retired).dump()),
+    steps=[_step('system_prompt', _SYS_TEXT, step_id=0), _step('user_input', 'hello', step_id=1)],
+  )
+  with pytest.raises(ValueError, match='was retired on'):
+    fork(trail, 1, surface='call')

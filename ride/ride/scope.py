@@ -38,7 +38,7 @@ class ScopeRecipe:
   llm_key: bool
 
 
-def launch_llm_spec(
+def launch_recipe(
   driver: SessionHarness, attachment: str | None, bro_name: str, llm: str | None
 ) -> Recipe:
   from ride.authority_launch import request
@@ -54,16 +54,16 @@ def launch_llm_spec(
       fields['llm'] = llm
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     descriptor = reading.rules.normalize(requested, reading)
-    return checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm'))
+    return checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm')).recipe
 
 
 def scoped_secrets(
   bro_name: str,
-  recipe: ScopeRecipe,
+  scope: ScopeRecipe,
   *,
   attachment: str | None = None,
   attachment_repository: Repository | None = None,
-  llm_spec: Recipe | None = None,
+  recipe: Recipe | None = None,
   cred: Sequence[str] = (),
   grant: Sequence[str] = (),
   revoke: Sequence[str] = (),
@@ -81,13 +81,13 @@ def scoped_secrets(
     reading = Reading.take(repository)
     fields = {
       'target': bro_name,
-      'harness': recipe.harness.name,
+      'harness': scope.harness.name,
       'pass': list(cred),
       'grant': list(grant),
       'revoke': list(revoke),
     }
-    if llm_spec is not None:
-      fields['llm'] = providers.format_recipe(llm_spec)
+    if recipe is not None:
+      fields['llm'] = providers.format_recipe(recipe)
     requested, _ = request(BroType, fields, reading, reading.operator(), forward=False)
     return credentials_for(
       reading.rules.start(requested, reading.operator(), reading), recording=recording

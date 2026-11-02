@@ -99,7 +99,8 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   A given runtime's unboxed sessions verify TLS against the certifi store it carries, set as `SSL_CERT_FILE` in their snapshot;
   a frozen runtime's sessions trust the host's own store.
   A manual token carries the frozen hash or given path, and its launch command names that runtime's own `ride`.
-- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail with its set option values and newly computed defaults.
+- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail with its recorded resolved recipe and source, its set option values and newly computed defaults.
+  `--llm` replaces the recipe on the recorded harness, with a same-wire check for native continuation.
   No pointer is published when trail recording is disabled.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
@@ -150,5 +151,5 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
 - Launch control runs normalization, the use and gift rules, and admission checks before worker code checks existence or starts work.
   Worker types declare options and runs, not permission checks.
   A manual token retains its prepared request until claim; the operator may retry a commit before the child starts.
-  Resume records retain set values and principal attribution, gift/cap, and operator layers, not resolved defaults.
+  Resume records retain the resolved-recipe record, set values and principal attribution, gift/cap, and operator layers, not other resolved defaults.
 - Every console script this distribution ships wraps its `main` in `ride.cli.reports_runtime_errors`, so unusable runtime locations and workspace records fail as CLI errors.

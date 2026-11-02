@@ -319,7 +319,7 @@ class Trail:
   format: int = TRAIL_FORMAT
 
   @property
-  def llm_spec(self) -> dict:
+  def recipe(self) -> dict:
     return self.native['llm']
 
 

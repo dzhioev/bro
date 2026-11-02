@@ -47,6 +47,7 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
   Content is the wire port’s `Text` and `File`; see `bro/reference/mu.md` (man topic `mu`).
   Uncompleted replies raise `LLMStopped`.
   Operator configuration: `bro/reference/permissions.md`, "Auxiliary LLM credentials".
+- `resolved.py` — `ResolvedRecipe`, the recipe-and-source record, its JSON and environment boundary, and canonical display.
 - `retry.py` — `retry_llm(request, transient)`, retrying through a provider outage until `RETRY_WINDOW_SECONDS` run out,
   then raising `llm.py`'s provider-neutral `LLMUnavailable`.
   The recipe classifies transient errors.

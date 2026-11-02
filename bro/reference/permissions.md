@@ -347,7 +347,8 @@ Credential-derived caches refresh on store generation; resource-owning toolsets 
 
 `ride resume <workspace>` is a new operator root start with a new reading.
 It carries recorded set values (all attributed to the operator), gift, cap, and operator layer, then applies defaults again.
-Thus default picks and an unnamed recipe follow current configuration instead of freezing the first launch's resolved descriptor.
+Default credential picks follow current configuration;
+the resolved-recipe record keeps the recipe and source the session ran, unless `--llm` replaces them.
 `--cred` and credential grants/revokes replace per-kind values; permission flags replace per-name operator-layer entries; `--limit` applies caps.
 All start checks run against O.
 A resumed child is a root; its former descendants do not survive.
@@ -356,10 +357,11 @@ A resumed manual child's runtime is frozen from the invoking installation rather
 
 The host record keeps type, set values with principal attribution, normalized descriptor, gift, cap, operator gift/cap, and effective authority.
 The reading belongs to the root tree.
-Resume records keep set values, not resolved defaults, and retain pending credential operations until settled.
+Resume records keep set values and the resolved-recipe record, not other resolved defaults, and retain pending credential operations until settled.
 Summon depth and summon harness come from the new reading on resume.
 The launch audit records descriptor, gift/cap, and refusals with their rule and atom.
-Old unreadable resume records are refused, not migrated.
+Records without a resolved-recipe record are refused, not migrated, and `ride list` still lists them.
+The refusal names the workspace and recovery routes: fork its native trail with `bro chat <bro> --fork <trail>`, or start a new session.
 
 ## Visibility and refusals
 

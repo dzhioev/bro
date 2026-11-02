@@ -149,7 +149,7 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
     store,
     'bro',
     runner.trail_id,
-    llm_spec=Recipe.from_dict(recorded.header.native['llm']),
+    recipe=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
   with resumed.runner:
@@ -225,7 +225,7 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
     store,
     'bro',
     runner.trail_id,
-    llm_spec=Recipe.from_dict(recorded.header.native['llm']),
+    recipe=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
   with resumed.runner:
@@ -287,7 +287,7 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
   assert descriptor.values['cred.deepseek'] == ''
   assert checked_recipe(
     descriptor, reading, ('deepseek:deepseek-v4-pro,reasoning_effort=high', 'summon llm')
-  ) == Recipe(model='deepseek-v4-pro', reasoning_effort='high')
+  ).recipe == Recipe(model='deepseek-v4-pro', reasoning_effort='high')
 
 
 DEEPSEEK_KEY = 'host-deepseek-key'
@@ -345,7 +345,7 @@ def summoned_stage(
 
   launch = SummonLaunchSpec(mission, 'go', 'parent', tmp_path, None, llm=llm)
   session_spec = _child_session_spec(launch, 'stage', None)
-  recipe = session_spec.llm_spec
+  recipe = session_spec.recipe
   files, _ = hydrate(credentials_for(mission))
   directory = tmp_path / 'session'
   for name, content in files.items():
@@ -356,7 +356,7 @@ def summoned_stage(
     repo=None,
     harness='bro',
     hold='unattended',
-    resolved_llm=session_spec.resolved_llm,
+    resolved_recipe=session_spec.resolved_recipe,
     solo=True,
     resume=False,
     bro='bro-dev',
@@ -439,7 +439,7 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     )
     assert latest_fork_point(recorded) < rejected[0].step_id
     resumed = resume(
-      store, 'bro', runner.trail_id, llm_spec=Recipe(model='deepseek-v4-pro'), hold='unattended'
+      store, 'bro', runner.trail_id, recipe=Recipe(model='deepseek-v4-pro'), hold='unattended'
     )
     with resumed.runner:
       assert await resumed.runner.send('continue', surface='test') == 'reply'

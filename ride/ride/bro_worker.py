@@ -207,7 +207,7 @@ def _child_session_spec(
     grant=[],
     revoke=[],
     llm=None,
-    resolved_llm=spec.dump(),
+    resolved_recipe=spec.dump(),
     authority_request=dump_request(launch.record.request, launch.record.descriptor),
     mission=launch.record,
     operator_values=sorted(launch.record.operator_values),
