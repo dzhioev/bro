@@ -312,7 +312,10 @@ On the host:
 ride resume my-session --cred github+reviewer --grant @browser
 ```
 
-Resume starts a new root using current configuration and installation, reapplying defaults such as unpinned credential picks and the default recipe.
+Resume starts a new root using current configuration and installation, reapplying defaults such as unpinned credential picks.
+It runs the recorded recipe and source;
+use `ride resume my-session --llm <recipe>` to replace them on the recorded harness.
+A native replacement must use the recorded wire.
 It keeps explicit recorded values and gifts/caps unless the resume flags replace them.
 Former children do not survive a resume, and a resumed child becomes its own root.
 Use override rather than resume when a running session only needs a new target or credential and should keep its current tree alive.
@@ -357,7 +360,7 @@ An instance named only by permission may be absent without making scope inspecti
 Inside a session, call `bro::banner` or run:
 
 ```sh
-ride banner --llm
+ride banner --plain
 ```
 
 `may_summon` names usable bro targets, `permits` other usable permissions, and `may_give` rights you can hand out but not use.

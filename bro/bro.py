@@ -32,6 +32,7 @@ from bro.datasources.man import manual
 from bro.harness import Harness, get_harness
 from bro.launch.hold import UNATTENDED
 from bro.llm.llm import Recipe
+from bro.llm.resolved import ResolvedRecipe
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
 from bro.run_lifecycle import validate_answer
@@ -103,6 +104,9 @@ class LiveRun(Protocol):
   call, and the result store lives as long as the run. A process that assembles
   a bro without running one has none, and keeps its results in the session's
   store."""
+
+  @property
+  def resolved_recipe(self) -> ResolvedRecipe | None: ...
 
   @property
   def trail_id(self) -> Optional[str]: ...
@@ -289,15 +293,16 @@ _BANNER_DESCRIPTION = (
 
 
 def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variables) -> llm_mcp.Tool:
-  # the same facts `ride banner --llm` prints, rendered in-process. the bro name is
-  # passed explicitly because an in-process run's environment carries the
-  # launcher's RIDE_BRO (or none), not this bro's. the workspace import stays
-  # function-local so `import bro` stays cheap.
   def _banner() -> str:
     from bro.workspace.banner import render_banner
 
     trail_id = None if live_run is None else live_run.trail_id
-    return render_banner(llm=True, bro=bro.name, trail_id=trail_id)
+    return render_banner(
+      plain=True,
+      bro=bro.name,
+      trail_id=trail_id,
+      resolved_recipe=None if live_run is None else live_run.resolved_recipe,
+    )
 
   return llm_mcp.FunctionTool(
     _banner, name='banner', description=_BANNER_DESCRIPTION, variables=variables

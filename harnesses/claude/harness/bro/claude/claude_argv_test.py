@@ -79,7 +79,7 @@ def _declaring(*layers: ToolLayer) -> BaseBro:
 class TestRideSessionLaunch:
   def test_basic_shape(self):
     argv = _ride_session_launch(_spec()).argv
-    assert argv[:2] == ['--model', _spec().llm_spec.model]
+    assert argv[:2] == ['--model', _spec().recipe.model]
     assert '--effort' not in argv
     assert '--bare' not in argv and '--resume' not in argv
     assert argv[argv.index('--disallowed-tools') + 1] == 'mcp__claude_ai_*'

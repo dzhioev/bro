@@ -6,7 +6,8 @@ Do not produce any visible output
 
 Call the `bro::banner` tool once.
 It returns the structured session facts as `key: value` lines:
-`isolation`, `repo`, `name`, `bro`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `talk`, `permits`, and `trail_id`.
+`isolation`, `repo`, `name`, `bro`, `llm`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `talk`, `permits`, and `trail_id`.
+The `llm` row names the admitted recipe in canonical text and its source.
 Interpret them as follows:
 
 1. `isolation: boxed` means the workspace runs in its own container.

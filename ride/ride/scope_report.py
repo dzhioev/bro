@@ -47,16 +47,14 @@ def report_scope(
     manifest = existence(
       descriptor, reading, present_kinds, check_presence=False, require_recipe=False
     )
-    from bro.llm.providers import format_recipe
-    from ride.authority_scope import checked_recipe, resolve_recipe
+    from ride.authority_scope import checked_recipe
 
     resolved = checked_recipe(descriptor, reading, None if llm is None else (llm, '--llm'))
-    configured = resolve_recipe(reading, bro, harness) if llm is None else None
     print(
       'descriptor: '
       + json.dumps(dump_values(descriptor.values), ensure_ascii=False, sort_keys=True)
     )
-    print(f'llm: {format_recipe(resolved)} ({configured.source if configured else "--llm"})')
+    print(f'llm: {resolved.display()}')
     view = mission_view(mission)
     for key in ('summon_entries', 'permits', 'may_give'):
       print(f'{key}: ' + (', '.join(view[key]) or '(none)'))

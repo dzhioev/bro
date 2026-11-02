@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from bro import summon
+from bro.llm.resolved import ResolvedRecipe
 from bro.monitor import health, trail_pointer
 from bro.workspace.paths import ISOLATION_ENV
 
@@ -52,20 +53,16 @@ class SessionFacts:
   summon_entries: Optional[tuple[str, ...]] = None
   party_member: Optional[str] = None
   talk: Optional[tuple[str, ...]] = None
+  resolved_recipe: ResolvedRecipe | None = None
 
   @classmethod
   def collect(
-    cls, bro_override: Optional[str] = None, trail_id_override: Optional[str] = None
+    cls,
+    bro_override: Optional[str] = None,
+    trail_id_override: Optional[str] = None,
+    resolved_recipe: ResolvedRecipe | None = None,
   ) -> 'SessionFacts':
-    """collect session facts from env + session-local state for `ride banner`.
-
-    Read-only; an invalid published isolation fails rather than being guessed.
-    bro_override forces the `bro` fact regardless of
-    `RIDE_BRO` — for in-process callers that know the bro they run: an in-process
-    run (e.g. `bro run <bro>`) reads the launching environment, whose
-    `RIDE_BRO` is the launcher's own persona or absent. trail_id_override likewise
-    carries an in-process run's own trail, which no session recorder publishes.
-    """
+    """Collect session facts, with explicit run facts overriding the environment."""
     isolation = os.environ.get(ISOLATION_ENV) or None
     if isolation not in (None, 'boxed', 'unboxed'):
       raise ValueError(f'invalid {ISOLATION_ENV}: {isolation!r}')
@@ -93,6 +90,9 @@ class SessionFacts:
       name=name,
       repo=repo,
       bro=bro,
+      resolved_recipe=resolved_recipe
+      if resolved_recipe is not None
+      else ResolvedRecipe.from_environment(),
       host_workspace=host_workspace,
       container_workspace=container_workspace,
       exec_command=exec_command,
@@ -168,6 +168,9 @@ class SessionFacts:
         )
       )
 
+    if self.resolved_recipe is not None:
+      rows.append(('llm:', '', self.resolved_recipe.display()))
+
     if self.exec_command is not None:
       # "docker shell" because the command opens a shell *inside* the docker
       # container — the label tracks the destination, not the host that launches it
@@ -212,7 +215,7 @@ class SessionFacts:
 
     return '\n'.join(lines)
 
-  def render_llm(self) -> str:
+  def render_plain(self) -> str:
     """render the agent-facing session facts as plain key:value lines."""
     lines: list[str] = []
     if self.recording_problem is not None:
@@ -235,9 +238,8 @@ class SessionFacts:
       value = getattr(self, attribute)
       if value is not None:
         lines.append(f'{label}: {value}')
-    # stated either way, unlike the human banner's conditional row: an agent
-    # asking whether it owes a summoner an answer must not have to read a `no`
-    # out of a missing line
+    if self.resolved_recipe is not None:
+      lines.append(f'llm: {self.resolved_recipe.display()}')
     lines.append(f'summoned: {"yes" if self.summoned else "no"}')
     if self.party_member is not None:
       lines.append(f'party: joined as {self.party_member} (shared tree)')
@@ -263,20 +265,19 @@ class SessionFacts:
 
 
 def render_banner(
-  llm: bool = False, bro: Optional[str] = None, trail_id: Optional[str] = None
+  plain: bool = False,
+  bro: Optional[str] = None,
+  trail_id: Optional[str] = None,
+  resolved_recipe: ResolvedRecipe | None = None,
 ) -> str:
-  """render the banner string for the current session. visual (ANSI + logo) by
-  default; --llm for plain key:value text. exposed so in-process callers (e.g.
-  `call`'s opening bro message, the `bro::banner` service tool) can render
-  without a shell-out. bro overrides the `bro` fact — an in-process run's
-  environment carries the launcher's `RIDE_BRO` (or none), not the running
-  bro's; None falls back to the env. trail_id overrides the recorded-trail fact
-  the same way, for a run recording a trail of its own."""
-  facts = SessionFacts.collect(bro_override=bro, trail_id_override=trail_id)
-  return facts.render_llm() if llm else facts.render_visual()
+  """Render session facts, with in-process facts overriding the environment."""
+  facts = SessionFacts.collect(
+    bro_override=bro, trail_id_override=trail_id, resolved_recipe=resolved_recipe
+  )
+  return facts.render_plain() if plain else facts.render_visual()
 
 
-def banner(llm: bool) -> int:
-  """print the banner. visual by default; --llm for plain text."""
-  print(render_banner(llm))
+def banner(plain: bool) -> int:
+  """Print the banner, with --plain selecting key: value lines."""
+  print(render_banner(plain))
   return 0

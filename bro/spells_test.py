@@ -57,6 +57,7 @@ class _NoRun:
   """the `LiveRun` a bro assembled outside a run has: no trail, no tool position,
   and the session's result store."""
 
+  resolved_recipe = None
   trail_id = None
   current_tool_step_id = None
 

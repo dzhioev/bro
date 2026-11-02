@@ -1220,3 +1220,13 @@ def test_fork_without_an_override_refuses_a_recorded_unlisted_model(monkeypatch)
   recorded.header.native['llm'] = OpenAISpec(model='gpt-7').dump()
   with pytest.raises(RecipeError, match='gpt-7.*passthrough'):
     fork(recorded, 2, record=False, surface='test')
+
+
+def test_a_retired_recorded_recipe_is_readable_but_cannot_fork_without_replacement():
+  retired = next(iter(OpenAISpec.RETIRED_MODELS))
+  trail = RecordedTrail(
+    header=_trail_header(llm_spec=OpenAISpec(model=retired).dump()),
+    steps=[_step('system_prompt', _SYS_TEXT, step_id=0), _step('user_input', 'hello', step_id=1)],
+  )
+  with pytest.raises(ValueError, match='was retired on'):
+    fork(trail, 1, surface='call')

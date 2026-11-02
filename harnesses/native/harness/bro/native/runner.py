@@ -27,6 +27,7 @@ from bro.llm.observer import (
   TurnRefusedEvent,
   TurnStartedEvent,
 )
+from bro.llm.resolved import IN_PROCESS_SOURCE, ResolvedRecipe
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.llm.wire import SystemPrompt, Text, UserMessage
 from bro.monitor import session_dir, trail_pointer
@@ -87,9 +88,13 @@ class Runner:
   toolset mounts report against this run.
   """
 
-  def __init__(self, bro: BaseBro, recipe: Recipe, *, activity_file: Optional[Path] = None):
+  def __init__(
+    self, bro: BaseBro, recipe: Recipe | ResolvedRecipe, *, activity_file: Optional[Path] = None
+  ):
     self.bro = bro
-    self.recipe = recipe
+    self.resolved_recipe = (
+      recipe if isinstance(recipe, ResolvedRecipe) else ResolvedRecipe(recipe, IN_PROCESS_SOURCE)
+    )
     self.activity_file = activity_file
     self.inbox = Inbox()
     self.registry = Registry(self.inbox)
@@ -120,6 +125,10 @@ class Runner:
     self._lifetime_active = False
     self._last_end_reason: Optional[EndReason] = None
     self._last_end_detail: Optional[str] = None
+
+  @property
+  def recipe(self) -> Recipe:
+    return self.resolved_recipe.recipe
 
   @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]:

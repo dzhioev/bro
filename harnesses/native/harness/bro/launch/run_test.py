@@ -12,7 +12,7 @@ def in_process_run(monkeypatch):
   bro.name = 'dev'
   runner = MagicMock(name='runner')
   runner.run = AsyncMock(return_value='done')
-  monkeypatch.setattr('bro.launch.run.launch_llm_spec', lambda name, args: None)
+  monkeypatch.setattr('bro.launch.run.launch_recipe', lambda name, args: None)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: bro)
   monkeypatch.setattr('bro.launch.run.Runner', lambda declared, recipe, activity_file: runner)
   monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: MagicMock())
@@ -30,9 +30,9 @@ def test_runs_in_the_calling_process(in_process_run):
 
 def test_a_malformed_resolved_recipe_is_refused(monkeypatch, caplog):
   monkeypatch.setattr('bro.launch.run.Runner', lambda *args, **kwargs: pytest.fail('started'))
-  argv = ['bro', 'dev', 'hello', '--resolved-llm', '{"type":']
+  argv = ['bro', 'dev', 'hello', '--resolved-recipe', '{"type":']
   assert run_main(argv, program=['bro', 'run']) == 1
-  assert 'invalid --resolved-llm recipe' in caplog.text
+  assert 'invalid --resolved-recipe recipe' in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -75,18 +75,18 @@ def test_native_surfaces_refuse_an_absent_or_incomplete_recipe(
 def test_resolved_and_explicit_recipes_are_exclusive(capsys):
   with pytest.raises(SystemExit):
     run_main(
-      ['bro', 'dev', 'read', '--resolved-llm', '{}', '--llm', 'openai:gpt-6.1-sol'],
+      ['bro', 'dev', 'read', '--resolved-recipe', '{}', '--llm', 'openai:gpt-6.1-sol'],
       program=['bro', 'run'],
     )
 
-  assert 'arguments --resolved-llm and --llm are mutually exclusive' in capsys.readouterr().err
+  assert 'arguments --resolved-recipe and --llm are mutually exclusive' in capsys.readouterr().err
 
 
 def test_bro_run_uses_the_live_installation_stack(monkeypatch, tmp_path, home_settings_file):
   import json
 
   from bro.base import host_config
-  from bro.launch.run import launch_llm_spec
+  from bro.launch.run import launch_recipe
   from bro.llm.providers import bind_recipe
 
   home_settings_file.write_text('[llm]\nbro = "openai:gpt-5.6-terra"\n')
@@ -94,8 +94,8 @@ def test_bro_run_uses_the_live_installation_stack(monkeypatch, tmp_path, home_se
   path = tmp_path / 'host.json'
   path.write_text(json.dumps({'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': text}}}}}}))
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', path)
-  recipe = launch_llm_spec('dev', {'llm': None, 'resolved_llm': None})
-  assert recipe == bind_recipe(text)
-  assert launch_llm_spec('eyebro', {'llm': None, 'resolved_llm': None}) == bind_recipe(
+  recipe = launch_recipe('dev', {'llm': None, 'resolved_recipe': None})
+  assert recipe.recipe == bind_recipe(text)
+  assert launch_recipe('eyebro', {'llm': None, 'resolved_recipe': None}).recipe == bind_recipe(
     'openai:gpt-5.6-terra'
   )

@@ -71,7 +71,7 @@ from ride.authority_launch import request as authority_request
 from ride.authority_reading import Reading
 from ride.bro_worker import BroType
 from ride.broker_root import broker_bind_hosts
-from ride.do_ride import RESOLVED_LLM_ENV, encode_resolved_llm
+from ride.do_ride import RESOLVED_RECIPE_ENV, encode_resolved_recipe
 from ride.harness import get_harness
 from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
@@ -650,7 +650,7 @@ launch = Launch(name=name,
                      'RIDE_SESSION_DIR': '/var/ride/session',
                      **{
                          key: os.environ[key]
-                         for key in ('RIDE_E2E_QUEST_ROUTE', 'RIDE_RESOLVED_LLM')
+                         for key in ('RIDE_E2E_QUEST_ROUTE', 'RIDE_RESOLVED_RECIPE')
                          if key in os.environ
                      }},
                 secrets=tuple(json.loads(os.environ.get('RIDE_E2E_SECRETS', '[]'))),
@@ -1368,8 +1368,8 @@ def _admitted_recipe(harness: str, llm: Optional[str]) -> dict[str, str]:
 
   recipe = bind_recipe(_LAUNCH_RECIPES[harness] if llm is None else llm)
   get_harness(harness).check_recipe(recipe)
-  recipe = recipe.dump()
-  return {RESOLVED_LLM_ENV: encode_resolved_llm(recipe)}
+  record = {'recipe': recipe.dump(), 'source': 'defaults' if llm is None else '--llm'}
+  return {RESOLVED_RECIPE_ENV: encode_resolved_recipe(record)}
 
 
 def _report(env: IsolatedEnv, name: str) -> dict:
@@ -3707,7 +3707,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert 'bro::quest_watch' not in '\n'.join(notifications)
     assert '# One-shot turn end' in '\n'.join(notifications)
     assert 'bro' in authority_view.read()['may_summon']
-    assert 'may_summon: @bro' in render_banner(llm=True)
+    assert 'may_summon: @bro' in render_banner(plain=True)
     assert summon_and_wait('bro', 'answer', harness='bro', llm='echo:echo', timeout=120) == 'granted child'
     Path('/workspace/.override-summoned').touch()
     receive(runner, '--revoke @bro')

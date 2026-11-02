@@ -39,7 +39,7 @@ def _spec(**kwargs) -> SessionRun:
     repo=spec.repo,
     harness=spec.resolved_harness,
     hold=spec.hold,
-    resolved_llm=spec.resolved_llm,
+    resolved_recipe=spec.resolved_recipe,
     solo=spec.solo,
     resume=spec.resume,
     bro=spec.bro,
@@ -245,7 +245,7 @@ class TestSessionRun:
     with _Harness(tmp_path) as h:
       assert ride_runner.run_session(_spec()) == 0
       assert h.start_recorder.call_args.args[0] == tmp_path
-      assert h.start_recorder.call_args.kwargs['llm'] == _spec().llm_spec.dump()
+      assert h.start_recorder.call_args.kwargs['llm'] == _spec().recipe.dump()
       assert h.start_recorder.return_value.stop.call_count == 1
 
   def test_claude_and_its_tool_server_read_usage_from_the_file_the_runner_keeps_current(

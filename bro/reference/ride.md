@@ -64,8 +64,8 @@ the launcher's own `--log` never reaches the session.
 
 ### Lifecycle verbs
 
-- `ride resume <workspace>` relaunches the recorded session recipe, with optional `--cred`, `--grant`, and `--revoke` adjustments.
-  Resuming a solo run opens an interactive conversation in the same workspace and re-resolves the hold to `along`'s default (`attended`, or `guided` with `--unboxed`).
+- `ride resume <workspace> [--llm RECIPE]` runs the recorded recipe and source unless `--llm` replaces them, with optional `--cred`, `--grant`, `--revoke`, and `--limit` adjustments.
+  Resuming a solo run opens an interactive conversation in the same workspace, preserving its recorded hold.
 - `ride override <mission> --grant N` / `--revoke N` changes a running session's bro targets (`@<bro>`) or credential kinds;
   `--cred kind+instance` changes a held instance and holds its kind.
   Requests go through the root's operator channel.
@@ -88,8 +88,9 @@ the launcher's own `--log` never reaches the session.
 - `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--llm RECIPE]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
   `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
   Omitting `--bro` uses the installation's `default-bro`, whether attached or detached.
-  The shared LLM flags select the prospective recipe and its credential key; an absent recipe leaves the LLM key out.
-- `ride banner [--llm]` renders the session facts.
+  It prints `llm: <canonical text> (<source>)`, or the refusal with a nonzero exit status.
+- `ride banner [--plain]` renders the session facts, including `llm: <canonical text> (<source>)`;
+  `--plain` selects plain `key: value` lines instead of the visual banner.
 
 ## Harness selection
 
@@ -115,6 +116,8 @@ Two layers never combine into one recipe, and a layer naming only `bro` leaves `
 Personas declare no recipe.
 In-process `bro run` and `bro chat` read the live installation's same stack on the bro harness;
 they read only its recipe, leaving credentials ambient.
+`bro chat --fork <trail>` runs the trail’s recorded recipe unless `--llm` replaces it, with source `trail <id>` when using the record.
+The fork checks admission and requires a compatible recorded wire.
 `ride scope` prints the recipe and source or the refusal a launch would meet.
 With no configured recipe or explicit recipe, a launch refuses before running, naming `--llm` and the configuration key.
 
@@ -302,11 +305,16 @@ Ending the run still closes every job and orphans every in-flight mission, while
 
 Each session publishes its own current-trail pointer beside the workspace's `resume.json`:
 the native runner publishes when its trail opens, and the Claude recorder republishes as segments turn over.
-`ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`;
-it does not use the globally newest call or the bro class's current recipe.
+`ride resume` continues that exact trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`.
 A session with trail recording disabled publishes no pointer and cannot be resumed.
-A resume resolves the recorded selection under the current runtime, which refuses an unlisted model without `passthrough`.
-`ride resume` takes no `--llm` override: continue such a trail with `bro chat <bro> --fork <trail>` under the persona’s declaration, select a listed model or the recorded model with `+passthrough` there, or start a new session.
+A resume checks the recorded recipe for admission and harness support before starting.
+`--llm` replaces it on the recorded harness, with source `--llm`;
+only the replacement is checked for admission, so a retired recorded model can resume with a listed model or with `+passthrough`.
+A native replacement on another wire is refused before the session starts.
+
+Records without a resolved-recipe record predate this format and are refused with recovery instructions, but remain visible in `ride list`.
+Continue a native trail with `bro chat <bro> --fork <trail>`, or start a new session.
+A record naming a materialized runtime bundle re-executes that bundle’s `ride` before reading the record.
 
 Each session also names its agent's cumulative LLM usage to the commands it runs, in the usage file `BRO_USAGE_FILE` points at (`bro.llm.usage`), which the commit footer reads:
 the native LLM loop writes a file of its own process after every API call,
@@ -1289,7 +1297,7 @@ Unboxed isolation runs it from the snapshot venv and boxed isolation from the mo
 both expose only pinned session shims plus system paths.
 The distribution declares `do-ride` as both a console script and a session command, so every runtime bundle carries it beside `ride`.
 
-`do-ride` receives `RIDE_ISOLATION`, the admitted recipe in `RIDE_RESOLVED_LLM`, and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
+`do-ride` receives `RIDE_ISOLATION`, the admitted recipe in `RIDE_RESOLVED_RECIPE`, and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
 It then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
 It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, asks the selected harness to prepare its session state, and owns the optional session broxy.
 Each step is idempotent, so a launcher may pre-provision state before invoking it.
@@ -1447,7 +1455,7 @@ Wrappers and session daemons rely on a small set of env vars:
 - `RIDE_RUNTIME` — launcher-side absolute path to the ride's materialized host runtime.
   Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.
 - `RIDE_COMMAND` — the user-visible invocation this session launched under for telemetry and the banner:
-  the reconstructed `ride solo|along …` command with its flags, `ride resume <ref>` for a resume, or the `summon --join …` request that started a joined member.
+  the reconstructed `ride solo|along …` command with its flags, `ride resume [--llm RECIPE] <ref>` for a resume, or the `summon --join …` request that started a joined member.
   Set by the launch env of every started session and by the join lowering for a member.
 - `RIDE_BRO` — names the bro the session runs as (the selected bro).
   Set explicitly in the container env at every boxed launch site
@@ -1515,7 +1523,10 @@ Wrappers and session daemons rely on a small set of env vars:
 - `BRO_INSTALL_DIR` — the session's directory for credential-hook output and its current environment overlay.
   Each launcher sets its own value, overriding ambient session state;
   a direct `do-ride` invocation derives the current isolation's session environment directory and exports it.
-- `RIDE_RESOLVED_LLM` — the JSON encoding of the exact LLM recipe the launcher validated, scoped, and recorded.
+- `RIDE_RESOLVED_RECIPE` — the JSON record `{"recipe": <dump>, "source": <source>}` of the recipe the launcher admitted and its source.
+  Starts, manual commits and resume records carry the same shape under `resolved_recipe`.
+  The native harness passes it verbatim to `bro run` or `bro chat` as `--resolved-recipe`;
+  the Claude harness reads its recipe for Claude Code’s model, effort and fast mode.
   `do-ride` requires it as the session's only recipe input, so the harness runs exactly what the launch admitted and recorded.
 - `BROKER_UPSTREAM` — the host broker address supplied by a launcher, `tcp://<token>@<host>:<port>`.
   Only the session broxy consumes it (`host.docker.internal` in a container, loopback on host), removing it once the local proxy is ready.

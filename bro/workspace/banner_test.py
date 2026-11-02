@@ -51,7 +51,7 @@ class TestSessionFacts:
     assert facts.name is None
     assert facts.container_workspace is None
     assert facts.exec_command is None
-    assert 'workspace_container_path' not in facts.render_llm()
+    assert 'workspace_container_path' not in facts.render_plain()
     assert '(boxed session without a workspace)' in facts.render_visual()
 
   def test_host_worktree_reads_paths_from_the_session_environment(self, monkeypatch, tmp_path):
@@ -155,7 +155,7 @@ class TestRenderBanner:
     out = _facts(
       bro='dev',
       ride_command='ride along --bro bro task',
-    ).render_llm()
+    ).render_plain()
     assert '\033[' not in out  # no ANSI
     assert '██' not in out  # no logo
     assert 'isolation: boxed' in out
@@ -168,7 +168,7 @@ class TestRenderBanner:
     assert 'launch_command:' not in out
 
   def test_llm_emits_ride_command_for_direct_session(self):
-    out = _facts(ride_command='ride along feature').render_llm()
+    out = _facts(ride_command='ride along feature').render_plain()
     assert 'ride_command: ride along feature' in out
     assert 'launch_command:' not in out
 
@@ -179,7 +179,7 @@ class TestRenderBanner:
       host_workspace=None,
       container_workspace=None,
       exec_command=None,
-    ).render_llm()
+    ).render_plain()
     assert (
       out
       == 'isolation: unboxed\nrepo: none (detached)\nsummoned: no\ntrail_id: none (not published)'
@@ -187,7 +187,7 @@ class TestRenderBanner:
 
   def test_llm_lists_the_summon_targets(self):
     assert (
-      'may_summon: deployer, reviewer' in _facts(may_summon=('deployer', 'reviewer')).render_llm()
+      'may_summon: deployer, reviewer' in _facts(may_summon=('deployer', 'reviewer')).render_plain()
     )
 
   def test_llm_marks_the_names_an_entry_answers_to(self, monkeypatch):
@@ -196,27 +196,27 @@ class TestRenderBanner:
       'lineage',
       lambda name: (name, 'reviewer', 'bro') if name == 'house-reviewer' else (name,),
     )
-    out = _facts(may_summon=('house-reviewer', 'deployer')).render_llm()
+    out = _facts(may_summon=('house-reviewer', 'deployer')).render_plain()
     assert 'may_summon: house-reviewer (reviewer, bro), deployer' in out
 
   def test_llm_spells_out_an_empty_allow_list(self):
     # distinguishable from the omitted line of a launch that published no list
-    assert 'may_summon: none' in _facts(may_summon=()).render_llm()
+    assert 'may_summon: none' in _facts(may_summon=()).render_plain()
 
   def test_llm_and_visual_render_the_quest_talk(self):
     facts = _facts(talk=('owner.say', 'worker.question'))
-    assert 'talk: owner.say, worker.question' in facts.render_llm()
+    assert 'talk: owner.say, worker.question' in facts.render_plain()
     assert 'talk:' in facts.render_visual()
     assert 'owner.say, worker.question' in facts.render_visual()
 
   def test_llm_and_visual_spell_out_a_mute_quest(self):
     facts = _facts(talk=())
-    assert 'talk: none' in facts.render_llm()
+    assert 'talk: none' in facts.render_plain()
     assert 'talk:' in facts.render_visual()
     assert '(none)' in facts.render_visual()
 
   def test_llm_omits_may_summon_when_no_list_was_published(self):
-    assert 'may_summon' not in _facts(may_summon=None).render_llm()
+    assert 'may_summon' not in _facts(may_summon=None).render_plain()
 
   def test_llm_lists_launch_permissions_except_bro_targets(self):
     facts = _facts(
@@ -224,23 +224,23 @@ class TestRenderBanner:
     )
     assert (
       'permits: benchmark, bro.placement=join, '
-      'bro.placement=unboxed, webview.vnc' in facts.render_llm()
+      'bro.placement=unboxed, webview.vnc' in facts.render_plain()
     )
-    assert '@reviewer' not in facts.render_llm()
+    assert '@reviewer' not in facts.render_plain()
 
   def test_llm_and_visual_state_joined_party_membership(self):
     facts = _facts(party_member='broker-CH')
-    assert 'party: joined as broker-CH (shared tree)' in facts.render_llm()
+    assert 'party: joined as broker-CH (shared tree)' in facts.render_plain()
     assert 'party:' in facts.render_visual()
     assert 'joined as broker-CH' in facts.render_visual()
 
   def test_llm_states_the_summoned_fact_either_way(self):
     # an agent asking whether it owes a summoner an answer needs a stated `no`
-    assert 'summoned: yes' in _facts(summoned=True).render_llm()
-    assert 'summoned: no' in _facts(summoned=False).render_llm()
+    assert 'summoned: yes' in _facts(summoned=True).render_plain()
+    assert 'summoned: no' in _facts(summoned=False).render_plain()
 
   def test_llm_emits_the_trail_id(self):
-    assert 'trail_id: 01trail' in _facts(trail_id='01trail').render_llm()
+    assert 'trail_id: 01trail' in _facts(trail_id='01trail').render_plain()
 
   def test_visual_shows_the_summon_targets_and_trail(self):
     out = _facts(may_summon=('deployer',), trail_id='01trail').render_visual()
@@ -328,13 +328,13 @@ class TestRenderBanner:
     assert 'ride along --bro bro task' in out
 
   def test_llm_emits_the_recording_problem_as_first_line(self):
-    out = _facts(recording_problem='FAILING — see session-recorder.log').render_llm()
+    out = _facts(recording_problem='FAILING — see session-recorder.log').render_plain()
     # first line so it survives Claude's collapsed tool-output preview
     assert out.splitlines()[0] == 'session_recording: FAILING — see session-recorder.log'
     assert 'isolation: boxed' in out
 
   def test_llm_omits_the_recording_problem_when_healthy(self):
-    out = _facts().render_llm()
+    out = _facts().render_plain()
     assert 'session_recording' not in out
 
   def test_visual_paints_the_recording_problem_red_above_logo(self):

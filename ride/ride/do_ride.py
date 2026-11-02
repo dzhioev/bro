@@ -17,6 +17,7 @@ from bro.base.args import Parser
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import Recipe
+from bro.llm.resolved import RESOLVED_RECIPE_ENV, ResolvedRecipe
 from bro.monitor import PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
 from bro.summon import party_member
@@ -34,7 +35,6 @@ if TYPE_CHECKING:
 __cli_name__ = 'do-ride'
 
 INSTALL_DIRECTORY_ENV = 'BRO_INSTALL_DIR'
-RESOLVED_LLM_ENV = 'RIDE_RESOLVED_LLM'
 CONTAINER_INSTALL_DIRECTORY = '/home/ride/.bro-environment'
 
 
@@ -53,7 +53,7 @@ class SessionRun:
   repo: Optional[str]
   harness: str
   hold: str
-  resolved_llm: dict
+  resolved_recipe: dict
   solo: bool
   resume: bool
   bro: str
@@ -61,8 +61,8 @@ class SessionRun:
   activity_file: Path
 
   @property
-  def llm_spec(self) -> Recipe:
-    return Recipe.from_dict(self.resolved_llm)
+  def recipe(self) -> Recipe:
+    return ResolvedRecipe.from_dict(self.resolved_recipe).recipe
 
 
 def command(spec: 'SessionSpec') -> list[str]:
@@ -118,18 +118,15 @@ def _parse(argv: list[str]) -> dict:
   return build_parser().parse(argv)
 
 
-def encode_resolved_llm(resolved_llm: dict) -> str:
-  return json.dumps(resolved_llm, separators=(',', ':'))
+def encode_resolved_recipe(resolved_recipe: dict) -> str:
+  return ResolvedRecipe.from_dict(resolved_recipe).encode()
 
 
-def _resolved_llm() -> dict:
-  encoded = os.environ.get(RESOLVED_LLM_ENV)
+def _resolved_recipe() -> dict:
+  encoded = os.environ.get(RESOLVED_RECIPE_ENV)
   if encoded is None:
-    raise RuntimeError(f'{RESOLVED_LLM_ENV} is unset: do-ride requires the admitted recipe')
-  data = json.loads(encoded)
-  if not isinstance(data, dict):
-    raise TypeError(f'{RESOLVED_LLM_ENV} must encode an object')
-  return Recipe.from_dict(data).dump()
+    raise RuntimeError(f'{RESOLVED_RECIPE_ENV} is unset: do-ride requires the admitted recipe')
+  return ResolvedRecipe.from_dict(json.loads(encoded)).dump()
 
 
 def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:
@@ -143,7 +140,7 @@ def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:
     name=name,
     harness=harness_name,
     solo=mode == 'solo',
-    resolved_llm=_resolved_llm(),
+    resolved_recipe=_resolved_recipe(),
     activity_file=_session_state() / ACTIVITY_FILENAME,
     **args,
   )
