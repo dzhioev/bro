@@ -12,6 +12,7 @@ from bro.monitor.trail_pointer import read, session_pointer
 from bro.worker_types import PeerDescription, UnattributablePeer
 from bro.workspace.paths import workspace_dir
 from ride import pending_launch
+from ride.authority_reading import SummonAllowance
 from ride.workspace.model import Workspace
 
 if TYPE_CHECKING:
@@ -33,6 +34,7 @@ class WorkerFacts:
   published_ports: tuple[tuple[int, int], ...] = ()
   extension: Any = None
   record: Mission | Prepared | None = None
+  allowance: SummonAllowance | None = None
   pending_override: dict[str, Any] | None = None
   credential_applier: Any = None
 

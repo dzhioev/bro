@@ -216,7 +216,9 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   )
   prepared = source.rules.prepare(requested, root.authority, source)
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('root')
+    ),
     'manual': WorkerFacts(type='bro', workspace=None, record=prepared, expected=True),
   }
   peers = SimpleNamespace(for_mission=lambda identifier: facts[identifier])
@@ -226,7 +228,7 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   )
   replies = []
   context = SimpleNamespace(journal=journal, reply=lambda peer, result: replies.append(result))
-  worker = BroType(cast(Any, SimpleNamespace(depth_cap=3)))
+  worker = BroType(cast(Any, object()))
   control = LaunchControl(
     ride='root',
     types={'bro': worker},
@@ -259,6 +261,10 @@ def test_manual_commit_can_be_retried_before_claim_and_replaces_starter_picks(
   assert [reply['outcome'] for reply in replies] == ['ok', 'ok'], replies
   assert replies[0]['value']['descriptor'] == replies[1]['value']['descriptor']
   assert replies[0]['value']['commit'] == replies[1]['value']['commit']
+  parent_allowance = facts['root'].allowance
+  child_allowance = facts['manual'].allowance
+  assert parent_allowance is not None and child_allowance is not None
+  assert child_allowance.value == parent_allowance.value - 1
   assert replies[1]['value']['descriptor']['values']['cred.github'] == 'operator'
   assert replies[1]['value']['descriptor']['values']['provider'] == 'echo'
   assert replies[1]['value']['descriptor']['values']['placement'] == 'unboxed'
@@ -313,7 +319,9 @@ def test_manual_commit_checks_the_operators_fixed_option_values(
   requested, _ = request(BroType, {'target': 'browser', 'manual': True}, source, root.authority)
   prepared = source.rules.prepare(requested, root.authority, source)
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('root')
+    ),
     'manual': WorkerFacts(type='bro', workspace=None, record=prepared, expected=True),
   }
   peers = SimpleNamespace(for_mission=lambda identifier: facts[identifier])
@@ -360,7 +368,9 @@ def test_manual_commit_can_replace_a_complete_subset_option(source, tmp_path):
   )
   prepared = source.rules.prepare(requested, root.authority, source)
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('root')
+    ),
     'manual': WorkerFacts(type='bro', workspace=None, record=prepared, expected=True),
   }
   replies = []

@@ -956,7 +956,7 @@ def test_reading_freezes_the_home_stack_and_ignores_attachment_edits(
   from ride.authority_scope import resolve_recipe
 
   assert resolve_recipe(source, 'child', 'native').recipe.dump()['model'] == 'chosen'
-  assert source.default_bro == 'other' and source.summon_depth == 0
+  assert source.default_bro == 'other' and source.root_allowance('other').value == 0
   with pytest.raises(TypeError):
     cast(MutableMapping, source.layers('child')[-1].config.llm)['native'] = 'echo:changed'
   assert resolve_recipe(replace(source, attachment=None), 'child', 'native') == resolve_recipe(
@@ -1039,3 +1039,67 @@ def test_admission_refuses_a_descriptor_that_differs_from_the_recipe(installatio
   altered = Descriptor('bro', {**descriptor.values, option: value})
   with pytest.raises(ValueError, match=f'descriptor {option} differs'):
     checked_recipe(altered, source)
+
+
+@pytest.mark.parametrize(
+  ('settings_depth', 'defaults_depth', 'home_depth', 'expected'),
+  [(None, None, None, None), (5, None, None, 5), (5, 4, None, 4), (5, 4, 3, 3), (5, 4, 0, 0)],
+)
+def test_root_allowance_uses_the_last_general_layer(
+  installation, settings_depth, defaults_depth, home_depth, expected
+):
+  from bro.base.configs import DEFAULT_SUMMON_DEPTH
+
+  source = reading(
+    installation,
+    {
+      'defaults': {} if defaults_depth is None else {'summon-depth': defaults_depth},
+      'homes': {'test-home': {} if home_depth is None else {'summon-depth': home_depth}},
+    },
+    settings=HomeSettings(summon_depth=settings_depth),
+  )
+  assert source.root_allowance('child').value == (
+    DEFAULT_SUMMON_DEPTH if expected is None else expected
+  )
+
+
+@pytest.mark.parametrize(
+  ('foreign_cap', 'own_cap', 'expected'), [(0, None, 0), (0, 8, 3), (8, 0, 0)]
+)
+def test_bro_cap_last_wins_and_never_raises_the_received_allowance(
+  installation, foreign_cap, own_cap, expected
+):
+  installed = replace(installation, bro_homes={'child': 'foreign'})
+  config = {
+    'defaults': {'summon-depth': 3},
+    'homes': {
+      'foreign': {'bros': {'child': {'summon-depth': foreign_cap}}},
+      'test-home': {'bros': {'child': {} if own_cap is None else {'summon-depth': own_cap}}},
+    },
+  }
+  source = Reading(
+    Configuration.parse(config, home='test-home', bro_homes=installed.bro_homes), {}, installed
+  )
+  assert source.root_allowance('child').value == expected
+  parent = source.root_allowance('other')
+  assert source.child_allowance(parent, Descriptor('bro', {'target': 'child'})).value == min(
+    parent.value - 1, expected
+  )
+
+
+def test_bro_cap_lowers_the_subtree_even_with_generations_left(installation):
+  source = reading(
+    installation,
+    {
+      'defaults': {'summon-depth': 7},
+      'homes': {'test-home': {'bros': {'child': {'summon-depth': 1}}}},
+    },
+  )
+  child = source.child_allowance(
+    source.root_allowance('other'), Descriptor('bro', {'target': 'child'})
+  )
+  assert child.value == 1
+  grandchild = source.child_allowance(child, Descriptor('bro', {'target': 'other'}))
+  assert grandchild.value == 0
+  with pytest.raises(ValueError, match=r'allowance 0.*homes.test-home.bros.child.summon-depth=1'):
+    grandchild.check(Descriptor('webview'))

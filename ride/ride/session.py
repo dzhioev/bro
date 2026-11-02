@@ -18,7 +18,7 @@ from bro.authority.records import (
   load_request,
 )
 from bro.authority.rules import Mission
-from bro.base import configs, credentials, log
+from bro.base import credentials, log
 from bro.broker.environment import BROKER_MISSION, BROKER_UPSTREAM, Talk
 from bro.harness import harness_name
 from bro.llm import providers
@@ -100,7 +100,6 @@ _SESSION_INPUT_FIELDS = frozenset(
     'revoke',
     'limit',
     'llm',
-    'summon_depth',
     'summon_harness',
     'mission',
     'export',
@@ -132,7 +131,6 @@ class SessionSpec:
   prompt: Optional[str]
   subject: Optional[str]
   repo: Optional[str] = None
-  summon_depth: int = configs.DEFAULT_SUMMON_DEPTH
   summon_harness: str | None = None
   tree: Optional[str] = None
   runtime_bundle: Optional[str] = None
@@ -160,8 +158,6 @@ class SessionSpec:
         raise ValueError('external tree path must be absolute')
     if self.runtime_bundle is not None and self.runtime_bundle == '':
       raise ValueError('runtime bundle reference must not be empty')
-    if type(self.summon_depth) is not int or self.summon_depth <= 0:
-      raise ValueError('summon depth must be a positive integer')
     if self.harness is not None:
       harness_name(self.harness)
     if self.summon_harness is not None:
@@ -932,7 +928,6 @@ def _prepare_session(
         operator_gift=dump_authority(operator_gift, mission.descriptor),
         operator_cap=dump_authority(operator_cap, mission.descriptor),
         resolved_recipe=resolved.dump(),
-        summon_depth=reading.summon_depth,
         summon_harness=reading.summon_harness,
       )
     else:

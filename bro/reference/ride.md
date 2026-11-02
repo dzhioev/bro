@@ -617,8 +617,7 @@ revoke = ["bro.placement=boxed"]
 the mode verbs still require their bro positional.
 `harness` and `summon-harness` supply the selections described in "Harness selection".
 Each may be omitted when the launch or host configuration supplies it.
-`summon-depth` is a non-negative integer;
-a root takes the last value in its home settings, host `defaults` and `homes.<installation home>`, or the framework default when absent.
+`summon-depth` is a non-negative integer controlling the [summon allowance](#summon-allowance).
 Home settings may name credential kinds and authority entries, but not host credential instances.
 
 For bro B of home H in installation I, the stack is:
@@ -629,7 +628,8 @@ For bro B of home H in installation I, the stack is:
 4. `homes.H.bros.B`, when H differs from I;
 5. `homes.I.bros.B`.
 
-`default-bro`, `harness`, `summon-harness` and `summon-depth` take the last setting.
+`default-bro`, `harness` and `summon-harness` take the last setting.
+For `summon-depth`, the general layers set the root allowance and the bro layers set its cap, each last-wins.
 `llm` takes the last value per harness;
 `creds` takes the last pick per kind over the store defaults.
 Authority folds caps and then grants in stack order.
@@ -1182,8 +1182,29 @@ Root exit *detaches* an in-flight manual child rather than killing it
 The summoner's side is the ordinary detach flow:
 the token works with `quest check` / `quest list` / `mission watch`, reading as running until the user launches.
 
+### Summon allowance
+
+Every mission records how many more generations may start below it.
+Launching any worker type requires an allowance of at least 1:
+a summon, a joined bro, a webview and a benchmark all consume one generation.
+
+A root takes the last `summon-depth` in its installation's home settings, host `defaults` and `homes.<installation home>`, or the framework default when none sets it.
+A bro's cap is the last `summon-depth` in its bro layers:
+its foreign home entry, when applicable, then the installation's own entry.
+The root's allowance is lowered to that cap when present.
+Every launched mission receives its launcher's allowance minus 1, lowered to its own cap if it is a bro.
+A cap never raises an inherited allowance;
+a cap of 0 prevents that bro from launching anything, including when it is a root.
+
+Manual preparation does not check the allowance;
+the operator's commit checks the summoner's allowance before admitting the child.
+A refused launch names the allowance and the configuration sources that set it.
+A resumed session is a fresh root and receives a root allowance from its new reading, not its previous inherited allowance.
+
+### Host launch records
+
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds a generic `WorkerFacts` row keyed by the mission a peer undertakes:
-type, workspace and optional joined-member name, expected/artifact-view state, published ports, and a type-owned extension.
+type, workspace and optional joined-member name, expected/artifact-view state, published ports, summon allowance with its sources, and a type-owned extension.
 The bro extension carries its name and resolved placement.
 The journal's host-anchored mission seeds the root row;
 an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace, a joined bro’s inherited workspace plus channel-named member, or the claimed workspace for an expected bro filled at launch.
@@ -1194,7 +1215,7 @@ Every owner resolves through one join
 A child has an independent base with explicit gifts and caps; its [authority record](permissions.md#resume-and-durable-records) is not copied from the parent.
 The root's reading fixes configuration and recipe defaults for the whole tree.
 A peer the control cannot attribute to a mission is denied.
-The root sits at depth 0, and a request that would create a child past the configured `summon-depth` is denied.
+Every launch is subject to the [summon allowance](#summon-allowance), independently of its authority.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance from the summoner's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
 Owner attribution has one shape in the audit: `{workspace, type, member?, bro?, trail_id?}`.

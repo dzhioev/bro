@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from bro.authority.authority import Authority
+from bro.authority.patterns import Descriptor
 from bro.authority.rules import Declaration, Rules
 from bro.authority.syntax import Layer, Syntax, parse_layer
 from bro.base import credentials, host_config, log
@@ -215,6 +216,18 @@ class Installation:
 
 
 @dataclass(frozen=True)
+class SummonAllowance:
+  value: int
+  sources: tuple[str, ...]
+
+  def check(self, descriptor: Descriptor) -> None:
+    if self.value < 1:
+      raise ValueError(
+        f'allowance {self.value}; a launch needs at least 1; ' + '; '.join(self.sources)
+      )
+
+
+@dataclass(frozen=True)
 class Reading:
   configuration: Configuration
   store_defaults: Mapping[str, str]
@@ -302,7 +315,10 @@ class Reading:
     )
 
   def layers(self, target: str) -> tuple[Policy, ...]:
-    result = list(self.general_layers())
+    return (*self.general_layers(), *self.bro_layers(target))
+
+  def bro_layers(self, target: str) -> tuple[Policy, ...]:
+    result = []
     foreign = self.installation.bro_homes.get(target, self.home)
     for home in (foreign, self.home) if foreign != self.home else (self.home,):
       section = self.configuration.homes.get(home)
@@ -347,18 +363,37 @@ class Reading:
       raise self.failure(winner[1], key.replace('_', '-'), error, target) from error
     return name
 
-  @property
-  def summon_depth(self) -> int:
+  def root_allowance(self, target: str) -> SummonAllowance:
     from bro.base.configs import DEFAULT_SUMMON_DEPTH
 
-    return next(
-      (
-        policy.config.summon_depth
-        for policy in reversed(self.general_layers())
-        if policy.config.summon_depth is not None
-      ),
-      DEFAULT_SUMMON_DEPTH,
+    allowance = SummonAllowance(DEFAULT_SUMMON_DEPTH, ('framework default summon-depth',))
+    for policy in self.general_layers():
+      if policy.config.summon_depth is not None:
+        allowance = SummonAllowance(
+          policy.config.summon_depth,
+          (f'{policy.source}.summon-depth={policy.config.summon_depth}',),
+        )
+    return self._cap_allowance(allowance, target)
+
+  def child_allowance(self, parent: SummonAllowance, descriptor: Descriptor) -> SummonAllowance:
+    allowance = SummonAllowance(
+      parent.value - 1, (*parent.sources, f'inherited {parent.value} minus 1')
     )
+    return (
+      self._cap_allowance(allowance, cast(str, descriptor.values['target']))
+      if descriptor.type == 'bro'
+      else allowance
+    )
+
+  def _cap_allowance(self, allowance: SummonAllowance, target: str) -> SummonAllowance:
+    for policy in reversed(self.bro_layers(target)):
+      cap = policy.config.summon_depth
+      if cap is not None:
+        return SummonAllowance(
+          min(allowance.value, cap),
+          (*allowance.sources, f'{policy.source}.summon-depth={cap} (cap)'),
+        )
+    return allowance
 
   def configured_picks(self, target: str) -> dict[str, str]:
     result = dict(self.store_defaults)

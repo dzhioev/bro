@@ -43,6 +43,31 @@ A plain grant also lets assistant give that permission to its children.
 To allow summoning without allowing it to hand the permission onward, use `"@browser for *"` instead.
 To allow any bro target, use `"@*"`; it includes future installed names, not just today's roster.
 
+## Limit how far a session can delegate
+
+```json
+{
+  "defaults": {"summon-depth": 2},
+  "homes": {
+    "my-home": {
+      "bros": {"reviewer": {"summon-depth": 0}}
+    }
+  }
+}
+```
+
+A root assistant receives two generations, its child helper one, and that helper's children zero.
+Reviewer receives zero wherever it starts, whether as a root or a child.
+It cannot summon or open a webview even if its permissions allow those operations.
+
+General layers set a root's allowance;
+bro layers set a cap that can only lower what that bro receives.
+A cap above the inherited allowance does not grant extra generations.
+Every worker type consumes one generation, including joined bros, webviews and benchmarks.
+A manual summon may be prepared with no allowance, but its commit is refused.
+Resume starts a fresh root allowance from the new configuration.
+See [summon allowance](ride.md#summon-allowance) for the resolution rules.
+
 ## Give a session a credential, or choose an instance
 
 On the host:

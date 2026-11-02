@@ -126,7 +126,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 - `may_summon = ('reviewer',)` seeds `@reviewer` with full use and give before configuration layers apply.
   The child's base is independent of its starter; request gifts and caps add or restrict authority under the use/give checks.
   The declaration is MRO-walked and unioned like `extra_secrets`.
-  The host's depth cap separately bounds the tree.
+  The host's [summon allowance](ride.md#summon-allowance) separately bounds the tree.
 - `may_launch = ('webview',)` seeds the type's start permission with full use and give.
   The declaration is MRO-walked and unioned like `may_summon`.
   Guarded option values, such as profiles, VNC, or downloads, need their own grants.

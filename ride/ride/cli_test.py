@@ -10,7 +10,7 @@ import pytest
 import ride.cli as ride_cli
 from bro.authority.authority import Atom
 from bro.authority.patterns import Descriptor
-from bro.base import configs, credentials, host_config
+from bro.base import credentials, host_config
 from bro.workspace.paths import workspace_dir
 from bros.bro import Bro
 from ride import pending_launch
@@ -165,7 +165,6 @@ class TestAttachment:
         default_bro='bro-dev',
         harness='claude',
         summon_harness=None,
-        summon_depth=configs.DEFAULT_SUMMON_DEPTH,
         sections={},
       ),
     )

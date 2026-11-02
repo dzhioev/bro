@@ -252,12 +252,19 @@ The CLI's `--join`, `--boxed`, and `--unboxed` map to `placement=join`, `boxed`,
 `--start` selects a separate party; an otherwise unmarked summon always defaults boxed, never falls back to unboxed, and never implicitly joins.
 A join refuses `into` and `manual` and inherits its party's isolation.
 
-For each start the host resolves the starter's mission record, maps the request, normalizes it under the reading, runs use and gift rules, runs admission checks such as summon depth, records its authority, then checks existence and runs the worker.
+For each start the host resolves the starter's mission record, maps the request, and normalizes it under the reading.
+It runs use, gift and admission checks, including the summon allowance, before recording authority, checking existence and running the worker.
 Only a starter authorized to name an item learns that it is missing.
 A cap on configured credentials may refuse starting the bro unless the request drops that kind.
 Artifacts are outside this model except for publishing to the host:
 a mission can share only refs it can already read, and `bro.export` is the one permission a session needs to publish a ref it can read to the operator, who reads it with `ride artifact get`.
 The operator needs no permission to hand a host file or an exported ref to any live mission.
+
+The [summon allowance](ride.md#summon-allowance) is separate from authority and applies to every worker type.
+Each mission receives its launcher's allowance minus one;
+a bro's configured `summon-depth` cap can only lower it.
+An allowance of 0 refuses any launch even when use and gift checks pass.
+Refusals identify the allowance and the layers that set it.
 
 ## Manual children: joint starts
 
@@ -272,6 +279,7 @@ The operator supplies placement, hold, recipe, harness, and credential flags, re
 The host recomputes defaults under the root reading, validates the final descriptor, and repeats authorization against current authorities.
 Starter values and defaults are checked against the starter, operator values against O, with all patterns matched against the final descriptor.
 The gift rule runs on that final descriptor too.
+The summoner's allowance is checked at commit, not preparation.
 The launcher hydrates exactly the admitted descriptor's picks, including authentication and LLM credentials, without rereading host policy.
 
 The CLI exposes less than the abstract joint-start model: the target positional must match; changing talk, prompt, `into`, `--env`, or authority entries at commit is refused.

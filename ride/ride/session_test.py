@@ -190,7 +190,7 @@ def configured_project(monkeypatch, tmp_path):
   monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(tmp_path / 'gitconfig-system'))
 
   @contextlib.contextmanager
-  def resolved_runtime_bundle():
+  def resolved_runtime_bundle(reference=None):
     yield _runtime_bundle(tmp_path)
 
   monkeypatch.setattr(ride_session, 'resolve_runtime_bundle', resolved_runtime_bundle)
@@ -1351,7 +1351,6 @@ class TestUnboxedSession:
     monkeypatch.setattr(ride_session, 'run_started_party', run)
     spec = replace(
       _spec(isolation=Isolation.UNBOXED),
-      summon_depth=4,
       summon_harness='claude',
     )
     scope = _launch_scope(mission=mission(grant=['@dev']))
@@ -1837,7 +1836,9 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
   prepared = source.rules.prepare(requested, root.authority, source)
   token = 'manual-generation'
   facts = {
-    'root': WorkerFacts(type='bro', workspace='root', record=root),
+    'root': WorkerFacts(
+      type='bro', workspace='root', record=root, allowance=source.root_allowance('bro')
+    ),
     token: WorkerFacts(type='bro', workspace=None, expected=True, record=prepared),
   }
   journal = SimpleNamespace(
@@ -2225,3 +2226,47 @@ def test_resume_checks_support_on_the_recorded_harness(tmp_path, monkeypatch, ca
     if replacement is None:
       host.run_started_party.assert_not_called()
       assert 'claude harness cannot run' in caplog.text
+
+
+@pytest.mark.parametrize('cap', [None, 0])
+def test_resumed_child_enters_the_broker_with_a_fresh_root_allowance(cap, tmp_path, monkeypatch):
+  from ride.bro_worker import SummonLaunchSpec, _child_session_spec
+  from ride.root import _run_via_broker
+
+  original = reading(config={'defaults': {'summon-depth': 2}})
+  child = mission(target='bro', source=original, values={'harness': 'claude', 'timeout': None})
+  assert original.child_allowance(original.root_allowance('bro'), child.descriptor).value == 1
+  launch = SummonLaunchSpec(
+    record=child, prompt='work', parent='parent', parent_tree=tmp_path, summoner=None, repo=tmp_path
+  )
+  workspace = _workspace(tmp_path)
+  spec = _child_session_spec(launch, workspace.name, '/runtime')
+  ride_session.record_resume_spec(workspace, spec)
+  current = reading(
+    config={
+      'defaults': {'summon-depth': 4},
+      'homes': {'test-home': {'bros': {'bro': {} if cap is None else {'summon-depth': cap}}}},
+    }
+  )
+  monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
+  captured = []
+
+  class RootRecorded(Exception):
+    pass
+
+  def record_root(root, **kwargs):
+    captured.append(root)
+    raise RootRecorded
+
+  def run(launch, workspace, *, credential_scope, **kwargs):
+    return _run_via_broker(launch, workspace, **kwargs)
+
+  monkeypatch.setattr('ride.broker_root.PeerFacts', record_root)
+  with _ContainerHarness() as host:
+    host.take_reading.side_effect = lambda repository: current
+    host.run_started_party.side_effect = run
+    with pytest.raises(RootRecorded):
+      ride_session.resume_session('w', cred=[], grant=[], revoke=[])
+  [root] = captured
+  assert root.allowance.value == (4 if cap is None else 0)
+  assert 'defaults.summon-depth=4' in root.allowance.sources

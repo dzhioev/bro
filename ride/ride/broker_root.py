@@ -100,6 +100,7 @@ def run_root_via_broker(
       workspace=workspace.name,
       tree=workspace.tree,
       record=mission,
+      allowance=reading.root_allowance(bro),
       artifact_view=(
         PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if isinstance(launch, DockerLaunchSpec) else None
       ),
