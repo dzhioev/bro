@@ -171,6 +171,14 @@ def build_parser() -> Parser:
 
   check_harness.add_argument('name', choices=HARNESS_NAMES, help='installed harness to check')
 
+  check_host = subparsers.add_parser(
+    'check-host',
+    help='check the host prerequisites a launch needs, each with its fix (exit 0=all hold)',
+  )
+  check_host.add_argument(
+    '--install', action='store_true', help='first run the fixes that need no root'
+  )
+
   exec_command = subparsers.add_parser(
     'exec', help='exec a command in a running boxed workspace (default: interactive bash)'
   )
@@ -461,6 +469,14 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'check-harness':
     get_harness(args['name']).check_runtime()
     return None
+  if command == 'check-host':
+    from ride.host_check import UnsupportedHost, check_this_host
+
+    try:
+      return check_this_host(install=args['install'])
+    except UnsupportedHost as error:
+      log.error('%s', error)
+      return 1
   if command == 'check-clean':
     try:
       workspace = Workspace.open(args['name'])

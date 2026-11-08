@@ -317,6 +317,7 @@ PYTEST_FILES = [
   'bro/launch/broxy_test.py',
   'harnesses/native/harness/bro/native/harness_test.py',
   'ride/ride/harness_test.py',
+  'ride/ride/host_check_test.py',
   'ride/ride/provisioning_test.py',
   'ride/ride/identity_test.py',
   'ride/ride/root_test.py',

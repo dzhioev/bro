@@ -33,13 +33,10 @@ _SCRIPTS = [
 ]
 
 # data files the distribution deliberately leaves behind: development docs, and
-# the host-provisioning scripts `setup_env.sh` drives from a checkout
+# the checkout's bump of the uv pin
 _NOT_SHIPPED = [
   '*/AGENTS.md',
-  'bro/setup/setup_env.sh',
   'bro/setup/bump-uv.sh',
-  'bro/setup/versions.sh',
-  'bro/setup/ubuntu/*',
 ]
 
 _GUARD = """
