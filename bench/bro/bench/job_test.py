@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import subprocess
 from pathlib import Path
 from typing import cast
 
@@ -18,18 +19,21 @@ from bro.quest import LAUNCH
 from bro.worker_types import Host, LaunchDenied, LaunchRequest, PeerDescription, installed_type
 
 TIMEOUT = 5.0
-CONFIG = 'benchmark/bro/benchmark/job.yaml'
+CONFIG = 'var/benchmark/runs/job.json'
 ROOT = 'root-peer'
 REF = 'sha256:' + 'a' * 64 + '/run'
 
 
 @pytest.fixture
-def tree(tmp_path):
+def tree(tmp_path, monkeypatch):
+  """a workspace with a benchmark project and a docker-environment job config, on a
+  host whose compose plugin answers."""
+  monkeypatch.setattr(job, 'compose_missing', lambda: False)
   (tmp_path / 'benchmark').mkdir()
   (tmp_path / 'benchmark' / 'pyproject.toml').write_text('[project]\n')
   config = tmp_path / CONFIG
   config.parent.mkdir(parents=True)
-  config.write_text('datasets: []\n')
+  config.write_text('{"datasets": []}\n')
   return tmp_path
 
 
@@ -124,18 +128,38 @@ class TestBenchmarkType:
     assert 'relative to the workspace root' in _denial(tree, {'config': str(tree / CONFIG)})
 
   def test_config_escaping_the_workspace_is_denied(self, tree, tmp_path_factory):
-    outside = tmp_path_factory.mktemp('outside') / 'job.yaml'
-    outside.write_text('datasets: []\n')
+    outside = tmp_path_factory.mktemp('outside') / 'job.json'
+    outside.write_text('{"datasets": []}\n')
     relative = '../' * 10 + str(outside).lstrip('/')
     assert 'escapes the workspace' in _denial(tree, {'config': relative})
 
   def test_absent_config_file_is_denied(self, tree):
-    assert 'no job config' in _denial(tree, {'config': 'benchmark/nothing.yaml'})
+    assert 'no job config' in _denial(tree, {'config': 'benchmark/nothing.json'})
 
   def test_workspace_without_benchmark_project_is_denied(self, tmp_path):
-    config = tmp_path / 'job.yaml'
-    config.write_text('datasets: []\n')
-    assert 'no benchmark project' in _denial(tmp_path, {'config': 'job.yaml'})
+    config = tmp_path / 'job.json'
+    config.write_text('{"datasets": []}\n')
+    assert 'no benchmark project' in _denial(tmp_path, {'config': 'job.json'})
+
+  def test_a_config_that_is_no_json_object_is_denied(self, tree):
+    (tree / CONFIG).write_text('datasets: []\n')
+    assert 'is not JSON' in _denial(tree, {'config': CONFIG})
+
+  def test_a_docker_job_on_a_host_without_compose_is_denied_with_the_fix(self, tree, monkeypatch):
+    monkeypatch.setattr(job, 'compose_missing', lambda: True)
+
+    denial = _denial(tree, {'config': CONFIG})
+
+    assert 'no docker compose plugin' in denial
+    assert job.COMPOSE_FIX in denial
+
+  def test_a_job_on_another_environment_needs_no_compose(self, tree, monkeypatch):
+    monkeypatch.setattr(job, 'compose_missing', lambda: True)
+    (tree / CONFIG).write_text('{"environment": {"type": "daytona"}}\n')
+
+    run = _worker_type().launch(_request(tree, {'config': CONFIG}))
+
+    assert run.command.command[0] == 'uv'
 
 
 def _result(request_id: str, payload: dict) -> Message:
@@ -338,3 +362,36 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
 def test_start_lifetime_requires_whole_seconds(seconds):
   with pytest.raises(SystemExit):
     job.main(['benchmark-job', 'start', '-c', CONFIG, '--timeout', seconds])
+
+
+@pytest.mark.parametrize(
+  ('environment', 'drives'),
+  [
+    ({}, True),
+    ({'type': 'docker'}, True),
+    ({'import_path': 'package.module:Environment'}, True),
+    ({'type': 'modal'}, False),
+  ],
+)
+def test_the_docker_environment_is_the_one_naming_no_other_type(environment, drives):
+  assert job.drives_compose(environment) is drives
+
+
+@pytest.mark.parametrize(('returncode', 'missing'), [(0, False), (1, True)])
+def test_the_compose_plugin_is_probed_through_the_docker_cli(monkeypatch, returncode, missing):
+  monkeypatch.setattr(
+    job.subprocess,
+    'run',
+    lambda command, **kwargs: subprocess.CompletedProcess(command, returncode),
+  )
+
+  assert job.compose_missing() is missing
+
+
+def test_a_host_without_docker_at_all_lacks_compose(monkeypatch):
+  def absent(*args, **kwargs):
+    raise FileNotFoundError('docker')
+
+  monkeypatch.setattr(job.subprocess, 'run', absent)
+
+  assert job.compose_missing() is True
