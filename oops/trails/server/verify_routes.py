@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from bro.base import log
+
 
 def verify(base_url: str, token: str, fixtures: Path) -> None:
   def request(path: str, payload: dict | None = None) -> dict:
@@ -30,7 +32,7 @@ def verify(base_url: str, token: str, fixtures: Path) -> None:
     assistant = [message for message in messages if message['type'] == 'assistant']
     assert assistant[0]['content'] == case['reply'], assistant
     assert assistant[0]['terminal'] is True, assistant
-    print(f'{case["name"]}: blaze, append and projection passed', flush=True)
+    log.info('%s: blaze, append and projection passed', case['name'])
 
 
 if __name__ == '__main__':

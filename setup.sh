@@ -1,6 +1,6 @@
 #!/usr/bin/env -S bash -e
-DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-cd "$DIR"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/bro/setup/prelude.sh"
+cd "$HERE"
 
 # RIDE_VENV_MANIFEST names a directory holding, at their repository-relative paths,
 # the dependency manifests that the venv already linked into this tree was
@@ -11,7 +11,7 @@ manifests_match() {
   local staged compared=0
   [ -n "${RIDE_VENV_MANIFEST:-}" ] || return 1
   while IFS= read -r staged; do
-    cmp -s "$staged" "$DIR/${staged#"$RIDE_VENV_MANIFEST"/}" || return 1
+    cmp -s "$staged" "$HERE/${staged#"$RIDE_VENV_MANIFEST"/}" || return 1
     compared=1
   done < <(find "$RIDE_VENV_MANIFEST" -type f)
   [ "$compared" = 1 ]
@@ -19,7 +19,7 @@ manifests_match() {
 
 if ! manifests_match; then
   if [ -n "${RIDE_VENV_MANIFEST:-}" ]; then
-    echo 'dependency manifests differ from the linked venv; syncing it' >&2
+    log INFO 'dependency manifests differ from the linked venv; syncing it'
   fi
   unset VIRTUAL_ENV
   uv sync --all-packages --all-groups --all-extras
@@ -28,6 +28,6 @@ fi
 printf 'bro\n' > .venv/bro-installation-home
 
 # shellcheck source=/dev/null
-source "$DIR/.venv/bin/activate"
+source "$HERE/.venv/bin/activate"
 python -m ride.provisioning
 bro.dev.install

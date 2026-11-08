@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # sourceable helpers for service deployment scripts; callers provide deployment config.
 
+source "$(bro-shell-dir)/log.sh"
 _UV_VERSION="$(cat "$(bro-shell-dir)/uv-version")"
 
 BRO_SERVER_BASE_IMAGE="${BRO_SERVER_BASE_IMAGE:-bro-server-base}"
@@ -119,7 +120,7 @@ stage_bro_wheel() {
     ) || return
     description="${url}@${revision}"
   fi
-  echo "staged wheels in ${output_directory} from ${description}"
+  log INFO "staged wheels in ${output_directory} from ${description}"
 }
 
 ensure_server_base() {
@@ -194,11 +195,11 @@ trigger_image_build() {
   case "$image_digest" in
     None) ;;
     sha256:*)
-      echo "using existing image for target ${target}, commit ${commit}: ${image_digest}"
+      log INFO "using existing image for target ${target}, commit ${commit}: ${image_digest}"
       return 0
       ;;
     *)
-      echo "error: unexpected ECR digest for target ${target}, commit ${commit}: ${image_digest}" >&2
+      log ERROR "unexpected ECR digest for target ${target}, commit ${commit}: ${image_digest}"
       return 1
       ;;
   esac
@@ -212,7 +213,7 @@ trigger_image_build() {
     fi
   done < <(git for-each-ref --format='%(objectname)' refs/remotes/origin)
   if [ "$pushed" != "true" ]; then
-    echo "error: HEAD ${commit} is not reachable from any origin branch; push it first" >&2
+    log ERROR "HEAD ${commit} is not reachable from any origin branch; push it first"
     return 1
   fi
 
@@ -226,7 +227,7 @@ trigger_image_build() {
       "name=IMAGE_REGION,value=${region},type=PLAINTEXT" \
       "name=UV_VERSION,value=${_UV_VERSION},type=PLAINTEXT" \
     --query build.id --output text)"
-  echo "started build ${build_id} (target ${target}, commit ${commit})"
+  log INFO "started build ${build_id} (target ${target}, commit ${commit})"
 
   status=IN_PROGRESS
   token=""
@@ -250,7 +251,7 @@ trigger_image_build() {
         --start-from-head \
         "${token_arguments[@]}" \
         --output json)"
-      jq -j '.events[].message' <<<"$events"
+      jq -j '.events[].message' <<<"$events" >&2
       token="$(jq -r '.nextForwardToken' <<<"$events")"
     fi
     if [ "$status" != "IN_PROGRESS" ]; then
@@ -258,7 +259,7 @@ trigger_image_build() {
     fi
     sleep 10
   done
-  echo "build ${build_id}: ${status}"
+  log INFO "build ${build_id}: ${status}"
   [ "$status" = "SUCCEEDED" ]
 }
 
@@ -334,7 +335,7 @@ cdk_diff() {
     # an option reaches the CLI's own verdict: `--security-only` alone drops every resource
     # line, leaving the scan to read a stack the deploy destroys as a clean plan
     if [ "${stack#-}" != "$stack" ]; then
-      echo "error: cdk_diff takes stack names only, not ${stack}" >&2
+      log ERROR "cdk_diff takes stack names only, not ${stack}"
       return 2
     fi
   done

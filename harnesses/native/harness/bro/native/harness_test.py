@@ -746,4 +746,4 @@ def test_provider_diagnostic_runs_complete_recipe_text(capsys):
   from bro.native.llm import main
 
   main(['bro.native.llm', '--llm', 'echo:echo', 'diagnostic request'])
-  assert '< diagnostic request' in capsys.readouterr().out
+  assert capsys.readouterr().out == 'diagnostic request\n'

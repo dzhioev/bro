@@ -5,6 +5,7 @@ from typing import Optional
 import pytest
 
 import bro.claude.claude_config as ride_claude_config
+from bro.base.args import CLIError
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -73,7 +74,7 @@ class TestSeedClaudeJSON:
   def test_missing_identity_key_is_fatal(self, tmp_path):
     host = tmp_path / 'host.json'
     host.write_text(json.dumps({'userID': 'uid'}))
-    with pytest.raises(SystemExit):
+    with pytest.raises(CLIError):
       self._seed(_seed_dir(tmp_path), host)
 
   def test_seed_is_not_overwritten_on_second_call(self, tmp_path):

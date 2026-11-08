@@ -16,6 +16,7 @@ afterwards.
 import json
 import os
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -46,7 +47,9 @@ def build_bundle(tree: Path) -> None:
   """rebuild the relocatable bundle, so the trials run this checkout's framework
   rather than whatever an older build left in the tree."""
   log.info('building the bundle the trials run from')
-  spawn.run(_benchmark_command(tree, 'benchmark', 'bundle'), cwd=tree, check=True)
+  spawn.run(
+    _benchmark_command(tree, 'benchmark', 'bundle'), cwd=tree, check=True, stdout=sys.stderr
+  )
 
 
 def run_host_job(
@@ -59,7 +62,7 @@ def run_host_job(
     tree, 'bro.benchmark.job', '-c', str(config), '--jobs-dir', str(jobs), '--job-name', job_name
   )
   try:
-    spawn.run(command, cwd=tree, check=True, timeout=timeout, grace=TERM_GRACE)
+    spawn.run(command, cwd=tree, check=True, timeout=timeout, grace=TERM_GRACE, stdout=sys.stderr)
   except subprocess.TimeoutExpired:
     raise JobError(f'no result within {timeout:.0f}s; the job was killed') from None
   except subprocess.CalledProcessError as error:

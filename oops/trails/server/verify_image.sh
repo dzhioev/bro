@@ -46,6 +46,10 @@ if [ "$missing_status" -ne 1 ]; then
   log ERROR "expected startup failure, got status $missing_status"
   exit 1
 fi
-grep -F 'cannot serve bro.llm.wires:chat' "$smoke_directory/missing-entry.log"
+if ! grep -qF 'cannot serve bro.llm.wires:chat' "$smoke_directory/missing-entry.log"; then
+  cat "$smoke_directory/missing-entry.log" >&2
+  log ERROR 'expected the startup failure to name the missing bro.llm.wires:chat entry'
+  exit 1
+fi
 
 log INFO 'verification passed'

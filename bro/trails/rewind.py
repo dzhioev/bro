@@ -65,7 +65,7 @@ def _command_list(client: TrailsStore, args: dict[str, Any]) -> int:
     )
   ]
   if len(records) == 0:
-    print('(no trails)', file=sys.stderr)
+    log.info('no trails')
     return 0
   configuration = _configuration(args, PresetName.REWIND_LIST)
   _emit_document(_retained_document(records, configuration), args, configuration)
@@ -236,7 +236,7 @@ def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
   try:
     regex = re.compile(args['pattern'], re.IGNORECASE if args.get('ignore_case', False) else 0)
   except re.error as exception:
-    raise SystemExit(f'invalid pattern {args["pattern"]!r}: {exception}') from exception
+    raise base_args.CLIError(f'invalid pattern {args["pattern"]!r}: {exception}') from exception
 
   context_value: Optional[int] = args.get('context')
   default_context = context_value if context_value is not None else 0
@@ -245,7 +245,7 @@ def _command_grep(client: TrailsStore, args: dict[str, Any]) -> int:
   before_value: Optional[int] = args.get('before_context')
   before = before_value if before_value is not None else default_context
   if before < 0 or after < 0:
-    raise SystemExit('context lengths must be non-negative')
+    raise base_args.CLIError('context lengths must be non-negative')
   has_context = before > 0 or after > 0
 
   trail_ids: list[str] = args.get('trails', [])

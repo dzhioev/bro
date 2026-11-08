@@ -624,13 +624,13 @@ class TestCredentialHydrationRoutes:
     result = ride_cli.main(
       ['ride', 'scope', '--repo', str(route.repository), '--bro', 'hydration-test', *flags]
     )
-    output = capsys.readouterr().out
+    captured = capsys.readouterr()
     if layer == 'absent':
       assert result == 1
-      assert 'no harness for hydration-test: pass --harness' in output
+      assert 'no harness for hydration-test: pass --harness' in captured.err
     else:
       assert result == 0
-      descriptor = json.loads(output.splitlines()[0].removeprefix('descriptor: '))
+      descriptor = json.loads(captured.out.splitlines()[0].removeprefix('descriptor: '))
       assert descriptor['harness'] == 'bro'
 
   @pytest.mark.parametrize('content', [None, 'not a home\n'])
@@ -818,7 +818,7 @@ class TestLifecycle:
 
       resolve.return_value = Repository(str(tmp_path), tmp_path)
       assert ride_cli.main(['ride', 'scope', '--repo', str(tmp_path), '--bro', 'dev']) == 1
-    assert 'harness' in capsys.readouterr().out
+    assert 'harness' in capsys.readouterr().err
 
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):
     monkeypatch.setenv('XDG_DATA_HOME', 'share')

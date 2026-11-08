@@ -25,7 +25,7 @@ for store in "$SMOKE_TMP/bro" "$SMOKE_TMP/detached-bro" \
   echo '{}' > "$store/creds.json"
 done
 
-echo "building runtime and project images" >&2
+log INFO "building runtime and project images"
 python - "$TAG" "$PROJECT" "$SMOKE_TMP/bundle-hash" >&2 <<'PY'
 import sys
 from pathlib import Path
@@ -77,7 +77,7 @@ CONSUMER_UV_TAG="bro/consumer-uv-smoke:test"
 make_consumer_repo "$CONSUMER_UV_REPO" bro/consumer-uv-smoke
 uv lock --directory "$CONSUMER_UV_REPO"
 if grep -Eq '^name = "bro(-[a-z]+)?"$' "$CONSUMER_UV_REPO/uv.lock"; then
-  echo "the consumer lock resolves a framework distribution" >&2
+  log ERROR "the consumer lock resolves a framework distribution"
   exit 1
 fi
 git -C "$CONSUMER_UV_REPO" add .
@@ -125,7 +125,7 @@ echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.cla
 echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
 HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
 
-echo "running entrypoint" >&2
+log INFO "running entrypoint"
 docker run --rm -i \
   -v "$SMOKE_TMP/workspace:/workspace" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
@@ -175,7 +175,7 @@ SMOKE
 grep -q modified_by_container "$SMOKE_TMP/claude/.claude.json"
 test "$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)" = "$HOST_CLAUDE_SHA"
 
-echo "running consumer fixture without bro in its lock" >&2
+log INFO "running consumer fixture without bro in its lock"
 docker run --rm \
   -v "$SMOKE_TMP/consumer-uv-workspace:/workspace" \
   -v "$SMOKE_TMP/consumer-uv-claude:/home/ride/.claude" \
@@ -192,7 +192,7 @@ docker run --rm \
     test ! -e /workspace/setup.sh
   ' >&2
 
-echo "running consumer fixture without a uv lock or setup.sh" >&2
+log INFO "running consumer fixture without a uv lock or setup.sh"
 python - "$RUNTIME_TAG" "$CONSUMER_PLAIN_REPO" <<'PY'
 import sys
 from pathlib import Path
@@ -215,7 +215,7 @@ docker run --rm \
     test ! -e /workspace/setup.sh
   ' >&2
 
-echo "running detached entrypoint" >&2
+log INFO "running detached entrypoint"
 docker run --rm \
   -v "$SMOKE_TMP/detached-workspace:/workspace" \
   -v "$SMOKE_TMP/detached-claude:/home/ride/.claude" \
@@ -241,4 +241,4 @@ docker run --rm \
   -e "EXPECTED_ORIGIN_MASTER=$EXPECTED_ORIGIN_MASTER" \
   "$TAG" bash -c 'test "$(readlink /workspace/.venv)" = /opt/project-venv' >&2
 
-echo "smoke test passed" >&2
+log INFO "smoke test passed"

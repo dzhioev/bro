@@ -17,6 +17,7 @@ from pathlib import Path, PurePath
 from typing import Optional
 
 from bro.base import log
+from bro.base.args import CLIError
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -207,7 +208,7 @@ def _seed_claude_json(
     if host is not None:
       for key in _CLAUDE_JSON_IDENTITY_KEYS:
         if key not in host:
-          raise SystemExit(f'{host_file} has no {key!r} — log in with claude on the host first')
+          raise CLIError(f'{host_file} has no {key!r} — log in with claude on the host first')
         data[key] = host[key]
     seed.write_text(json.dumps(data))
     seed.chmod(0o600)

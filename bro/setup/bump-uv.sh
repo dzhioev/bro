@@ -7,4 +7,4 @@ VERSION="$(
     | python3 -c 'import json, sys; print(json.load(sys.stdin)["info"]["version"])'
 )"
 printf '%s\n' "$VERSION" > "$HERE/uv-version"
-echo "uv pinned to $VERSION" >&2
+log INFO "uv pinned to $VERSION"

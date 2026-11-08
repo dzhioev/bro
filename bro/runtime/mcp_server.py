@@ -57,9 +57,11 @@ def _toolset_server(namespace: str) -> 'MCPServer':
   ]
   if len(matches) > 1:
     values = ', '.join(entry_point.value for entry_point in matches)
-    raise SystemExit(f'duplicate toolset {namespace!r}: {values}')
+    raise base_args.CLIError(f'duplicate toolset {namespace!r}: {values}')
   if len(matches) == 0:
-    raise SystemExit(f'unknown server {namespace!r}; expected one of {_known_server_forms()}')
+    raise base_args.CLIError(
+      f'unknown server {namespace!r}; expected one of {_known_server_forms()}'
+    )
   from bro.mcp import Toolset
 
   toolset = matches[0].load()
@@ -71,13 +73,17 @@ def _toolset_server(namespace: str) -> 'MCPServer':
 def _target_servers(spec: str) -> list['MCPServer']:
   target, separator, value = spec.partition(':')
   if separator == '' or value == '':
-    raise SystemExit(f'invalid assembled target {spec!r}; expected one of {_target_forms()}')
+    raise base_args.CLIError(
+      f'invalid assembled target {spec!r}; expected one of {_target_forms()}'
+    )
   matches = [entry_point for entry_point in _target_entry_points() if entry_point.name == target]
   if len(matches) > 1:
     values = ', '.join(entry_point.value for entry_point in matches)
-    raise SystemExit(f'duplicate assembled target {target!r}: {values}')
+    raise base_args.CLIError(f'duplicate assembled target {target!r}: {values}')
   if len(matches) == 0:
-    raise SystemExit(f'unknown assembled target {target!r}; expected one of {_target_forms()}')
+    raise base_args.CLIError(
+      f'unknown assembled target {target!r}; expected one of {_target_forms()}'
+    )
   resolver = matches[0].load()
   servers = resolver(value)
   from bro.llm.mcp import MCPServer
@@ -114,7 +120,7 @@ def _lowlevel_server(label: str, entries: list['Tool']) -> 'Server':
   output_validators: dict[str, Validator] = {}
   for tool in entries:
     if tool.name in tools_by_name:
-      raise SystemExit(f'duplicate tool name {tool.name!r} in {label!r}')
+      raise base_args.CLIError(f'duplicate tool name {tool.name!r} in {label!r}')
     tools_by_name[tool.name] = tool
     input_validators[tool.name] = validator(tool.parameters)
     if tool.output_schema is not None:
@@ -363,9 +369,9 @@ def main(argv: list[str]) -> Optional[int]:
     if (
       args['port'] is not None or args['port_file'] is not None or args['bearer_token'] is not None
     ):
-      raise SystemExit('--port/--port-file/--bearer-token only apply with --http')
+      parser.error('--port/--port-file/--bearer-token only apply with --http')
     if ':' in args['server']:
-      raise SystemExit('assembled targets serve one endpoint per namespace; run them with --http')
+      parser.error('assembled targets serve one endpoint per namespace; run them with --http')
     asyncio.run(run(_resolve_servers(args['server'])[0]))
     return None
 
@@ -373,7 +379,7 @@ def main(argv: list[str]) -> Optional[int]:
   if bearer_token is None:
     bearer_token = os.environ.get(BEARER_TOKEN_ENV)
   if args['port'] is None or bearer_token is None:
-    raise SystemExit(f'--http requires --port and --bearer-token or {BEARER_TOKEN_ENV}')
+    parser.error(f'--http requires --port and --bearer-token or {BEARER_TOKEN_ENV}')
   # bind before the heavy import/tool resolution: the port is discoverable
   # (--port-file) milliseconds in and is never released between discovery and
   # serving, and a client connect that lands mid-import sits in the TCP backlog

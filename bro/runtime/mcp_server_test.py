@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Optional
 import pytest
 from starlette.testclient import TestClient
 
+from bro.base.args import CLIError
 from bro.bro import BaseBro
 from bro.datasources.searchable import Hit, SearchableDataSource
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer, Tool
@@ -150,12 +151,12 @@ class TestResolveServers:
 
   def test_unknown_target_has_a_clear_error(self, monkeypatch):
     monkeypatch.setattr(mcp_server, '_target_entry_points', lambda: ())
-    with pytest.raises(SystemExit, match="unknown assembled target 'missing'"):
+    with pytest.raises(CLIError, match="unknown assembled target 'missing'"):
       _resolve_servers('missing:value')
 
   def test_absent_toolset_has_a_clear_error(self, monkeypatch):
     monkeypatch.setattr(mcp_server, '_toolset_entry_points', lambda: ())
-    with pytest.raises(SystemExit, match="unknown server 'tasks'; expected one of"):
+    with pytest.raises(CLIError, match="unknown server 'tasks'; expected one of"):
       _resolve_servers('tasks')
 
   def test_contributed_brog(self, monkeypatch):
@@ -172,7 +173,7 @@ class TestResolveServers:
     assert servers[0].namespace == 'brog'
 
   def test_unknown(self):
-    with pytest.raises(SystemExit, match='unknown server'):
+    with pytest.raises(CLIError, match='unknown server'):
       _resolve_servers('does-not-exist')
 
 
@@ -217,14 +218,16 @@ class TestHTTPBindBeforeResolve:
       mcp_server.main(['mcp-server', 'tasks', '--http', '--port', '0'])
     assert captured['token'] == 'env-token'
 
-  def test_http_requires_a_bearer_token_source(self, monkeypatch):
+  def test_http_requires_a_bearer_token_source(self, monkeypatch, capsys):
     monkeypatch.delenv(mcp_server.BEARER_TOKEN_ENV, raising=False)
-    with pytest.raises(SystemExit, match='requires --port and --bearer-token or'):
+    with pytest.raises(SystemExit):
       mcp_server.main(['mcp-server', 'tasks', '--http', '--port', '0'])
+    assert 'requires --port and --bearer-token or' in capsys.readouterr().err
 
-  def test_port_file_requires_http(self):
-    with pytest.raises(SystemExit, match='only apply with --http'):
+  def test_port_file_requires_http(self, capsys):
+    with pytest.raises(SystemExit):
       mcp_server.main(['mcp-server', 'tasks', '--port-file', '/tmp/port'])
+    assert 'only apply with --http' in capsys.readouterr().err
 
 
 class TestHealth:
@@ -289,7 +292,7 @@ class TestNamespaceEndpoints:
       assert {t['name'] for t in body['result']['tools']} == {'_ping', '_pong'}
 
   def test_duplicate_tool_in_namespace_raises(self):
-    with pytest.raises(SystemExit, match="duplicate tool name '_ping'"):
+    with pytest.raises(CLIError, match="duplicate tool name '_ping'"):
       create_http_app([_create_ping_server(), _create_ping_server()], TOKEN)
 
 
@@ -471,7 +474,7 @@ class TestServerLifetime:
   def test_http_construction_failure_closes_every_server(self):
     first = _ClosingServer('same')
     second = _ClosingServer('same')
-    with pytest.raises(SystemExit, match="duplicate tool name '_ping'"):
+    with pytest.raises(CLIError, match="duplicate tool name '_ping'"):
       create_http_app([first, second], TOKEN)
     assert first.close_count == 1
     assert second.close_count == 1

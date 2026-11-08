@@ -732,7 +732,7 @@ def select(base: str) -> Selection:
   """the work a change against `base` can reach, stage by stage."""
   source_roots = distribution_roots(DIR, [project.directory for project in PROJECTS])
   changed = changed_paths(DIR, base)
-  print(f'{len(changed)} paths changed against {base}', file=sys.stderr)
+  log.info('%d paths changed against %s', len(changed), base)
   seeds = {name for path in changed if (name := module_name(source_roots, DIR / path)) is not None}
   hit = reachable(import_graph(DIR, source_roots), seeds)
 

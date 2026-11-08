@@ -27,6 +27,7 @@ def _stub_tree(tmp_path: Path) -> Path:
   tree = tmp_path / 'tree'
   tree.mkdir()
   shutil.copy(SETUP_SCRIPT, tree / 'setup.sh')
+  shutil.copytree(SETUP_SCRIPT.parent / 'bro' / 'setup', tree / 'bro' / 'setup')
   for relative_path in MANIFESTS:
     manifest = tree / relative_path
     manifest.parent.mkdir(parents=True, exist_ok=True)

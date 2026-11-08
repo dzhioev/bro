@@ -313,7 +313,7 @@ def main(argv: list[str]) -> Optional[int]:
   project = _project(Path(args['project']))
   if args['check'] is True:
     if not check(project):
-      print('console-script artifacts are stale; run `sync-scripts` and commit', file=sys.stderr)
+      log.error('console-script artifacts are stale; run `sync-scripts` and commit')
       return 1
     return 0
   both = not args['pyproject'] and not args['entrypoints']

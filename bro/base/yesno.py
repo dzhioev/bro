@@ -21,9 +21,9 @@ def yesno(question: str, default=NO) -> bool:
       elif response in ['n', 'no']:
         return False
       else:
-        print("Please enter 'y(es)' or 'n(o)' (or press Enter for default)")
+        print("answer 'y(es)' or 'n(o)', or press Enter for the default")
     except KeyboardInterrupt:
-      print('\nInterrupted!')
+      print('\ninterrupted')
       raise
     except EOFError:
       print(f'\n{default_char}')

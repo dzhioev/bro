@@ -90,11 +90,11 @@ else:
 ' <<<"$1"
 }
 
-echo "waiting for deployment to start"
+log INFO "waiting for deployment to start"
 
 while true; do
   json="$(get_json)" || {
-    echo "aws error: $json" >&2
+    log WARNING "aws error: $json"
     sleep "$POLL_INTERVAL"
     continue
   }
@@ -109,7 +109,7 @@ saw_running=0
 
 while true; do
   json="$(get_json)" || {
-    echo "aws error: $json" >&2
+    log WARNING "aws error: $json"
     sleep "$POLL_INTERVAL"
     continue
   }
@@ -118,7 +118,7 @@ while true; do
   key="$(head -1 <<<"$output")"
   display="$(tail -1 <<<"$output")"
   if [ "$key" != "$previous_key" ]; then
-    echo "$display"
+    log INFO "$display"
     previous_key="$key"
   fi
 
@@ -126,10 +126,10 @@ while true; do
   if [ "$state" = "RUNNING" ]; then
     saw_running=1
   elif [ "$state" = "DONE" ]; then
-    echo "deploy succeeded"
+    log INFO "deploy succeeded"
     break
   elif [ "$state" = "FAILED" ] || [ "$state" = "CRASH" ]; then
-    echo "deploy failed: container crashed or the deployment rolled back" >&2
+    log ERROR "deploy failed: container crashed or the deployment rolled back"
     exit 1
   fi
 

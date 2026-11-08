@@ -14,6 +14,8 @@
 # container and image are cleaned up on EXIT. $SMOKE_PORT holds the mapped host
 # port.
 
+source "$(dirname "${BASH_SOURCE[0]}")/log.sh"
+
 if [ "$#" -ne 2 ]; then
   echo "usage: source docker_smoke_test.sh <oci-command> <build-preparer>" >&2
   return 2
@@ -21,11 +23,11 @@ fi
 _SMOKE_OCI_COMMAND="$1"
 _SMOKE_BUILD_PREPARER="$2"
 if ! command -v "$_SMOKE_OCI_COMMAND" >/dev/null; then
-  echo "OCI command not found: $_SMOKE_OCI_COMMAND" >&2
+  log ERROR "OCI command not found: $_SMOKE_OCI_COMMAND"
   return 2
 fi
 if ! command -v "$_SMOKE_BUILD_PREPARER" >/dev/null; then
-  echo "build preparer not found: $_SMOKE_BUILD_PREPARER" >&2
+  log ERROR "build preparer not found: $_SMOKE_BUILD_PREPARER"
   return 2
 fi
 
@@ -43,7 +45,7 @@ smoke_build() {
   trap '_smoke_cleanup' EXIT
 
   "$_SMOKE_BUILD_PREPARER" "$dockerfile"
-  echo "=== $_SMOKE_OCI_COMMAND build ==="
+  log INFO "$_SMOKE_OCI_COMMAND build"
   "$_SMOKE_OCI_COMMAND" build -f "$dockerfile" -t "$_SMOKE_IMAGE" .
 }
 
@@ -55,7 +57,7 @@ smoke_build() {
 smoke_copy() {
   local source=$1 container_path=$2
   if [ ! -e "$source" ]; then
-    echo "copy source does not exist: $source" >&2
+    log ERROR "copy source does not exist: $source"
     exit 1
   fi
   _SMOKE_COPIES+=("$source" "$container_path")
@@ -66,7 +68,7 @@ smoke_start() {
   _SMOKE_INTERNAL_PORT=$internal_port
   SMOKE_PORT=$((internal_port + 10000 + RANDOM % 10000))
 
-  echo "=== starting container ==="
+  log INFO "starting container"
   _SMOKE_CID=$("$_SMOKE_OCI_COMMAND" create -p "${SMOKE_PORT}:${internal_port}" "$@" "$_SMOKE_IMAGE")
   local index
   for ((index = 0; index < ${#_SMOKE_COPIES[@]}; index += 2)); do
@@ -113,7 +115,7 @@ smoke_await() {
     fi
     sleep 0.5
   done
-  echo "container failed to become ready" >&2
+  log ERROR "container failed to become ready"
   "$_SMOKE_OCI_COMMAND" logs "$_SMOKE_CID" >&2
   exit 1
 }
@@ -128,7 +130,7 @@ smoke_assert_status() {
   local actual
   actual=$(_smoke_request status "$path" "$@")
   if [ "$actual" != "$expected" ]; then
-    echo "expected $expected on $path, got $actual" >&2
+    log ERROR "expected $expected on $path, got $actual"
     exit 1
   fi
 }

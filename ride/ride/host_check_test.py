@@ -94,7 +94,7 @@ def test_a_uv_off_the_pin_is_installed_into_the_uv_directory(host, tmp_path, cap
 
 
 def test_an_install_another_uv_shadows_reports_the_path_instead_of_reinstalling(
-  host, tmp_path, capsys
+  host, tmp_path, capfd
 ):
   _complete(host, uv='0.0.1')
   for name in ('bash', 'cat', 'cp', 'env', 'mkdir', 'sh'):
@@ -110,8 +110,9 @@ def test_an_install_another_uv_shadows_reports_the_path_instead_of_reinstalling(
 
   assert check_host(prerequisites(), Platform.MACOS, install=True) == 1
 
-  out = capsys.readouterr().out
-  assert out.count('installing uv') == 1
+  captured = capfd.readouterr()
+  out = captured.out
+  assert captured.err.count('installing uv') == 1
   installed = _uv_directory(tmp_path) / 'uv'
   assert f'PATH does not reach the pinned uv at {installed} first' in out
   assert f'  fix: export PATH={_uv_directory(tmp_path)}:"$PATH"' in out
@@ -196,7 +197,7 @@ def _marked(directory: Path, name: str, *, automatic: bool, requires=()) -> Prer
   )
 
 
-def test_install_runs_only_the_automatic_fixes_of_failing_prerequisites(tmp_path, capsys):
+def test_install_runs_only_the_automatic_fixes_of_failing_prerequisites(tmp_path, capfd):
   (tmp_path / 'held').touch()
   prerequisites = (
     _marked(tmp_path, 'held', automatic=True),
@@ -208,8 +209,9 @@ def test_install_runs_only_the_automatic_fixes_of_failing_prerequisites(tmp_path
 
   assert (tmp_path / 'automatic').exists()
   assert not (tmp_path / 'manual').exists()
-  out = capsys.readouterr().out
-  assert out.count('installing ') == 1
+  captured = capfd.readouterr()
+  out = captured.out
+  assert captured.err.count('installing ') == 1
   assert 'automatic: ok (marked)' in out
   assert f'  fix: touch {tmp_path / "manual"}' in out
 

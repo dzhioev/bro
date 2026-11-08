@@ -41,7 +41,6 @@ from bro.trails.display import (
   DisplayRecord,
   Notice,
   Origin,
-  PresetName,
   Reasoning,
   UserInput,
 )
@@ -180,9 +179,7 @@ async def test_text_drives_send_until_eof(capsys):
   assert runner.mock_llm.send_calls[0][-1] == UserMessage((Text('first'),))
   assert runner.mock_llm.send_calls[1] == [UserMessage((Text('second'),))]
   assert runner.mock_llm.send_calls[2] == [UserMessage((Text('third'),))]
-  out = capsys.readouterr().out
-  # each reply line is `[HH:MM:SS] <bro-name>: <reply>`
-  assert out.count('[12:34:56] record: reply') == 3
+  assert capsys.readouterr().out == 'reply\nreply\nreply\n'
 
 
 @pytest.mark.asyncio
@@ -193,12 +190,23 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
   )
   runner = _MockRunner(response='reply')
   await call_text(runner, 'first', read_line=_ScriptedLines([]), now=_fixed_now)
-  out = capsys.readouterr().out
-  # banner is the opening bro message, before the first reply line; the bro name
-  # is passed through so the logo renders on an in-process run, whose
-  # environment doesn't carry this bro's RIDE_BRO
-  assert out.index('BANNER[record]') < out.index('[12:34:56] record: reply')
-  assert '[12:34:56] record:\nBANNER[record]' in out
+  captured = capsys.readouterr()
+  # the bro name is passed through so the logo renders on an in-process run,
+  # whose environment doesn't carry this bro's RIDE_BRO
+  assert 'BANNER[record]' in captured.err
+  assert captured.out == 'reply\n'
+
+
+@pytest.mark.asyncio
+async def test_text_renders_a_forked_history_off_stdout(capsys):
+  runner = _MockRunner(response='reply')
+  history = [AssistantText(key='past', origin=Origin.RECORDED, content='earlier reply')]
+  await call_text(
+    runner, 'first', read_line=_ScriptedLines([]), now=_fixed_now, history=list(history)
+  )
+  captured = capsys.readouterr()
+  assert 'earlier reply' in captured.err
+  assert captured.out == 'reply\n'
 
 
 @pytest.mark.asyncio
@@ -417,7 +425,7 @@ def _chat(argv: list[str]):
 def test_bro_chat_default_builds_plain_spec(monkeypatch):
   built: list[Runner] = []
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     built.append(runner)
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
@@ -433,7 +441,7 @@ def test_bro_chat_default_builds_plain_spec(monkeypatch):
 def test_bro_chat_runs_explicit_service_tier(monkeypatch):
   built: list[Runner] = []
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     built.append(runner)
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
@@ -451,7 +459,7 @@ def test_bro_chat_runs_explicit_service_tier(monkeypatch):
 def test_bro_chat_runs_the_resolved_recipe(monkeypatch):
   built: list[Runner] = []
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     built.append(runner)
 
   resolved = llm_llms_openai.Recipe(
@@ -485,23 +493,17 @@ def test_bro_chat_refuses_resolved_and_explicit_recipes_together(monkeypatch, ca
 
 
 def test_chat_starts_an_empty_repl_and_defaults_to_guided(monkeypatch):
-  captured: list[tuple[Optional[str], str, PresetName]] = []
+  captured: list[tuple[Optional[str], str]] = []
 
-  async def fake_call_text(
-    runner,
-    initial: Optional[str],
-    history=None,
-    hold: str = 'guided',
-    preset_name: PresetName = PresetName.CHAT,
-  ):
-    captured.append((initial, hold, preset_name))
+  async def fake_call_text(runner, initial: Optional[str], history=None, hold: str = 'guided'):
+    captured.append((initial, hold))
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record']) is None
-  assert captured == [(None, 'guided', PresetName.CHAT)]
+  assert captured == [(None, 'guided')]
 
 
 def test_chat_relays_a_delivered_answer_to_the_summoner(monkeypatch):
@@ -552,7 +554,7 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
 
   captured: dict = {}
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     captured['runner'] = runner
     captured['initial'] = initial
     captured['history'] = history
@@ -600,7 +602,7 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
     captured['trail_ref'] = trail_ref
     return ResumedCall(runner=_MockRunner(), history=[], trail_id='old-trail')
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     pass
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
@@ -614,7 +616,7 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
 
 
 def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     runner.trail_id = 'trail-xyz'
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
@@ -628,7 +630,7 @@ def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
   captured: list[str] = []
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     captured.append(initial)
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
@@ -1256,10 +1258,10 @@ async def test_text_mode_ctrl_c_ends_the_turn_not_the_chat(capsys, monkeypatch):
   )
 
   assert runner.cancelled
-  out = capsys.readouterr().out
-  assert INTERRUPTED_NOTICE in out
+  captured = capsys.readouterr()
+  assert INTERRUPTED_NOTICE in captured.err
   # the REPL kept going: the next message is an ordinary exchange
-  assert 'record: second reply' in out
+  assert captured.out == 'second reply\n'
   # and SIGINT is back to ending the chat once no turn is running
   assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
 
@@ -1279,7 +1281,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
     )
     return ResumedCall(runner=resumed_runner, history=[], trail_id=trail_ref)
 
-  async def fake_call_text(runner, initial, history=None, hold='guided', preset_name=None):
+  async def fake_call_text(runner, initial, history=None, hold='guided'):
     captured.update(runner=runner, initial=initial, history=history, chat_hold=hold)
 
   monkeypatch.setenv('RIDE_IN_CONTAINER', '1')

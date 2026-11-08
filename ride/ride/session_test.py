@@ -992,27 +992,27 @@ class TestResumeSession:
 
 
 class TestResumeHint:
-  HINT = 'Resume this session with:\n  ride resume w\n'
-
-  def test_prints_the_resume_command_and_nothing_else(self, monkeypatch, capsys, tmp_path):
+  def test_shows_the_resume_command_on_stderr(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
-    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    monkeypatch.setattr('sys.stderr.isatty', lambda: True)
     ride_session._print_resume_hint(_spec(solo=True, prompt='go'), _workspace(tmp_path))
-    assert capsys.readouterr().out == self.HINT
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert '  ride resume w\n' in captured.err
 
   def test_silent_without_a_session_jsonl(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: False)
-    monkeypatch.setattr('sys.stdout.isatty', lambda: True)
+    monkeypatch.setattr('sys.stderr.isatty', lambda: True)
     ride_session._print_resume_hint(
       _spec(isolation=Isolation.UNBOXED), _workspace(tmp_path, Isolation.UNBOXED)
     )
-    assert capsys.readouterr().out == ''
+    assert capsys.readouterr().err == ''
 
-  def test_silent_when_stdout_is_redirected(self, monkeypatch, capsys, tmp_path):
+  def test_silent_when_stderr_is_redirected(self, monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
-    monkeypatch.setattr('sys.stdout.isatty', lambda: False)
+    monkeypatch.setattr('sys.stderr.isatty', lambda: False)
     ride_session._print_resume_hint(_spec(), _workspace(tmp_path))
-    assert capsys.readouterr().out == ''
+    assert capsys.readouterr().err == ''
 
 
 class TestConcurrentSessionGuard:

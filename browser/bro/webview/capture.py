@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, NoReturn
 
+from bro.base import log
 from bro.base.offload import off_loop
 from bro.webview import serve
 from bro.webview.capture_protocol import CAPTURE_OPTIONS_ENV, EXCHANGE_MAX_BYTES
@@ -120,7 +121,7 @@ async def _navigate(
     closed_process='Playwright MCP',
   )
   if result.is_error:
-    print(f'initial navigation failed: {serve._content_text(result)}', file=sys.stderr)
+    log.warning('initial navigation failed: %s', serve._content_text(result))
 
 
 async def _capture_state(
@@ -205,6 +206,6 @@ def run_capture() -> int:
   try:
     asyncio.run(capture(sys.stdin.buffer, sys.stdout.buffer))
   except Exception as error:
-    print(f'webview capture failed: {error}', file=sys.stderr)
+    log.error('webview capture failed: %s', error)
     return 1
   return 0
