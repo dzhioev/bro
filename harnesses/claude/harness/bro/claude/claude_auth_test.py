@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import bro.claude.claude_auth as ride_claude_auth
+from bro.claude.setup_token import setup_command
 from ride.workspace.store import ScopedSecrets
 
 
@@ -31,7 +32,7 @@ class TestClaudeAuthPreflight:
 
     assert CLAUDE.preflight_auth(MagicMock(), scoped) is None
 
-  def test_missing_selected_instance_names_the_remedy_path(self, tmp_path, monkeypatch):
+  def test_missing_selected_instance_names_the_command_minting_it(self, tmp_path, monkeypatch):
     from bro.base import credentials
     from bro.claude.harness import CLAUDE
 
@@ -41,7 +42,7 @@ class TestClaudeAuthPreflight:
     error = CLAUDE.preflight_auth(MagicMock(), scoped)
 
     assert error is not None
-    assert str(tmp_path / credentials.MATERIAL_DIR / 'claude_code+work.cred') in error
+    assert f'`{setup_command("claude_code+work")}`' in error
 
   def test_a_host_token_excluded_from_the_scope_fails_preflight(self, tmp_path, monkeypatch):
     from bro.base import credentials
@@ -75,8 +76,8 @@ class TestApplyClaudeAuth:
     with patch('bro.claude.claude_auth.log.warning') as warning:
       ride_claude_auth.apply_claude_auth({}, warn_when_missing=True)
     warning.assert_called_once()
-    assert 'claude_code secret not resolvable' in warning.call_args.args[0]
-    assert warning.call_args.args[1:] == ('claude_code',)
+    assert 'secret not resolvable' in warning.call_args.args[0]
+    assert warning.call_args.args[1:] == ('claude_code', setup_command('claude_code'))
 
   def test_scrubs_outranking_auth_vars(self, material_dir):
     # inherited api-key / bearer vars outrank CLAUDE_CODE_OAUTH_TOKEN in claude's

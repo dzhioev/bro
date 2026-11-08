@@ -1,6 +1,8 @@
 """claude-session auth: the setup-token overlay."""
 
 from bro.base import credentials, log
+from bro.claude.credentials import AUTH_KIND
+from bro.claude.setup_token import setup_command
 
 # auth env vars that outrank CLAUDE_CODE_OAUTH_TOKEN in claude's credential
 # precedence: a value inherited from the launching shell would silently hijack
@@ -30,13 +32,15 @@ def apply_claude_auth(
     if env.pop(var, None) is not None:
       log.verbose('scrubbed inherited %s from the claude session env', var)
   credential_store = credentials.default_store() if store is None else store
-  token = credential_store.try_get('claude_code')
+  token = credential_store.try_get(AUTH_KIND)
   if token is None:
     if warn_when_missing:
+      name = credential_store.selected_name(AUTH_KIND)
       log.warning(
-        'claude_code secret not resolvable; the session starts unauthenticated — mint a '
-        'token with `claude setup-token` and configure %s before starting a session',
-        credential_store.selected_name('claude_code'),
+        '%s secret not resolvable; the session starts unauthenticated — mint and store '
+        'one with `%s` before starting a session',
+        name,
+        setup_command(name),
       )
     return
   env['CLAUDE_CODE_OAUTH_TOKEN'] = token

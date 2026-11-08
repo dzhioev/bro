@@ -196,7 +196,7 @@ Common material paths and shapes:
   `{"backend": "service", "base_url": ..., "token": ...}` selects the service, and the DynamoDB/S3 shape belongs to a trails-server scope.
 - `creds/trails_tokens.cred` — tokens accepted by a trails server.
 - `creds/openai.cred`, `creds/anthropic.cred`, and `creds/brave.cred` — JSON objects carrying each service's `api_key`.
-- `creds/claude_code.cred` — the scalar long-lived OAuth token from `claude setup-token`.
+- `creds/claude_code.cred` — the scalar long-lived OAuth token `claude-setup-token` mints and stores.
   The `claude_code` install hook exports it as `CLAUDE_CODE_OAUTH_TOKEN`.
 - `creds/cookies+<instance>.cred` — a literal, versioned Playwright storage profile passed only to a webview worker
 - `creds/aws.cred` — the AWS shared-credentials file installed for SDK and CLI consumers.

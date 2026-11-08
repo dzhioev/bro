@@ -888,7 +888,7 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   — `ride` aborts asking you to log in on the launcher first.
   Subsequent sessions keep whatever the container last wrote.
   Stops per-project mutations (mcpServers, allowedTools, hasTrustDialogAccepted) from being usable to escalate into the next unboxed session.
-- **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Claude sessions authenticate with this env var, which the **required** `claude_code` secret (a `claude setup-token` long-lived token) exports via its registry install hook.
+- **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Claude sessions authenticate with this env var, which the **required** `claude_code` secret (a long-lived token that `claude-setup-token` mints) exports via its registry install hook.
   Claude Code reads it above any credentials file, and one stable bearer is shared by every session
   — so no OAuth credentials file is mounted or synced, and none of the cross-session refresh-token rotation that forced the periodic `/login`.
   Being required, a missing token fails loudly on the launcher at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
