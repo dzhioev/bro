@@ -198,6 +198,14 @@ async def test_text_emits_banner_before_first_reply(capsys, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_text_prints_a_long_reply_whole(capsys):
+  reply = 'word ' * 2000
+  runner = _MockRunner(response=reply)
+  await call_text(runner, 'first', read_line=_ScriptedLines([]), now=_fixed_now)
+  assert capsys.readouterr().out == f'{reply}\n'
+
+
+@pytest.mark.asyncio
 async def test_text_renders_a_forked_history_off_stdout(capsys):
   runner = _MockRunner(response='reply')
   history = [AssistantText(key='past', origin=Origin.RECORDED, content='earlier reply')]
