@@ -300,6 +300,7 @@ def _build_presets() -> Mapping[PresetName, DisplayConfig]:
   )
   ask = DisplayConfig(
     record_filter=_filter_for(activity_kinds, RecordKind.USER_INPUT),
+    detail_overrides=((RecordKind.ASSISTANT, Verbosity.FULL),),
     layout=Layout.EVENT_LOG,
     appearance=Appearance.PLAIN_LOG,
     color=ColorMode.NEVER,
