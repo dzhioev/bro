@@ -85,6 +85,9 @@ the launcher's own `--log` never reaches the session.
 - `ride exec <workspace> [command ...]` enters a running boxed workspace.
   The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
+- `ride check-host [--install]` probes the host prerequisites a launch needs and prints each with the fix for its macOS or Ubuntu host, exiting nonzero while any fails;
+  `--install` first runs the fixes that need no root.
+  It refuses inside a managed session, which is not the host it would check.
 - `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--llm RECIPE]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
   `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
   Omitting `--bro` uses the installation's `default-bro`, whether attached or detached.

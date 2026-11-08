@@ -21,8 +21,8 @@ The rest of this page shows all of that on one made-up bro.
 ## Getting started
 
 The way in is [`BOOTSTRAP.md`](BOOTSTRAP.md), an executable checklist for an agent rather than a page for you.
-On a macOS or Ubuntu host with Git, Python 3.12 or newer, [uv](https://docs.astral.sh/uv/), Docker, and Claude Code, open an agent session in the repository you want to adopt bro in and point it at the file;
-any harness that can read and edit the repository will do.
+On a macOS or Ubuntu host with Git and [uv](https://docs.astral.sh/uv/), open an agent session in the repository you want to adopt bro in and point it at the file;
+any harness that can read and edit the repository will do, and the session checks the rest of the host with `ride check-host`.
 With Claude Code:
 
 ```console
@@ -33,7 +33,8 @@ claude 'fetch https://raw.githubusercontent.com/dzhioev/bro/master/BOOTSTRAP.md 
 The session pins the framework into the project from this repository at one commit, declares a first developer bro, lets you choose which harness runs launches and summons by default, wires the host's credentials, and commits the setup;
 then it proves the setup with an isolated run under each harness whose credential is wired and hands you a `dive-in` to continue from, showing every write before it makes it.
 
-To work on the framework itself, clone this repository and run `./setup.sh`.
+To work on the framework itself, clone this repository and run `./setup.sh` with any uv;
+`uv run -q ride check-host --install` then brings the host to the pinned uv and the rest of what a launch needs.
 
 ## Meet triage, an example
 

@@ -53,7 +53,8 @@ Refer to credentials only by kind, instance name, expected non-secret identity, 
    Inspect `git status --short --branch`, `git remote -v` with credential-bearing URLs redacted, the current branch, and whether `HEAD` exists.
 3. Determine the current harness's writable project boundary and how it restarts at a different root.
 4. Read the target's root and relevant subsystem `AGENTS.md`, `CLAUDE.md`, packaging files, setup scripts, and repository instructions.
-5. Check `git`, Python 3.12 or newer, `uv`, `claude`, and a responding Docker daemon with version or status commands.
+5. Check `git --version` and `uv --version`:
+   the framework is pinned and synced with them, and section 2 checks the rest of the host through the pinned framework.
 6. Inspect whether `BRO_STORE` is set without displaying a value.
    This workflow uses the conventional persistent store at `~/.bro`, so an inherited directed store is a separate execution boundary.
 7. If GitHub is under consideration, check `gh --version` and `gh auth status` without printing a token or a credential-bearing remote URL.
@@ -79,7 +80,7 @@ Refer to credentials only by kind, instance name, expected non-secret identity, 
 5. Create a GitHub repository or change `origin` only after showing and receiving approval for the exact outward action.
 6. Preserve every unrelated dirty path in an existing repository.
 
-**Checkpoint 1:** report the canonical target root, operating system, writable boundary, Git state, chosen public/module/class names, GitHub and brog choices, delivery permission, tool versions, Docker availability, and that `BRO_STORE` is unset.
+**Checkpoint 1:** report the canonical target root, operating system, writable boundary, Git state, chosen public/module/class names, GitHub and brog choices, delivery permission, the `git` and `uv` versions, and that `BRO_STORE` is unset.
 
 ## 2. Choose the packaging shape and pin one framework revision
 
@@ -198,6 +199,11 @@ Require `bro`, `bro-dev`, `bro-native`, `bro-claude`, `bro-ride`, and `bro-opena
 Reject a retained older revision, mixed revisions, missing Git source, or branch movement during the operation.
 Call that exact value `BRO_SHA` for the remainder of this bootstrap.
 
+Check the host with the pinned framework: run `uv run ride check-host`, adding `--project bro_project` for a sidecar.
+It prints each prerequisite a launch needs with the fix for a failing one, and exits nonzero while any fails.
+Stop on a failing line and show its fix;
+`--install` runs the fixes that need no root, which write under the user's home directory and need that approval first.
+
 Read all framework sources from that revision, never from a local stale checkout or moving `master`.
 Construct every read as `https://raw.githubusercontent.com/dzhioev/bro/${BRO_SHA}/<path>` or `https://github.com/dzhioev/bro/blob/${BRO_SHA}/<path>` after substituting the actual SHA.
 Fetch and read these paths before using their contracts:
@@ -235,7 +241,8 @@ This is a support gate, not the final image proof; section 4 builds the actual p
 Run both gates against the root even when `ride` comes from `bro_project/.venv`, and do not substitute a sidecar-only sync.
 Ask before local Docker image writes, show the image tag and temporary paths, remove the temporary trees afterward, and fail closed on either phase.
 
-**Checkpoint 2:** report the selected packaging shape, owning distribution, exact `BRO_SHA`, all four locked source records, source paths read at that SHA, root-lock status, both image-phase results, and any preserved project setup conventions.
+**Checkpoint 2:** report the selected packaging shape, owning distribution, exact `BRO_SHA`, all four locked source records, and source paths read at that SHA;
+then the host check's result, root-lock status, both image-phase results, and any preserved project setup conventions.
 
 ## 3. Choose the home and write its launch settings
 
@@ -592,7 +599,7 @@ Also report the verified managed-session GitHub identity and repository access m
 
 ### Check
 
-Confirm this is still a host session, Docker responds, the intended environment is active, required scope rows are `ok`, and the focused commit is `HEAD`.
+Confirm this is still a host session, `ride check-host` passes, the intended environment is active, required scope rows are `ok`, and the focused commit is `HEAD`.
 
 ### Ask
 

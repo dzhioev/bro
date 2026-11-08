@@ -68,6 +68,8 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/harness.py`
   — the `SessionHarness` protocol (scope, auth, session reads, preparation, the runtime probe, host-cache cleanup, image/host/bundle provisioning, and the launch hooks), the metadata-derived harness roster, and the lazy checked resolver.
   The framework identity, prompt facts, and `bro.harnesses` registry live in `bro/harness/__init__.py`.
+- `ride/host_check.py` — `ride check-host`: the host prerequisites a launch needs, each probed and given its macOS or Ubuntu fix;
+  `--install` first runs the fixes that need no root.
 - `ride/provisioning.py` — installed-harness host setup and relocatable-runtime asset installation with per-harness checksum records.
 - `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
