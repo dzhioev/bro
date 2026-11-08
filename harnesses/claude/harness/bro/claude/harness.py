@@ -19,7 +19,9 @@ from bro.claude.claude_config import (
   read_subject,
   workspace_projects_dir,
 )
+from bro.claude.credentials import AUTH_KIND
 from bro.claude.provisioning import claude_code_version
+from bro.claude.setup_token import setup_command
 from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
 from bro.mcp import Reach
 from bro.run_lifecycle import RunLifecycle
@@ -33,9 +35,6 @@ from ride.workspace.store import ScopedSecrets
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
-
-
-_AUTH_SECRET = 'claude_code'
 
 
 def recipe(spec: 'SessionSpec | SessionRun') -> Recipe:
@@ -133,12 +132,12 @@ class ClaudeHarness(Harness):
     del spec
     store = credential_store(scoped)
     held = scoped.required | scoped.optional
-    if _AUTH_SECRET in held and store.try_get(_AUTH_SECRET) is not None:
+    if AUTH_KIND in held and store.try_get(AUTH_KIND) is not None:
       return None
-    material_path = store.material_path(_AUTH_SECRET)
+    name = store.selected_name(AUTH_KIND)
     return (
-      f'{_AUTH_SECRET} secret not resolvable — a Claude session authenticates with the '
-      f'setup-token; mint one with `claude setup-token` and store it at {material_path}'
+      f'{name} secret not resolvable — a Claude session authenticates with the '
+      f'setup-token; mint and store one with `{setup_command(name)}`'
     )
 
   def prepare_session(self, run: 'SessionRun') -> None:
@@ -223,6 +222,6 @@ CLAUDE = ClaudeHarness()
 _SCOPE = ScopeRecipe(
   name='claude',
   harness=CLAUDE,
-  auth_secret=_AUTH_SECRET,
+  auth_secret=AUTH_KIND,
   llm_key=False,
 )

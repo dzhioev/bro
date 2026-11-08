@@ -430,12 +430,12 @@ class TestGrantRevoke:
   def test_missing_setup_token_has_actionable_container_error(self, caplog):
     with _ContainerHarness() as harness:
       harness.preflight_auth.return_value = (
-        'claude_code secret not resolvable — mint one with `claude setup-token`'
+        'claude_code secret not resolvable — mint and store one with `claude-setup-token`'
       )
       rc = ride_session.start_session(_spec(drop=True))
     assert rc == 1
     assert harness.run_started_party.call_count == 0
-    assert 'mint one with `claude setup-token`' in caplog.text
+    assert 'mint and store one with `claude-setup-token`' in caplog.text
 
   def test_start_session_grant_already_present_is_harmless(self):
     with _ContainerHarness() as harness:

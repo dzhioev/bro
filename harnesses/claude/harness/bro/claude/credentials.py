@@ -1,3 +1,5 @@
+AUTH_KIND = 'claude_code'
+
 KIND = {
   'description': 'Claude Code OAuth token',
   'install': {

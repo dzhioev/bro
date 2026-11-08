@@ -361,6 +361,7 @@ PYTEST_FILES = [
   'harnesses/claude/harness/bro/claude/session_test.py',
   'harnesses/claude/harness/bro/claude/shell_prefix_test.py',
   'harnesses/claude/harness/bro/claude/claude_auth_test.py',
+  'harnesses/claude/harness/bro/claude/setup_token_test.py',
   'harnesses/claude/harness/bro/claude/claude_release_test.py',
   'harnesses/claude/harness/bro/claude/recorder_test.py',
   'ride/ride/session_test.py',

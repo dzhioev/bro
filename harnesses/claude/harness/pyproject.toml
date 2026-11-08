@@ -23,9 +23,11 @@ dependencies = [
 "bro.claude.command-gate" = "bro.claude._entrypoints:bro_claude_command_gate"
 "bro.claude.read-gate" = "bro.claude._entrypoints:bro_claude_read_gate"
 "bro.claude.session-end" = "bro.claude._entrypoints:bro_claude_session_end"
+"bro.claude.setup-token" = "bro.claude._entrypoints:bro_claude_setup_token"
 "bro.claude.statusline" = "bro.claude._entrypoints:bro_claude_statusline"
 "bro.claude.trail-recorder" = "bro.claude._entrypoints:bro_claude_trail_recorder"
 "bro.claude.watch-waiter" = "bro.claude._entrypoints:bro_claude_watch_waiter"
+"claude-setup-token" = "bro.claude._entrypoints:bro_claude_setup_token"
 
 [project.entry-points."bro.harnesses"]
 claude = "bro.claude.harness:CLAUDE"

@@ -440,15 +440,19 @@ def test_claude_format_wheel_contains_only_its_own_package(wheel_files):
 def test_claude_distribution_owns_its_console_scripts_and_registrations(wheels):
   entries = _entry_points(wheels['bro-claude'])
   assert dict(entries['console_scripts']) == {
-    f'bro.claude.{name.replace("_", "-")}': f'bro.claude._entrypoints:bro_claude_{name}'
-    for name in (
-      'command_gate',
-      'read_gate',
-      'session_end',
-      'statusline',
-      'trail_recorder',
-      'watch_waiter',
-    )
+    **{
+      f'bro.claude.{name.replace("_", "-")}': f'bro.claude._entrypoints:bro_claude_{name}'
+      for name in (
+        'command_gate',
+        'read_gate',
+        'session_end',
+        'setup_token',
+        'statusline',
+        'trail_recorder',
+        'watch_waiter',
+      )
+    },
+    'claude-setup-token': 'bro.claude._entrypoints:bro_claude_setup_token',
   }
   assert dict(entries['bro.mcp.targets']) == {
     'persona': 'bro.claude.assembly:resolve_persona_target',

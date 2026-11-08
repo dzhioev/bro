@@ -463,7 +463,8 @@ Compatible existing material is reused.
 A partial or conflicting file is shown by metadata and resolved explicitly, never overwritten silently.
 
 Claude Code always requires a scalar setup token.
-Have the user run `claude setup-token` in the separate terminal and redirect its secret output directly to `~/.bro/creds/claude_code.cred`, or to a selected `claude_code+<instance>.cred`.
+Have the user run `uv run claude-setup-token` in the separate terminal, adding `--project bro_project` for a sidecar and `--instance <instance>` for a selected `claude_code+<instance>`:
+it mints the token through the pinned Claude Code and stores what the user pastes at its hidden prompt.
 Verify only existence, nonzero size, mode, and later scope resolution.
 
 For a selected OpenAI key, store a JSON object shaped as `{"api_key":"..."}` in `openai.cred` or the selected named material.

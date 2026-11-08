@@ -12,6 +12,8 @@ The package `bro.claude` imports nothing from its `__init__.py`.
   Its workspace session reads and launch hooks supply the runner, Claude state mounts and env for a container, and the private state dir and auth for a host runner.
   Its `serve` mounts nothing, since Claude's own tools serve every group.
 - `credentials.py` — the literal `claude_code` credential kind and its install hook.
+- `setup_token.py` (`claude-setup-token`) — mints that kind's token through the pinned release's `setup-token`, run under a throwaway Claude config, and stores the token pasted at a hidden prompt;
+  the host needs no Claude Code install of its own.
 - `assembly.py` — the Claude composition over core `BaseBro.assemble`:
   a session selects the Claude harness, mounting the bro's servers and data sources beside Claude Code's own tools under the session's hold.
   It contributes the `persona:` resolver through `bro.mcp.targets`, which reads that hold off `BRO_HOLD` and refuses to resolve outside a managed session.
