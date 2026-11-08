@@ -123,6 +123,8 @@ def _capture_profile(
       reason = answer['error']
       if not isinstance(reason, str) or reason == '':
         raise SetupError('capture returned an invalid error answer')
+      # capture logs the browser output it kept while it tears down, after this answer
+      process.wait()
       raise SetupError(f'capture failed: {reason}')
     if set(answer) != {'event', 'state'} or answer.get('event') != 'state':
       raise SetupError(f'capture returned malformed state answer: {_message_shape(answer)}')

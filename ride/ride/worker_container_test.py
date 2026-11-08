@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import ride.worker_container as worker_container
-from bro.base import credentials
+from bro.base import credentials, log
 from bro.broker.brotocol import Talk
 from bro.broker.transport import Provisioned
 from bro.broker.transports.tcp import Endpoint
@@ -141,6 +141,7 @@ def test_worker_image_build_can_skip_pruning(monkeypatch):
 
 
 def test_foreground_run_freezes_runtime_publishes_ports_and_removes_container(monkeypatch):
+  monkeypatch.setenv(log.LEVEL_ENV, 'VERBOSE')
   calls = []
   process_arguments = []
 
@@ -204,6 +205,7 @@ def test_foreground_run_freezes_runtime_publishes_ports_and_removes_container(mo
     assert '/workspace' not in arguments
     assert 'BRO_STORE' not in ' '.join(arguments)
     assert 'RIDE_PUBLISHED_PORTS=6080=46080' in arguments
+    assert f'{log.LEVEL_ENV}=VERBOSE' in arguments
     assert arguments[-3:] == ['worker', 'bro/webview:image', '--serve']
 
   assert calls == [

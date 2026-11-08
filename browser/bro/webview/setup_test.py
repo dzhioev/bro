@@ -233,6 +233,69 @@ def test_setup_malformed_replies_do_not_expose_profile_values(messages, monkeypa
   assert 'profile-secret-marker' not in str(raised.value)
 
 
+_FAILING_CAPTURE = """
+import json, sys
+
+def send(message):
+  sys.stdout.write(json.dumps(message) + '\\n')
+  sys.stdout.flush()
+
+sys.stdin.readline()
+send({'event': 'ready'})
+sys.stdin.readline()
+send({'event': 'error', 'error': 'browser closed'})
+sys.stdin.read()
+sys.stderr.write('browser output before the failure\\n')
+sys.exit(1)
+"""
+
+
+class _ReleasingProcess:
+  """a capture child whose teardown holds until the host waits on its exit."""
+
+  def __init__(self, child: subprocess.Popen):
+    self.child = child
+    self.stdin = child.stdin
+    self.stdout = child.stdout
+
+  def wait(self) -> int:
+    assert self.child.stdin is not None
+    self.child.stdin.close()
+    return self.child.wait()
+
+
+def test_a_capture_error_waits_for_the_diagnostics_capture_logs_on_teardown(monkeypatch):
+  teardown_output: list[str] = []
+
+  @contextlib.contextmanager
+  def foreground_run(_worker_type, _spec):
+    with subprocess.Popen(
+      [sys.executable, '-c', _FAILING_CAPTURE],
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+    ) as child:
+      try:
+        yield SimpleNamespace(
+          process=_ReleasingProcess(child), published_ports=((46080, setup.VNC_PORT),)
+        )
+      finally:
+        # what removing the container does to a capture still running
+        if child.poll() is None:
+          child.kill()
+        child.wait()
+        assert child.stderr is not None
+        teardown_output.append(child.stderr.read().decode())
+
+  monkeypatch.setattr('ride.worker_container.foreground_worker_run', foreground_run)
+  monkeypatch.setattr('builtins.input', lambda _prompt: '')
+
+  with pytest.raises(setup.SetupError, match='capture failed: browser closed'):
+    setup._capture_profile(seed=None, url=None, indexed_db=False, port=None)
+
+  assert teardown_output == ['browser output before the failure\n']
+
+
 def test_setup_bounded_reader_refuses_oversize_and_eof(monkeypatch):
   monkeypatch.setattr(setup, 'EXCHANGE_MAX_BYTES', 8)
   with pytest.raises(setup.SetupError, match='exceeds'):

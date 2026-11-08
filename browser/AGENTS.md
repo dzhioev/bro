@@ -73,7 +73,7 @@ The Playwright MCP `storage` capability and `browser_run_code_unsafe` remain wit
 ## Capture wire
 
 Setup starts capture with `WEBVIEW_CAPTURE_OPTIONS={"url", "indexed_db"}` and exchanges ASCII-escaped JSON objects one per line over its stdin and stdout.
-Every read is bounded at the profile limit plus 1 KiB, and capture's child processes write to stderr so stdout carries only this sequence:
+Every read is bounded at the profile limit plus 1 KiB, and capture's child processes stay off its stdout, which carries only this sequence:
 setup sends `{"seed": <state>|null}`, capture sends `{"event":"ready"}`, setup sends `{"request":"state"}`, and capture sends either `{"event":"state","state":<state>}` or `{"event":"error","error":<reason>}`.
 Capture runs the display, noVNC, and Playwright startup shared with serve in a private temporary directory and saves state through its fixed `browser_run_code_unsafe` call.
 

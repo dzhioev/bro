@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import errno
 import io
+import os
 import socket
 import subprocess
 import tarfile
@@ -37,6 +38,13 @@ from ride.workspace.model import Workspace
 from ride.workspace.spawn import DEFAULT_RING_BYTES, DockerLaunchSpec, DockerSpawner
 
 _PUBLISHED_PORTS_ENV = 'RIDE_PUBLISHED_PORTS'
+
+
+def _worker_env(spec: WorkerContainer) -> dict[str, str]:
+  """the worker type's env over the launching process's log level, which the worker
+  inherits like any child process."""
+  level = os.environ.get(log.LEVEL_ENV)
+  return {**({} if level is None else {log.LEVEL_ENV: level}), **spec.env}
 
 
 @dataclass(frozen=True)
@@ -159,7 +167,7 @@ def foreground_worker_run(
       environment = {
         **IMAGE_ENV,
         'HOME': '/home/ride',
-        **spec.env,
+        **_worker_env(spec),
         _PUBLISHED_PORTS_ENV: published,
       }
       for name, value in environment.items():
@@ -237,7 +245,7 @@ def _lower_worker_container(
       DockerLaunch(
         name=workspace_name,
         command=['broxy', 'run', '--', *launch.spec.command],
-        env={**launch.spec.env, _PUBLISHED_PORTS_ENV: published},
+        env={**_worker_env(launch.spec), _PUBLISHED_PORTS_ENV: published},
         secrets=(),
         tty=False,
         image=image,
