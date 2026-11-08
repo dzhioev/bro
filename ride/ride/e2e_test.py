@@ -307,7 +307,7 @@ channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('benchmark-child')
 try:
-  ref = run_job('benchmark/pyproject.toml', timeout=60)
+  ref = run_job('benchmark/settings/smoke.json', timeout=60)
 except JobError as error:
   channel.completed('denied:' + str(error), 'ok')
 else:
@@ -3263,6 +3263,7 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
 
 def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, monkeypatch) -> None:
   import ride.bro_worker as ride_spawn
+  from bro.bench import job as bench_job
   from bro.bench.job import BenchmarkType
   from bro.broker.job import CommandJob
   from bro.worker_types import Job, LaunchRequest
@@ -3300,6 +3301,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
     return Job(command, run.extension)
 
   monkeypatch.setattr(BenchmarkType, 'launch', quick_launch)
+  monkeypatch.setattr(bench_job, 'compose_missing', lambda: False)
   original_started_party_launch = ride_spawn.started_party_launch
 
   def started_party_launch(*arguments, **keywords):

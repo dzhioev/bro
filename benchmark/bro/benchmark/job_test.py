@@ -6,9 +6,17 @@ from types import SimpleNamespace
 
 import pytest
 
+from bro.bench import job as bench_job
 from bro.benchmark import job
 
 PRESETS = {'agents': 'one', 'settings': 'quick', 'tasks': 'few'}
+
+
+@pytest.fixture(autouse=True)
+def _compose(monkeypatch):
+  """a host whose compose plugin answers, probed without the subprocess a test fakes
+  for Harbor."""
+  monkeypatch.setattr(bench_job, 'compose_missing', lambda: False)
 
 
 @pytest.fixture
@@ -70,6 +78,20 @@ def test_a_config_without_a_presets_record_fails_before_harbor_runs(tmp_path, mo
   )
 
   with pytest.raises(ValueError, match="no 'presets' record"):
+    job.run_job(config, tmp_path)
+
+
+def test_a_docker_job_on_a_host_without_compose_fails_before_harbor_runs(
+  tmp_path, monkeypatch, config
+):
+  monkeypatch.setattr(bench_job, 'compose_missing', lambda: True)
+  monkeypatch.setattr(
+    job.subprocess,
+    'run',
+    lambda *args, **kwargs: pytest.fail('a job without compose must fail before Harbor runs'),
+  )
+
+  with pytest.raises(ValueError, match='no docker compose plugin'):
     job.run_job(config, tmp_path)
 
 

@@ -10,7 +10,9 @@ Detached starts print the accepted request id, and completed work prints the art
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Optional, override
 
@@ -34,6 +36,39 @@ DEFAULT_TIMEOUT = 12 * 3600
 # relayed, 1 = failure, 2 = argparse usage error)
 PENDING_EXIT_CODE = 3
 HARBOR_API_KEY_ENV = 'HARBOR_API_KEY'
+# the plugin installs separately from the docker engine
+COMPOSE_PROBE = ('docker', 'compose', 'version')
+COMPOSE_FIX = (
+  'on macOS `brew install docker-compose && mkdir -p ~/.docker/cli-plugins && ln -sfn '
+  '"$(brew --prefix)/opt/docker-compose/bin/docker-compose" ~/.docker/cli-plugins/docker-compose`, '
+  'on Ubuntu `sudo apt-get install -y docker-compose-plugin`'
+)
+
+
+# --- the host's compose plugin -------------------------------------------------------
+
+
+def drives_compose(environment: Mapping[str, Any]) -> bool:
+  """whether a job config's Harbor `environment` is the docker one, which starts every
+  task container through the compose plugin: one naming no other `type`."""
+  return environment.get('type') in (None, 'docker')
+
+
+def compose_missing() -> bool:
+  try:
+    return subprocess.run(COMPOSE_PROBE, capture_output=True).returncode != 0
+  except FileNotFoundError:
+    return True
+
+
+def compose_refusal(config: Mapping[str, Any]) -> Optional[str]:
+  """why a job on `config` cannot start on this host, or None when it can."""
+  if not drives_compose(config.get('environment', {})) or not compose_missing():
+    return None
+  return (
+    "this host has no docker compose plugin, through which the job's docker environment "
+    f'starts every task container; install it: {COMPOSE_FIX}'
+  )
 
 
 # --- the registered worker type ---------------------------------------------------
@@ -82,6 +117,15 @@ class BenchmarkType(WorkerType):
     project = request.owner.tree / 'benchmark'
     if not (project / 'pyproject.toml').is_file():
       raise LaunchDenied('the workspace carries no benchmark project')
+    try:
+      content = json.loads(resolved.read_text())
+    except json.JSONDecodeError as error:
+      raise LaunchDenied(f'benchmark config {config!r} is not JSON: {error}') from error
+    if not isinstance(content, dict):
+      raise LaunchDenied(f'benchmark config {config!r} is not a JSON object')
+    refusal = compose_refusal(content)
+    if refusal is not None:
+      raise LaunchDenied(refusal)
 
     environment = dict(os.environ)
     environment.pop(HARBOR_API_KEY_ENV, None)

@@ -5,8 +5,13 @@ import itertools
 from collections import defaultdict
 
 import pytest
+from harbor.environments.docker.docker import DockerEnvironment
+from harbor.models.environment_type import EnvironmentType
 from harbor.models.job.config import JobConfig
+from harbor.models.trial.config import EnvironmentConfig
+from harbor.utils.import_path import import_symbol
 
+from bro.bench.job import drives_compose
 from bro.bench.presets import (
   AGENTS,
   DATASETS,
@@ -109,3 +114,18 @@ def test_smoke_is_within_core():
 
   assert smoke_dataset == core_dataset
   assert set(smoke) <= set(core)
+
+
+@pytest.mark.parametrize('settings', _names(SETTINGS))
+def test_the_launcher_reads_the_environment_as_harbor_resolves_it(settings):
+  config = compose(
+    workspace_root(), agents=_names(AGENTS)[0], settings=settings, tasks=_names(TASKS)[0]
+  )
+  environment = config.get('environment', {})
+
+  resolved = EnvironmentConfig.model_validate(environment)
+  if resolved.import_path is not None:
+    docker = issubclass(import_symbol(resolved.import_path), DockerEnvironment)
+  else:
+    docker = resolved.type is EnvironmentType.DOCKER
+  assert drives_compose(environment) is docker

@@ -40,20 +40,10 @@ from ride.workspace.spawn import PROCESS_TERM_GRACE
 CREDENTIAL = 'openai'
 INSTANCE = 'openai+benchmark'
 KEY = '{"api_key": "sk-test"}'
-_REAL_SUBPROCESS_RUN = subprocess.run
 
 
 @pytest.fixture(autouse=True)
-def _compose(monkeypatch):
-  """answer the host probe every construction runs, without a subprocess and
-  without carrying one test's answer into the next."""
-
-  def run(command, **kwargs):
-    if tuple(command) == harbor_agent.COMPOSE_PROBE:
-      return _completed(command, 0)
-    return _REAL_SUBPROCESS_RUN(command, **kwargs)
-
-  monkeypatch.setattr(subprocess, 'run', run)
+def _bundle(monkeypatch):
   monkeypatch.setattr(
     harbor_agent,
     'benchmark_bundle',
@@ -61,13 +51,6 @@ def _compose(monkeypatch):
       harnesses=('bro', 'claude'), identity='sha256:bundle', interpreter=Path(sys.executable)
     ),
   )
-  harbor_agent.docker_compose_missing.cache_clear()
-  yield
-  harbor_agent.docker_compose_missing.cache_clear()
-
-
-def _completed(command, returncode: int) -> subprocess.CompletedProcess:
-  return subprocess.CompletedProcess(command, returncode)
 
 
 def _write_interpreter(path: Path) -> None:
@@ -283,22 +266,6 @@ def test_a_ceiling_that_is_no_duration_is_refused(value):
 
 def test_a_ceiling_survives_the_string_a_command_line_kwarg_carries():
   assert run_timeout('900') == 900
-
-
-@pytest.mark.parametrize(('returncode', 'missing'), [(0, False), (1, True)])
-def test_the_compose_plugin_is_probed_through_the_docker_cli(monkeypatch, returncode, missing):
-  monkeypatch.setattr(subprocess, 'run', lambda command, **kwargs: _completed(command, returncode))
-
-  assert harbor_agent.docker_compose_missing() is missing
-
-
-def test_a_host_without_docker_at_all_reads_as_missing(monkeypatch):
-  def absent(*args, **kwargs):
-    raise FileNotFoundError('docker')
-
-  monkeypatch.setattr(subprocess, 'run', absent)
-
-  assert harbor_agent.docker_compose_missing() is True
 
 
 def test_the_kill_reaps_the_group_and_reports_success():

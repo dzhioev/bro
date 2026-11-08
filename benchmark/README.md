@@ -46,8 +46,8 @@ that will not run.
 
 ## Running a benchmark
 
-Harbor drives every task container through the `docker compose` CLI plugin, which nothing else in
-this repository needs — install it before the first run.
+Harbor's docker environment drives every task container through the `docker compose` CLI plugin, which nothing else in this repository needs;
+a job on that environment is refused on a host without it, naming the command that installs it.
 
 A run is named by presets committed under `benchmark/`, a JSON file each:
 

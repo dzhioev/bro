@@ -89,7 +89,8 @@ uv run --directory benchmark pytest bro/benchmark/benchmark_job_e2e_test.py
 - `bro/benchmark/trajectory.py` — converts the projected local trail in each finished trial into
   Harbor's ATIF v1.7 models at `agent/trajectory.json`, including normalized counts for reporting and step/final metrics priced through caller-supplied provider tables
 - `bro/benchmark/job.py` (`bro.benchmark.job`) — runs Harbor on the `cached` bundle against a known concrete job directory and adds the run's provenance to that raw result:
-  the built bundle's manifest, and the presets record its config carries
+  the built bundle's manifest, and the presets record its config carries.
+  A config Harbor would read lossily, or a docker-environment job on a host without the compose plugin, fails before Harbor runs
 - `bro/benchmark/retention.py` (`benchmark retain`) — resolves one raw job from an artifact ref or local path.
   It derives the manifest's trial rows from Harbor records and local trail stores.
   It copies the snapshotted files under the flat date/job key with conditional checksummed puts and the manifest last.

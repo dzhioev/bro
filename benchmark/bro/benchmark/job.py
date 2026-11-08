@@ -12,6 +12,7 @@ from harbor.models.job.config import JobConfig
 import bro.base.args as base_args
 from bro.base import log
 from bro.base.lulid import lulid
+from bro.bench.job import compose_refusal
 from bro.bench.presets import PRESETS_KEY, presets_of
 from bro.benchmark.bundle import cached, default_root, workspace_root
 
@@ -72,6 +73,9 @@ def run_job(config: Path, jobs_directory: Path, job_name: Optional[str] = None) 
   dropped = unknown_fields(content)
   if len(dropped) > 0:
     raise ValueError(f'the job config carries fields Harbor would drop: {", ".join(dropped)}')
+  refusal = compose_refusal(content)
+  if refusal is not None:
+    raise ValueError(refusal)
   resolved_jobs_directory = jobs_directory.resolve()
   selected_job_name = job_name if job_name is not None else lulid()
   job_directory = _job_directory(resolved_jobs_directory, selected_job_name)

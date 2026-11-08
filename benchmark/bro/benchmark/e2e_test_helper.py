@@ -15,6 +15,7 @@ from harbor.utils.trajectory_validator import TrajectoryValidator
 
 from bro.base import credentials
 from bro.base.suite_environment import host_credential_store
+from bro.bench.job import compose_missing
 from bro.bench.presets import compose
 from bro.benchmark.bundle import built, default_root, host_mismatch, workspace_root
 from bro.benchmark.trial_store import TRAILS_DIRECTORY
@@ -57,11 +58,7 @@ _HOST_MISMATCH = host_mismatch()
 LIVE_TRIAL = [
   pytest.mark.skipif(not _available('docker', 'info'), reason='no reachable docker daemon'),
   pytest.mark.skipif(_HOST_MISMATCH is not None, reason=str(_HOST_MISMATCH)),
-  # harbor drives every container through the compose CLI plugin, which is
-  # installed separately from the engine
-  pytest.mark.skipif(
-    not _available('docker', 'compose', 'version'), reason='no docker compose plugin'
-  ),
+  pytest.mark.skipif(compose_missing(), reason='no docker compose plugin'),
   pytest.mark.skipif(
     not _host_holds_the_credentials(), reason='a credential the job config names does not resolve'
   ),

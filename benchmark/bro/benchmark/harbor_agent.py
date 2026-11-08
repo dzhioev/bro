@@ -25,7 +25,6 @@ import shlex
 import subprocess
 import tempfile
 from collections.abc import Generator
-from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any, ClassVar, Optional, override
 
@@ -66,8 +65,6 @@ PGID_FILE = INSTALL_DIR / 'bro.pgid'
 # under it is the record it leaves behind
 AGENT_DIR = EnvironmentPaths.agent_dir
 ACTIVITY_LOG = AGENT_DIR / 'bro.log'
-
-COMPOSE_PROBE = ('docker', 'compose', 'version')
 
 
 def benchmark_bundle() -> Bundle:
@@ -124,22 +121,6 @@ TERM_GRACE_SEC = int(PROCESS_TERM_GRACE) + 10
 # the error classifier and the recorded failure detail, bounded because the log
 # holds the bro's whole trajectory
 FAILURE_LOG_TAIL_BYTES = 64 * 1024
-
-
-@cache
-def docker_compose_missing() -> bool:
-  """whether this host lacks the `docker compose` CLI plugin, which installs
-  separately from the engine.
-
-  Only harbor's docker environment reaches containers through it, and which
-  environment a job runs is harbor's choice rather than this agent's — so an
-  absent plugin is reported, never refused. Probed once per process: a job
-  constructs one agent per trial.
-  """
-  try:
-    return subprocess.run(COMPOSE_PROBE, capture_output=True).returncode != 0
-  except FileNotFoundError:
-    return True
 
 
 def llm_recipe(model_name: Optional[str]) -> str:
@@ -342,11 +323,6 @@ class BroAgent(BaseInstalledAgent):
     self._llm = llm_recipe(self.model_name)
     self._harness = harness_name(harness)
     self._run_timeout_sec = run_timeout(run_timeout_sec)
-    if docker_compose_missing():
-      self.logger.warning(
-        'no docker compose plugin on this host: a job on the docker environment cannot '
-        'start a task container without it'
-      )
 
   @staticmethod
   @override
