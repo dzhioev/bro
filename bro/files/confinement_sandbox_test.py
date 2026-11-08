@@ -111,7 +111,10 @@ def test_every_denied_syscall_is_blocked(abi, name):
   process = probe('syscall', abi=abi, name=name)
   # Kernel probe trampolines bypass seccomp but reject direct callers.
   if name == 'uprobe' and process.returncode == 0:
-    assert result(process) == {'result': -1, 'errno': errno.ENXIO}
+    outcome = result(process)
+    assert outcome['result'] == -1
+    # 6.18 refuses with ENXIO; kernels carrying the uprobe red-zone fix refuse with EPROTO.
+    assert outcome['errno'] in (errno.ENXIO, errno.EPROTO)
   else:
     expected = (-signal.SIGSYS, -signal.SIGILL) if name == 'uretprobe' else (-signal.SIGSYS,)
     assert process.returncode in expected, (name, process.stdout, process.stderr)
