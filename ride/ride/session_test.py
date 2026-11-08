@@ -860,10 +860,7 @@ class TestResumeSpecRecord:
     assert loaded.into is None and loaded.prompt is None
     assert loaded.authority_request == spec.authority_request
     assert loaded.env == spec.env
-    assert (
-      not {'cred', 'grant', 'revoke', 'llm', 'summon_depth', 'summon_harness'}
-      & loaded.dump().keys()
-    )
+    assert not {'cred', 'grant', 'revoke', 'llm', 'summon_depth'} & loaded.dump().keys()
 
   @pytest.mark.parametrize('env', [[], {'A=B': '1'}, {'A': 1}])
   def test_a_record_with_malformed_env_additions_is_unreadable(self, tmp_path, caplog, env):
@@ -1349,10 +1346,7 @@ class TestUnboxedSession:
       return 5
 
     monkeypatch.setattr(ride_session, 'run_started_party', run)
-    spec = replace(
-      _spec(isolation=Isolation.UNBOXED),
-      summon_harness='claude',
-    )
+    spec = _spec(isolation=Isolation.UNBOXED)
     scope = _launch_scope(mission=mission(grant=['@dev']))
 
     assert (

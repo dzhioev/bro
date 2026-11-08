@@ -197,7 +197,7 @@ _SUMMON_DESCRIPTION = (
   'in hours for a long-running review or deployment. `into` bases a new workspace on '
   'a git ref instead of your current HEAD; uncommitted changes never transfer. `hold` '
   'sets the child’s user-involvement level. `harness` selects its installed driving loop, '
-  'defaulting to the root reading’s summon harness. `llm` accepts complete '
+  'defaulting to the child’s configured `summon-harness`, else its `harness`. `llm` accepts complete '
   '`provider:model[+passthrough][,field=value]...` recipe text that replaces the configured '
   'recipe whole; an unsupported recipe fails '
   'rather than switching harness. '

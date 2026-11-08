@@ -100,7 +100,6 @@ _SESSION_INPUT_FIELDS = frozenset(
     'revoke',
     'limit',
     'llm',
-    'summon_harness',
     'mission',
     'export',
     'harness_set',
@@ -131,7 +130,6 @@ class SessionSpec:
   prompt: Optional[str]
   subject: Optional[str]
   repo: Optional[str] = None
-  summon_harness: str | None = None
   tree: Optional[str] = None
   runtime_bundle: Optional[str] = None
   env: dict[str, str] = field(default_factory=dict)
@@ -160,8 +158,6 @@ class SessionSpec:
       raise ValueError('runtime bundle reference must not be empty')
     if self.harness is not None:
       harness_name(self.harness)
-    if self.summon_harness is not None:
-      harness_name(self.summon_harness)
 
   @property
   def resolved_harness(self) -> str:
@@ -928,7 +924,6 @@ def _prepare_session(
         operator_gift=dump_authority(operator_gift, mission.descriptor),
         operator_cap=dump_authority(operator_cap, mission.descriptor),
         resolved_recipe=resolved.dump(),
-        summon_harness=reading.summon_harness,
       )
     else:
       from bro.authority.records import load_values
