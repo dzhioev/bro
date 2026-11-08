@@ -16,7 +16,7 @@ and hands off to [[run pr]].
 The framework checkout itself has nothing to bump.
 
 parameters: {"to?": "framework ref to pin — a commit, branch, or tag; default: the head of the branch the sources name"}
-version: 1.0.1
+version: 1.1.0
 ---
 
 # bump bro
@@ -38,43 +38,62 @@ Passed values appear in the `# Arguments` section appended by the spell tool:
 
 ## Step 1 — locate the pin and move it
 
-The pin is in the `pyproject.toml` whose `[tool.uv.sources]` resolves `bro` from a git URL
-— the repository root, or a `bro_project/` sidecar
-— and the `uv.lock` beside it.
-Every `uv` command below runs against that project (`--project bro_project` for a sidecar).
-Read the framework packages off the lock before touching it:
+The pin is in the tracked `pyproject.toml` whose `[tool.uv.sources]` resolves `bro` from a git URL, wherever it sits,
+and in the `uv.lock` of its workspace
+— beside it, unless it is a workspace member.
+Below, `<project>` is that file's directory, and every `uv` command runs against it with `--project <project>`.
+Find it and read the framework packages off its lock before touching either:
 
 ```bash
 python3 - <<'PY'
+import subprocess
 import tomllib
-for package in tomllib.load(open('uv.lock', 'rb'))['package']:
+from pathlib import Path
+
+sources = {}
+for path in subprocess.check_output(['git', 'ls-files', '-z', '--', 'pyproject.toml', '*/pyproject.toml'], text=True).split('\0')[:-1]:
+  source = tomllib.loads(Path(path).read_text()).get('tool', {}).get('uv', {}).get('sources', {}).get('bro')
+  if source is not None:
+    sources[str(Path(path).parent)] = source if isinstance(source, list) else [source]
+pinning = [project for project, entries in sources.items() if any('git' in entry for entry in entries)]
+if len(pinning) != 1:
+  raise SystemExit(f'{len(pinning)} projects resolve bro from git; bro sources: {sources}')
+workspace = subprocess.check_output(['uv', 'workspace', 'dir', '--project', pinning[0]], text=True).strip()
+lock = Path(workspace, 'uv.lock')
+print('project', pinning[0])
+print('lock', lock)
+for package in tomllib.loads(lock.read_text())['package']:
   git = package.get('source', {}).get('git')
   if git is not None:
     print(package['name'], git)
 PY
 ```
 
+It prints `<project>`, its lock, and every package the lock takes from git.
+A repository with no such project or with several stops it instead, naming every project's `bro` source;
+report those and stop too.
+None is the framework checkout itself or a repository taking `bro` from a path or an index, with no git pin to move;
+several leave the pin for the user to settle.
+
 Each framework package's source is the framework URL (up to its `?`) with the pinned commit as its fragment;
 the packages sharing that URL are the set to move, and the fragment is `<old>`.
-A lock where `bro` has no git source is the framework checkout itself:
-there is nothing to bump, report that and stop.
 
 Move the pin:
 
-- default: the sources name a branch, and the move is one `uv lock --upgrade-package <package>` naming every framework package, taking them to that branch's head.
+- default: the sources name a branch, and the move is one `uv lock --project <project> --upgrade-package <package>` naming every framework package, taking them to that branch's head.
   Sources pinned by `rev` or `tag` move nowhere without `to`;
   say so and ask for the ref.
-- with `to`: write it into every framework entry of `[tool.uv.sources]`
+- with `to`: write it into every framework entry of `[tool.uv.sources]` in `<project>/pyproject.toml`
   — `branch = "<to>"` for a branch, `rev = "<to>"` for a commit or tag
   — in place of the key that was there, then run the same lock command.
 
-Re-read the lock the same way:
+Re-run the snippet:
 every framework package resolves from the same URL at one identical commit, `<new>`.
 Mixed commits or a package left at `<old>` is an error to fix before going on, not a state to work from.
 `<new>` equal to `<old>` means the pin was already there;
 report it and stop.
 
-Then sync the project the way its own setup does
+Then sync `<project>` the way the repository's own setup does
 — its `setup.sh` or docs name the groups and extras.
 
 ## Step 2 — materialize the range
@@ -185,7 +204,7 @@ a reviewer judges it apart from the bump, and a wrong one reverts alone.
 ## Step 5 — gate
 
 Run the repository's formatter, then a persona construction smoke through the project environment
-— `uv run bro show <default bro>` for the installation's `default-bro`, and `uv run bro list`
+— `uv run --project <project> bro show <default bro>` for the installation's `default-bro`, and `uv run --project <project> bro list`
 — which resolves entry points and loads spells and declarations against the new framework, so an import or declaration error surfaces before the suite does.
 Then run the repository's own gate (its docs name the command).
 Give a long-running gate an explicit timeout large enough for the full run.
