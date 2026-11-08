@@ -8,9 +8,10 @@ import json
 import os
 import sys
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, NoReturn
+from typing import IO, Any, BinaryIO, NoReturn
 
 from bro.base import log
 from bro.base.offload import off_loop
@@ -24,6 +25,8 @@ from bro.webview.profile import (
 )
 
 _STATE_FILENAME = 'captured-state.json'
+_DIAGNOSTICS_FILENAME = 'browser-output.log'
+_DIAGNOSTICS_TAIL_LINES = 40
 _STORAGE_STATE_CODE = (
   'async (page) => { await page.context().storageState({ path: %s, indexedDB: %s }); }'
 )
@@ -156,6 +159,24 @@ async def _capture_state(
     raise CaptureError(f'captured profile is invalid: {error}') from error
 
 
+@contextlib.contextmanager
+def _browser_diagnostics(root: Path) -> Iterator[IO[bytes] | None]:
+  """where the browser's processes write their own output: stderr at verbose, otherwise
+  a file whose tail is logged when the capture fails."""
+  if log.verbose_enabled():
+    yield None
+    return
+  path = root / _DIAGNOSTICS_FILENAME
+  with path.open('wb') as diagnostics:
+    try:
+      yield diagnostics
+    except Exception:
+      tail = path.read_text(errors='replace').splitlines()[-_DIAGNOSTICS_TAIL_LINES:]
+      if len(tail) > 0:
+        log.error('browser output before the failure:\n%s', '\n'.join(tail))
+      raise
+
+
 async def capture(stdin: BinaryIO, stdout: BinaryIO) -> None:
   raw_options = os.environ.get(CAPTURE_OPTIONS_ENV)
   if raw_options is None:
@@ -165,9 +186,9 @@ async def capture(stdin: BinaryIO, stdout: BinaryIO) -> None:
 
   with tempfile.TemporaryDirectory(prefix='bro-browser-capture-') as directory:
     root = Path(directory)
-    with contextlib.ExitStack() as process_stack:
-      xvfb, display = process_stack.enter_context(serve._xvfb())
-      vnc_processes = process_stack.enter_context(serve._vnc(display))
+    with _browser_diagnostics(root) as diagnostics, contextlib.ExitStack() as process_stack:
+      xvfb, display = process_stack.enter_context(serve._xvfb(diagnostics))
+      vnc_processes = process_stack.enter_context(serve._vnc(display, diagnostics))
       config, storage_path = process_stack.enter_context(
         serve._browser_config(seed, downloads=False)
       )
@@ -181,6 +202,7 @@ async def capture(stdin: BinaryIO, stdout: BinaryIO) -> None:
             display,
             workspace=root,
             output_directory=root / 'output',
+            diagnostics=diagnostics,
           )
         )
         async with serve._supervising([*processes, ('Playwright MCP', mcp_process)]) as supervisor:

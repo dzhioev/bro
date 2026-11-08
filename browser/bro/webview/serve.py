@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Awaitable, Iterator, Mapping, Sequenc
 from contextlib import AsyncExitStack, ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Optional, cast
+from typing import IO, Any, BinaryIO, Optional, cast
 
 import anyio
 from mcp import ClientSession, types as mcp_types
@@ -140,10 +140,11 @@ def _terminate_process(process: subprocess.Popen) -> None:
 
 
 @contextlib.contextmanager
-def _xvfb() -> Iterator[tuple[subprocess.Popen, str]]:
+def _xvfb(diagnostics: IO[bytes] | None = None) -> Iterator[tuple[subprocess.Popen, str]]:
   process = subprocess.Popen(
     ('Xvfb', '-displayfd', '1', '-screen', '0', '1280x720x24', '-nolisten', 'tcp'),
     stdout=subprocess.PIPE,
+    stderr=diagnostics,
     text=True,
   )
   try:
@@ -162,8 +163,12 @@ def _xvfb() -> Iterator[tuple[subprocess.Popen, str]]:
 
 
 @contextlib.contextmanager
-def _child(name: str, command: Sequence[str]) -> Iterator[subprocess.Popen]:
-  process = subprocess.Popen(tuple(command), stdout=sys.stderr)
+def _child(
+  name: str, command: Sequence[str], diagnostics: IO[bytes] | None = None
+) -> Iterator[subprocess.Popen]:
+  process = subprocess.Popen(
+    tuple(command), stdout=sys.stderr if diagnostics is None else diagnostics, stderr=diagnostics
+  )
   try:
     yield process
   finally:
@@ -208,7 +213,9 @@ def _published_port(container_port: int, raw: str) -> int:
 
 
 @contextlib.contextmanager
-def _vnc(display: str) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
+def _vnc(
+  display: str, diagnostics: IO[bytes] | None = None
+) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
   with ExitStack() as stack:
     x11vnc = stack.enter_context(
       _child(
@@ -224,6 +231,7 @@ def _vnc(display: str) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
           '-shared',
           '-nopw',
         ),
+        diagnostics,
       )
     )
     _await_port('x11vnc', x11vnc, X11_PORT)
@@ -231,6 +239,7 @@ def _vnc(display: str) -> Iterator[tuple[tuple[str, subprocess.Popen], ...]]:
       _child(
         'websockify',
         ('websockify', '--web=/usr/share/novnc', str(VNC_PORT), f'127.0.0.1:{X11_PORT}'),
+        diagnostics,
       )
     )
     _await_port('websockify', websockify, VNC_PORT)
@@ -376,6 +385,7 @@ async def _playwright(
   *,
   workspace: Path | None = None,
   output_directory: Path | None = None,
+  diagnostics: IO[bytes] | None = None,
 ) -> AsyncIterator[tuple[ClientSession, subprocess.Popen]]:
   selected_workspace = WORKSPACE if workspace is None else workspace
   async with AsyncExitStack() as stack:
@@ -386,6 +396,7 @@ async def _playwright(
       ),
       stdin=subprocess.PIPE,
       stdout=subprocess.PIPE,
+      stderr=diagnostics,
       cwd=selected_workspace,
       env=_playwright_environment(display),
     )

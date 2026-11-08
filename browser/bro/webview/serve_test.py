@@ -389,7 +389,7 @@ def test_shared_child_stdout_stays_off_the_capture_exchange(monkeypatch):
   with serve._child('helper', ('helper', '--serve')):
     pass
 
-  assert calls == [(('helper', '--serve'), {'stdout': sys.stderr})]
+  assert calls == [(('helper', '--serve'), {'stdout': sys.stderr, 'stderr': None})]
 
 
 def test_mount_check_requires_the_declared_view_in_the_process_mount_table(tmp_path, monkeypatch):

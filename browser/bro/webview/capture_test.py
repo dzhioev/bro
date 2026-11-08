@@ -39,12 +39,12 @@ class Supervisor:
 
 
 @contextlib.contextmanager
-def _xvfb():
+def _xvfb(_diagnostics):
   yield object(), ':73'
 
 
 @contextlib.contextmanager
-def _vnc(_display):
+def _vnc(_display, _diagnostics):
   yield (('x11vnc', object()), ('websockify', object()))
 
 
@@ -186,6 +186,49 @@ async def test_capture_answers_a_tool_error_and_exits_nonzero_path(capture_runti
     {'event': 'ready'},
     {'event': 'error', 'error': 'Playwright storage-state capture failed: browser closed'},
   ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('verbose', [False, True])
+async def test_the_browser_output_reaches_stderr_only_at_verbose(
+  capture_runtime, monkeypatch, verbose
+):
+  global _playwright_session
+  _playwright_session = Session(_state())
+  monkeypatch.setenv(
+    capture.CAPTURE_OPTIONS_ENV,
+    json.dumps({'url': None, 'indexed_db': False}),
+  )
+  monkeypatch.setattr(capture.log, 'verbose_enabled', lambda: verbose)
+
+  await capture.capture(io.BytesIO(b'{"seed":null}\n{"request":"state"}\n'), io.BytesIO())
+
+  assert (_playwright_keywords['diagnostics'] is None) is verbose
+
+
+@pytest.mark.asyncio
+async def test_a_failed_capture_logs_the_browser_output_it_kept(
+  capture_runtime, monkeypatch, capsys
+):
+  global _playwright_session
+  _playwright_session = Session(error='browser closed')
+  monkeypatch.setenv(
+    capture.CAPTURE_OPTIONS_ENV,
+    json.dumps({'url': None, 'indexed_db': False}),
+  )
+
+  @contextlib.contextmanager
+  def reporting_xvfb(diagnostics):
+    diagnostics.write(b'xvfb could not open the font path\n')
+    diagnostics.flush()
+    yield object(), ':73'
+
+  monkeypatch.setattr(serve, '_xvfb', reporting_xvfb)
+
+  with pytest.raises(capture.CaptureError, match='browser closed'):
+    await capture.capture(io.BytesIO(b'{"seed":null}\n{"request":"state"}\n'), io.BytesIO())
+
+  assert 'xvfb could not open the font path' in capsys.readouterr().err
 
 
 @pytest.mark.asyncio
