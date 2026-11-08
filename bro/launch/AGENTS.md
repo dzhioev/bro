@@ -42,7 +42,9 @@ live activity on stderr and one undecorated reply on stdout.
 Its omitted hold is `unattended`.
 Its one-shot process follows the ordered verdict in `bro.turn_end.settle` (`bro/reference/ride.md`, "Bro harness").
 
-`bro chat` uses the chat preset and defaults to `guided`.
+`bro chat` defaults to `guided`.
+Its Textual mode uses the chat preset;
+its text mode, taken when stdin or stdout is not a terminal, uses the ask preset as `bro run` does, and renders a forked history on stderr under the chat preset.
 Between user turns, both text and Textual modes wait on the run inbox and call `Runner.wake()` when a watch reports news.
 Both modes can interrupt a running turn and render `call.INTERRUPTED_NOTICE`;
 the TUI prevents concurrent sends.

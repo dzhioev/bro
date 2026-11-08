@@ -2,4 +2,4 @@
 source "$(bro-shell-dir)/prelude.sh"
 VERSION=$(npm view @anthropic-ai/claude-code version)
 echo "$VERSION" > "$HERE/claude-code-version"
-echo "claude-code pinned to $VERSION" >&2
+log INFO "claude-code pinned to $VERSION"

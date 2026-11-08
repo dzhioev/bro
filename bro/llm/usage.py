@@ -47,13 +47,13 @@ import fcntl
 import json
 import os
 import re
-import sys
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from bro.base import log
 from bro.base.args import Parser
 
 __cli_name__ = 'usage'
@@ -315,10 +315,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.parse(argv)
   current = current_usage()
   if current is None:
-    print(
-      f'error: no usage published (no {USAGE_FILE_VARIABLE} pointer, or none billed yet)',
-      file=sys.stderr,
-    )
+    log.error('no usage published (no %s pointer, or none billed yet)', USAGE_FILE_VARIABLE)
     return 1
   print(f'agent: {current.agent}')
   for label, counts in to_labels(current.per_model).items():

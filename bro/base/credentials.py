@@ -34,7 +34,6 @@ import os
 import re
 import shlex
 import shutil
-import sys
 import tempfile
 import threading
 from abc import ABC, abstractmethod
@@ -1305,12 +1304,12 @@ def _get(name: str, field: Optional[str], as_json: bool, instance: bool) -> Opti
       return None
     data = store.get_instance_json(name) if instance else store.get_json(name)
   except (SecretNotFound, ValueError) as error:
-    print(str(error), file=sys.stderr)
+    log.error('%s', error)
     return 1
   value: dict | str = data
   if field is not None:
     if field not in data:
-      print(f'secret {name!r} has no field {field!r}', file=sys.stderr)
+      log.error('secret %r has no field %r', name, field)
       return 1
     value = data[field]
   print(

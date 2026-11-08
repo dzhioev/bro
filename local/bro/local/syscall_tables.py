@@ -4,7 +4,9 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Optional
 
+from bro.base import log
 from bro.base.args import Parser
 from bro.files.confinement.classification import CLASSIFICATION, validate_tables
 
@@ -105,7 +107,7 @@ def render(sources: dict[str, bytes]) -> str:
   return '\n'.join([*lines, '}', ''])
 
 
-def main(argv: list[str]) -> None:
+def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='generate reviewed Linux syscall tables from the pinned kernel tag')
   parser.add_argument(
     '--check', action='store_true', help='fetch, regenerate and compare without writing'
@@ -119,10 +121,11 @@ def main(argv: list[str]) -> None:
   generated = render(sources)
   if args['check']:
     if OUTPUT.read_text() != generated:
-      raise SystemExit('syscall tables differ; regenerate and review the classification')
+      log.error('syscall tables differ; regenerate and review the classification')
+      return 1
   else:
     OUTPUT.write_text(generated)
 
 
 if __name__ == '__main__':
-  main(sys.argv)
+  sys.exit(main(sys.argv))

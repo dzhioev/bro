@@ -69,10 +69,7 @@ async def llm_main(request: str, llm: str, attachments: list[str]):
     raise ValueError(f'provider {spec.TYPE!r} wire {spec.WIRE!r} has no client')
   instance = loop.create(spec, Inbox())
   inputs = [UserMessage((Text(request), *(File.from_path(path) for path in attachments)))]
-  print(f'> {request}')
-  print()
-  response = await instance.send(inputs)
-  print(f'< {response}')
+  print(await instance.send(inputs))
 
 
 def main(argv: list[str]) -> Optional[int]:

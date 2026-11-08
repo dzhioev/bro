@@ -83,11 +83,12 @@ def test_monitor_uses_caller_supplied_coordinates_and_reports_success(tmp_path):
   result = _run_monitor(tmp_path, responses)
 
   assert result.returncode == 0, result.stderr
-  assert result.stdout == (
-    'waiting for deployment to start\n'
-    'PRIMARY rollout=COMPLETED running=1/1 failed=0 | event: service event\n'
-    'deploy succeeded\n'
-  )
+  assert result.stdout == ''
+  assert [line.partition('] ')[2] for line in result.stderr.splitlines()] == [
+    'waiting for deployment to start',
+    'PRIMARY rollout=COMPLETED running=1/1 failed=0 | event: service event',
+    'deploy succeeded',
+  ]
 
 
 def test_monitor_accepts_a_service_that_already_settled(tmp_path):
@@ -98,7 +99,7 @@ def test_monitor_accepts_a_service_that_already_settled(tmp_path):
   result = _run_monitor(tmp_path, responses)
 
   assert result.returncode == 0, result.stderr
-  assert result.stdout.endswith('deploy succeeded\n')
+  assert result.stderr.endswith('deploy succeeded\n')
 
 
 def test_monitor_still_waits_for_a_named_old_deployment_to_be_replaced(tmp_path):
@@ -111,7 +112,7 @@ def test_monitor_still_waits_for_a_named_old_deployment_to_be_replaced(tmp_path)
   result = _run_monitor(tmp_path, responses, 'old')
 
   assert result.returncode == 0, result.stderr
-  assert result.stdout.endswith('deploy succeeded\n')
+  assert result.stderr.endswith('deploy succeeded\n')
 
 
 def test_monitor_reports_a_failed_rollout(tmp_path):

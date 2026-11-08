@@ -212,8 +212,10 @@ def _install(prerequisites: Sequence[Prerequisite], host: Platform) -> bool:
     if not fix.automatic or not unmet.isdisjoint(prerequisite.requires):
       unmet.add(prerequisite.name)
       continue
-    print(f'installing {prerequisite.name}: {fix.command}', flush=True)
-    status = subprocess.run(['bash', '-o', 'pipefail', '-c', fix.command]).returncode
+    log.info('installing %s: %s', prerequisite.name, fix.command)
+    status = subprocess.run(
+      ['bash', '-o', 'pipefail', '-c', fix.command], stdout=sys.stderr
+    ).returncode
     if status != 0:
       log.error('installing %s exited with status %d', prerequisite.name, status)
       return False

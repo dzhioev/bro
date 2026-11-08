@@ -334,10 +334,10 @@ def harness_for_workspace(workspace: Workspace) -> SessionHarness | None:
 
 
 def _print_resume_hint(spec: SessionSpec, workspace: Workspace) -> None:
-  if not sys.stdout.isatty() or not get_harness(spec.resolved_harness).session_exists(workspace):
+  if not sys.stderr.isatty() or not get_harness(spec.resolved_harness).session_exists(workspace):
     return
-  print('Resume this session with:')
-  print(f'  ride resume {workspace.name}')
+  print('resume this session with:', file=sys.stderr)
+  print(f'  ride resume {workspace.name}', file=sys.stderr)
 
 
 def _summoned_env(summoned: PendingBro, spec: SessionSpec, address: str) -> dict[str, str]:

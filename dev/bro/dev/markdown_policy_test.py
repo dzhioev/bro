@@ -31,7 +31,7 @@ class TestDefaultBase:
   def test_compares_against_the_default_branch_origin_names(self, origin, capsys):
     Path('document.md').write_text('Another sentence.\n')
     assert markdown_policy.main(['check-markdown']) == 1
-    assert 'text changed' in capsys.readouterr().err
+    assert 'text changed' in capsys.readouterr().out
 
   def test_a_default_branch_renamed_after_the_clone_fails_until_fetched(self, origin, capsys):
     _git('branch', '-m', 'trunk', 'renamed', cwd=origin)

@@ -17,6 +17,7 @@ from typing import Optional
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
+from bro.base import log
 from bro.base.args import Parser
 from bro.workflow import default_branch
 from bro.workspace.git import rev_parse_commit
@@ -428,24 +429,21 @@ def main(argv: list[str]) -> Optional[int]:
     try:
       base = f'origin/{default_branch.read()}'
     except default_branch.DefaultBranchError as error:
-      print(error, file=sys.stderr)
+      log.error('%s', error)
       return 1
   repo_root = _repo_root()
   if rev_parse_commit(repo_root, base) is None:
-    print(f'{base} names no commit here; fetch it or pass another --base', file=sys.stderr)
+    log.error('%s names no commit here; fetch it or pass another --base', base)
     return 1
   paths = args['paths'] if len(args['paths']) > 0 else _changed_markdown(repo_root, base)
   if len(paths) == 0:
-    print(f'no markdown changed since {base}', file=sys.stderr)
+    log.info('no markdown changed since %s', base)
     return 0
 
   problems = list(_check(repo_root, base, paths))
   for problem in problems:
-    print(problem, file=sys.stderr)
-  print(
-    f'{len(paths)} file(s) checked against {base}: {len(problems)} problem(s)',
-    file=sys.stderr,
-  )
+    print(problem)
+  log.info('%d file(s) checked against %s: %d problem(s)', len(paths), base, len(problems))
   return 1 if len(problems) > 0 else 0
 
 

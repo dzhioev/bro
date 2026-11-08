@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """`trails` — the operator surface over a recorded trail registry."""
 
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Optional
 
 import bro.base.args as base_args
+from bro.base import log
 from bro.trails import transfer
 from bro.trails.store import (
   InvalidRequest,
@@ -61,7 +61,7 @@ def _command_delete(client: TrailsStore, args: dict[str, Any]) -> int:
       break
     pending = list(refused)
   for exception in refused.values():
-    print(exception, file=sys.stderr)
+    log.error('%s', exception)
   return 1 if len(refused) > 0 else 0
 
 
@@ -104,6 +104,6 @@ def _dispatch(command: Callable[[TrailsStore, dict[str, Any]], int], args: dict[
     try:
       return command(client, args)
     except PermissionDenied as exception:
-      raise SystemExit(f'the trails credential is refused: {exception}') from exception
+      raise base_args.CLIError(f'the trails credential is refused: {exception}') from exception
     except InvalidRequest as exception:
-      raise SystemExit(f'the trails operation is refused: {exception}') from exception
+      raise base_args.CLIError(f'the trails operation is refused: {exception}') from exception

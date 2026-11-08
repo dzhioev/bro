@@ -261,7 +261,7 @@ def test_chat_fork_preserves_the_recorded_recipe_unless_explicitly_replaced(
     else ResolvedRecipe(recorded_runner.recipe, f'trail {recorded_runner.trail_id}')
   )
 
-  async def continue_chat(runner, initial, history=None, hold='guided', preset_name=None):
+  async def continue_chat(runner, initial, history=None, hold='guided'):
     assert runner.resolved_recipe == expected
     await runner.send('continue', surface='test', hold=hold)
 

@@ -104,13 +104,13 @@ def test_authority_instance_presence_is_independent_of_kind_hold(report_environm
 
 def test_detached_report_requires_an_explicit_target(capsys):
   assert report_scope(None, None, 'claude') == 1
-  assert 'no default bro' in capsys.readouterr().out
+  assert 'no default bro' in capsys.readouterr().err
 
 
 def test_unknown_target_is_reported_as_an_existence_error(report_environment, capsys):
   repository, _, _ = report_environment
   assert report_scope(repository, 'uninstalled', 'claude') == 1
-  assert "target 'uninstalled' is not installed" in capsys.readouterr().out
+  assert "target 'uninstalled' is not installed" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -125,7 +125,7 @@ def test_invalid_policy_is_reported_without_escaping(report_environment, capsys,
   repository, _, _ = report_environment
   (repository / 'host.json').write_text(json.dumps({'defaults': policy}))
   assert report_scope(repository, 'report-test', 'claude') == 1
-  assert 'cannot compute the scope:' in capsys.readouterr().out
+  assert 'cannot compute the scope:' in capsys.readouterr().err
 
 
 def test_explicit_target_overrides_the_project_default(report_environment, capsys):
@@ -160,7 +160,7 @@ def test_scope_without_a_configured_recipe_refuses(report_environment, capsys, h
   repository, _, _ = report_environment
   home_settings_file.write_text('default-bro = "report-test"\n')
   assert report_scope(repository, 'report-test', 'bro') == 1
-  assert 'has no recipe for harness bro' in capsys.readouterr().out
+  assert 'has no recipe for harness bro' in capsys.readouterr().err
   assert report_scope(repository, 'report-test', 'bro', 'openai:gpt-5.6-terra') == 0
 
 
@@ -186,4 +186,4 @@ def test_scope_cli_prints_resolution_refusal_and_exits_nonzero(report_environmen
   from ride.cli import main
 
   assert main(['ride', 'scope', '--harness', 'bro', '--llm', 'echo:not-listed']) == 1
-  assert 'add +passthrough' in capsys.readouterr().out
+  assert 'add +passthrough' in capsys.readouterr().err

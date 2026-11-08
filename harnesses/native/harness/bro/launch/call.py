@@ -9,7 +9,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterator
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Optional
 
 import bro.base.args as base_args
 from bro.base import log
@@ -28,6 +28,7 @@ from bro.trails.display import (
   LiveDisplayObserver,
   Notice,
   Origin,
+  OutputRoute,
   PresetName,
   StreamRenderer,
   preset,
@@ -173,6 +174,16 @@ def _surface_notice(
   )
 
 
+def _read_prompted_line() -> str:
+  if sys.stdin.isatty():
+    sys.stderr.write('> ')
+    sys.stderr.flush()
+  line = sys.stdin.readline()
+  if line == '':
+    raise EOFError
+  return line.removesuffix('\n')
+
+
 async def call_text(
   runner: Runner,
   initial: Optional[str],
@@ -180,21 +191,22 @@ async def call_text(
   now: Callable[[], datetime] = datetime.now,
   history: Optional[list[DisplayRecord]] = None,
   hold: str = 'guided',
-  preset_name: PresetName = PresetName.CALL,
-  output: Optional[TextIO] = None,
 ) -> None:
-  """Run the conversation REPL through the stream trails frontend."""
+  """Run the conversation REPL through the stream trails frontend: each reply as plain
+  text on stdout, everything else on stderr."""
   from bro.workspace.banner import render_banner
 
-  read = read_line if read_line is not None else (lambda: input('> '))
-  destination = output if output is not None else sys.stdout
-  renderer = StreamRenderer(destination)
-  configuration = preset(preset_name, context_label=runner.bro.name)
+  read = read_line if read_line is not None else _read_prompted_line
+  destinations = dict.fromkeys(OutputRoute, sys.stderr)
+  destinations[OutputRoute.REPLY] = sys.stdout
+  configuration = preset(PresetName.ASK, context_label=runner.bro.name)
   interruption_number = 0
 
-  with DisplaySession(configuration, renderer) as session:
-    if history is not None:
-      session.consume(history)
+  if history is not None:
+    conversation = preset(PresetName.CHAT, context_label=runner.bro.name)
+    with DisplaySession(conversation, StreamRenderer(sys.stderr)) as past:
+      past.consume(history)
+  with DisplaySession(configuration, StreamRenderer(destinations)) as session:
     session.consume(
       _surface_notice(
         'surface:banner',
@@ -370,7 +382,6 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
               initial,
               history=history,
               hold=hold,
-              preset_name=PresetName.CHAT,
             )
           )
     except AnswerDelivered as escaped:

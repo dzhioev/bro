@@ -6,7 +6,7 @@ from typing import cast
 
 from bro.authority.records import dump_values
 from bro.authority.values import Strings
-from bro.base import credentials
+from bro.base import credentials, log
 from ride.authority_launch import mission_view, request
 from ride.authority_reading import Reading
 from ride.authority_scope import existence
@@ -85,5 +85,5 @@ def report_scope(
       print(f'authority instance {kind}+{instance}: {state}')
     return 0
   except (ValueError, credentials.SecretNotFound) as error:
-    print(f'cannot compute the scope: {error}')
+    log.error('cannot compute the scope: %s', error)
     return 1

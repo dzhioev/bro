@@ -95,7 +95,8 @@ def test_trigger_image_build_reuses_the_commit_tag():
     """
   )
   assert result.returncode == 0
-  assert result.stdout == (
+  assert result.stdout == ''
+  assert result.stderr.endswith(
     f'using existing image for target target-a, commit {_COMMIT}: sha256:cached\n'
   )
 
@@ -133,8 +134,8 @@ def _run_trigger_image_build(on_start_build: str) -> subprocess.CompletedProcess
 def test_trigger_image_build_starts_the_caller_supplied_project():
   result = _run_trigger_image_build('[[ " $* " == *" --project-name project-a "* ]] || return 90')
   assert result.returncode == 0
-  assert f'started build project-a:build-id (target target-a, commit {_COMMIT})\n' in result.stdout
-  assert result.stdout.endswith('build project-a:build-id: SUCCEEDED\n')
+  assert f'started build project-a:build-id (target target-a, commit {_COMMIT})\n' in result.stderr
+  assert result.stderr.endswith('build project-a:build-id: SUCCEEDED\n')
 
 
 def test_trigger_image_build_passes_the_packaged_uv_pin(tmp_path):
@@ -237,7 +238,7 @@ def test_stage_bro_wheel_builds_all_declared_providers_from_the_working_tree(tmp
     'bro_format_a-0.1.0-py3-none-any.whl',
     'bro_wire_a-0.1.0-py3-none-any.whl',
   }
-  assert result.stdout.endswith('from the framework working tree\n')
+  assert result.stderr.endswith('from the framework working tree\n')
 
 
 def test_stage_bro_wheel_discovers_providers_at_the_revision_in_a_consumer_lock(tmp_path):
@@ -277,7 +278,7 @@ source = {{ git = "https://example.invalid/bro?branch=main#{_LOCKED_COMMIT}" }}
   assert result.returncode == 0, result.stderr
   assert f'checkout --quiet --detach {_LOCKED_COMMIT}' in arguments.read_text()
   assert len(list((consumer / 'build' / 'bro-wheel').glob('*.whl'))) == 3
-  assert result.stdout.endswith(f'from https://example.invalid/bro@{_LOCKED_COMMIT}\n')
+  assert result.stderr.endswith(f'from https://example.invalid/bro@{_LOCKED_COMMIT}\n')
 
 
 def _prepared_wheels(root: Path, image: Path) -> set[str]:

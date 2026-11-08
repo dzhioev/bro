@@ -312,10 +312,7 @@ def main(argv: list[str]) -> Optional[int]:
 
   current = usage.current_usage()
   if current is None:
-    print(
-      f'error: no usage published (no {usage.USAGE_FILE_VARIABLE} pointer, or none billed yet)',
-      file=sys.stderr,
-    )
+    log.error('no usage published (no %s pointer, or none billed yet)', usage.USAGE_FILE_VARIABLE)
     return 1
   print(_emit_default(current, state))
   return 0

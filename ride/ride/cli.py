@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import shlex
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -481,11 +480,11 @@ def main(argv: list[str]) -> Optional[int]:
     try:
       workspace = Workspace.open(args['name'])
     except ValueError as error:
-      print(str(error), file=sys.stderr)
+      log.error('%s', error)
       return 1
     clean, reasons = workspace.is_clean()
     for reason in reasons:
-      print(reason, file=sys.stderr)
+      print(reason)
     return 0 if clean else 1
   if command == 'exec':
     return exec_in_workspace(name=args['name'], command=args['command'])

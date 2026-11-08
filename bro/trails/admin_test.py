@@ -1,5 +1,6 @@
 import pytest
 
+from bro.base.args import CLIError
 from bro.trails import model
 from bro.trails.admin import main
 from bro.trails.local import LocalStore
@@ -71,7 +72,7 @@ def test_a_credential_without_the_admin_permission_stops_the_run(store, monkeypa
 
   monkeypatch.setattr(store, 'delete_trail', refuse)
 
-  with pytest.raises(SystemExit, match='is refused'):
+  with pytest.raises(CLIError, match='is refused'):
     main(['trails', 'delete', trail_id])
 
 
