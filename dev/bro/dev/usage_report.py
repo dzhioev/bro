@@ -13,9 +13,8 @@ dominated by cache-read and meaningless as spend. Commits without a parseable
 footer are not counted.
 
 Example:
-  usage-report master..HEAD
+  usage-report "origin/$(default-branch)..HEAD"
   usage-report HEAD~10..HEAD
-  usage-report master~50..master
 """
 
 from __future__ import annotations
@@ -114,6 +113,6 @@ def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='aggregate LLM token usage across a git commit range')
   parser.add_argument(
     'git_range',
-    help='git range, e.g. master..HEAD or HEAD~10..HEAD',
+    help='git range, e.g. HEAD~10..HEAD',
   )
   return usage_report(**parser.parse(argv))

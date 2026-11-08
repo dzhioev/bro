@@ -38,6 +38,10 @@ def bro_workflow_commit_footer():
   return run_cli('bro.workflow.commit_footer', sys.argv)
 
 
+def bro_workflow_default_branch():
+  return run_cli('bro.workflow.default_branch', sys.argv)
+
+
 def bro_workflow_fold_branch():
   return run_cli('bro.workflow.fold_branch', sys.argv)
 

@@ -28,11 +28,12 @@ build the wheel with `uv build --package bro-dev`.
   - `references.py` declares the `dev-style` and `rebase-conflicts` sources and the `guides` pages, all over files in `bro/prompts/dev/`
 - `bro/workflow/` — development delivery mechanics:
   co-author and token-accounting commit metadata,
+  the read of origin's default branch,
   branch folding,
   PR landing,
   and the packaged git hooks.
   Its public import paths remain `bro.workflow.*`;
-  its CLIs are `commit-footer`, `fold-branch`, and `land-pr`
+  its CLIs are `commit-footer`, `default-branch`, `fold-branch`, and `land-pr`
 - `bro/extra/github/` — `poll_pr.py` (the `poll-pr` review watcher) and `pr_state.py` (the `pr-state` reviewer-side read of a PR's review state).
   The GitHub client, App-auth source, and pull-request reads they consume remain in core at `bro.extra.github.api`, `.app`, and `.pulls`
 - `bro/prompts/dev/style.md` — the development style policy, tool-served by the Dev and Eyebro personas through `dev-style-source::read`
