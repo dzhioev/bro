@@ -101,6 +101,16 @@ read every guide the work in hand reaches before writing it, and again when audi
   an epilogue that consumes values computed inside the block (`__exit__` sees the exception, not the block's results);
   and sequencing within teardown itself, where a later cleanup step must run even when an earlier one raises.
 
+- A command's stdout carries only its data output.
+  Progress, diagnostics, and errors go to stderr through the repository's logger;
+  the usage a usage error prints goes to stderr, while `--help` prints to stdout.
+  An interactive prompt's own text, the prompt and its hints, stays with the prompt rather than going through the logger.
+
+- Every message a command writes or raises
+  — log lines, exception and exit messages
+  — is neutral and factual:
+  lowercase unless a proper noun leads, no trailing period, and no `!` or other emotional tone.
+
 - Diagnose before you patch.
   State the upstream cause of a failure before reaching for a workaround
   — a patch you can't trace to a root cause is a guess, and a workaround over one you do understand is debt to flag, not hide.
