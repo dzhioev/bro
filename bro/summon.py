@@ -57,7 +57,8 @@ MANUAL_HELP = (
 )
 HARNESS_HELP = (
   'the installed harness the child runs under '
-  f'({", ".join(installed_harness_names()) or "none"}); omitted uses the project summon harness'
+  f'({", ".join(installed_harness_names()) or "none"}); '
+  "omitted uses the child's configured summon-harness, else its harness"
 )
 GRANT_HELP = 'give the child an authority entry or add a held credential kind (repeatable)'
 REVOKE_HELP = 'cap a child permission or drop a credential kind (repeatable)'

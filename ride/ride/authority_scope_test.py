@@ -350,7 +350,7 @@ def test_url_attachment_reads_only_tree_sections_at_the_resolved_commit(
     store=tmp_path / 'absent',
     installation=installation,
   )
-  assert source.summon_harness == 'native'
+  assert source.resolve_harness(summon=True) == 'native'
   assert source.home_policy.layer.grant and not source.home_policy.layer.revoke
   assert source.project['example']['value'] == 'committed'
 
@@ -702,23 +702,32 @@ def test_later_starts_under_a_reading_do_no_per_target_work(installation, monkey
 
 def test_unset_harness_does_not_prevent_reading_or_explicit_summons(installation):
   source = Reading(Configuration.parse({}), {}, installation)
-  assert source.harness is None and source.summon_harness is None
   with pytest.raises(ValueError, match='no recipe'):
     normalized(source, harness='native')
-  with pytest.raises(ValueError) as failure:
+  with pytest.raises(ValueError, match='set "summon-harness" or "harness"'):
     normalized(source)
-  assert 'summon-harness' in str(failure.value)
 
 
-def test_summon_does_not_use_the_root_harness_key(installation):
-  source = Reading(
-    Configuration.parse({'defaults': {'harness': 'native'}}),
-    {},
+def test_summon_falls_back_to_the_child_stack_harness(installation):
+  source = reading(
     installation,
+    {
+      'defaults': {'harness': 'auth'},
+      'homes': {'test-home': {'bros': {'child': {'harness': 'native'}}}},
+    },
     settings=HomeSettings(harness='auth'),
   )
-  with pytest.raises(ValueError, match='summon-harness'):
-    normalized(source)
+  assert normalized(source).values['harness'] == 'native'
+  assert normalized(source, target='other').values['harness'] == 'auth'
+
+
+def test_summon_harness_in_any_layer_wins_over_the_harness_fallback(installation):
+  source = reading(
+    installation,
+    {'homes': {'test-home': {'bros': {'child': {'harness': 'auth'}}}}},
+    settings=HomeSettings(summon_harness='native'),
+  )
+  assert normalized(source).values['harness'] == 'native'
 
 
 def test_passthrough_cannot_be_overridden_or_set_on_a_manual_start(installation):

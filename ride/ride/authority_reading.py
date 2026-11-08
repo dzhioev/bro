@@ -333,26 +333,20 @@ class Reading:
         return value, policy
     return None
 
-  @property
-  def harness(self) -> str | None:
-    winner = self.winning('', 'harness')
-    return cast(str, winner[0]) if winner else None
-
-  @property
-  def summon_harness(self) -> str | None:
-    winner = self.winning('', 'summon_harness')
-    return cast(str, winner[0]) if winner else None
-
   def resolve_harness(
     self, selected: str | None = None, *, target: str = '', summon: bool = False
   ) -> str:
     if selected is not None:
       return selected
-    key = 'summon_harness' if summon else 'harness'
-    winner = self.winning(target, key)
-    if winner is None:
+    keys = ('summon_harness', 'harness') if summon else ('harness',)
+    for key in keys:
+      winner = self.winning(target, key)
+      if winner is not None:
+        break
+    else:
+      names = ' or '.join(f'"{key.replace("_", "-")}"' for key in keys)
       raise ValueError(
-        f'no harness for {target}: pass --harness, or set "{key.replace("_", "-")}" in a layer of ~/.bro.json or in the home settings'
+        f'no harness for {target}: pass --harness, or set {names} in a layer of ~/.bro.json or in the home settings'
       )
     name = cast(str, winner[0])
     try:

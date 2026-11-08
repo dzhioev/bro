@@ -96,10 +96,11 @@ the launcher's own `--log` never reaches the session.
 
 `--harness` selects any name registered by this installation's `bro.harnesses` entry points.
 A root selects `--harness`, otherwise its bro's stack's `harness`.
-A summon selects its `harness` field, otherwise the child's stack's `summon-harness`.
+A summon selects its `harness` field, otherwise the child's stack's `summon-harness`, otherwise that stack's `harness`;
+a `summon-harness` in any layer wins over the `harness` fallback.
 A manual commit selects the operator's `--harness`, otherwise the child's stack's `harness`.
 There is no framework default;
-a missing choice refuses the start, naming the relevant key and `--harness`.
+a missing choice refuses the start, naming the relevant keys and `--harness`.
 A selected harness must be installed, and `ride resume` keeps its recorded harness.
 
 A provider names the vendor and a harness the driving loop.

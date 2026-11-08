@@ -251,18 +251,18 @@ Ask before local Docker image writes, show the image tag and temporary paths, re
 2. If an already bro-enabled repository intentionally uses another default, ask whether to preserve it.
    A preserved default requires `--bro <developer-name>` on default-dependent `ride scope` and `dive-in` commands.
 3. Explain the two harness keys from the pinned home settings:
-   `harness` drives every launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness.
-   There is no framework harness default: each key must come from home settings, a host layer (`defaults`, `homes.<home>` or a bro entry), or the launch itself.
+   `harness` drives every launch that names no `--harness`, which is `dive-in`, `ride along`, and `ride solo` alike, and `summon-harness` drives every summon whose request names no harness, falling back to `harness` when no layer sets it.
+   There is no framework harness default: a harness must come from home settings, a host layer (`defaults`, `homes.<home>` or a bro entry), or the launch itself.
    Host layers override home settings, with the last setting in the bro's stack winning.
    Claude Code runs on the `claude_code` setup token, which section 5 always wires;
    the native loop runs the home-layer `llm.bro` recipe on its provider key, the `openai` credential.
 4. Ask whether the user has an OpenAI API key and wants section 5 to wire it.
-   Without one, both keys are `claude`, the native loop stays installed but unusable, and the user changes the keys once a key is wired later;
+   Without one, `harness` is `claude` with no `summon-harness`, the native loop stays installed but unusable, and the user changes the keys once a key is wired later;
    skip the next question.
 5. Present these configurations and ask which one to write:
    - recommended: `harness = "claude"` and `summon-harness = "bro"`, so interactive and one-shot launches run under Claude Code and summons under the native loop, which is how the framework repository runs itself;
-   - Claude Code everywhere: both keys `claude`;
-   - native everywhere: both keys `bro`, not recommended because the interactive native harness is early, working but well behind Claude Code's own session;
+   - Claude Code everywhere: `harness = "claude"` alone;
+   - native everywhere: `harness = "bro"` alone, not recommended because the interactive native harness is early, working but well behind Claude Code's own session;
    - the remaining pair, `harness = "bro"` with `summon-harness = "claude"`, when the user wants it.
 6. If an already bro-enabled repository carries intentional `harness` or `summon-harness` values, present them as its current configuration and ask whether to preserve or replace them.
 7. Select a complete Claude recipe with the user: a full listed model id and any provider-native effort or fast-mode fields, validated against the pinned Anthropic declaration.
@@ -286,7 +286,7 @@ summon-harness = "bro"
 ```
 
 For a sidecar, put the resource in its `<project_slug>_bros` package and name that package in the entry.
-Substitute the chosen public name and harness pair consistently.
+Substitute the chosen public name and harness keys consistently, omitting `summon-harness` when the chosen configuration sets `harness` alone.
 Preserve an intentional existing default when approved.
 Leave `summon-depth` absent unless a discovered requirement needs it.
 After syncing the launch environment, write its marker, including from setup on subsequent runs:

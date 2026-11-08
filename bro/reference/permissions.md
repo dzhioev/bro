@@ -106,7 +106,7 @@ Defaults never depend on the starter's authority.
 |---|---|---|---|---|
 | `target` | Bro names `[a-z][a-z0-9-]*` | Required | No | No |
 | `placement` | `boxed`, `unboxed`, `join` | `boxed` | No | No |
-| `harness` | Harness names | Reading's summon harness | Yes | No |
+| `harness` | Harness names | Per [harness selection](ride.md#harness-selection) | Yes | No |
 | `provider` | Provider names | Resolved recipe | Yes | No |
 | `model` | Strings | Resolved recipe | Yes | No |
 | `passthrough` | Flag | Send model and content unchecked by the model-input table | Yes | No |

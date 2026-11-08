@@ -145,11 +145,6 @@ class TestAttachment:
       assert ride_cli.main(['ride', 'along', 'dev']) == 0
     assert start.call_args.args[0].repo is None
 
-  def test_detached_launch_leaves_the_summon_harness_unset(self):
-    with patch('ride.cli.start_session', return_value=0) as start:
-      assert ride_cli.main(['ride', 'along', 'dev']) == 0
-    assert start.call_args.args[0].summon_harness is None
-
   def test_repo_resolves_any_directory_inside_the_checkout(self, monkeypatch):
     monkeypatch.setattr(ride_cli, 'project_root', lambda path: Path('/repo'))
     with patch('ride.cli.start_session', return_value=0) as start:
