@@ -153,16 +153,7 @@ class TestAttachment:
 
   def test_git_url_is_preserved_in_the_session_spec(self, monkeypatch):
     url = 'https://example.test/owner/repo.git'
-    repository = SimpleNamespace(
-      identity=url,
-      is_url=True,
-      project_config=lambda: SimpleNamespace(
-        default_bro='bro-dev',
-        harness='claude',
-        summon_harness=None,
-        sections={},
-      ),
-    )
+    repository = SimpleNamespace(identity=url)
     monkeypatch.setattr(ride_cli, '_resolve_repository_argument', lambda _value: repository)
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--repo', url, 'dev']) == 0
