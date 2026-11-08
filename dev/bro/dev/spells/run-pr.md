@@ -6,15 +6,15 @@ This spell should be used when the user signals that the worktree's changes are 
 — "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize".
 Covers commit hygiene (docs sync, policy audit, commit splitting),
 the repo's commit-message conventions,
-rebases onto the base branch (master by default),
-folds the branch into the commits master will carry so what is reviewed is what lands,
+rebases onto the base branch (the repository's default branch unless told otherwise),
+folds the branch into the commits the base will carry so what is reviewed is what lands,
 opens the PR via `gh pr create`,
 then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events.
 On approval, chains into [[land]] for the merge step.
 A PR that is already open with nothing watching it is [[resume pr]]'s.
 
-parameters: {"base?": "base branch for the pull request instead of master"}
-version: 8.0.0
+parameters: {"base?": "base branch for the pull request instead of the repository's default branch"}
+version: 8.1.0
 ---
 
 # run-pr
@@ -26,15 +26,15 @@ Stops at APPROVED — [[land]] does the merge.
 
 Passed values appear in the `# Arguments` section appended by the spell tool:
 
-- `base` — base the PR on this branch instead of `master`:
+- `base` — base the PR on this branch instead of the repository's default branch:
   rebase onto it (step 7), fold against it (step 8), scope the commit list against it (steps 4, 10), and pass `--base <branch>` to `gh pr create` (step 12).
-  Default `master`.
-  A coordinator driving multi-stage work passes its integration branch here so each stage opens its PR into that branch rather than master.
+  Default: the branch `default-branch` prints.
+  A coordinator driving multi-stage work passes its integration branch here so each stage opens its PR into that branch rather than the default branch.
   Below, `<base>` means this value.
 
 ## Preconditions
 
-- You are in a managed workspace (under the runtime state root's `workspaces/` or otherwise on a non-master branch).
+- You are in a managed workspace (under the runtime state root's `workspaces/` or otherwise on a branch other than `<base>`).
   Do NOT run this against the main checkout's working copy.
 - The work looks finished.
   If edits look WIP, a refactor is half-done, or the suite is known-red, confirm with the user before proceeding.
@@ -153,9 +153,9 @@ git fetch origin <base> && git rebase origin/<base>
 When it stops on a conflict, call `rebase-conflicts-source::read` and follow it:
 resolving in-band, the escalation bar, and the task comment.
 
-### 8. Fold the branch into what master will carry
+### 8. Fold the branch into what `<base>` will carry
 
-Master carries one commit per logical change, and the branch is rarely shaped that way already:
+`<base>` carries one commit per logical change, and the branch is rarely shaped that way already:
 [[fix]]'s checkpoints are commits about *making* the change, not changes of their own.
 The reviewer approves commits, not a diff
 — so the branch is folded into the ones that will land before anyone looks at it, and the merge rewrites nothing afterwards.
@@ -191,7 +191,7 @@ A `fold` line naming no commits takes every commit the others leave
 — the whole branch when it is the only line
 — so the one-commit plan names no shas at all.
 A `fold` line with nothing written under it keeps the message of the first commit it folds, which is what a commit that already names its unit wants.
-The messages here are what master carries:
+The messages here are what `<base>` carries:
 nothing downstream composes one, so they follow the repo's commit conventions and carry the task metadata (step 5).
 
 ```bash
@@ -585,7 +585,7 @@ the watch is over and the PR is not
   — credential stores, key files, minting configs.
   If anything that looks like a secret shows up in `git status`, warn the user before staging.
 - Never skip hooks (`--no-verify`, `--no-gpg-sign`, etc.).
-- Never force-push (`--force`, `--force-with-lease`) to master.
+- Never force-push (`--force`, `--force-with-lease`) to `<base>`.
 - Never stage with `git add -A` / `git add .`
   — stage by explicit path.
 - Never `git add -N`

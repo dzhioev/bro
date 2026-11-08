@@ -971,6 +971,7 @@ def test_installed_distributions_publish_the_session_command_roster():
     'broxy',
     'commit-footer',
     'credentials',
+    'default-branch',
     'do-ride',
     'fold-branch',
     'land-pr',

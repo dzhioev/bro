@@ -21,7 +21,7 @@ equal the tree of the branch it replaces, or the branch is left as it was.
 
 On success prints a single JSON object to stdout:
 
-  {"base": "master", "commits": [{"sha": ..., "subject": "..."}]}
+  {"base": ..., "commits": [{"sha": ..., "subject": "..."}]}
 """
 
 import contextlib
@@ -39,7 +39,7 @@ from typing import Optional
 import bro.llm.usage as usage
 from bro.base import log, spawn
 from bro.base.args import Parser
-from bro.workflow import co_author, commit_footer
+from bro.workflow import co_author, commit_footer, default_branch
 
 __cli_name__ = 'fold-branch'
 
@@ -270,10 +270,10 @@ def _fold(plan: str, base: str) -> dict:
   return {'base': base, 'commits': _shaped(merge_base)}
 
 
-def fold_branch(plan: str, base: str) -> Optional[int]:
+def fold_branch(plan: str, base: Optional[str]) -> Optional[int]:
   try:
-    result = _fold(plan, base)
-  except FoldError as error:
+    result = _fold(plan, base if base is not None else default_branch.read())
+  except (FoldError, default_branch.DefaultBranchError) as error:
     log.error(str(error))
     return 1
   print(json.dumps(result))
@@ -290,8 +290,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument(
     '--base',
-    default='master',
     metavar='BRANCH',
-    help='the branch this one lands on (default: master)',
+    help="the branch this one lands on (default: origin's default branch)",
   )
   return fold_branch(**parser.parse(argv))

@@ -18,6 +18,8 @@ from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from bro.base.args import Parser
+from bro.workflow import default_branch
+from bro.workspace.git import rev_parse_commit
 
 __cli_name__ = 'check-markdown'
 
@@ -414,23 +416,34 @@ def _check(repo_root: Path, base: str, paths: list[str]) -> Iterator[str]:
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(description='check markdown reflows against the repository policy')
   parser.add_argument(
-    '--base', default='origin/master', help='revision the working tree is compared against'
+    '--base',
+    help="revision the working tree is compared against (default: origin's default branch)",
   )
   parser.add_argument(
     'paths', nargs='*', help='markdown files to check (default: every one changed since --base)'
   )
   args = parser.parse(argv)
+  base = args['base']
+  if base is None:
+    try:
+      base = f'origin/{default_branch.read()}'
+    except default_branch.DefaultBranchError as error:
+      print(error, file=sys.stderr)
+      return 1
   repo_root = _repo_root()
-  paths = args['paths'] if len(args['paths']) > 0 else _changed_markdown(repo_root, args['base'])
+  if rev_parse_commit(repo_root, base) is None:
+    print(f'{base} names no commit here; fetch it or pass another --base', file=sys.stderr)
+    return 1
+  paths = args['paths'] if len(args['paths']) > 0 else _changed_markdown(repo_root, base)
   if len(paths) == 0:
-    print(f'no markdown changed since {args["base"]}', file=sys.stderr)
+    print(f'no markdown changed since {base}', file=sys.stderr)
     return 0
 
-  problems = list(_check(repo_root, args['base'], paths))
+  problems = list(_check(repo_root, base, paths))
   for problem in problems:
     print(problem, file=sys.stderr)
   print(
-    f'{len(paths)} file(s) checked against {args["base"]}: {len(problems)} problem(s)',
+    f'{len(paths)} file(s) checked against {base}: {len(problems)} problem(s)',
     file=sys.stderr,
   )
   return 1 if len(problems) > 0 else 0

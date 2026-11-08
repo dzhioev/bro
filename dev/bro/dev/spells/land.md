@@ -12,7 +12,7 @@ Also covers landing without a pull request
 — a repo that takes changes straight onto its target branch:
 the rebase-and-push one-liner, and the CI dispatch that stands in for the checks no PR is there to run.
 
-version: 5.6.0
+version: 5.7.0
 ---
 
 # land
@@ -37,10 +37,11 @@ the branch was verified at its last push, the land publishes nothing of its own,
 
 What `<base>` gets is the commits the branch carries:
 [[run pr]] folded them into that shape before review, and `land-pr` writes nothing to the branch.
-Read them once before merging:
+Read them once before merging,
+`<base>` being the PR's base branch (`gh pr view --json baseRefName --jq .baseRefName`):
 
 ```bash
-git log origin/<base>..HEAD --oneline    # <base> is the PR's base branch, master unless it says otherwise
+git log origin/<base>..HEAD --oneline
 ```
 
 Messages and all, that is what lands.
@@ -165,6 +166,8 @@ A repo that takes its changes straight onto the target branch never opens one, s
 The merge is a fast-forward push of the rebased branch
 — but the pull request was carrying both the review and the CI gate, and neither goes with it, so both fall due *before* that push rather than after it.
 The push is the last thing this section does.
+`<base>` here is the branch the change goes onto:
+the one the user named, otherwise the branch `default-branch` prints.
 
 Rebase first:
 

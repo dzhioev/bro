@@ -272,6 +272,15 @@ class TestFold:
     ]
     assert result['commits'][0]['sha'] == _sh(worktree.path, 'rev-parse', 'HEAD~1')
 
+  def test_no_base_folds_against_the_default_branch_origin_names(self, worktree, tmp_path, capsys):
+    _sh(worktree.origin, 'branch', 'trunk', 'master')
+    _sh(worktree.origin, 'symbolic-ref', 'HEAD', 'refs/heads/trunk')
+    with patch.object(fold_branch.commit_footer, 'group_footers', return_value=['', '']):
+      assert fold_branch.fold_branch(self._plan(worktree, tmp_path), None) is None
+    assert json.loads(capsys.readouterr().out)['base'] == 'trunk'
+    landed = _sh(worktree.path, 'log', '--reverse', '--format=%s', 'origin/trunk..HEAD')
+    assert landed.splitlines() == ['the feature', 'the unrelated fix']
+
   def test_an_unaccounted_branch_advances_no_baseline(self, worktree, tmp_path):
     # a branch with no footered commits aggregates to nothing, and nothing to
     # attribute means no baseline to advance either

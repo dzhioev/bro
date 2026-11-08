@@ -9,7 +9,7 @@ runs each target's declared plan before any live resource changes,
 then its deploy command as a backgrounded shell job followed by its declared `infra::verify`,
 and treats dry-run as an explicit opt-in that stops after the plan.
 
-version: 3.1.0
+version: 3.2.0
 ---
 
 # Deploy
@@ -44,7 +44,7 @@ For “deploy everything,” use every target in registry order.
 For “deploy what changed,” read these sets with shell git:
 
 ```bash
-git diff --name-only origin/master...HEAD
+base=$(default-branch) && git fetch origin "$base" && git diff --name-only "origin/$base...HEAD"
 git diff --name-only
 git ls-files --others --exclude-standard
 ```

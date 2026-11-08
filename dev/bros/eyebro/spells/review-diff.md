@@ -9,7 +9,7 @@ The review is read-only and changes nothing.
 For driving a GitHub pull request to a verdict, [[review pr]] wraps this judging in the PR conversation loop.
 
 parameters: {"target?": "revision, branch, or revision range to review; default: the current branch against its merge base with the default branch"}
-version: 1.1.0
+version: 1.2.0
 ---
 
 # review-diff
@@ -24,8 +24,9 @@ The `target` argument names what to review:
 
 - a revision range (`abc123..def456`) — exactly that;
 - a single revision — that commit (`<rev>^..<rev>`);
-- a branch — what it adds over the default branch:
-  `$(git merge-base origin/master <branch>)..<branch>`;
+- a branch — what it adds over the default branch, `<fork>..<branch>`,
+  where `<fork>` is what `base=$(default-branch) && git fetch origin "$base" && git merge-base "origin/$base" <branch>` prints;
+  run that as a command of its own, since nested inside the range a failed lookup leaves `..<branch>`, which is empty;
 - absent — the current branch the same way.
 
 Read `git log` over the range before the diff:

@@ -5,7 +5,7 @@ Runs the deterministic tail of a dev session: resolve the PR, enforce the merge
 preconditions, rebase-merge, and delete the remote feature branch.
 
 The branch lands as the commits it carries: nothing here rewrites it, so what
-was approved is what reaches master, commit boundaries and accounting footers
+was approved is what reaches its base, commit boundaries and accounting footers
 included.
 
 Preconditions (each failure aborts with a message on stderr and exit 1):
@@ -30,7 +30,7 @@ Preconditions (each failure aborts with a message on stderr and exit 1):
 
 On success prints a single JSON object to stdout:
 
-  {"pr": 310, "url": ..., "title": ..., "base": "master", "merged_sha": ...,
+  {"pr": 310, "url": ..., "title": ..., "base": ..., "merged_sha": ...,
    "merged_at": "2026-07-03T10:41:02Z", "commits": 1, "branch_deleted": true}
 """
 
