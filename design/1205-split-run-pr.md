@@ -6,8 +6,8 @@ the pull request that carries it is a design review only.
 
 ## 1. Goal, scope and constraints
 
-Goal: `run-pr` takes a change through an explicitly chosen review and an independently gated landing, with its roles, the accounts it listens to, and its token accounting made explicit.
-The task's `## Goal` states the six outcomes the verification phase checks.
+Goal: `run-pr` takes a change through an explicitly chosen review and an independently gated landing, with its roles and the accounts it listens to made explicit.
+The task's `## Goal` states the outcomes the verification phase checks.
 
 What it enables, for example:
 
@@ -16,7 +16,6 @@ What it enables, for example:
 - A coordinator summons the developer and the reviewer as two unlinked children and holds the verdict itself.
 - A landing requires a human's approval, a bro's verdict, CI, the local gate, or any subset stated explicitly, whichever method lands it.
 - A comment from an account the review does not trust never reaches the author's model.
-- The footer of an orchestrated feature's landing counts its design, planning and coordination as well as its stages and their reviewers.
 
 The owner settled the design's decisions on 2026-11-08 and 2026-11-09;
 §15 records each one and the section that applies it.
@@ -26,8 +25,9 @@ Out of scope, each with where it belongs:
 - what a review judges, which stays `review-diff`'s;
 - the substance of preparing a branch (survey, formatter, policy audit, docs, commit splits, messages, rebase, the change-scoped gate), which `run-pr` keeps as it is;
 - deploys, which stay `land`'s handoff;
-- the usage-totals mission §9 relies on, and recording `mu` calls with their summoner, which are a design of their own in the coordinator's plan (§14);
-- signed review tags, a follow-up the verdict of §4 is ready for (§14).
+- token accounting, whose footers stay as they are (§9), counting every session that contributed to a landing being [#1227](https://github.com/dzhioev/bro/issues/1227)'s;
+- signed review tags, [#1230](https://github.com/dzhioev/bro/issues/1230), a follow-up the verdict of §4 is shaped for;
+- live-LLM runs of the routes §12 names, which are [#1228](https://github.com/dzhioev/bro/issues/1228)'s.
 
 Constraints:
 
@@ -35,9 +35,12 @@ Constraints:
 - core imports no other workspace member;
 - backward compatibility is not a constraint (`AGENTS.md`, "Conventions");
 - a violated assumption fails fast (the development style policy);
-- every rendering of a spell fits the 30,000-character tool-result window (`bro.base.text_window.BYTE_LIMIT`) that both `bro::cast` and the `spell::` tools return through;
+- every rendering of a spell fits the 30,000-character tool-result window (`bro.base.text_window.BYTE_LIMIT`, counted in characters) that both `bro::cast` and the `spell::` tools return through, past which a result pages;
 - GitHub's rebase merge writes new commit ids and drops commits that were empty to begin with (§16);
-- this repository's `master` requires a pull request with one approval from an account its rules count, the last push approved by someone other than its pusher, linear history, and the `tests` check (§16).
+- this repository's `master` requires, through its ruleset (§16):
+  a pull request with one approval from an account its rules count, and the last push approved by someone other than its pusher;
+  an extra approval for changes no GitHub account is credited with;
+  linear history, and the `tests` check.
 
 ## 2. Concepts
 
@@ -49,11 +52,10 @@ Terms the repository already defines, as this design uses them:
 - **Base** — the branch a change lands on, written `<base>`;
   the **base commit** is the tip of the base a verdict or check was made against.
 - **Landing shape** — one commit per logical change, each with the message the base will carry (`run-pr`, "Fold the branch").
-- **Fold** — `fold-branch` rewriting the branch into landing shape, proving the final tree unchanged.
+- **Fold** — `fold-branch` rewriting the branch into landing shape, proving the final tree unchanged, and summing the folded commits' footers onto the commits that land.
 - **Footer** — the token-accounting line `> created with <agents> | <model>: ↑(<input> <cache-write> <cache-read>) ↓<output>, …` owned by `bro.llm.usage`, appended to agent commits by the `commit-msg` hook.
 - **Quest**, **talk rights** and **placement** — a summon's conversation, its four rights, and `boxed`, `unboxed` or `join` (`bro/reference/ride.md`, "Summoning another bro").
 - **Artifact** — a content-addressed file or directory passed between peers of one ride (`bro/reference/ride.md`, "Sharing artifacts between peers").
-- **Trail** — the recording of a session, pointing at its summoner's trail through `summoned_by` and at the trail it continues through `forked_from`.
 - **PR watch** — the long-lived `poll-pr` process a session reacts to through [[watch]], one per open pull request it follows.
 
 Terms this design introduces:
@@ -67,13 +69,13 @@ Terms this design introduces:
   `verdict`, `checks`, `tests` or `approval` (§3.5).
 - **Platform rule** — a precondition the remote enforces, which no plan chooses or waives (§3.6).
 - **Verdict** — the reviewer's judgement of one named head against one named base commit (§4).
+- **Successor** — a reviewer that takes over a review from one that cannot finish it (§4.3, §5.7).
 - **Round** — one exchange of findings and answers about a named head (§5.1).
-- **Landing fold** — the fold made once the review has nothing open, which writes the landing's footers (§5.2, §9).
+- **Landing fold** — the last fold before landing, made once the review has nothing open (§5.2).
 - **Turn** — in `talk` and `local`, the span in which the named head belongs to the reviewer (§5.3).
 - **Trusted account** — a GitHub account whose comments, reviews and approvals the author acts on (§5.5).
-- **Credit** — a trail the plan names whose whole tree counts toward the landing's total (§9.2).
-- **Coordination line** — a second footer line, `> coordinated with …`, carrying what a credited landing's total adds beyond its folded commits (§9.3).
 - **Choice parameter** — a spell parameter with a closed set of values its body renders on (§7.1).
+- **Route** — one end-to-end path through a plan's choices, as §12 names them.
 
 ## 3. The delivery plan
 
@@ -86,17 +88,17 @@ Terms this design introduces:
 | `base` | a branch | the branch `default-branch` prints |
 | `pr` | an open pull request to resume (§3.8) | none |
 | `channel` | `github`, `talk`, `local` (choice parameter) | `github` |
-| `reviewer` | `summon`, `coordinator`, `others` | `summon` where `may_summon` names a reviewer, else `others` |
+| `reviewer` | `summon`, `coordinator`, `others` | `summon` where a reviewer is granted, else `others` |
 | `approver` | `human`, `summoner` | `human` |
 | `lander` | `self`, `summon`, `coordinator`, `others` | `self` |
 | `landing` | `merge`, `push` (choice parameter) | `merge` |
 | `gates` | any subset of `verdict`, `checks`, `tests`, `approval` | §3.5 |
 | `placement` | `boxed`, `unboxed`, `join` | `boxed` |
 | `trust` | GitHub logins | none |
-| `credit` | trail ids | none |
 
-A reviewer is a summon target that is an `eyebro`, by `may_summon`'s is-a reading;
-a lander is a summon target that offers [[land]].
+A reviewer is a granted summon target that answers to `eyebro`, and a lander one that answers to `dev`, whose roster carries [[land]].
+A spell tests the grant with `#may_summon contains eyebro`, which holds for `eyebro` and for every bro deriving from it,
+and the summon names the granted bro itself, since the host admits exactly the names granted (§16).
 `placement` applies to the bros the author summons, the reviewer and a lander.
 
 ### 3.2 Review channels
@@ -121,7 +123,7 @@ a lander is a summon target that offers [[land]].
 The reviewer:
 
 - `summon` — the author summons a reviewer bro with talk `worker.say` and `worker.question`, a 14,400-second timeout and the plan's placement;
-  its answer is the verdict.
+  its answer is the verdict, and a reviewer that times out hands the review to a successor (§5.7).
 - `coordinator` — `github` only:
   the author's summoner arranges a reviewer and relays its verdict (§5.6).
 - `others` — `github` only:
@@ -144,9 +146,9 @@ The lander:
 
 ### 3.4 Landing methods
 
-- `merge` — GitHub's rebase merge of the pull request, through `land-pr`.
-- `push` — a fast-forward of `<base>` to the head:
-  `git push <remote> HEAD:<base>` where the repository has a remote, `git push . HEAD:<base>` where it has none.
+- `merge` — GitHub's rebase merge of the pull request, through `land-pr` (§6.2).
+- `push` — a fast-forward of `<base>` to the head, through `land-push` (§6.3):
+  onto `<base>` on the repository's remote, or onto the local branch `<base>` where the repository has no remote.
   No push of a landing is ever forced.
 
 ### 3.5 Gates
@@ -154,18 +156,18 @@ The lander:
 - `verdict` — the reviewer approved this head (§4).
 - `checks` — CI concluded green on this head:
   the pull request's checks for `merge`;
-  for `push` to GitHub, a run of the repository's CI workflow dispatched on a temporary branch at the head.
+  for `push` to GitHub, a run of the repository's CI workflow that `land-push` dispatches on a temporary branch at the head.
 - `tests` — the repository's whole local gate passed on this head, in the landing session's workspace, with whatever stages that workspace cannot run reported skipped.
 - `approval` — the approver's go-ahead for this head.
 
 Without a `gates` parameter, the gates are `verdict`, `approval`, and `checks` where CI covers the method, otherwise `tests`.
 CI covers `merge` where a workflow has ever run on a pull request in the repository (`gh api 'repos/{owner}/{repo}/actions/runs?event=pull_request&per_page=1' --jq .total_count` above zero),
-and it covers `push` where the remote is GitHub and the repository's docs name a CI workflow `gh workflow run` accepts.
+and it covers `push` where the remote is GitHub and the repository's docs name its CI workflow, whose triggers include `workflow_dispatch`.
 A `gates` parameter replaces the default whole,
 so a landing no human takes part in is always explicit:
 a `gates` list without `approval`, or approver `summoner`.
 A plan without the `verdict` gate engages no reviewer, whatever its channel,
-and its one fold before landing is its landing fold (§9.2).
+and its one fold before landing is its landing fold.
 
 ### 3.6 Platform rules
 
@@ -174,13 +176,15 @@ No plan chooses or waives them:
 - a `merge` obeys the base's GitHub rules, which `land-pr` reads off `reviewDecision` and the checks;
 - a `push` obeys the remote, and a refusal (a non-fast-forward, or a rule against direct pushes) ends that attempt with the remote's message;
 - on GitHub, a base whose rules require a pull request refuses `push` at plan time, read from `gh api repos/{owner}/{repo}/rules/branches/<base>`.
+  That endpoint reports rulesets only:
+  classic branch protection, which takes admin access to read, is enforced by the remote's refusal alone.
 
 ### 3.7 Plan check
 
 `run-pr` refuses a plan before preparing anything when:
 
 - `channel` is `talk` or `local` and `reviewer` is not `summon`;
-- a `summon` role has no matching target in `may_summon`;
+- a `summon` role has no granted target that answers to its bro (§3.1);
 - a `coordinator` role or approver `summoner` is chosen in a session that was not summoned, or whose quest lacks the `worker.question` that role asks with;
 - `placement` is `join` for a reviewer outside `local`, or the session's authority lacks `bro.placement=join`;
 - lander `others` is chosen with `landing` other than `merge`;
@@ -207,7 +211,7 @@ Delivery: channel github · reviewer summon · approver human · lander self · 
 With `pr`, `run-pr` resumes an open pull request:
 
 1. it checks out the pull request's head branch, unless the session already sits on it;
-2. it reads the task from the body's `Task:` line and the plan from its `Delivery:` line;
+2. it reads the task from the body's `Task:` line and the plan from its `Delivery:` line, a body without one resuming under the defaults of §3.1;
 3. a merged pull request gets [[land]]'s bookkeeping, and a closed one a report, and the run stops;
 4. otherwise it enters at the review (§5), the PR watch reconciling what arrived while nothing watched (§7.3).
 
@@ -223,7 +227,7 @@ A plan the user or coordinator changes mid-run is checked (§3.7) and recorded a
   the gates are `verdict`, `approval` and `checks`.
 - An orchestrated stage:
   the stage task states `gates=verdict,checks`, and the author merges into the integration branch.
-  The integration landing keeps the defaults and adds `credit=<the lead's trail>`, so the user's approval on the pull request is required, as `master` requires anyway.
+  The integration landing keeps the defaults, so the user's approval on the pull request is required, as `master` requires anyway.
 - A benchmark box with neither Docker nor a remote:
   review over `local` with `placement=join`, landing by `push` onto the local base;
   attended, the gates are `verdict`, `tests` and `approval`, and an unattended run states `gates=verdict,tests`.
@@ -248,7 +252,7 @@ Red checks, failed tests or a conflict before then are rounds like any other, wi
 Under reviewer `others` the verdict is the approval of §5.5,
 and the `checks` gate and the platform rules cover what such an approval does not.
 
-A reviewer bro's verdict is its answer, and its text is what a signed review tag would carry (§14):
+A reviewer bro's verdict is its answer, and its text is what a signed review tag would carry (#1230):
 
 ```
 approved <head sha> on <base sha>
@@ -267,14 +271,15 @@ but the quest's answer is what clears the `verdict` gate, relayed by the coordin
 - Checks and tests hold for the exact head only.
 - Any other change to the head clears every gate:
   an appended fix, a fold, a conflict resolution, someone else's push.
-- [[land]] checks the verdict in one step of its own, so a signature check can replace that step later (§14).
+- [[land]] checks the verdict in one step of its own, where a signature check can plug in later (#1230);
+  for `push`, `land-push` holds the head to it mechanically (§6.3).
 
 ### 4.3 When the base moves after a verdict
 
 - The head still merges cleanly, or rebases with every commit unchanged:
   no reviewer is needed, and checks run again on the new head wherever the method requires them (§6.3).
 - It needed a conflict resolution, or a fix after CI on the rebased head:
-  a successor reviewer reviews only the delta since the approved head.
+  a successor reviews only the delta since the approved head.
   - On `github` it reconstructs the review from the pull request:
     its own earlier approval, and what changed since.
   - On `talk` or `local` the author's summon passes the earlier verdict verbatim, as `bro::quest_check` returns it, and delivers the approved head beside the new one.
@@ -287,8 +292,7 @@ so relaying the verdict adds no assumption beyond the author's following its own
 
 ### 5.1 Rounds
 
-1. Before the first round, `run-pr` folds the branch into landing shape with `fold-branch`,
-   with provisional footers (§9.2).
+1. Before the first round, `run-pr` folds the branch into landing shape with `fold-branch`, which sums the footers as a fold does today (§9).
 2. The reviewer judges a named head and sends its findings:
    on `github`, one review on the pull request;
    on `talk` or `local`, one question on its quest naming the round and the head.
@@ -313,7 +317,7 @@ under reviewer `others`, when no trusted thread is open and the head's checks ar
    on `talk` or `local` with its round question ("Round <n> on <head>: no findings remain. Fold for landing and reply with the folded head and its concluded checks").
    Neither clears a gate.
 2. The author makes the landing fold:
-   the fixups fold into the commits they serve, the messages are final, and the footers come from §9.
+   the fixups fold into the commits they serve, the messages are final, and `fold-branch` sums the folded footers onto the landed commits (§9).
    It delivers the folded head, waits for its checks to conclude (the pull request's for `merge`, the dispatched run for `push` with `checks`) or runs the `tests` gate on it, and replies with the result.
 3. The reviewer checks that `git diff <last reviewed head> <folded head>` is empty, judges the new commit split and messages but never the footer lines, waits for green checks and a clean merge, and answers its verdict.
 4. A problem with the split or the messages is a finding:
@@ -329,13 +333,14 @@ In `talk` and `local`, the head the author's reply names belongs to the reviewer
 - During the reviewer's turn the author changes nothing the head names:
   no commit, push or fold, and in a joined review nothing in the tree;
   pull request events that arrive meanwhile wait for the turn to return.
-- A joined reviewer starts every turn by checking that `git status --porcelain` prints nothing and `git rev-parse HEAD` prints the named head, and asks the author to fix it otherwise.
+- A joined reviewer starts every turn by checking that `git --no-optional-locks status --porcelain` prints nothing and `git rev-parse HEAD` prints the named head, and asks the author to fix it otherwise;
+  the option keeps the check from refreshing the index the two share.
 - A joined reviewer never checks out, stages, commits, stashes or resets, and writes nothing inside the tree, keeping its scratch files outside it;
   its narrow checks may write files the repository ignores.
 - A reviewer recognises a join by its banner's `party: joined` line.
 - The verdict's head is the record that nothing unreviewed went in after it.
 - A joined reviewer shares the author's container and user,
-  so a joined review guards against the author's mistakes, not against an author acting in bad faith (§14).
+  so a joined review guards against the author's mistakes, not against an author acting in bad faith (#1230).
 
 ### 5.4 How each head reaches the reviewer
 
@@ -343,32 +348,38 @@ In `talk` and `local`, the head the author's reply names belongs to the reviewer
 |---|---|---|
 | `github` | a push to the pull request | `gh pr checkout <n>`, resetting to `origin/<head branch>` when the branch was rewritten |
 | `talk` | a push to the review branch | `git fetch origin <branch>` |
-| `local`, started | round 1: the summon's base; later: `git bundle create .git/review/<head>.bundle <range>`, `artifact mint`, `bro::quest_share` | round 1: its workspace `HEAD`; later: `artifact get <ref>`, then `git fetch <bundle> <head>` |
+| `local`, started | round 1: the summon's base; later: `git bundle create .git/review/<head>.bundle <last delivered head>..HEAD`, `artifact mint .git/review/<head>.bundle`, `bro::quest_share` | round 1: its workspace `HEAD`; later: `artifact get <ref>`, then `git fetch <bundle path> HEAD` |
 | `local`, joined | a commit in the shared tree, left clean | the shared tree, checked as §5.3 says |
 
-The bundle's range starts at the head the author last delivered, or at the base commit when the branch was rewritten.
+A bundle's range always starts at the head the author last delivered, which the reviewer holds, and ends at `HEAD`, since `git bundle` refuses a range that ends at a bare commit id;
+such a range carries a rewritten or a rebased branch whole (§16).
 A reviewer that cannot obtain the named head, or obtains another commit, asks the author about it and reviews nothing.
 
 ### 5.5 Trust on GitHub
 
 The author acts only on comments, reviews and approvals from trusted accounts:
 
-- accounts GitHub grants `write` or `admin` on the repository, `maintain` reading as `write`;
+- accounts GitHub marks `OWNER` on the comment or review;
+- accounts the repository grants `write` or `admin`, `maintain` reading as `write`, where the watch's credential can read the grant (§8);
 - the reviewers the plan engaged:
   a summoned reviewer asks its summoner `reviewing <pr> as <login>` before it posts anything,
   and a coordinator relays its own reviewer's login (§5.6);
 - accounts named in `trust`.
 
-`poll-pr` enforces it (§8),
+An App account, a reviewer's included, is no repository's collaborator, so it is trusted only as an engaged reviewer or a named account.
+`poll-pr` enforces the rule (§8), the session writing the engaged and named accounts into its trust file,
 so an untrusted account's comment never reaches the model, and its approval clears nothing:
 
 - an `others` verdict is an approving review of the head from a trusted account;
 - a human approval on GitHub is one from a trusted account GitHub marks as a user rather than a bot.
 
-The reviewer's own watch trusts the pull request's author, accounts with write access, and accounts named to it,
+The reviewer's own watch trusts the pull request's author and the accounts named to it, through its trust file, and the `OWNER` and write-access accounts as above,
 and it adopts only trusted accounts' threads when it reconciles a pull request's history.
+A reviewer whose credential cannot read the grants, as an App holding `contents: read` cannot, hears the author, the owner and the named accounts.
 A watch still never reports its own account,
 so a human sharing the author's account cannot be heard on the pull request and speaks in the session instead.
+The rule covers the text of comments and reviews;
+a pull request's title, body, commits and check names come from its author and from accounts that can push to it.
 `talk` and `local` need no trust rule:
 only the two ends of the quest speak on it.
 
@@ -386,12 +397,18 @@ When the verdict and the approval both come from the summoner, the two questions
 
 ### 5.7 Failures
 
-- A reviewer summon denied, or a reviewer that raised, errored or timed out before a verdict:
+- A reviewer summon denied, or a reviewer that raised or errored before a verdict:
   the `verdict` gate cannot clear;
   where questions reach the user, the author reports it and stops, and elsewhere it raises with the reason.
   No other reviewer or channel stands in for it unless the plan is changed (§3.8).
+- A reviewer that timed out before a verdict is succeeded on the same channel and plan:
+  the author summons a successor as it summoned the first, handing it the predecessor's conversation as `bro::quest_history` returns it for the ended quest, an artifact past the message bound;
+  on `github` the pull request carries the rounds as well.
+  The successor holds what settled there as settled and reviews the head the author names now;
+  where the history was truncated, it judges the whole change.
+  A successor that times out is succeeded the same way, within the author's own run.
 - A GitHub review under the author's own account:
-  the reviewer refuses before reviewing anything, naming `talk` and `local`, and the author handles it as above.
+  the reviewer refuses before reviewing anything, naming `talk` and `local`, and the author handles it as a denied summon.
 - A `talk` reviewer that cannot fetch from origin refuses, naming `local`.
 - A `talk` or `local` reviewer whose quest lacks `worker.question` refuses.
 - A deadlocked thread ends the review `blocked` (§5.1).
@@ -415,7 +432,7 @@ and in a lander other than the author also the pull request (for `merge`) or the
 3. It takes the verdict, the approval and the tests result from its caller:
    the gates its own run retained where the author lands, otherwise the prompt that summoned it.
    The verdict check is the one step §4.2 reserves.
-4. It lands by the method (§6.2, §6.3) and does the bookkeeping (§6.5).
+4. It lands by the method, through `land-pr` (§6.2) or `land-push` (§6.3), and does the bookkeeping (§6.5).
 
 ### 6.2 `merge`
 
@@ -426,20 +443,32 @@ its wait for the checks, the rebase merge with `--match-head-commit`, and the de
 
 ### 6.3 `push`
 
-1. Fetch the base;
-   if it moved, rebase onto it, keeping the verdict and the approval only where §4.2 allows and otherwise returning to review (§4.3).
-2. On GitHub with the `checks` gate, a head the checks have not run on gets them:
-   push it to `land/<head sha>`, `gh workflow run <workflow> --ref land/<head sha>`, and wait for that run to conclude;
-   a red run sends the change back to review (§4.3).
-3. With the `tests` gate, a head the gate has not passed on gets the whole local gate.
-4. `git push <remote> HEAD:<base>`, or `git push . HEAD:<base>` without a remote.
-   A non-fast-forward refusal returns to step 1;
-   any other refusal is reported, or raised with when unattended.
-5. Delete the temporary branch and the review branch on the remote.
+`land-push`, a command of `bro.workflow` beside `land-pr`, carries the push's mechanics:
 
+```
+land-push --base <branch> --approved <head sha> [--workflow <file>] [--wait-checks <seconds>] [--delete <branch>]…
+```
+
+The remote is the repository's `origin`;
+a repository without one lands onto its local branch `<base>`, with no dispatched run and no deletions.
+
+1. It refuses a dirty worktree.
+2. It fetches the base where there is a remote, and exits with a distinct status, `base moved`, when `HEAD` does not descend from the base's tip.
+3. It refuses unless the verdict covers `HEAD` (§4.2):
+   `HEAD` is the approved head, or `git range-diff <merge base of the approved head and the base tip>..<approved head> <base tip>..HEAD` shows every commit unchanged.
+4. With `--workflow`, the `checks` gate on GitHub, a `HEAD` whose check runs have not concluded green gets them:
+   it pushes `HEAD` to `land/<head sha>`, runs `gh workflow run <file> --ref land/<head sha>`, waits up to `--wait-checks` seconds for that run, refuses unless it concluded green, and deletes `land/<head sha>` whatever the outcome.
+5. It pushes `HEAD:<base>` without force, or `git push . HEAD:<base>` without a remote, and exits with `base moved` on a non-fast-forward refusal;
+   any other refusal is the remote's rule, reported with its message.
+6. It deletes the branches `--delete` names on the remote, the review branch on `talk` among them, and prints a JSON result:
+   the base, the pushed commits, whether the verdict covered `HEAD` as the approved head or by range-diff, the dispatched run, and the deleted branches.
+
+[[land]] runs the loop around it.
+On `base moved` it rebases onto the base, runs the `tests` gate again where the plan has it, and runs `land-push` again;
+a rebase that conflicts, a range-diff showing a changed commit, or a red dispatched run sends the change back to review (§4.3).
 A remote other than GitHub gets neither the rules pre-check of §3.6 nor a dispatched run:
 its refusal is its rule, and the plan check keeps `checks` off it.
-A pull request whose head a push landed is expected to read as merged on GitHub (§16);
+A pull request whose head a push landed reads as merged, since GitHub marks a pull request merged once its head commits are reachable from its base (§16);
 one that stays open is closed with a comment naming the pushed commits.
 
 ### 6.4 Handing the landing over
@@ -448,6 +477,8 @@ one that stays open is closed with a comment naming the pushed commits.
   the author summons a lander based on its own `HEAD`, or joined where the plan says so,
   with `[[land <pr or base> at <head> by <method>]]`, the `Delivery:` line, the cleared gates and the task's URL in its prompt;
   it relays the lander's answer and ends.
+  A summoned lander resolves its own configured credentials, never the author's (§16),
+  so a lander that merges or pushes to GitHub needs a `github` credential configured for it.
 - Lander `coordinator`:
   the author answers `ready <ref> at <head>` with the `Delivery:` line, the cleared gates, and how the head is reached
   — the pull request, a pushed branch, or a bundle artifact its summoner can share onward —
@@ -470,15 +501,25 @@ A spell parameter may declare a closed set of values for its body to render on.
 - In a spell's frontmatter, a `parameters` value may be an object instead of a description:
   `{"description": "…", "choices": ["github", "talk", "local"], "default": "github"}`.
   An optional parameter's object carries a `default`, and a required parameter's carries none.
-- Loading refuses an empty or repeated choice, a default outside the choices, and a name that collides with a fact spell bodies render with (`harness`, `creds`, `may_summon`, `hold`, `features`, `true`, `false`, and the harness's own facts).
+- Loading refuses an empty or repeated choice, a choice outside the template's literal grammar (`[A-Za-z0-9_.-]+`), a default outside the choices,
+  and a name that collides with a fact spell bodies render with:
+  `harness`, `creds`, `may_summon`, `talk`, `hold`, `features`, and the template's own `true` and `false`.
+  A harness's own facts are known only once a harness is loaded, which constructing a bro never does, so a collision with one refuses at rendering.
 - `SpellTool`'s schema and the cast roster both expose a choice parameter as an `enum` with its `default`.
-- A call passing a value outside the choices is refused before rendering, and an omitted optional one takes its default.
-- `get_spell_body` receives the call's choice values, and the body renders with each as a string variable whose domain is its choices,
-  so `{{iff #channel = github}}…{{eliff #channel = talk}}…{{end}}` renders one branch and a misspelt literal fails every rendering.
+  Neither binds a call by itself:
+  the Claude-side tool server validates `enum` but the native tool registry does not, the cast's interpreting model only reads its roster, and nothing applies a JSON-schema `default`.
+  The spell layer enforces both, in `SpellTool.call` and in the cast's call validation:
+  a value outside the choices is refused before rendering, and an omitted optional one takes its default.
+- `get_spell_body` receives the call's choice values, and the body renders with each as a string variable whose domain is its choices, as it renders `hold`.
+  Every condition's literal is checked against that domain on every rendering, and an `iff` whose branches miss the rendered value raises,
+  so `{{iff #channel = github}}…{{eliff #channel = talk}}…{{eliff #channel = local}}…{{end}}` renders one branch;
+  a misspelt literal fails every rendering, and a missing branch the renderings of its value.
+- A fragment a body includes renders with the including spell's variables, so a choice it tests is declared by every spell that includes it.
 - `call_text`'s `# Arguments` section lists every passed value as today, and each defaulted choice as `<name>: <value> (default)`.
 - The cast path and the `spell::` tools both render through `_render_spell_call`,
   so a session without `mu`, whose `[[…]]` markers call the spell's own tool, renders the same way, and nothing returns unrendered.
-- A test renders every shipped spell under every combination of its choices and holds each rendering to `BYTE_LIMIT`.
+- `bro/spells_test.py`'s `test_every_spell_call_fits_one_window` renders every shipped spell under every combination of its choices and holds each rendering to `BYTE_LIMIT`;
+  its other parameters are filled as today, and the cast's `spell: spell::<name>` prefix counts.
 
 ### 7.2 `run-pr`
 
@@ -489,14 +530,14 @@ Its sections:
 1. the arguments and the plan, its check and its `Delivery:` line (§3);
 2. resuming with `pr` (§3.8);
 3. preparing:
-   the survey, the formatter and the policy audit, the docs, the commit splits and messages, the commits, the rebase, the fold before review, the change-scoped gate and the scope check, as today and without the accounting text;
+   the survey, the formatter and the policy audit, the docs, the commit splits and messages, the commits, the rebase, the fold before review, the change-scoped gate and the scope check, as today;
 4. publishing:
    a pull request where `channel` is `github` or `landing` is `merge`, with its `PR opened` task comment, its review link, and [[follow pr]] armed on it;
    a review branch for `talk`;
 5. the review handoff of the plan's channel, the only branch that renders:
    on `github`, summoning the reviewer, running the coordinator exchange, or waiting on trusted accounts;
    on `talk` and `local`, the summon with its talk rights, the deliveries of §5.4 and the turns of §5.3;
-6. the author's half of the rounds and the landing fold (§5.1, §5.2);
+6. the author's half of the rounds, the landing fold and a timed-out reviewer's successor (§5.1, §5.2, §5.7);
 7. the gates:
    retaining them per head (§4.2), collecting the approval from the approver, and handing the landing over once all clear (§6.4).
 
@@ -506,8 +547,8 @@ A new spell taking `pr`, cast wherever a pull request is open, by `run-pr` and b
 it requires [[watch]] and [[land]].
 
 1. Reconcile what arrived while nothing watched, from `gh` state, trusted accounts only:
-   today's `resume-pr` step 4.
-2. Arm `poll-pr <owner>/<repo> <n> --trust-file <path>` through [[watch]].
+   the reviews, inline comments and conversation comments `pr-state` prints, the last of which it gains, so every login compared is spelt by one API.
+2. Arm `poll-pr <owner>/<repo> <n> --trust-file <path>` through [[watch]], the trust file kept outside the tree.
 3. React to every event:
    trusted feedback is a round (§5.1);
    `checks` and `conflicts` feed the gates and the verdict (§4);
@@ -522,7 +563,7 @@ it requires [[watch]] and [[land]].
 `landing` is a choice parameter, and `pr`, `head` and `base` are optional;
 an author landing its own change passes none of them.
 Its sections follow §6:
-the head and what [[land]] re-checks, the one rendered method, the handover's receiving side, and the bookkeeping.
+the head and what [[land]] re-checks, the one rendered method with its command (`land-pr` or `land-push` and its loop), the handover's receiving side, and the bookkeeping.
 The no-pull-request review rounds its current text runs go, since review is `run-pr`'s.
 
 ### 7.5 The eyebro's `review`
@@ -533,7 +574,8 @@ it replaces `review-pr` and requires [[review diff]] and [[watch]].
 - The `github` branch is today's `review-pr`, with these changes:
   - its precondition refuses a shared identity before anything else, naming `talk` and `local`;
   - it announces its login to its summoner (§5.5);
-  - it reconciles and adopts trusted accounts' threads only, under its own trust file;
+  - its trust file holds the pull request's author and the accounts named to it, and it reconciles and adopts trusted accounts' threads only;
+  - it arms its watch before posting its first round, so nothing posted in between is lost to the watch's baseline;
   - it expects appended rounds and one landing fold, and announces that it waits for that fold (§5.2);
   - checks and conflicts are part of its verdict instead of information (§4.1);
   - it approves only the landing fold's head, green and merging cleanly, and answers in §4.1's form;
@@ -550,7 +592,6 @@ on `talk` and `local`, the base commit and the head as `<base>..<head>`, the rev
 - Stage tasks state their delivery explicitly.
   The line the review-and-plan phase writes by default reads:
   "land via [[run pr]] with its base argument set to `<integration branch>`, reviewed on github by a reviewer you summon, with gates verdict and checks — the human approval comes at the integration landing".
-- The integration phase's prompt passes `credit=<the lead's trail id>`, read off the lead's banner as it summons the phase, and otherwise keeps the defaults.
 - The coordinator roles are the lead's option per stage:
   it answers §5.6's exchanges, and a stage that answers "ready" lands through a lander the lead summons with `[[land …]]`.
 - A phase whose plan summons a reviewer or a lander is granted that target under the name `may_summon` gives.
@@ -576,77 +617,37 @@ Estimated renderings, which the test of §7.1 holds to the window once the spell
 | `review` on `github` | about 16,000 characters |
 | `review` on `talk` or `local` | about 9,000 characters |
 
+`run-pr`'s widest rendering today is 29,950 characters, 50 under the window (§16).
+
 ## 8. `poll-pr`
 
 - `--trust-file <path>` names a file of trusted logins, one per line, which the watch reads again every cycle,
   so a session extends it while the watch runs, as an announcement arrives.
-- Every other account is checked for write access through `repos/{owner}/{repo}/collaborators/{login}/permission`, once per login per watch.
-- `comment` and `review` events fire only for trusted accounts, replacing today's rule of the pull request's parties (its author, the repository's owner, anyone who reviewed).
+  The watch reads it outside its GitHub sources:
+  a file it cannot read ends the watch with a `watch_failed` naming the file, never as a GitHub source's failure.
+- An account the file does not name is trusted where GitHub marks the item `OWNER` (`author_association`),
+  and otherwise where the repository grants it `write` or `admin`, `maintain` reading as `write`, through `repos/{owner}/{repo}/collaborators/{login}/permission`, read once per login per watch.
+  That endpoint answers only a caller with push access, and an App account is no collaborator:
+  a refused or missing answer (403 or 404) leaves the login untrusted, cached like any answer, and never fails the watch.
+- `comment` and `review` events fire only for trusted accounts,
+  replacing today's rule of the pull request's parties (its author, the repository's owner, anyone who reviewed), under which any account's review made its comments fire.
 - An untrusted account's comment or review fires one bodiless `untrusted:` event with `user`, `kind` and `url`,
   and is held:
-  once its account becomes trusted, the held items fire as their ordinary events, in order.
-- A `review` event also carries `user_type`, `User` or `Bot`, as GitHub reports it.
+  once its account becomes trusted, the held items fire as their ordinary events, in order, a held review with its inline comments;
+  an item deleted while held is dropped.
+- `comment` and `review` events also carry `user_type`, `User` or `Bot`, as GitHub reports it.
 - The watch's own account stays filtered out, as today.
 
 ## 9. Token accounting
 
-### 9.1 What stays
+Footers stay as they are:
+the `commit-msg` and `post-commit` hooks with the usage file and the baseline state behind them, `commit-footer`, `fold-branch`'s aggregation onto the landed commits, the baseline promotion after a fold, `usage-report` and `git golc`.
 
-The footer's format, the `commit-msg` and `post-commit` hooks with the usage file and the baseline state behind them, `commit-footer`, `usage-report` and `git golc` stay as they are,
-except that the two reports read every footer line of a message (§9.4).
-Working commits keep their per-commit footers.
-
-### 9.2 The landing's total
-
-`fold-branch --plan <path> [--base <branch>] [--credit <trail id>]…` asks the usage-totals mission (§9.5) for the total of the trails that contributed to the landing:
-
-- the folding session's own trails;
-- everything summoned under them, recursively:
-  reviewers, landers, helpers, and `mu` calls once those record their summoner;
-- every credited trail's whole tree.
-
-Each trail counts once, however many of those it is reached through.
-Orchestrate's integration landing credits the lead's trail (§7.6),
-whose tree holds the design, the planning, the coordination, every stage with its reviewers, and the integration session itself.
-The fold before review asks too, and the footers it writes are provisional:
-the landing fold replaces them.
-What sessions spend after the landing fold is not counted.
-
-### 9.3 Splitting the total over the landed commits
-
-- Each landed commit's footer line carries the sum of the footers of the commits folded into it.
-- The rest
-  — the total minus every folded commit's footer, per model label and token class —
-  goes on the last landed commit:
-  - without credits, added into its footer line;
-  - with credits, on a coordination line of its own, `> coordinated with <agents> | <model>: …`, its agents being the ones the mission reports.
-- A rest below zero for any label and class refuses the fold:
-  some folded commit was made by a session the total does not count.
-- The baseline promotion after a fold stays,
-  so a commit made after a fold carries only what its session spent since,
-  and a later fold reads the earlier landing's lines, the coordination line included, as folded footers.
-
-For example, an integration landing that folds two stage commits carrying 3M and 2M tokens into one commit, under a lead's tree totalling 9M,
-writes a footer line of 5M and a coordination line of 4M.
-Rearranging the commits moves tokens between the landed commits' lines and never into or out of the landing's total.
-The last landed commit carries the coordination line rather than an empty commit of its own,
-because GitHub's rebase merge drops a commit that was empty to begin with (§16).
-
-### 9.4 The reports
-
-`bro.llm.usage.parse_footer` and `git golc`'s parser read every footer line of a message, `created with` and `coordinated with` alike, and sum them;
-`usage-report` and `git golc` change in nothing else.
-
-### 9.5 The usage-totals mission
-
-The landing fold depends on a host-side, non-agentic mission whose own design is in the coordinator's plan (§14).
-What this design requires of it:
-
-- its input is trail ids, the folding session's current trail and the credits;
-- its output is the total of every trail in their trees, each counted once, per model label and token class in the footer's vocabulary, with the agents behind them;
-- the bro requesting it needs no trail read rights.
-
-Its own design settles its authority, the tree it walks (forks, summons, `mu` calls), how a session continuing another's work counts its predecessor, its failures, and what `fold-branch` does where no mission can be reached.
+The rounds of §5 change only when the branch folds:
+working commits and fixups keep their per-commit footers, the fold before review aggregates them as a fold does today, and the landing fold aggregates what the rounds appended.
+A summoned reviewer's, lander's or helper's spend reaches no footer, as today,
+and nothing spent after the landing fold is counted.
+Counting every session that contributed to a landing is #1227's, which takes the landing fold as its hook point.
 
 ## 10. Personas
 
@@ -654,36 +655,77 @@ Its own design settles its authority, the tree it walks (forks, summons, `mu` ca
   Its pinned `github: True` keeps it from running `local` without a credential,
   and its framework prompt and man pages duplicate what the reviewer reads from the checkout, in the version under review.
   The generic `eyebro` takes its place:
-  `may_summon` grants `@eyebro`, and the host configuration's picks for it, `github+eyebro` among them, move to `eyebro`'s entry.
+  `may_summon` grants `@eyebro`, and the host configuration's picks for it, `github+eyebro` among them, move to `eyebro`'s entry (§11).
 - `eyebro`'s spells are `review-diff` and `review`;
   its `github` feature stays gated on the credential, and the `github` branch names what is missing without it, as `review-pr` does today.
 - `lead` and `dev` keep their tools.
 
 ## 11. Rollout
 
-- The landing fold's accounting goes live only with the usage-totals mission it asks:
-  the plan orders that mission's design and implementation before the accounting stage lands.
-- Everything else goes live as installations re-sync;
-  a session keeps the runtime it launched under, with its old spells and hooks, until it is relaunched.
-- The footer format does not change, so a history mixing old and new landings reads the same way;
-  only landings folded under the new rule carry coordination lines, which the new reports sum.
-- Operator steps:
-  moving the `bro-eyebro` entries of the host configuration to `eyebro`, granting `@eyebro` where `@bro-eyebro` was granted,
-  and granting `bro.placement=join` to the bros that run joined reviews.
+The change ships in the installation, and nothing is deployed separately:
+the spells, `poll-pr`, `pr-state`, `land-push` and the personas reach a session through its root's runtime bundle.
+
+- **Runtime.** Every session of a tree runs its root's frozen runtime bundle and its root's reading of the host configuration, summoned, joined and manual children alike (§16),
+  so an author and the reviewer, lander or coordinator it works with always run the same spells and commands.
+  The new spells go live for roots started after the host installation is synced to a default branch carrying them;
+  running roots keep the old ones until they end, and a review that spans the sync finishes under the runtime that started it.
+- **Host configuration.** An entry or `@` grant naming a bro the installation lacks refuses every root start (§16):
+  1. before the sync, add `eyebro`'s entries (its `github+eyebro` pick and its recipe) and grant `@eyebro` wherever `@bro-eyebro` is granted, which is valid while both bros are installed;
+  2. sync the installation;
+  3. before any root starts on it, remove every `bro-eyebro` entry and `@bro-eyebro` grant.
+
+  Running roots keep their reading, and with it `bro-eyebro`, until they end.
+- **Joins.** A root's authority is fixed at its start, so joins are granted in the configuration a root starts under.
+  This repository grants none, its reviews running on `github`;
+  a deployment that runs joined reviews, such as a benchmark box, grants `bro.placement=join for @eyebro` in its own settings.
+- **Pull requests across the sync.** One opened before it carries no `Delivery:` line, and a resume reads it under the defaults (§3.8).
+- **Stage tasks.** Orchestrate's delivery line (§7.6) passes parameters only the new `run-pr` accepts,
+  so only a lead started on the new runtime writes it, for stages that run under that same runtime.
+- **GitHub.** No rule changes;
+  `land-push`'s `checks` gate needs the CI workflow to accept `workflow_dispatch`, which this repository's `tests.yml` does.
+- **Footers.** Unchanged (§9), so history reads the same before and after.
 
 ## 12. Testing
 
+Deterministic tests, in the stages that build each piece:
+
 - Choice parameters:
-  the load refusals, the `enum` and `default` in both schemas, the refusal of a value outside the set, defaulted rendering, the `# Arguments` listing,
-  and every shipped spell rendered under every combination within `BYTE_LIMIT`.
-- `fold-branch`, against a stubbed mission:
-  a one-commit landing, a several-commit landing, a credited landing writing a coordination line, a rest below zero refused, and the tree still proven unchanged.
-- The footer parsers summing several lines, in `bro.llm.usage` and `git golc`.
+  the load refusals, the `enum` and `default` in both schemas, a value outside the set refused on the Claude and the native path and through the cast, defaulted rendering, the `# Arguments` listing,
+  and every shipped spell rendered under every combination of its choices within `BYTE_LIMIT`.
 - `poll-pr`:
-  the trust file read again each cycle, write access read once per login, bodiless `untrusted:` events, held items fired once trusted, `user_type`, and the own account still filtered.
-- [[land]]'s `push`:
-  a local base through `git push .`, a non-fast-forward refusal, the `range-diff` rule after a rebase, and the GitHub dispatch stubbed.
-- The persona rosters and spell requirements of `dev`, `eyebro` and `lead`.
+  the trust file read again each cycle, and its read failure;
+  `OWNER` trusted without a lookup, write access read once per login, and a refused lookup leaving the login untrusted without failing the watch;
+  bodiless `untrusted:` events, and held items fired once trusted (a review with its inline comments) and dropped once deleted;
+  `user_type`, and the own account still filtered.
+- `pr-state`'s conversation comments.
+- `land-push`:
+  a local base through `git push .`, a dirty worktree refused, and `base moved` before and at the push;
+  the range-diff rule, an unchanged rebase covered and a changed commit refused;
+  the dispatched run stubbed green, red and past its wait, with `land/<head sha>` deleted after each;
+  and the JSON result.
+- The persona rosters and spell requirements of `dev`, `eyebro` and `lead`, and `bro-eyebro`'s absence.
+
+The routes below are the design's end-to-end paths.
+The stage that completes each one covers its mechanics deterministically:
+its commands against a stubbed GitHub, and the renderings its choices select.
+Live runs of them are #1228's, whose first scenarios they are;
+it lands before this design's verification, so verification is never where a route first runs.
+
+| route | path |
+|---|---|
+| R1 | `github` · reviewer `summon` · approver `human` · lander `self` · `merge`: a fix session's default delivery |
+| R2 | `github` · reviewer `summon` · gates `verdict, checks` · `merge` into an integration branch: an orchestrated stage |
+| R3 | `github` · reviewer `coordinator` · approver `summoner`: the exchanges of §5.6 |
+| R4 | `github` · reviewer `others`: a trusted account's approval as the verdict, and an untrusted comment held as an `untrusted:` event |
+| R5 | `talk` · `merge`: the review branch, and rounds on the quest |
+| R6 | `local` with a started reviewer · `push` onto a local base without a remote: bundle deliveries |
+| R7 | `local` with a joined reviewer · `push` onto a local base: turns |
+| R8 | `push` onto a GitHub base with `checks`: the dispatched run |
+| R9 | lander `summon`, `coordinator` and `others`: the handovers of §6.4 |
+| R10 | a base that moves after a verdict: an unchanged rebase keeping the verdict, and a conflict reviewed by a successor |
+| R11 | `run-pr` with `pr`: a resume, with and without a `Delivery:` line |
+| R12 | a reviewer that times out, and its successor |
+| R13 | the plan check's refusals |
 
 ## 13. Deletions
 
@@ -692,19 +734,14 @@ Its own design settles its authority, the tree it walks (forks, summons, `mu` ca
 - `run-pr`'s "Hand the review to the eyebro" and its review-event handling, moved to §7.2's sections and to `follow-pr`.
 - `land`'s review rounds for landings without a pull request.
 - `local/bros/bro_eyebro/` and its `bro.bros.bro` entry point (§10).
-- `commit_footer.group_footers`'s session remainder, replaced by the rest of §9.3.
 
-## 14. For the coordinator's plan
+## 14. Follow-ups
 
-- **The usage-totals mission and `mu` calls' summoner provenance**:
-  their own design, which §9's accounting depends on (§9.5).
-- **Signed review tags**:
-  a follow-up.
-  The reviewer signs an annotated tag at the approved head carrying §4.1's text, with a key the author cannot reach;
-  the lander, and a server's pre-receive hook or, on GitHub, a required status check on the pull request's head, verify it against reviewer keys kept on the base branch.
-  It needs a signing-key credential, an exception to the reviewer's rule of writing nothing for its own review tags, the tag's transport (pushed by the reviewer, or handed over as an artifact), and the check.
-  §4.2's verdict step is where verification plugs in;
-  a joined reviewer cannot sign anything that proves a review against the author (§5.3).
+- [#1227](https://github.com/dzhioev/bro/issues/1227) counts every session that contributed to a landing in its footers, taking the landing fold (§5.2) as its hook point.
+- [#1228](https://github.com/dzhioev/bro/issues/1228) runs §12's routes live, ahead of this design's verification.
+- [#1229](https://github.com/dzhioev/bro/issues/1229) restores the banner's lineage marks, which tell a model which granted target answers to `eyebro` when its name does not say so (§3.1).
+- [#1230](https://github.com/dzhioev/bro/issues/1230) signs verdicts:
+  the verdict's text (§4.1) is what a signed tag carries, and [[land]]'s verdict step (§4.2) is where its verification plugs in.
 
 ## 15. Decision record
 
@@ -715,23 +752,23 @@ The owner settled every decision below on 2026-11-08 and 2026-11-09.
 | 1 | The review channel is an explicit choice of `github`, `talk` or `local`, and `local` covers a started reviewer (the summon's base, then bundles) and a joined one (the shared tree, in turns) | §3.2, §5.3, §5.4 |
 | 2 | `[[review]]` is the reviewer's single entry point, replacing `review-pr`, and the author chooses the channel through `run-pr`'s `channel` | §7.5 |
 | 3 | Choice parameters are a core spell addition both the cast and the `spell::` tools render with, rather than a sub-spell per channel | §7.1 |
-| 4 | The defaults are channel `github` and landing `merge` | §3.1 |
+| 4 | The defaults are channel `github` and landing `merge`, and no repository rule restricts the channel: the default keeps this repository's reviews on GitHub | §3.1 |
 | 5 | The reviewer, the approver and the lander are roles chosen per plan, so author, reviewer and lander can be three bros | §3.3, §6.4 |
 | 6 | A landing requires a human's approval by default, and landing without one is only ever explicit | §3.5 |
 | 7 | Gates are chosen independently of the landing method, and platform rules are never chosen nor waived | §3.5, §3.6 |
-| 8 | `push` lands onto any branch of any remote, or onto a local base where there is no remote, with GitHub's steps only on GitHub | §3.4, §6.3 |
+| 8 | `push` lands onto any branch of any remote, or onto a local base where there is no remote, with GitHub's steps only on GitHub, through a `land-push` command beside `land-pr` | §3.4, §6.3 |
 | 9 | What the reviewer approves is what lands: fixes are appended, the branch folds before review and once more when nothing is open, and the reviewer stays alive to reconfirm the landing fold, saying it waits for it | §5.1, §5.2 |
 | 10 | Checks and mergeability are part of the verdict | §4.1 |
 | 11 | A verdict names its head and base commit and holds only for that head or a rebase of it with every commit unchanged; a moved base needing changes gets a successor that reviews only the delta, given the earlier verdict | §4.2, §4.3 |
-| 12 | On GitHub the author acts only on trusted accounts (write access, announced reviewers, named accounts), enforced by `poll-pr` so that untrusted text never reaches the model | §5.5, §8 |
-| 13 | `resume-pr` folds into `run-pr`'s `pr`, and `follow-pr` holds the PR watch | §3.8, §7.3 |
-| 14 | Footers, hooks and reports stay; a landing's footers come from a host-side mission's total over the contributing trails, no bro holds trail read rights, and spend after the landing fold is not counted | §9 |
-| 15 | The lead is counted through `credit` at the integration landing | §7.6, §9.2 |
-| 16 | A landing's total splits into the folded footers plus a rest on the last landed commit, a credited rest going on a coordination line rather than an empty commit | §9.3 |
-| 17 | The usage-totals mission and `mu` provenance are a design of their own in the coordinator's plan | §9.5, §14 |
-| 18 | `bro-eyebro` is dropped in favour of the generic `eyebro` | §10 |
-| 19 | Orchestrate's stages state `gates=verdict,checks`, the human approval coming at the integration landing | §7.6 |
-| 20 | Signed review tags are a follow-up, and the verdict is shaped for them | §4.1, §14 |
+| 12 | A reviewer that times out is succeeded on the same channel and plan, given its predecessor's conversation | §5.7 |
+| 13 | On GitHub the author acts only on trusted accounts (the owner, write access, announced reviewers, named accounts), enforced by `poll-pr` so that untrusted text never reaches the model; a permission lookup GitHub refuses leaves the account untrusted without failing the watch | §5.5, §8 |
+| 14 | `resume-pr` folds into `run-pr`'s `pr`, and `follow-pr` holds the PR watch | §3.8, §7.3 |
+| 15 | Footers, their hooks, `fold-branch`'s aggregation and the reports stay as they are, and counting every session that contributed to a landing moves to #1227 | §9 |
+| 16 | `bro-eyebro` is dropped in favour of the generic `eyebro` | §10 |
+| 17 | `local` stays in this design; this repository grants no joins, and a deployment running joined reviews grants them in its own settings | §11 |
+| 18 | Orchestrate's stages state `gates=verdict,checks`, the human approval coming at the integration landing | §7.6 |
+| 19 | Live-LLM runs of the routes are #1228's, which lands before this design's verification | §12 |
+| 20 | Signed review tags are a follow-up, #1230, and the verdict is shaped for them | §4.1, §14 |
 
 ## 16. Assumptions and evidence
 
@@ -744,17 +781,55 @@ Verified while designing:
 - The collaborator-permission endpoint answers under this checkout's GitHub App installation token:
   `dzhioev` reads `admin`, the App account `bbbbro[bot]` reads `none` with type `Bot`, and an unrelated account reads `read`.
   An App account therefore never qualifies through write access.
-- A started child bases on its summoner's `HEAD` with local-only commits, while a joined child uses the party's tree with its uncommitted state (`bro/reference/ride.md`, "Summoning another bro").
 - A mint is readable by its minter and its summoners, `share` and `bro::quest_share` hand a ref down, and a manual child receives no share (`bro/reference/ride.md`, "Sharing artifacts between peers").
 - A quest message is bounded at 16 KiB (`bro/broker/journal.py`) and an answer at 64 KiB (`bro/run_lifecycle.py`).
 - A spell body renders today without its call's arguments (`BaseBro.get_spell_body`), and the `spell::` tools already carry every declared parameter in their schema (`bro/spells.py`, `SpellTool`).
-- `run-pr.md` is 29,976 bytes on `master`, and renders to 29,950 (the task's findings).
 - `poll-pr` reports comments and reviews from the pull request's parties, a stranger who reviews becoming one.
-- `mu` calls record no trail (`bro/llm/mu.py`), and `parse_footer` reads only the first footer line of a message (`bro/llm/usage.py`).
+
+Verified in review:
+
+- The ruleset also sets `require_extra_approval_for_unattributed_changes`, which GitHub's documentation does not describe;
+  repositories using it report a pull request held for a person's approval while it carries a commit no GitHub account is credited with, as this repository's `bro-dev <bro-dev@bro>` commits are.
+  No ruleset covers another branch, so `integration/*` and `land/*` take direct pushes.
+- GitHub marks a pull request merged when its head commits become reachable from its base outside it, protection rules notwithstanding
+  ([Pull request merges](https://docs.github.com/en/pull-requests/reference/pull-request-merges), "Indirect merges").
+- Once a commit's required checks pass, it may be pushed directly onto a protected branch
+  ([About protected branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)),
+  and checks attach to the commit, so a run on `land/<head sha>` counts for the push of that commit.
+- `tests.yml` runs on every pull request whatever its base, on pushes to `master`, and on `workflow_dispatch`;
+  its recent runs took five to six minutes, so the reviewer's 14,400 seconds are at risk from human latency rather than CI (§5.7).
+- `gh api repos/{owner}/{repo}/rules/branches/<branch>` reports rulesets only, `master` reading its five rules and an integration branch none;
+  classic branch protection takes admin access to read.
+- The collaborator-permission endpoint is reported to refuse a caller without push access ("Must have push access to view collaborator permission").
+  This repository's reviewer App `eyebbbbro` declares `contents: read`, and the author's App `bbbbro` declares `contents: write` (`gh api /apps/<slug>`).
+- Every review and comment carries `author_association`:
+  on recent pull requests `dzhioev` reads `OWNER`, `eyebbbbro[bot]` `NONE`, and `bbbbro[bot]` `CONTRIBUTOR`.
+- Every session of a tree, summoned, joined or manual, runs its root's frozen runtime bundle (`ride/ride/bro_worker.py`, `SummonSpawner`),
+  and a root freezes its reading of the host configuration for all its descendants (`bro/reference/ride.md`, "Home settings").
+- A host-configuration entry or `@` grant naming a bro the installation lacks refuses every launch (`ride/ride/authority_reading.py`).
+- The host admits exactly the granted target names,
+  and only the `#may_summon` template fact answers to a granted bro's lineage (`bro/mcp.py`, `_answers_to`);
+  live banners print the host's raw entries without lineage marks (#1229).
+- A started child bases on its summoner's `HEAD` with local-only commits, its clone pointing `origin` at the attachment's remote and carrying none of the summoner's local branches, so nothing it pushes reaches the summoner's tree;
+  a joined child uses the party's tree with its uncommitted state, sharing the summoner's container, user, index and `.token_accounting_state.json`.
+  A join needs `bro.placement=join` at its root's start, which `ride override` cannot grant.
+- A summoned child resolves its own configured credentials, never its summoner's.
+- `artifact mint <path>` takes a file or directory inside the workspace, and the store is capped at 32 GiB per ride and ends with it.
+- `git bundle create` refuses a range ending at a bare commit id ("Refusing to create empty bundle"), and accepts `<old head>..HEAD` after a rewrite, which a clone holding the old head verifies and fetches.
+- The root broker retains quest results up to 2 MiB and 256 records, a quest keeps 16 pending questions and a 32-entry history tail, and a summoner's end ends its live children `failed:orphaned` (`bro/broker/journal.py`, `bro/broker/dispatcher.py`).
+- Choice parameters:
+  `_parse_parameters` refuses a value that is not a string;
+  `talk` is a framework fact name;
+  `true` and `false` are the template's own variables;
+  a domain-closed `StringVariable` refuses a literal outside its domain but does not check its own value;
+  an `iff` whose branches miss the rendered value raises;
+  the Claude-side tool server validates `enum`, the native tool registry does not, and nothing applies a JSON-schema `default`
+  (`bro/spells.py`, `bro/template.py`, `bro/condition.py`, `bro/runtime/mcp_server.py`, `bro/llm/mcp.py`).
+- `run-pr.md` is 29,976 bytes on `master`, and its widest rendering is 29,950 characters.
+- `land-pr` merges with `gh pr merge --rebase --match-head-commit` and has no push path, and `land`'s landing without a pull request names no dispatch command.
 
 Unverified:
 
-- That GitHub marks a pull request merged when its head is pushed straight onto its base (`github` with `push`).
-- That a direct push to a base requiring checks is accepted once the same commit passed them on a dispatched run.
 - The renderings of §7.8, which the test of §7.1 settles.
-- That the reviewer's 14,400-second timeout covers the CI waits a verdict now includes.
+- That a permission lookup under the reviewer App's installation token is refused;
+  this design's review probes it.
