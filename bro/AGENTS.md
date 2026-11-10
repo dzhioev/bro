@@ -21,6 +21,7 @@ A subpackage with a map of its own is pointed at, not described here.
   Live tool and server objects stay in `llm/mcp.py` and are imported only when a declaration is built
 - `spells.py` — the spell store:
   the `SpellFile` value a `spells` declaration is made of, the selection of the spells a bro offers (conditions and `requires`),
+  choice parameter declarations, schemas and call binding (validation and defaults),
   and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
 - `results.py` — the session's kept tool results:
   the store, one file per result under `<tag>-<n>` ids, whose numbers processes sharing its directory claim by exclusive link;
@@ -185,7 +186,7 @@ A process assembling without a run, the Claude session's tool server, keeps them
 ### Service tools
 
 Every assembly (`assemble(harness=…, hold=…)`) receives the engine's registered `Harness` object and the session's hold, and appends the `bro` service server;
-the spell tools and `cast` render spell bodies under that hold.
+the spell tools and `cast` render spell bodies under that hold and the call's choice variables (`reference/extending.md`, "Declaring a bro").
 `_build_service_server` decides core's roster from the surface and the process environment, then appends `Harness.own_tools` and renders the combined roster as the `#tools` universe:
 
 - `banner`, always:

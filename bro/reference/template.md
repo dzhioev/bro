@@ -82,7 +82,7 @@ Each surface renders its copy once, with its own facts:
 - `BaseBro.composed_prompt(harness, hold=…)` — a composed system prompt for the explicitly selected harness
 - `harnesses/claude/harness/bro/claude/system_prompt.py` — a managed Claude session's append prompt, the injected persona included (harness `claude`)
 - `bro.prompts.session_fragment` — the session fragments, closing on the hold text (`bro/prompts/hold.md` selecting over `bro/prompts/holds/`)
-- spell bodies — each `spell::` tool renders for its serving harness and the session's hold;
+- spell bodies — each `spell::` tool and `bro::cast` render for the serving harness, the session's hold, and the call's declared [choice parameters](extending.md#declaring-a-bro);
   the bro-native loop uses the bro branch, while a managed Claude session uses the Claude branch
 - tool descriptions and parameter annotations
   — rendered by the owning server at build time against its own vocabulary, not the harness facts (`#tools` for a `Toolset`'s roster, a data source's `#features` + `#source`;

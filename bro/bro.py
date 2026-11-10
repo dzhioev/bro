@@ -1200,20 +1200,35 @@ class BaseBro(ABC):
     variables.update(self._feature_vocabulary)
     return spell_store.select_spells(self._spell_declarations, variables)
 
-  def get_spell_body(self, name: str, *, harness: mcp.HarnessLike, hold: str) -> str:
+  def get_spell_body(
+    self,
+    name: str,
+    *,
+    harness: mcp.HarnessLike,
+    hold: str,
+    choices: Mapping[str, str] | None = None,
+  ) -> str:
     paths = self.spell_paths
     path = paths.get(name)
     if path is None:
       available = ', '.join(sorted(paths)) if len(paths) > 0 else '(none)'
       raise KeyError(f'no spell named {name!r}; available: {available}')
     spell = spell_store.load_spell(name, path)
+    variables = spell_store.choice_variables(spell, {} if choices is None else choices)
+    if variables:
+      harness = get_harness(harness) if isinstance(harness, str) else harness
+      conflicts = variables.keys() & harness.facts().keys()
+      if conflicts:
+        raise ValueError(
+          f'spell {name!r} choices conflict with harness facts: {", ".join(sorted(conflicts))}'
+        )
     return mcp.render_text(
       spell.body,
       harness=harness,
       creds=credentials.known_names(),
       may_summon=summon.may_summon() or (),
       hold=hold,
-      extra=self._feature_vocabulary,
+      extra={**self._feature_vocabulary, **variables},
     ).strip()
 
   def spell_descriptions(self) -> list[tuple[str, str]]:
