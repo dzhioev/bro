@@ -34,6 +34,10 @@ def bro_extra_github_pr_state():
   return run_cli('bro.extra.github.pr_state', sys.argv)
 
 
+def bro_workflow_check_head():
+  return run_cli('bro.workflow.check_head', sys.argv)
+
+
 def bro_workflow_commit_footer():
   return run_cli('bro.workflow.commit_footer', sys.argv)
 
@@ -48,3 +52,7 @@ def bro_workflow_fold_branch():
 
 def bro_workflow_land_pr():
   return run_cli('bro.workflow.land_pr', sys.argv)
+
+
+def bro_workflow_land_push():
+  return run_cli('bro.workflow.land_push', sys.argv)
