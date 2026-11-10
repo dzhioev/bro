@@ -412,6 +412,7 @@ PYTEST_FILES = [
   'bro/extra/github/pulls_test.py',
   'dev/bro/extra/github/poll_pr_test.py',
   'dev/bro/extra/github/pr_state_test.py',
+  'dev/bro/extra/github/trust_test.py',
   'dev/bro/dev/markdown_policy_test.py',
   'dev/bro/workflow/co_author_test.py',
   'dev/bro/workflow/commit_footer_test.py',
