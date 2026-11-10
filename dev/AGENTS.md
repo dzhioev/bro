@@ -34,7 +34,15 @@ build the wheel with `uv build --package bro-dev`.
   and the packaged git hooks.
   Its public import paths remain `bro.workflow.*`;
   its CLIs are `commit-footer`, `default-branch`, `fold-branch`, and `land-pr`
-- `bro/extra/github/` — `poll_pr.py` (the `poll-pr` review watcher) and `pr_state.py` (the `pr-state` reviewer-side read of a PR's review state).
+- `bro/extra/github/` — `poll_pr.py` (the `poll-pr` review watcher), `pr_state.py` (the `pr-state` read of a PR's reviews and conversation/inline comments), and their shared account trust predicate in `trust.py`.
+  Both commands require `--trust-file <path>`, naming trusted GitHub logins, one per line;
+  repository owners and accounts with write access also qualify.
+  Untrusted feedback carries only its account, kind and URL, never its text.
+  `poll-pr` rereads the file each cycle and releases held feedback once trusted;
+  an unreadable file ends it with `watch_failed`.
+  Its `--replay` emits existing feedback oldest first with `replayed`, then `replay_complete` with the event count before live events.
+  Comments carry `in_reply_to`, comments and reviews carry `user_type`, and reviews carry the `commit_id` they judged;
+  `pr-state` also carries each trusted review's association and state.
   The GitHub client, App-auth source, and pull-request reads they consume remain in core at `bro.extra.github.api`, `.app`, and `.pulls`
 - `bro/prompts/dev/style.md` — the development style policy, tool-served by the Dev and Eyebro personas through `dev-style-source::read`
 - `bro/prompts/dev/{concurrency,testing,markdown}.md` — the guide pages the style policy points to, declared by the same personas into their `man` manual
