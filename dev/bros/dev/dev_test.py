@@ -5,6 +5,7 @@ import pytest
 
 import bro.dev as dev
 from bro.authority_view_test_helper import publish
+from bro.base.text_window import BYTE_LIMIT
 from bro.datasources.references import llm_providers
 from bro.dev import references
 from bro.harness import get_harness
@@ -82,10 +83,27 @@ def test_gate_timeout_guidance_is_harness_neutral():
 def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
   assert 'summon' not in bro.get_spell_body('run-pr', harness='claude', hold='unattended').lower()
-  assert 'eyebro' not in bro.get_spell_body('land', harness='claude', hold='unattended')
   publish(monkeypatch, targets=('eyebro',))
   assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude', hold='unattended')
-  assert 'eyebro' in bro.get_spell_body('land', harness='claude', hold='unattended')
+
+
+@pytest.mark.parametrize('landing', ['merge', 'push'])
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+def test_land_selects_only_its_method_within_one_window(landing, harness):
+  body = _TrackerDev().get_spell_body(
+    'land', harness=harness, hold='unattended', choices={'landing': landing}
+  )
+  markers = {'merge': '## 3. Merge through `land-pr`', 'push': '## 3. Push through `land-push`'}
+  assert markers[landing] in body
+  assert markers['push' if landing == 'merge' else 'merge'] not in body
+  assert len(body) <= BYTE_LIMIT
+
+
+def test_land_without_arguments_selects_merge():
+  bro = _TrackerDev()
+  assert bro.get_spell_body('land', harness='bro', hold='unattended') == bro.get_spell_body(
+    'land', harness='bro', hold='unattended', choices={'landing': 'merge'}
+  )
 
 
 def test_review_delegation_uses_one_asynchronous_tool_shape(monkeypatch):
