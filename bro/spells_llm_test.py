@@ -119,7 +119,8 @@ async def test_a_command_resolves_without_the_words_that_selected_its_spell(comm
   resolved = await _resolutions(command)
 
   outcomes = collections.Counter(
-    repr(None if isinstance(result, str) else (result[0].name, result[1])) for result in resolved
+    repr(None if isinstance(result, str) else (result.spell.name, result.arguments))
+    for result in resolved
   )
   assert outcomes == {repr(expected): _ATTEMPTS}
 
@@ -131,7 +132,7 @@ async def test_free_text_material_keeps_what_it_names_without_the_spell_word():
   )
 
   materials = [
-    None if isinstance(result, str) else result[1].get('material', '') for result in resolved
+    None if isinstance(result, str) else result.arguments.get('material', '') for result in resolved
   ]
   assert all(
     material is not None and _TRAIL in material and not material.lower().startswith('reflect')

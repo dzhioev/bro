@@ -144,7 +144,19 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   The file opens with flat frontmatter
   — `name`, `description`, an optional one-line JSON `parameters` map, and an optional informational `version` bumped when the spell changes
   — and carries the markdown body after the closing `---`.
-  A parameter is a string, and a `?` suffix on its key marks it optional (`parameters: {"task": "task ref", "notes?": "optional context"}`).
+  A parameter takes a string, and a `?` suffix on its key marks it optional (`parameters: {"task": "task ref", "notes?": "optional context"}`).
+  Its declaration is a description string, or a choice object: `parameters: {"mode?": {"description": "output mode", "choices": ["short", "full"], "default": "short"}}`.
+  The object has only `description`, `choices` and, for an optional choice, `default`:
+  an optional choice requires a default, and a required one forbids it.
+  Choices are a nonempty list of distinct nonempty strings matching the template literal grammar `[A-Za-z0-9_.-]+`, and the default must be one of them.
+  A choice name cannot shadow `harness`, `creds`, `may_summon`, `talk`, `hold`, `features`, `true` or `false`;
+  loading refuses those names, and rendering refuses a collision with the selected harness's own facts.
+  Both the spell tool schema and the cast roster expose the choices as `enum` and the optional choice's `default`.
+  The spell layer validates call values and fills omitted choices with their defaults on both paths, before rendering.
+  Each choice becomes a string variable with its choices as its closed domain, available to the body and any included fragments (`{{iff #mode = short}}…{{eliff #mode = full}}…{{end}}`):
+  a literal outside that domain fails every rendering, and an `iff` with no matching branch fails when that value renders.
+  Other parameters are arguments only, not template variables.
+  The returned `# Arguments` section lists passed values, marking each defaulted choice as `<name>: <value> (default)`.
   A frontmatter value is either inline after the key or, where a bare `key:` is followed by a blank line, the block of lines under it up to the next blank line or the closing fence
   — folded into one paragraph on single spaces, so a long description breaks semantically in the file (one clause per line, for reviewable diffs) and still reaches the tool as one paragraph.
   The filename stem is the spell's name, canonical and validated against `name:`;
