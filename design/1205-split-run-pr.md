@@ -463,8 +463,10 @@ and in a lander other than the author also the pull request (for `merge`) or the
    the gates its own run retained where the author lands, otherwise the prompt that summoned it.
    The verdict check is the one step §4.2 reserves.
    A lander other than the author runs the `tests` gate itself on the head it lands, where the plan has it, since that gate is about the landing session's workspace (§3.5);
-   a failure ends its landing with `blocked <head sha>: tests`, which the session it reports to takes as a red check:
-   an author that summoned the lander starts a round with the same reviewer (§4.1), and a coordinator routes the change back to a new author session resuming it (§3.8).
+   a failure ends its landing with `blocked <head sha>: tests`, which the session it reports to takes as a red check after the verdict.
+   An author that summoned the lander fixes the head and, where the plan has `verdict`, has a successor review the delta since the approved head (§4.3), since the reviewer ended with its verdict;
+   it then folds, clears its gates again and hands the landing over anew.
+   A coordinator routes the change back to a new author session resuming it (§3.8).
 4. It lands by the method, through `land-pr` (§6.2) or `land-push` (§6.3), and does the bookkeeping (§6.5).
 
 ### 6.2 `merge`
@@ -578,14 +580,19 @@ Its sections:
    the survey, the formatter and the policy audit, the docs, the commit splits and messages, the commits, the rebase, the fold before review, the change-scoped gate and the scope check, as today;
    every step names the base as the ref it is (§3.1), `fold-branch --base <base>` among them;
 4. publishing:
-   a pull request where `channel` is `github` or `landing` is `merge`, opened on the base remote's repository from a head branch pushed to that remote, with its `PR opened` task comment, its review link, and [[follow pr]] armed on it;
-   a review branch on the base's remote for `talk`;
-5. the review handoff of the plan's channel, the only branch that renders:
+   a pull request where `landing` is `merge`, or where the plan engages a reviewer on `github`, opened on the base remote's repository from a head branch pushed to that remote;
+   the pull request gets its `PR opened` task comment, its review link, and [[follow pr]] armed on it;
+   a review branch on the base's remote where the plan engages a reviewer on `talk`;
+   nothing where the plan engages no reviewer and lands by `push`;
+5. the review handoff of the plan's channel, the only branch that renders, which a plan without the `verdict` gate skips:
    on `github`, summoning the reviewer, running the coordinator exchange, or waiting on trusted accounts;
    on `talk` and `local`, the summon with its talk rights, the deliveries of §5.4 and the turns of §5.3;
-6. the author's half of the rounds, the landing fold and a timed-out reviewer's successor (§5.1, §5.2, §5.7);
+6. the author's half of the rounds, the landing fold and a timed-out reviewer's successor (§5.1, §5.2, §5.7), a plan without the `verdict` gate making its one landing fold and no rounds;
 7. the gates:
-   retaining them per head (§4.2), collecting the approval from the approver, and handing the landing over once all clear, or under lander `others` once all but `approval` clear (§6.4).
+   retaining them per head (§4.2), collecting the approval from the approver, and handing the landing over once every gate the author can clear has cleared:
+   all of them for lander `self`;
+   all but `tests` for another lander, which takes the author's run as evidence and clears that gate itself (§6.1);
+   and all but `approval` under lander `others`, whose merge is the approval (§6.4).
 
 ### 7.3 `follow-pr`
 
