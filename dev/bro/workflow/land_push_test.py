@@ -170,3 +170,26 @@ def test_merge_only_content_is_not_an_unchanged_rebase(repository):
   repository.git('commit', '-qm', 'merge with unreviewed content')
   assert _land(approved=approved) == 1
   assert repository.git('ls-remote', 'origin', 'main').split()[0] == base
+
+
+def test_conflict_resolution_requires_a_successors_approved_head(repository, capsys):
+  approved = repository.git('rev-parse', 'HEAD')
+  repository.git('checkout', '-q', 'main')
+  base = repository.commit('feature', 'conflicting base content\n')
+  repository.git('push', '-q', 'origin', 'main')
+  repository.git('checkout', '-q', 'feature')
+  assert _land(approved=approved) == land_push.BASE_MOVED
+  rebase = land_push.spawn.run(['git', 'rebase', 'origin/main'], capture_output=True, text=True)
+  assert rebase.returncode != 0
+  assert repository.git('diff', '--name-only', '--diff-filter=U') == 'feature'
+  (repository.path / 'feature').write_text('reviewed integration resolution\n')
+  repository.git('add', 'feature')
+  repository.git('-c', 'core.editor=true', 'rebase', '--continue')
+  head = repository.git('rev-parse', 'HEAD')
+  assert _land(approved=approved) == 1
+  assert repository.git('ls-remote', 'origin', 'main').split()[0] == base
+  assert _land(approved=head) is None
+  result = json.loads(capsys.readouterr().out)
+  assert result['coverage'] == 'head'
+  assert result['head'] == head
+  assert repository.git('ls-remote', 'origin', 'main').split()[0] == head

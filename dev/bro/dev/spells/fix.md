@@ -124,7 +124,7 @@ a future reader only needs the *why*.
 Make the change.
 For anything beyond a small, single-commit edit, **commit completed logical units as you go** rather than leaving the whole change uncommitted until [[run pr]]
 — the session can exhaust its output budget mid-implementation, and uncommitted work is then lost, while committed units survive on the branch as a recoverable checkpoint.
-Keep each checkpoint conventional (commit style from [[run pr]]'s steps 5-6);
+Keep each checkpoint conventional (commit style from [[run pr]]'s "Docs, splits and commit messages" and "Commit" sections);
 don't run the gate per checkpoint
 — its one mandatory pass is [[run pr]]'s.
 
