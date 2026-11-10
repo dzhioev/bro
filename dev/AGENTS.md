@@ -29,11 +29,11 @@ build the wheel with `uv build --package bro-dev`.
 - `bro/workflow/` — development delivery mechanics:
   co-author and token-accounting commit metadata,
   the read of origin's default branch,
-  branch folding,
-  PR landing,
+  base-ref resolution and branch folding,
+  head checks and push or PR landing,
   and the packaged git hooks.
   Its public import paths remain `bro.workflow.*`;
-  its CLIs are `commit-footer`, `default-branch`, `fold-branch`, and `land-pr`
+  its CLIs are `commit-footer`, `default-branch`, `fold-branch`, `check-head`, `land-push`, and `land-pr`
 - `bro/extra/github/` — `poll_pr.py` (the `poll-pr` review watcher), `pr_state.py` (the `pr-state` read of a PR's reviews and conversation/inline comments), and their shared account trust predicate in `trust.py`.
   Both commands require `--trust-file <path>`, naming trusted GitHub logins, one per line;
   repository owners and accounts with write access also qualify.

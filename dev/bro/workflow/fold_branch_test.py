@@ -260,12 +260,12 @@ class TestFold:
       patch.object(fold_branch.commit_footer, 'group_footers', return_value=['> footer', '']),
       patch.object(fold_branch.commit_footer, 'record_session_spend') as recorded,
     ):
-      assert fold_branch.fold_branch(self._plan(worktree, tmp_path), 'master') is None
+      assert fold_branch.fold_branch(self._plan(worktree, tmp_path), 'origin/master') is None
     landed = _sh(worktree.path, 'log', '--reverse', '--format=%s', 'origin/master..HEAD')
     assert landed.splitlines() == ['the feature', 'the unrelated fix']
     recorded.assert_called_once_with()
     result = json.loads(capsys.readouterr().out)
-    assert result['base'] == 'master'
+    assert result['base'] == 'origin/master'
     assert [commit['subject'] for commit in result['commits']] == [
       'the feature',
       'the unrelated fix',
@@ -277,7 +277,7 @@ class TestFold:
     _sh(worktree.origin, 'symbolic-ref', 'HEAD', 'refs/heads/trunk')
     with patch.object(fold_branch.commit_footer, 'group_footers', return_value=['', '']):
       assert fold_branch.fold_branch(self._plan(worktree, tmp_path), None) is None
-    assert json.loads(capsys.readouterr().out)['base'] == 'trunk'
+    assert json.loads(capsys.readouterr().out)['base'] == 'origin/trunk'
     landed = _sh(worktree.path, 'log', '--reverse', '--format=%s', 'origin/trunk..HEAD')
     assert landed.splitlines() == ['the feature', 'the unrelated fix']
 
@@ -288,14 +288,14 @@ class TestFold:
       patch.object(fold_branch.commit_footer, 'group_footers', return_value=['', '']),
       patch.object(fold_branch.commit_footer, 'record_session_spend') as recorded,
     ):
-      assert fold_branch.fold_branch(self._plan(worktree, tmp_path), 'master') is None
+      assert fold_branch.fold_branch(self._plan(worktree, tmp_path), 'origin/master') is None
     recorded.assert_not_called()
 
   def test_a_dirty_worktree_refuses_before_touching_the_branch(self, worktree, tmp_path):
     (worktree.path / 'feature.txt').write_text('uncommitted\n')
     head = _sh(worktree.path, 'rev-parse', 'HEAD')
     with pytest.raises(fold_branch.FoldError, match='uncommitted changes'):
-      fold_branch._fold(self._plan(worktree, tmp_path), 'master')
+      fold_branch._fold(self._plan(worktree, tmp_path), 'origin/master')
     assert _sh(worktree.path, 'rev-parse', 'HEAD') == head
 
   def test_a_rewrite_that_changes_the_content_leaves_the_branch_alone(self, worktree, tmp_path):
@@ -307,15 +307,27 @@ class TestFold:
       ),
       pytest.raises(fold_branch.FoldError, match='changes the content'),
     ):
-      fold_branch._fold(self._plan(worktree, tmp_path), 'master')
+      fold_branch._fold(self._plan(worktree, tmp_path), 'origin/master')
     assert _sh(worktree.path, 'rev-parse', 'HEAD') == head
 
   def test_a_branch_with_nothing_over_the_base_refuses(self, worktree, tmp_path):
     _sh(worktree.path, 'checkout', '-q', 'master')
     with pytest.raises(fold_branch.FoldError, match='nothing to fold'):
-      fold_branch._fold(self._plan(worktree, tmp_path), 'master')
+      fold_branch._fold(self._plan(worktree, tmp_path), 'origin/master')
 
   def test_a_failed_fold_exits_nonzero_without_printing(self, worktree, tmp_path, capsys):
     (worktree.path / 'feature.txt').write_text('uncommitted\n')
-    assert fold_branch.fold_branch(self._plan(worktree, tmp_path), 'master') == 1
+    assert fold_branch.fold_branch(self._plan(worktree, tmp_path), 'origin/master') == 1
     assert capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize('base', ['upstream/master', 'refs/heads/master', 'master'])
+def test_fold_uses_the_named_base(worktree, tmp_path, base, capsys):
+  if base == 'upstream/master':
+    _sh(worktree.path, 'remote', 'rename', 'origin', 'upstream')
+  elif base == 'master':
+    _sh(worktree.path, 'remote', 'remove', 'origin')
+  plan = _plan_file(tmp_path, 'fold\nland the branch\n')
+  assert fold_branch.fold_branch(plan, base) is None
+  assert json.loads(capsys.readouterr().out)['base'] == base
+  assert _sh(worktree.path, 'rev-list', '--count', 'master..HEAD') == '1'

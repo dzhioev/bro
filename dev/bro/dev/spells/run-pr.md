@@ -195,7 +195,7 @@ The messages here are what `<base>` carries:
 nothing downstream composes one, so they follow the repo's commit conventions and carry the task metadata (step 5).
 
 ```bash
-fold-branch --plan plan.txt --base <base>
+fold-branch --plan plan.txt --base origin/<base>
 ```
 
 It refuses a dirty worktree, refuses a plan that does not partition the branch, and proves the fold moved only commit boundaries before it writes anything.
@@ -448,9 +448,9 @@ address every comment that has arrived, then pay one verification pass and one p
    **Not the full suite:**
    the push in step 7 puts the branch back through the PR's own CI, which runs the whole gate, and the merge is blocked on it
    — a full local pass here duplicates a run that is about to happen anyway and that nothing can land without.
-6. Re-fold (step 8):
+6. Re-fold with `--base origin/<base>` (step 8):
    the branch has to be back in landing shape before it is pushed, or the approval that follows would cover commits that are not the ones landing.
-   Write the plan over the branch as it stands now
+   Write the plan over the branch
    — the last fold rewrote the shas
    — and let a `fold` line naming no commits absorb what this round added, or name the round's commit in the fold whose unit it serves.
    The re-approval this costs is the point:
