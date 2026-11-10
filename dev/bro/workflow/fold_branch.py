@@ -39,7 +39,7 @@ from typing import Optional
 import bro.llm.usage as usage
 from bro.base import log, spawn
 from bro.base.args import Parser
-from bro.workflow import co_author, commit_footer, default_branch
+from bro.workflow import base_ref, co_author, commit_footer, default_branch
 
 __cli_name__ = 'fold-branch'
 
@@ -75,8 +75,7 @@ class Fold:
 
 def _branch_commits(base: str) -> list[str]:
   """the commits the branch adds to `base`, oldest first."""
-  _git('fetch', '--no-tags', 'origin', f'+refs/heads/{base}:refs/remotes/origin/{base}')
-  return _git('rev-list', '--reverse', f'origin/{base}..HEAD').split()
+  return _git('rev-list', '--reverse', f'{base}..HEAD').split()
 
 
 def _resolve(sha: str) -> Optional[str]:
@@ -250,16 +249,17 @@ def _shaped(base: str) -> list[dict[str, str]]:
   ]
 
 
-def _fold(plan: str, base: str) -> dict:
+def _fold(plan: str, base: Optional[str]) -> dict:
   if _git('status', '--porcelain', '--untracked-files=no') != '':
     raise FoldError('the worktree has uncommitted changes; the fold rewrites the branch in place')
-  branch = _branch_commits(base)
+  resolved = base_ref.resolve(base)
+  branch = _branch_commits(resolved.tip)
   if len(branch) == 0:
     raise FoldError(f'the branch adds no commits to {base}; there is nothing to fold')
   folds = _load_plan(plan, branch)
   footers = commit_footer.group_footers([fold.commits for fold in folds])
   head = _git('rev-parse', 'HEAD')
-  merge_base = _git('merge-base', f'origin/{base}', 'HEAD')
+  merge_base = _git('merge-base', resolved.tip, 'HEAD')
   with _branch_restored(head):
     tip = _rewrite(folds, merge_base, footers)
     if _git('rev-parse', f'{tip}^{{tree}}') != _git('rev-parse', f'{head}^{{tree}}'):
@@ -267,13 +267,13 @@ def _fold(plan: str, base: str) -> dict:
     _git('reset', '--hard', tip)
   if any(len(footer) > 0 for footer in footers):
     commit_footer.record_session_spend()
-  return {'base': base, 'commits': _shaped(merge_base)}
+  return {'base': resolved.ref, 'commits': _shaped(merge_base)}
 
 
 def fold_branch(plan: str, base: Optional[str]) -> Optional[int]:
   try:
-    result = _fold(plan, base if base is not None else default_branch.read())
-  except (FoldError, default_branch.DefaultBranchError) as error:
+    result = _fold(plan, base)
+  except (FoldError, base_ref.WorkflowError, default_branch.DefaultBranchError) as error:
     log.error(str(error))
     return 1
   print(json.dumps(result))
@@ -290,7 +290,7 @@ def main(argv: list[str]) -> Optional[int]:
   )
   parser.add_argument(
     '--base',
-    metavar='BRANCH',
-    help="the branch this one lands on (default: origin's default branch)",
+    metavar='REF',
+    help="the remote/branch or refs/heads/branch this one lands on (default: origin's default branch)",
   )
   return fold_branch(**parser.parse(argv))

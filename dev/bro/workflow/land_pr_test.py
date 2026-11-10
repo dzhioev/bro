@@ -26,6 +26,8 @@ def _pr(**overrides: Any) -> dict[str, Any]:
     'baseRefName': 'master',
     'headRefName': 'worktree-feature',
     'headRefOid': _HEAD_OID,
+    'headRepository': {'name': 'fork'},
+    'headRepositoryOwner': {'login': 'contributor'},
     'url': 'https://github.com/o/r/pull/310',
     'commits': [{'oid': 'aaa1111'}, {'oid': 'bbb2222'}],
     'statusCheckRollup': [_check()],
@@ -153,7 +155,8 @@ def test_land_happy_path(capsys):
 
   assert merge_calls == [['gh', 'pr', 'merge', '310', '--rebase', '--match-head-commit', _HEAD_OID]]
   spawned.assert_called_once_with(
-    ['git', 'push', 'origin', '--delete', 'worktree-feature'], text=True
+    ['gh', 'api', '--method', 'DELETE', 'repos/contributor/fork/git/refs/heads/worktree-feature'],
+    text=True,
   )
 
   assert json.loads(capsys.readouterr().out) == {
@@ -290,7 +293,7 @@ class TestAwaitChecks:
     ):
       assert land_pr._await_checks(310, pr, 60) == _checks([_check()])
     sleep.assert_called_once_with(land_pr._CHECK_POLL_INTERVAL)
-    view.assert_called_once_with(land_pr._CHECK_FIELDS, number=310)
+    view.assert_called_once_with(land_pr._CHECK_FIELDS, number=310, repo=None)
 
   def test_waits_for_a_check_github_holds_the_merge_for(self):
     pr = _pr(statusCheckRollup=[], mergeStateStatus='BLOCKED')
@@ -397,3 +400,40 @@ def test_land_does_not_wait_for_checks_on_a_pr_the_base_blocks():
   ):
     assert _land(wait_checks=480) == 1
   sleep.assert_not_called()
+
+
+def test_explicit_repository_binds_reads_merge_and_cleanup(capsys, worktree_head):
+  worktree_head.side_effect = lambda *arguments: (
+    'worktree-feature' if arguments[0] == 'symbolic-ref' else _HEAD_OID
+  )
+  calls = []
+  fake = _fake_run([], _pr())
+
+  def run(command, *, capture):
+    calls.append(command)
+    return fake(command, capture=capture)
+
+  with (
+    patch.object(land_pr, '_run', side_effect=run),
+    patch.object(land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)) as spawned,
+  ):
+    assert _land(repo='base/project') is None
+  assert calls[0][3] == 'worktree-feature'
+  for command in calls:
+    if command[:2] == ['gh', 'pr']:
+      assert command[command.index('--repo') + 1] == 'base/project'
+    else:
+      assert 'repos/base/project' in command
+  spawned.assert_called_once_with(
+    ['gh', 'api', '--method', 'DELETE', 'repos/contributor/fork/git/refs/heads/worktree-feature'],
+    text=True,
+  )
+  assert json.loads(capsys.readouterr().out)['branch_deleted']
+
+
+def test_cleanup_encodes_fork_branch_slashes():
+  with patch.object(
+    land_pr.spawn, 'run', return_value=subprocess.CompletedProcess([], 0)
+  ) as spawned:
+    assert land_pr._delete_remote_branch('review/topic', 'contributor/fork')
+  assert spawned.call_args.args[0][-1] == 'repos/contributor/fork/git/refs/heads/review%2Ftopic'

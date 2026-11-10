@@ -39,6 +39,7 @@ import re
 import subprocess
 import time
 from typing import Any, Optional
+from urllib.parse import quote
 
 from bro.base import log, spawn
 from bro.base.args import Parser
@@ -64,10 +65,16 @@ def _run(command: list[str], *, capture: bool) -> str:
   return result.stdout.strip() if capture else ''
 
 
-def _pr_view(fields: list[str], number: Optional[int] = None) -> dict[str, Any]:
+def _pr_view(
+  fields: list[str], number: Optional[int] = None, repo: Optional[str] = None
+) -> dict[str, Any]:
   command = ['gh', 'pr', 'view']
   if number is not None:
     command.append(str(number))
+  elif repo is not None:
+    command.append(git_out('symbolic-ref', '--quiet', '--short', 'HEAD'))
+  if repo is not None:
+    command += ['--repo', repo]
   command += ['--json', ','.join(fields)]
   return json.loads(_run(command, capture=True))
 
@@ -144,7 +151,9 @@ def _checks_settled(pr: dict[str, Any]) -> bool:
   return len(pending) == 0
 
 
-def _await_checks(number: int, pr: dict[str, Any], wait_seconds: int) -> dict[str, Any]:
+def _await_checks(
+  number: int, pr: dict[str, Any], wait_seconds: int, repo: Optional[str] = None
+) -> dict[str, Any]:
   """the PR's check fields once the checks settled, or once the wait budget is spent.
 
   A run takes a moment to register against a freshly pushed head, and so does
@@ -159,7 +168,7 @@ def _await_checks(number: int, pr: dict[str, Any], wait_seconds: int) -> dict[st
     )
     log.info(f'waiting for the checks to conclude: {waiting}')
     time.sleep(_CHECK_POLL_INTERVAL)
-    pr = _pr_view(_CHECK_FIELDS, number=number)
+    pr = _pr_view(_CHECK_FIELDS, number=number, repo=repo)
   return pr
 
 
@@ -195,11 +204,14 @@ def _log_ignored_checks(entries: list[dict[str, Any]]) -> None:
     )
 
 
-def _delete_remote_branch(branch: str) -> bool:
+def _delete_remote_branch(branch: str, repo: str) -> bool:
   """delete only the remote ref — the local branch and checkout stay untouched
   (deleting them out from under a live worktree is the session manager's call).
   The merge is already done when this runs, so a failure degrades to a warning."""
-  result = spawn.run(['git', 'push', 'origin', '--delete', branch], text=True)
+  result = spawn.run(
+    ['gh', 'api', '--method', 'DELETE', f'repos/{repo}/git/refs/heads/{quote(branch, safe="")}'],
+    text=True,
+  )
   if result.returncode != 0:
     log.warning(f'could not delete remote branch {branch} (exit {result.returncode})')
     return False
@@ -215,15 +227,18 @@ _PR_FIELDS = [
   'baseRefName',
   'headRefName',
   'headRefOid',
+  'headRepository',
+  'headRepositoryOwner',
   'url',
   'commits',
   *_CHECK_FIELDS,
 ]
 
 
-def _merge(pr: dict[str, Any]) -> None:
+def _merge(pr: dict[str, Any], repo: Optional[str] = None) -> None:
   """let GitHub replay the branch's commits onto the base, as they stand."""
-  allowed = _run(['gh', 'api', 'repos/{owner}/{repo}', '--jq', '.allow_rebase_merge'], capture=True)
+  target = repo if repo is not None else '{owner}/{repo}'
+  allowed = _run(['gh', 'api', f'repos/{target}', '--jq', '.allow_rebase_merge'], capture=True)
   if allowed != 'true':
     raise LandError(
       'the repository disallows rebase merging, so it cannot land the branch as it stands'
@@ -237,6 +252,7 @@ def _merge(pr: dict[str, Any]) -> None:
       '--rebase',
       '--match-head-commit',
       pr['headRefOid'],
+      *([] if repo is None else ['--repo', repo]),
     ],
     capture=False,
   )
@@ -246,8 +262,9 @@ def _land(
   allow_unchecked: bool,
   ignore_checks: bool,
   wait_checks: int,
+  repo: Optional[str] = None,
 ) -> dict:
-  pr = _pr_view(_PR_FIELDS)
+  pr = _pr_view(_PR_FIELDS, repo=repo)
   error = _precondition_error(pr, allow_unchecked) or _head_error(pr)
   if error is not None:
     raise LandError(error)
@@ -256,14 +273,14 @@ def _land(
   else:
     # after the cheap preconditions: a PR that cannot merge anyway must not
     # cost the check wait
-    checks = _await_checks(pr['number'], pr, wait_checks)
+    checks = _await_checks(pr['number'], pr, wait_checks, repo)
     error = _checks_error(pr['number'], checks)
     if error is not None:
       raise LandError(error)
     if len(_rollup(checks)) == 0:
       log.warning('merging a head no status check reported on: GitHub expects none of it')
-  _merge(pr)
-  merged = _pr_view(['state', 'mergeCommit', 'mergedAt'], number=pr['number'])
+  _merge(pr, repo)
+  merged = _pr_view(['state', 'mergeCommit', 'mergedAt'], number=pr['number'], repo=repo)
   if merged['state'] != 'MERGED':
     raise LandError(f'merge command succeeded but PR state is {merged["state"]}')
   return {
@@ -274,7 +291,9 @@ def _land(
     'merged_sha': merged['mergeCommit']['oid'],
     'merged_at': merged['mergedAt'],
     'commits': len(pr['commits']),
-    'branch_deleted': _delete_remote_branch(pr['headRefName']),
+    'branch_deleted': _delete_remote_branch(
+      pr['headRefName'], f'{pr["headRepositoryOwner"]["login"]}/{pr["headRepository"]["name"]}'
+    ),
   }
 
 
@@ -282,9 +301,10 @@ def land_pr(
   allow_unchecked: bool,
   ignore_checks: bool,
   wait_checks: int,
+  repo: Optional[str] = None,
 ) -> Optional[int]:
   try:
-    result = _land(allow_unchecked, ignore_checks, wait_checks)
+    result = _land(allow_unchecked, ignore_checks, wait_checks, repo)
   except LandError as error:
     log.error(str(error))
     return 1
@@ -295,6 +315,11 @@ def land_pr(
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
     description='merge the PR for the current branch in one shot, where its base permits'
+  )
+  parser.add_argument(
+    '--repo',
+    metavar='OWNER/REPO',
+    help='repository carrying the pull request (default: gh selection)',
   )
   parser.add_argument(
     '--allow-unchecked',
