@@ -1,7 +1,7 @@
 # Framework checkout integration
 
 Checkout-specific personas, policy tests, and the repository test gate.
-The workspace member publishes `bro-local`, contributing `bro.local` plus the `bro-dev` and `bro-eyebro` persona declarations used to work on this repository.
+The workspace member publishes `bro-local`, contributing `bro.local` plus the `bro-dev` persona and the conformance probe personas.
 Nothing here belongs in a consumer installation.
 
 ## Development
@@ -13,8 +13,8 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 ## Components
 
 - `bro/local/bro-settings.toml` — the `bro` home's packaged launch settings
-- `bros/` — this checkout's developer and reviewer persona declarations, `bro-watch-probe` for shell conformance, and `bro-file-probe` for file-reading conformance.
-- `bro/local/prompts.py` — framework-project context shared by those personas.
+- `bros/` — this checkout's developer persona, `bro-watch-probe` for shell conformance, and `bro-file-probe` for file-reading conformance.
+- `bro/local/prompts.py` — framework-project context for the developer persona.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.
 - `bro/local/syscall_tables.py` (`syscall-tables`) — generate `bro.files.confinement`'s syscall tables from the pinned Linux tag, recording source hashes and refusing unclassified names.
   `syscall-tables --check` fetches the sources again and compares without writing; run it by hand when bumping the pin and review every classification decision.

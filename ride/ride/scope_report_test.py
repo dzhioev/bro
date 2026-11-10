@@ -10,7 +10,7 @@ from ride.scope_report import report_scope
 class ReportBro(BaseBro):
   name = 'report-test'
   extra_secrets = ('github',)
-  may_summon = ('bro-eyebro',)
+  may_summon = ('eyebro',)
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ def test_report_shows_descriptor_usable_give_only_and_presence(report_environmen
       {
         'defaults': {
           'grant': [
-            'webview.cred=cookies+absent to @bro-eyebro',
+            'webview.cred=cookies+absent to @eyebro',
           ]
         }
       }
@@ -52,7 +52,7 @@ def test_report_shows_descriptor_usable_give_only_and_presence(report_environmen
   )
   assert descriptor['target'] == 'report-test'
   assert descriptor['cred.github'] == 'reviewer'
-  assert 'summon_entries: @bro-eyebro for *' in output
+  assert 'summon_entries: @eyebro for *' in output
   assert 'permits: ' in output and 'bro.placement=boxed for *' in output
   assert 'may_give: webview.cred=cookies+absent to ' in output
   assert 'github+reviewer: PRESENT' in output
@@ -92,7 +92,7 @@ def test_authority_instance_presence_is_independent_of_kind_hold(report_environm
       {
         'defaults': {
           'grant': [
-            'webview.cred=cookies+reviewer to @bro-eyebro',
+            'webview.cred=cookies+reviewer to @eyebro',
           ]
         }
       }
@@ -118,7 +118,7 @@ def test_unknown_target_is_reported_as_an_existence_error(report_environment, ca
   [
     {'grant': [':launch.bro']},
     {'grant': ['unknown']},
-    {'limit': ['@bro-eyebro']},
+    {'limit': ['@eyebro']},
   ],
 )
 def test_invalid_policy_is_reported_without_escaping(report_environment, capsys, policy):

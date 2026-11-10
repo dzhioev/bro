@@ -6,10 +6,10 @@ This spell should be used when the user asks for a code review of a revision, br
 — "[[review diff]] on this branch", "review HEAD", "review abc123..def456", "what do you think of this change"
 — judging the change against the repository's own standards and producing a list of questions and suggestions for its author.
 The review is read-only and changes nothing.
-For driving a GitHub pull request to a verdict, [[review pr]] wraps this judging in the PR conversation loop.
+For driving a change through rounds to a verdict, [[review]] wraps this judging in the chosen review channel.
 
 parameters: {"target?": "revision, branch, or revision range to review; default: the current branch against its merge base with the default branch"}
-version: 1.2.0
+version: 1.3.0
 ---
 
 # review-diff
