@@ -511,7 +511,8 @@ one that stays open is closed with a comment naming the pushed commits.
   — the pull request, a pushed branch, or a bundle artifact its summoner can share onward —
   and ends.
 - Lander `others`:
-  the author reports the change ready to merge and keeps its PR watch running until `merged`, then does the bookkeeping.
+  the author reports the change ready to merge once every gate but `approval` has cleared, the person's merge being the approval and the landing at once (§3.3),
+  and keeps its PR watch running until `merged`, then does the bookkeeping.
 
 ### 6.5 Bookkeeping
 
@@ -567,7 +568,7 @@ Its sections:
    on `talk` and `local`, the summon with its talk rights, the deliveries of §5.4 and the turns of §5.3;
 6. the author's half of the rounds, the landing fold and a timed-out reviewer's successor (§5.1, §5.2, §5.7);
 7. the gates:
-   retaining them per head (§4.2), collecting the approval from the approver, and handing the landing over once all clear (§6.4).
+   retaining them per head (§4.2), collecting the approval from the approver, and handing the landing over once all clear, or under lander `others` once all but `approval` clear (§6.4).
 
 ### 7.3 `follow-pr`
 
