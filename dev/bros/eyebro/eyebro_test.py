@@ -1,18 +1,21 @@
 import pytest
 
+from bro.base.text_window import BYTE_LIMIT
+from bro.bro import BaseBro
 from bro.dev import references
-from bros.eyebro import Eyebro
+from bros.eyebro import Eyebro, spells
 
 
-def test_reviewer_carries_review_spells_but_no_author_procedures():
-  bro = Eyebro()
-  assert 'review-diff' in bro.spell_paths
-  assert 'review-pr' in bro.spell_paths
-  # a reviewer must not carry the author-side procedures; Eyebro derives from
-  # Bro rather than Dev precisely to keep them out
-  assert 'fix' not in bro.spell_paths
-  assert 'run-pr' not in bro.spell_paths
-  assert 'land' not in bro.spell_paths
+@pytest.mark.asyncio
+async def test_reviewer_serves_review_spells_but_no_author_procedures():
+  servers = Eyebro().assemble(harness='claude', hold='attended')
+  server = next(server for server in servers if server.namespace == 'spell')
+  assert {tool.name for tool in await server.list_tools()} == {
+    'ask',
+    'watch',
+    'review-diff',
+    'review',
+  }
 
 
 def test_claude_surface_selects_the_reference_tools():
@@ -39,27 +42,45 @@ def test_github_is_the_reviewers_best_effort_credential():
   assert 'github' not in bro.needed_secrets(harness='claude')
 
 
-def test_review_pr_drives_the_pull_request_only_under_a_github_identity(monkeypatch):
-  bro = Eyebro()
-  monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'github')
-  with_identity = bro.get_spell_body('review-pr', harness='claude', hold='unattended')
-  assert 'pr-state' in with_identity
-  assert 'no GitHub identity' not in with_identity
-
-  monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
-  without_identity = bro.get_spell_body('review-pr', harness='claude', hold='unattended')
-  assert 'no GitHub identity' in without_identity
-  assert 'pr-state' not in without_identity
+_CHANNEL_MARKERS = {
+  'github': '## 2. Arm replay, then reconcile',
+  'talk': '### Pushed review branch',
+  'local': '### Local delivery, without a remote',
+}
 
 
-def test_review_pr_cannot_be_offered_without_the_spells_it_runs():
-  import bros.eyebro as eyebro
-  from bros.bro import Bro
+@pytest.mark.parametrize('channel', _CHANNEL_MARKERS)
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+@pytest.mark.parametrize('github', [True, False])
+def test_review_selects_only_its_channel_within_one_window(monkeypatch, channel, harness, github):
+  monkeypatch.setattr('bro.base.credentials.available', lambda name: github and name == 'github')
+  body = Eyebro().get_spell_body(
+    'review', harness=harness, hold='unattended', choices={'channel': channel}
+  )
+  marker = (
+    '## Missing GitHub identity'
+    if channel == 'github' and not github
+    else _CHANNEL_MARKERS[channel]
+  )
+  assert marker in body
+  for other, other_marker in _CHANNEL_MARKERS.items():
+    if other != channel:
+      assert other_marker not in body
+  assert len(body) <= BYTE_LIMIT
 
-  class Incomplete(Bro):
+
+@pytest.mark.parametrize(
+  ('missing', 'declaration'),
+  [
+    ('review-diff', (spells.review,)),
+    ('watch', (spells.review, spells.review_diff)),
+  ],
+)
+def test_review_cannot_be_offered_without_the_spells_it_runs(missing, declaration):
+  class Incomplete(BaseBro):
     name = 'incomplete'
     description = 'test bro'
-    spells = (eyebro.spells.review_pr,)
+    spells = declaration
 
-  with pytest.raises(ValueError, match="requires spell 'review-diff'"):
+  with pytest.raises(ValueError, match=f"requires spell '{missing}'"):
     Incomplete()

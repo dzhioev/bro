@@ -60,5 +60,5 @@ class Eyebro(Bro):
     man(permissions),
     man(permissions_cheatsheet),
   ]
-  spells = (eyebro.spells.review_diff, eyebro.spells.review_pr)
+  spells = (eyebro.spells.review_diff, eyebro.spells.review)
   system_prompt = SYSTEM_PROMPT

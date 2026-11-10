@@ -1,4 +1,4 @@
-"""prompt text shared by this checkout's personas."""
+"""framework-project prompt context."""
 
 FRAMEWORK_PROJECT = """\
 ## Bro framework project

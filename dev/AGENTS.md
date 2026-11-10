@@ -52,10 +52,11 @@ build the wheel with `uv build --package bro-dev`.
 - `bros/dev/` — generic developer with the `files`, unrestricted `brash`, `web`, and `delegation` tool groups, and those spells (the task ones gated on its `brog` feature).
   Its optional `brog` feature mounts tracker tooling;
   its provisioning declaration installs the commit hooks
-- `bros/eyebro/` — code reviewer with the `review-diff` (revision/branch → findings list) and `review-pr` (drive a PR to a verdict through `poll-pr`) spells.
+- `bros/eyebro/` — code reviewer with the `review-diff` (revision/branch → findings list) and `review` (rounds to a head-bound verdict on `github`, `talk` or `local`) spells.
   It derives from `Bro`, not `Dev`, so the author-side spells stay out of its roster.
   Its optional `github` feature is the pull-request conversation's identity:
-  `review-pr` runs under it and otherwise names what is missing and how to supply it, while `review-diff` needs none
+  `review` uses it on `github` and otherwise names what is missing and how to supply it.
+  The `local` channel and standalone `review-diff` need no credential
 - `bros/lead/` — coordinator persona and `orchestrate` spell
 - `bros/terminal/` — standalone container developer, directly derived from `BaseBro`
 
