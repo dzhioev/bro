@@ -130,7 +130,7 @@ The optional file configures installations by home, independently of the attache
     "bro": {
       "creds": ["brog+github", "github+dev"],
       "bros": {
-        "bro-eyebro": {
+        "eyebro": {
           "creds": ["github+reviewer"],
           "llm": {"bro": "openai:gpt-6.1-sol,reasoning_effort=xhigh"}
         }

@@ -9,6 +9,12 @@ def test_bro_dev_is_registered_as_a_persona():
   assert [entry.load() for entry in entries] == [BroDev]
 
 
+def test_checkout_installed_personas_exclude_the_retired_reviewer():
+  entries = importlib.metadata.entry_points(group='bro.bros.bro')
+  assert 'eyebro' in {entry.name for entry in entries}
+  assert 'bro-eyebro' not in {entry.name for entry in entries}
+
+
 def test_bro_dev_carries_the_framework_context_and_the_author_block():
   prompt = BroDev().composed_prompt('bro', hold='unattended')
   assert FRAMEWORK_PROJECT.strip() in prompt
