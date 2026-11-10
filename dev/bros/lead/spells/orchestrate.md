@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.18.0
+version: 2.19.0
 ---
 
 # orchestrate
@@ -68,6 +68,10 @@ if both appear, stop and ask the user to choose one.
 infer which phase the work stands at,
 and continue from there.
 Never redo a completed phase.
+Before launching the next stage, read **every pending stage task's description**:
+where its delivery base names its landing's bare integration branch, replace only that base argument with `origin/<branch>` through `brog::edit_description` and record the amendment as a comment on that stage task.
+Leave explicit remote refs and `refs/heads/…` unchanged;
+complete all these amendments before any stage launch.
 
 ## Step 0 — open the root task
 
@@ -144,10 +148,12 @@ this spell only says how a phase differs from a one-shot ask.
   `@<bro>` for onward delegation, or `bro.placement=unboxed` / `bro.placement=join` for non-default placement.
   When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator may use the matching `bro.cred=<kind>+<instance>` permission.
   Otherwise the kind and instance must come from `homes.<installation home>.bros.<phase-bro>` in the host configuration;
-  do not broaden every run of that bro when an authorized per-phase pass is available.{{when #may_summon contains eyebro}}
-- **The eyebro.** Every phase that opens or lands a pull request gets it granted,
-  under the name your banner's `may_summon` gives rather than `eyebro` itself:
-  a child renders [[run pr]]'s reviewer handoff only where its initial usable bro targets include one.{{end}}
+  do not broaden every run of that bro when an authorized per-phase pass is available.
+  Grant every reviewer or lander the phase's delivery plan summons, under the actual target name your banner's `may_summon` gives, not an ancestor it answers to.
+  A reviewer answers to `eyebro`; a lander answers to `dev` and exposes [[land]].
+  Coordinator-owned roles need targets here rather than in the author's grant.
+  Settle missing authority before launch;
+  never substitute `others` silently.
 - **Self-contained prompts.** A bro shares no context with you:
   spell out the root task URL,
   what to produce,
@@ -253,7 +259,8 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > Use [[design]] for agreed revisions, without restarting settled decisions;
 > revise the file on the design branch and push, never copying the specification back to the page.{{when #may_summon contains eyebro}}
 > The design's pull request is the design review:
-> watch it with `poll-pr` the way [[run pr]] watches the pull requests it opens, armed before the reviewer is summoned.
+> watch it with `poll-pr` using [[follow pr]]'s trust-file and replay procedure, armed before the reviewer is summoned.
+> Reconcile the whole replay before acting; this is document review only, with no code folds or landing.
 > [[Ask <the eyebro>]] to review that pull request as a document, not code:
 > gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives, not tests or CI.
 > Fold its findings into the file until it approves, settling with the user in this session whatever needs their opinion;
@@ -269,12 +276,13 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > For EACH stage call `brog::create_task` to open a stage task whose body carries:
 > the stage's goal and details;
 > "part of the multi-phase work tracked at [`<root-task-name>`](`<root-task-url>`) — read its `## Design`, including the design file it links on the kept branch, and `## Design changelog` before starting";
-> "land via [[run pr]] with its base argument set to `<its landing's integration branch>`, so this PRs into the integration branch rather than the default branch";
+> "land via [[run pr]] with its base argument set to `origin/<integration branch>`, reviewed on github by a reviewer you summon, with gates verdict and checks — the human approval comes at the integration landing";
 > "when the PR merges, mark this task done — do not hold it for a rollout, the coordinator rolls the work out after its landing merges";
 > and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
 > The first stage of each later landing carries one more line, since its branch can only start from what the landing before it left on the default branch:
 > "first create `<its landing's integration branch>` on origin from the default branch, staying on your own workspace branch:
 > `base=$(default-branch) && git fetch origin "$base" && git push origin "origin/$base:refs/heads/<branch>"`, skipped where origin already has it".
+> Record any chosen coordinator roles and gates explicitly, including `approval` for summoner approval.
 > Every end-to-end route the design names is owed automated coverage by the last stage that completes it, and that stage's task names the routes it owes;
 > the verification phase confirms the shipped result against the real system and is never where a route runs for the first time.
 > Then establish the first landing's integration branch, every landing's named after the root task rather than left as the workspace's own:
@@ -304,7 +312,7 @@ Before starting stage 1, take to the user the material objections, the open ques
 
 ### 3 — stages
 
-**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` 28800 · grants per delivery plan
 
 The long timeout covers the PR review a phase ends on:
 it idles on human latency, and the summon default kills it mid-watch.
@@ -316,12 +324,9 @@ For each, summon the bro on the stage task:
 > Work the task at `<stage-url>` through [[fix]].
 > Its body carries the root task it belongs to and how to land it.
 
-The bro implements,
-opens its PR into the integration branch,
-carries it through review,
-lands it there,
-and closes its stage task.
-Record the outcome and move to the next stage.
+Under the default delivery the bro implements, reviews and lands its PR into the integration branch and closes its stage task.
+Under coordinator roles, handle the exchanges below instead.
+A `ready` answer is not a landing: record a stage landed and move on only after the landing and task closure succeed.
 
 If a stage reports a blocker or a design change, decide with the user whether the plan needs adjusting
 — a repointed stage,
@@ -329,9 +334,43 @@ an added one — before continuing.
 A stage that raises leaves its work recoverable on a pushed ref named in the reason;
 the retry is a fresh summon on the same stage task.
 
+### Coordinator roles for a stage
+
+Choose `reviewer=coordinator`, `approver=summoner` and `lander=coordinator` independently per stage, recording them before launch.
+You arrange review and landing, never judge code or land yourself.{{when #may_summon contains eyebro}}
+
+**Reviewer coordinator.** For `reviewer=coordinator`:
+
+1. On `review requested: <pr> at <head>`, summon your granted reviewer with `[[review <pr> on github]]`, timeout `14400` and talk `worker.question`.
+   Supply stage/root task URLs, full head, base ref/URL, Delivery line, gates and trusted accounts;
+   retain both quests and the author's question id.
+2. When the reviewer asks `reviewing <pr> as <login>`, reply to the author's pending question with that login so it registers the engaged reviewer in its trust file, then acknowledge the reviewer's question.
+   Rounds travel on GitHub;
+   only the reviewer's **answer**, not its GitHub approval, is the verdict.
+3. On `verdict for <pr> at <head>?`, wait for that answer and relay its head/base verdict and evidence verbatim to the author's question.
+   A different head needs a successor on the requested head, carrying the earlier verdict and approved head for delta review.
+   A reviewer that times out gets a successor on the same plan with its retained quest history;
+   truncated history requires a whole-change review.
+   Relay a blocked verdict as blocked; a denial or failure clears no gate.{{end}}
+
+**Summoner approval.** On `approve landing <ref> at <head>?`, reply `approved <head>` only when you approve that named head under the stage's recorded plan;
+otherwise refuse with the reason.
+A combined coordinator-verdict/approval question needs both in one reply.
+This is never human approval or a waiver of platform rules.{{when #may_summon contains dev}}
+
+**Lander coordinator.** For `lander=coordinator`, the author ends with `ready <ref> at <head>`.
+Require its Delivery line, task URL, cleared-gate evidence (full verdict and approval where selected), and head delivery: PR, pushed branch or bundle artifact.
+Summon your granted dev target with `[[land <pr or base> at <head> by <method>]]`, that complete handover and `timeout` `28800`.
+Base it on the delivered head where reachable and share supplied artifacts;
+a local base needs an authorized joined lander in the same checkout.
+The lander uses its own credentials, rechecks gates and platform rules, reruns selected tests and owns bookkeeping and stage closure.
+Wait for its result before advancing;
+a `blocked <head>: <reason>` is not a landing.
+Route failure to a fresh author with the plan, earlier head/base/verdict and failure evidence; resume a PR through [[run pr]]'s `pr` argument for fixes and successor review, then accept a new handover.{{end}}
+
 ### 4 — integrate
 
-**Summon:** `into` the landing's integration branch · `timeout` 28800{{when #may_summon contains eyebro}} · `grant` `@<the eyebro>`{{end}}
+**Summon:** `into` the landing's integration branch · `timeout` 28800 · grants per delivery plan
 
 Once every stage task of the landing is done, tell the user what the last step needs from them:
 where the default branch is protected, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
@@ -346,16 +385,14 @@ Then summon:
 > the integration branch is never pushed again.
 > A repository that gates the branches stages merge into refuses every direct push to them, the rebase's included, so a phase that pushed the integration branch would be stuck with nothing to open a PR from
 > — and the two roles want separating anyway, since what stages merge into should not be the thing a merge to the default branch rewrites.
-> Then open ONE pull request for all the landing's stages together with [[run pr]] based on the default branch and land it with [[land]].
+> Then open ONE pull request for all the landing's stages together with [[run pr]], its base argument `origin/<default branch>` and its default human-approval gate retained, and land it with [[land]].
 > Its body names the stage pull requests and the integration branch their commits landed on
 > — the task's comments carry them
 > — so the reviewer reconciles those approvals instead of re-reading the stages.
 > Record the pull request on the task at `<root-task-url>` as soon as it is open (`brog::add_comment`, topic `integration pr`), so the page carries the one that took the stages to the default branch.
 > Where the default branch is protected, the approving review that clears the merge has to come from the user:
 > an agent's own approval does not satisfy the base's rule, so a land refused for want of a review is the expected state there rather than a blocker.
-> Keep the review watcher running through it
-> — restart it if the chain into [[land]] already stopped it
-> — and land when the user's approval arrives.
+> Keep [[follow pr <integration-pr>]] running through it, restarting that watch if needed, and land when the user's approval arrives.
 > Keep the task at `<root-task-url>` open whatever happens
 > — the coordinating session closes it after verification.
 > Roll nothing out, even where [[land]] would hand a deploy off:
