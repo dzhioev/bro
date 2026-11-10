@@ -158,7 +158,12 @@ def _request(method: str, url: str, token: str, body: Optional[Any] = None) -> A
 
 
 def _request_with_headers(
-  method: str, url: str, token: str, body: Optional[Any] = None
+  method: str,
+  url: str,
+  token: str,
+  body: Optional[Any] = None,
+  *,
+  absent_statuses: frozenset[int] = frozenset(),
 ) -> tuple[Any, Message]:
   """one authenticated call, retried per the transient policy; parsed JSON response
   (None when the response has no body, e.g. a 204) and the response headers.
@@ -189,6 +194,9 @@ def _request_with_headers(
         payload = response.read()
         response_headers = response.headers
     except urllib.error.HTTPError as error:
+      if error.code in absent_statuses:
+        with error:
+          return None, error.headers
       if error.code != _NOT_MODIFIED or cached is None:
         raise
       payload, response_headers = cached.payload, cached.headers
@@ -210,8 +218,9 @@ def _request_with_headers(
   return retry(observed_send, _RETRY_POLICY, label=url)
 
 
-def get(url: str, token: str) -> Any:
-  return _request('GET', url, token)
+def get(url: str, token: str, *, absent_statuses: frozenset[int] = frozenset()) -> Any:
+  """read JSON, returning None for `absent_statuses` without retries or failure reports."""
+  return _request_with_headers('GET', url, token, absent_statuses=absent_statuses)[0]
 
 
 def _page_size(url: str) -> int:

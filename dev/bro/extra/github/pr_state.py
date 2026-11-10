@@ -7,11 +7,13 @@ directly.
 """
 
 import json
+from pathlib import Path
 from typing import Any, Optional
 
 from bro.base import credentials
 from bro.base.args import Parser
 from bro.extra.github import api, pulls
+from bro.extra.github.trust import Trust, untrusted
 
 __cli_name__ = 'pr-state'
 
@@ -20,6 +22,8 @@ def _review(review: dict[str, Any]) -> dict[str, Any]:
   return {
     'id': review['id'],
     'user': review['user']['login'],
+    'user_type': review['user']['type'],
+    'author_association': review['author_association'],
     'state': review['state'],
     'commit_id': review['commit_id'],
     'body': review['body'],
@@ -34,14 +38,17 @@ def _comment(comment: dict[str, Any]) -> dict[str, Any]:
     # GitHub omits the key on a thread's root comment
     'in_reply_to': comment.get('in_reply_to_id'),
     'user': comment['user']['login'],
-    'path': comment['path'],
+    'user_type': comment['user']['type'],
+    'path': comment.get('path'),
     'line': comment.get('line'),
     'body': comment['body'],
     'url': comment['html_url'],
   }
 
 
-def pr_state(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
+def pr_state(owner: str, repo: str, pr: int, token: str, trust_file: Path) -> dict[str, Any]:
+  trust = Trust(owner, repo)
+  trust.read(trust_file)
   pull = pulls.pull_request(owner, repo, pr, token)
   return {
     'viewer': api.viewer_login(token),
@@ -57,15 +64,27 @@ def pr_state(owner: str, repo: str, pr: int, token: str) -> dict[str, Any]:
       'head': pull['head']['ref'],
       'head_sha': pull['head']['sha'],
     },
-    'reviews': [_review(r) for r in pulls.reviews(owner, repo, pr, token)],
-    'comments': [_comment(c) for c in pulls.review_comments(owner, repo, pr, token)],
+    'reviews': [
+      _review(review) if trust.trusted(review, token) else untrusted(review, 'review')
+      for review in pulls.reviews(owner, repo, pr, token)
+    ],
+    'comments': [
+      _comment(comment) if trust.trusted(comment, token) else untrusted(comment, 'comment')
+      for comment in sorted(
+        [
+          *pulls.issue_comments(owner, repo, pr, token),
+          *pulls.review_comments(owner, repo, pr, token),
+        ],
+        key=lambda comment: comment['created_at'],
+      )
+    ],
   }
 
 
 def main(argv: list[str]) -> Optional[int]:
   parser = Parser(
     description="a pull request's review state as one JSON object: the account the token "
-    'acts for, the PR, its reviews, and its inline review comments'
+    'acts for, the PR, and trusted reviews and conversation/inline comments'
   )
   parser.add_argument(
     'repo',
@@ -74,8 +93,13 @@ def main(argv: list[str]) -> Optional[int]:
     help='target repo (e.g. owner/repository)',
   )
   parser.add_argument('pr', type=int, help='PR number')
+  parser.add_argument(
+    '--trust-file', type=Path, required=True, env=False, help='trusted GitHub logins, one per line'
+  )
   namespace = parser.parse(argv)
   owner, repo = namespace['repo']
   token = credentials.get('github')
-  print(json.dumps(pr_state(owner, repo, namespace['pr'], token), indent=2))
+  print(
+    json.dumps(pr_state(owner, repo, namespace['pr'], token, namespace['trust_file']), indent=2)
+  )
   return 0
