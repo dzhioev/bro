@@ -2,14 +2,9 @@
 """poll a GitHub PR for merge status, merge conflicts, check results, pushes,
 new comments, and new reviews.
 
-Comment and review events fire for the parties to the PR's review — the PR
-author, the repo owner, and anyone who has posted a review on the PR — minus
-the account the watch's own token acts for. Reviewing admits a login to the
-parties, so the same watch serves both sides of a review: the author's watch
-hears whoever starts reviewing, and a reviewer's watch hears the author's
-replies — including an author that is a bot account, which is why there is no
-blanket bot filter: a bot that never reviews is not a party and stays silent
-anyway.
+Comment and review text fires only for trusted accounts other than the watch's
+own account. Untrusted feedback is reported without text and held until trusted.
+`--replay` emits existing feedback before `replay_complete` and the live events.
 
 Events go to stdout as text: a headline of the event name and its `key=value`
 fields, followed by indented lines for its body and its list items. The log goes
@@ -37,6 +32,7 @@ from bro import watches
 from bro.base import credentials, log
 from bro.base.args import Parser
 from bro.extra.github import api, pulls
+from bro.extra.github.trust import Trust, untrusted
 from bro.workspace.git import git_out, git_run
 
 __cli_name__ = 'poll-pr'
@@ -101,113 +97,138 @@ def _fetch_check_runs(owner: str, repo: str, sha: str, token: str) -> list[dict[
   return data.get('check_runs', [])
 
 
-def _owner_login(owner: str, repo: str, token: str) -> str:
-  url = f'https://api.github.com/repos/{owner}/{repo}'
-  data: dict[str, Any] = api.get(url, token)
-  return data['owner']['login']
-
-
 def _comment_event(comment: dict[str, Any]) -> dict[str, Any]:
   return {
     'event': 'comment',
     'id': comment['id'],
-    'user': comment.get('user', {}).get('login', ''),
-    'body': comment.get('body', ''),
-    'path': comment.get('path'),
-    'url': comment.get('html_url', ''),
-  }
-
-
-def _bundled_comment(comment: dict[str, Any]) -> dict[str, Any]:
-  return {
-    'id': comment['id'],
+    'user': comment['user']['login'],
+    'user_type': comment['user']['type'],
+    'in_reply_to': comment.get('in_reply_to_id'),
+    'body': comment['body'],
     'path': comment.get('path'),
     'line': comment.get('line'),
-    'body': comment.get('body', ''),
-    'url': comment.get('html_url', ''),
+    'url': comment['html_url'],
   }
 
 
-def emit_cycle(
-  owner: str,
-  repo: str,
-  pr: int,
-  token: str,
-  seen_comment_ids: set[int],
-  seen_review_ids: set[int],
-  parties: set[str],
-  self_login: str,
-  emit: Callable[[dict[str, Any]], None],
-) -> None:
-  """one polling cycle over comments and reviews, emitting what it finds.
+class Conversation:
+  def __init__(self, trust: Trust, self_login: str):
+    self._trust = trust
+    self._self_login = self_login.casefold()
+    self._seen: set[tuple[str, int]] = set()
+    self._held: set[tuple[str, int]] = set()
 
-  a comment or review fires when its author is in `parties` and is not
-  `self_login`. posting a review admits the author to `parties`, and reviews
-  are processed before comments so a first-time reviewer's comments fire in
-  the same cycle as the review that admitted them.
+  def emit_cycle(
+    self,
+    owner: str,
+    repo: str,
+    pr: int,
+    token: str,
+    emit: Callable[[dict[str, Any]], None],
+    *,
+    baseline: bool = False,
+    replayed: bool = False,
+  ) -> int:
+    reviews = pulls.reviews(owner, repo, pr, token)
+    issue_comments = pulls.issue_comments(owner, repo, pr, token)
+    comments = {comment['id']: comment for comment in pulls.review_comments(owner, repo, pr, token)}
+    bundled: dict[int, list[dict[str, Any]]] = {}
+    for review in reviews:
+      if not baseline and ('review', review['id']) not in self._seen:
+        # Fetch after seeing the review: the all-comments index can lag its submission.
+        bundled[review['id']] = pulls.review_inline_comments(owner, repo, pr, review['id'], token)
+        comments.update((comment['id'], comment) for comment in bundled[review['id']])
 
-  mutates `seen_comment_ids` / `seen_review_ids` so subsequent cycles skip
-  what was already emitted; an id is marked only once its event is out, so a
-  fetch that fails partway through the cycle costs a repeated fetch rather
-  than a dropped event. inline review comments are bundled into the parent
-  `review` event under a `comments` key — this kills the race where the
-  inline-comments endpoint lags the reviews endpoint by milliseconds, so an
-  APPROVED review with an attached "ship after fix" comment would otherwise
-  emit as a comment-less APPROVED on one cycle and the comment on the next.
-  every `review` event carries the PR's `review_decision` beside the reviewer's
-  own `state`.
-  """
+    items = [
+      *[('review', review) for review in reviews],
+      *[('issue_comment', comment) for comment in issue_comments],
+      *[('review_comment', comment) for comment in comments.values()],
+    ]
+    present = {(kind, item['id']) for kind, item in items}
+    self._held.intersection_update(present)
+    if baseline:
+      self._seen.update(present)
+      return 0
 
-  def actionable(login: str) -> bool:
-    return login != self_login and login in parties
+    self._seen.update(
+      (kind, item['id'])
+      for kind, item in items
+      if item['user']['login'].casefold() == self._self_login
+    )
+    bundled_comment_ids = {
+      comment['id']
+      for review_id, inline in bundled.items()
+      if ('review', review_id) not in self._seen
+      for comment in inline
+    }
+    pending = [(kind, item) for kind, item in items if (kind, item['id']) not in self._seen]
+    pending.sort(
+      key=lambda entry: entry[1]['submitted_at' if entry[0] == 'review' else 'created_at']
+    )
+    count = 0
 
-  @functools.cache
-  def decision() -> Optional[str]:
-    # lazy: a cycle emitting no review must not pay the extra request
-    return pulls.review_decision(owner, repo, pr, token)
+    def publish(event: dict[str, Any]) -> None:
+      nonlocal count
+      if replayed:
+        event['replayed'] = True
+      emit(event)
+      count += 1
 
-  for r in pulls.reviews(owner, repo, pr, token):
-    login = r.get('user', {}).get('login', '')
-    parties.add(login)
-    if r['id'] in seen_review_ids:
-      continue
-    # fetch inline comments AFTER seeing the review so the window in which a
-    # comment isn't yet indexed is as small as possible. mark them seen even
-    # if the review's author is not actionable — we don't want them to fire
-    # as standalone comment events on a later cycle.
-    inline = pulls.review_inline_comments(owner, repo, pr, r['id'], token)
-    if actionable(login):
-      emit(
-        {
-          'event': 'review',
-          'id': r['id'],
-          'user': login,
-          'state': r.get('state', ''),
-          'review_decision': decision(),
-          'body': r.get('body', ''),
-          'url': r.get('html_url', ''),
-          'comments': [_bundled_comment(c) for c in inline],
-        }
-      )
-    seen_review_ids.add(r['id'])
-    seen_comment_ids.update(c['id'] for c in inline)
+    def accept(kind: str, item: dict[str, Any]) -> bool:
+      key = (kind, item['id'])
+      if self._trust.trusted(item, token):
+        return True
+      if key not in self._held:
+        publish(
+          {'event': 'untrusted', **untrusted(item, 'review' if kind == 'review' else 'comment')}
+        )
+        self._held.add(key)
+      return False
 
-  for c in pulls.issue_comments(owner, repo, pr, token):
-    if c['id'] in seen_comment_ids:
-      continue
-    if actionable(c.get('user', {}).get('login', '')):
-      emit(_comment_event(c))
-    seen_comment_ids.add(c['id'])
+    @functools.cache
+    def decision() -> Optional[str]:
+      return pulls.review_decision(owner, repo, pr, token)
 
-  # any inline review comments not bundled with a review fire standalone —
-  # covers replies to existing review threads and comments that became
-  # visible after the per-review fetch above.
-  for c in pulls.review_comments(owner, repo, pr, token):
-    if c['id'] in seen_comment_ids:
-      continue
-    if actionable(c.get('user', {}).get('login', '')):
-      emit(_comment_event(c))
-    seen_comment_ids.add(c['id'])
+    for kind, item in pending:
+      key = (kind, item['id'])
+      if key in self._seen:
+        continue
+      if kind == 'review_comment' and item['id'] in bundled_comment_ids:
+        accept(kind, item)
+        continue
+      if not accept(kind, item):
+        continue
+      if kind == 'review':
+        inline = [
+          comment
+          for comment in bundled[item['id']]
+          if ('review_comment', comment['id']) not in self._seen
+          and accept('review_comment', comment)
+        ]
+        publish(
+          {
+            'event': 'review',
+            'id': item['id'],
+            'user': item['user']['login'],
+            'user_type': item['user']['type'],
+            'commit_id': item['commit_id'],
+            'state': item['state'],
+            'review_decision': decision(),
+            'body': item['body'],
+            'url': item['html_url'],
+            'comments': [
+              {field: value for field, value in _comment_event(comment).items() if field != 'event'}
+              for comment in inline
+            ],
+          }
+        )
+        self._seen.update(('review_comment', comment['id']) for comment in inline)
+      else:
+        publish(_comment_event(item))
+      self._seen.add(key)
+      self._held.discard(key)
+    self._held.difference_update(self._seen)
+    return count
 
 
 class ConflictTracker:
@@ -476,10 +497,10 @@ def poll_pr(
   failure_grace: float,
   disconnect_after: float,
   local_tip: Callable[[str], bool],
+  trust_file: Path,
+  replay: bool = False,
 ) -> int:
-  seen_comment_ids: set[int] = set()
-  seen_review_ids: set[int] = set()
-  parties: set[str] = set()
+  trust = Trust(owner, repo)
   conflicts = ConflictTracker()
   checks = CheckTracker()
   connection = ConnectionTracker(pr, disconnect_after)
@@ -493,34 +514,30 @@ def poll_pr(
   beat_promise = interval + _CYCLE_SLACK_SECONDS
   watches.beat(beat_promise)
 
+  def read_trust() -> None:
+    try:
+      trust.read(trust_file)
+    except (OSError, UnicodeError) as error:
+      raise WatchFailed('trust-file', f'{trust_file}: {error}', 0.0) from error
+
   try:
-    # the baseline decides what counts as pre-existing, so it is all-or-nothing:
-    # a watch that starts without it would replay the whole PR as new events
+    read_trust()
     with _watch_failure('baseline'):
       startup_token = token()
       self_login = api.viewer_login(startup_token)
       log.info(f'self: {self_login}')
       pr_data = pulls.pull_request(owner, repo, pr, startup_token)
       head = HeadTracker(pr_data.get('head', {}).get('sha'))
-      parties.add(pr_data['user']['login'])
-      parties.add(_owner_login(owner, repo, startup_token))
-
-      for comments in (
-        pulls.issue_comments(owner, repo, pr, startup_token),
-        pulls.review_comments(owner, repo, pr, startup_token),
-      ):
-        for c in comments:
-          seen_comment_ids.add(c['id'])
-      for r in pulls.reviews(owner, repo, pr, startup_token):
-        seen_review_ids.add(r['id'])
-        parties.add(r.get('user', {}).get('login', ''))
-      log.info(
-        f'existing comments: {len(seen_comment_ids)}, existing reviews: {len(seen_review_ids)}, '
-        f'parties: {sorted(parties)}'
+      conversation = Conversation(trust, self_login)
+      count = conversation.emit_cycle(
+        owner, repo, pr, startup_token, _emit, baseline=not replay, replayed=replay
       )
+    if replay:
+      _emit({'event': 'replay_complete', 'pr': pr, 'count': count})
 
     while True:
       watches.beat(beat_promise)
+      read_trust()
       # re-read per cycle so a short-lived minted credential stays fresh across
       # a watch that outlives it
       cycle_token = token()
@@ -553,15 +570,11 @@ def poll_pr(
 
       sources.probe(
         'reviews',
-        emit_cycle,
+        conversation.emit_cycle,
         owner,
         repo,
         pr,
         cycle_token,
-        seen_comment_ids,
-        seen_review_ids,
-        parties,
-        self_login,
         _emit,
       )
 
@@ -626,6 +639,16 @@ def main(argv: list[str]) -> Optional[int]:
     help='target repo (e.g. owner/repository)',
   )
   parser.add_argument('pr', type=int, help='PR number')
+  parser.add_argument(
+    '--trust-file',
+    type=Path,
+    required=True,
+    env=False,
+    help='trusted GitHub logins, one per line; read again every cycle',
+  )
+  parser.add_argument(
+    '--replay', action='store_true', help='replay existing feedback before live events'
+  )
   parser.add_argument('--interval', type=int, default=5, help='poll interval in seconds')
   parser.add_argument(
     '--failure-grace',
@@ -662,4 +685,6 @@ def main(argv: list[str]) -> Optional[int]:
     failure_grace=namespace['failure_grace'],
     disconnect_after=namespace['disconnect_after'],
     local_tip=branch_tip_probe(namespace['checkout']),
+    trust_file=namespace['trust_file'],
+    replay=namespace['replay'],
   )

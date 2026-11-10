@@ -15,6 +15,7 @@ import pytest
 from bro import watches
 from bro.base import credentials, retry
 from bro.extra.github import poll_pr
+from bro.extra.github.trust import Trust
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:
@@ -24,7 +25,10 @@ def _http_error(code: int) -> urllib.error.HTTPError:
 
 
 def _user(login: str) -> dict[str, Any]:
-  return {'user': {'login': login}}
+  return {
+    'user': {'login': login, 'type': 'Bot' if login.endswith('[bot]') else 'User'},
+    'author_association': 'OWNER' if login == 'owner' else 'NONE',
+  }
 
 
 def _open_pr(login: str = 'alice', sha: str = 'deadbeef', **extra: Any) -> dict[str, Any]:
@@ -41,6 +45,7 @@ def _issue_comment(id: int, login: str, body: str) -> dict[str, Any]:
   return {
     'id': id,
     'body': body,
+    'created_at': '2026-11-01T10:00:00Z',
     'html_url': f'https://github.com/x/y/issues/1#issuecomment-{id}',
     **_user(login),
   }
@@ -51,6 +56,8 @@ def _review(id: int, login: str, state: str, body: str = '') -> dict[str, Any]:
     'id': id,
     'state': state,
     'body': body,
+    'commit_id': 'reviewed-head',
+    'submitted_at': '2026-11-01T10:00:00Z',
     'html_url': f'https://github.com/x/y/pull/1#pullrequestreview-{id}',
     **_user(login),
   }
@@ -60,6 +67,7 @@ def _inline(id: int, review_id: int, login: str, body: str, line: int = 10) -> d
   return {
     'id': id,
     'pull_request_review_id': review_id,
+    'created_at': '2026-11-01T10:00:00Z',
     'body': body,
     'path': 'src/foo.py',
     'line': line,
@@ -113,19 +121,16 @@ def _install(monkeypatch, api: _FakeAPI) -> None:
   monkeypatch.setattr(poll_pr.pulls, 'review_decision', api.fetch_review_decision)
 
 
-def _run(api: _FakeAPI, **kwargs) -> list[dict[str, Any]]:
+def _conversation(logins=('alice',), self_login='me') -> poll_pr.Conversation:
+  trust = Trust('x', 'y')
+  trust.logins = set(logins)
+  return poll_pr.Conversation(trust, self_login)
+
+
+def _run(*, conversation=None, trusted=('alice',), self_login='me') -> list[dict[str, Any]]:
   events: list[dict[str, Any]] = []
-  poll_pr.emit_cycle(
-    owner='x',
-    repo='y',
-    pr=1,
-    token='t',
-    seen_comment_ids=kwargs.pop('seen_comment_ids', set()),
-    seen_review_ids=kwargs.pop('seen_review_ids', set()),
-    parties=kwargs.pop('parties', {'alice'}),
-    self_login=kwargs.pop('self_login', 'me'),
-    emit=events.append,
-  )
+  conversation = conversation or _conversation(trusted, self_login)
+  conversation.emit_cycle('x', 'y', 1, 't', events.append)
   return events
 
 
@@ -138,6 +143,14 @@ def _events_as_json(monkeypatch):
   `TestRender` and `TestTextOutput` cover the text they are rendered to."""
   monkeypatch.setattr(poll_pr, '_emit', lambda event: print(json.dumps(event), flush=True))
   monkeypatch.setattr(poll_pr.pulls, 'pull_commits', lambda *a: [])
+  get = poll_pr.api.get
+  monkeypatch.setattr(
+    poll_pr.api,
+    'get',
+    lambda url, *args, **kwargs: (
+      {'permission': 'read'} if '/collaborators/' in url else get(url, *args, **kwargs)
+    ),
+  )
 
 
 def _poll(**overrides) -> int:
@@ -150,6 +163,7 @@ def _poll(**overrides) -> int:
     'failure_grace': 300,
     'disconnect_after': 60,
     'local_tip': lambda sha: False,
+    'trust_file': Path('/dev/null'),
   }
   return poll_pr.poll_pr(**{**arguments, **overrides})
 
@@ -164,7 +178,7 @@ class TestEmitCycle:
       all_inline=[_inline(200, 100, 'alice', 'nit: rename foo')],
     )
     _install(monkeypatch, api)
-    events = _run(api)
+    events = _run()
     assert len(events) == 1
     e = events[0]
     assert e['event'] == 'review'
@@ -181,14 +195,14 @@ class TestEmitCycle:
       review_decision='REVIEW_REQUIRED',
     )
     _install(monkeypatch, api)
-    events = _run(api)
+    events = _run()
     assert events[0]['state'] == 'APPROVED'
     assert events[0]['review_decision'] == 'REVIEW_REQUIRED'
 
   def test_one_decision_read_serves_every_review_in_a_cycle(self, monkeypatch):
     api = _FakeAPI(reviews=[_review(100, 'alice', 'COMMENTED'), _review(101, 'alice', 'APPROVED')])
     _install(monkeypatch, api)
-    events = _run(api)
+    events = _run()
     assert [e['id'] for e in events] == [100, 101]
     assert api.review_decision_calls == 1
 
@@ -198,7 +212,7 @@ class TestEmitCycle:
       issue_comments=[_issue_comment(50, 'alice', 'top-level comment')],
     )
     _install(monkeypatch, api)
-    events = _run(api, self_login='self-bot')
+    events = _run(self_login='self-bot')
     assert [e['event'] for e in events] == ['comment']
     assert api.review_decision_calls == 0
 
@@ -206,7 +220,7 @@ class TestEmitCycle:
     # reply to an existing review thread, no new review wrapping it.
     api = _FakeAPI(all_inline=[_inline(201, 99, 'alice', 'follow-up note')])
     _install(monkeypatch, api)
-    events = _run(api)
+    events = _run()
     assert len(events) == 1
     assert events[0]['event'] == 'comment'
     assert events[0]['id'] == 201
@@ -215,7 +229,7 @@ class TestEmitCycle:
   def test_issue_comment_emitted_separately(self, monkeypatch):
     api = _FakeAPI(issue_comments=[_issue_comment(50, 'alice', 'top-level comment')])
     _install(monkeypatch, api)
-    events = _run(api)
+    events = _run()
     assert len(events) == 1
     assert events[0]['event'] == 'comment'
     assert events[0]['id'] == 50
@@ -227,11 +241,10 @@ class TestEmitCycle:
       all_inline=[_inline(200, 100, 'alice', 'nit')],
     )
     _install(monkeypatch, api)
-    seen_c: set[int] = set()
-    seen_r: set[int] = set()
-    first = _run(api, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    conversation = _conversation()
+    first = _run(conversation=conversation)
     assert len(first) == 1
-    second = _run(api, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    second = _run(conversation=conversation)
     assert second == []
     # the inline-comments-by-review endpoint is hit once per review (the first
     # cycle); the second cycle skips it because the review is already seen.
@@ -240,8 +253,7 @@ class TestEmitCycle:
   def test_inline_comment_arriving_after_review_fires_on_next_cycle(self, monkeypatch):
     # the race we want to survive: cycle 1 sees the review but the inline
     # comment isn't yet indexed; cycle 2 catches it via the standalone fetch.
-    seen_c: set[int] = set()
-    seen_r: set[int] = set()
+    conversation = _conversation()
 
     cycle1 = _FakeAPI(
       reviews=[_review(100, 'alice', 'APPROVED')],
@@ -249,7 +261,7 @@ class TestEmitCycle:
       all_inline=[],
     )
     _install(monkeypatch, cycle1)
-    first = _run(cycle1, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    first = _run(conversation=conversation)
     assert len(first) == 1
     assert first[0]['event'] == 'review'
     assert first[0]['comments'] == []
@@ -260,14 +272,13 @@ class TestEmitCycle:
       all_inline=[_inline(200, 100, 'alice', 'late comment')],
     )
     _install(monkeypatch, cycle2)
-    second = _run(cycle2, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    second = _run(conversation=conversation)
     assert len(second) == 1
     assert second[0]['event'] == 'comment'
     assert second[0]['body'] == 'late comment'
 
   def test_review_whose_inline_fetch_fails_is_emitted_on_the_next_cycle(self, monkeypatch):
-    seen_c: set[int] = set()
-    seen_r: set[int] = set()
+    conversation = _conversation()
     api = _FakeAPI(
       reviews=[_review(100, 'alice', 'APPROVED')],
       review_inline={100: [_inline(200, 100, 'alice', 'nit')]},
@@ -280,11 +291,11 @@ class TestEmitCycle:
 
     monkeypatch.setattr(poll_pr.pulls, 'review_inline_comments', failing_inline)
     with pytest.raises(urllib.error.HTTPError):
-      _run(api, seen_comment_ids=seen_c, seen_review_ids=seen_r)
-    assert seen_r == set()
+      _run(conversation=conversation)
+    assert ('review', 100) not in conversation._seen
 
     _install(monkeypatch, api)
-    events = _run(api, seen_comment_ids=seen_c, seen_review_ids=seen_r)
+    events = _run(conversation=conversation)
     assert [e['event'] for e in events] == ['review']
     assert events[0]['comments'][0]['id'] == 200
 
@@ -297,34 +308,39 @@ class TestEmitCycle:
       all_inline=[_inline(200, 100, 'self-bot', 'self comment')],
     )
     _install(monkeypatch, api)
-    events = _run(api, self_login='self-bot')
+    events = _run(self_login='self-bot')
     assert events == []
     assert api.review_inline_calls == [100]
 
-  def test_a_comment_from_outside_the_parties_stays_silent(self, monkeypatch):
-    api = _FakeAPI(issue_comments=[_issue_comment(50, 'github-actions[bot]', 'coverage: 93%')])
+  def test_an_untrusted_comment_is_bodiless(self, monkeypatch):
+    comment = _issue_comment(50, 'github-actions[bot]', 'coverage: 93%')
+    api = _FakeAPI(issue_comments=[comment])
     _install(monkeypatch, api)
-    assert _run(api, parties={'alice'}) == []
+    assert _run() == [
+      {
+        'event': 'untrusted',
+        'user': 'github-actions[bot]',
+        'kind': 'comment',
+        'url': comment['html_url'],
+      }
+    ]
 
-  def test_a_review_admits_its_author_for_the_same_cycle_comments(self, monkeypatch):
-    # a first-time reviewer's review and comment arrive in one cycle: the
-    # review admits the login to the parties before the comment passes run
+  def test_a_review_does_not_admit_its_author(self, monkeypatch):
     api = _FakeAPI(
-      reviews=[_review(100, 'newcomer', 'CHANGES_REQUESTED')],
-      issue_comments=[_issue_comment(50, 'newcomer', 'overall: needs work')],
+      reviews=[_review(100, 'newcomer', 'CHANGES_REQUESTED', 'untrusted review')],
+      issue_comments=[_issue_comment(50, 'newcomer', 'untrusted comment')],
     )
     _install(monkeypatch, api)
-    parties: set[str] = {'alice'}
-    events = _run(api, parties=parties)
-    assert [e['event'] for e in events] == ['review', 'comment']
-    assert 'newcomer' in parties
+    events = _run()
+    assert [event['event'] for event in events] == ['untrusted', 'untrusted']
+    assert all('body' not in event for event in events)
 
-  def test_a_party_bot_login_fires(self, monkeypatch):
-    # the PR author can be an app account; a party fires whatever its suffix
+  def test_an_explicitly_trusted_bot_fires(self, monkeypatch):
     api = _FakeAPI(issue_comments=[_issue_comment(50, 'app[bot]', 'fixed in abc123')])
     _install(monkeypatch, api)
-    events = _run(api, parties={'app[bot]'})
-    assert [e['event'] for e in events] == ['comment']
+    events = _run(trusted={'app[bot]'})
+    assert events[0]['event'] == 'comment'
+    assert events[0]['user_type'] == 'Bot'
 
 
 class _Stepper:
@@ -344,7 +360,6 @@ class _Stepper:
 
 class TestPollLoopResilience:
   def _baseline(self, monkeypatch):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
     monkeypatch.setattr(poll_pr.pulls, 'issue_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
@@ -399,7 +414,6 @@ class _Response(io.BytesIO):
 
 class TestSourceFailures:
   def _baseline(self, monkeypatch):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
     monkeypatch.setattr(poll_pr.pulls, 'issue_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
@@ -717,7 +731,6 @@ class TestTextOutput:
 
 class TestMergedEvent:
   def _merged(self, monkeypatch, capsys, **pr_fields):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
     for name in ('issue_comments', 'review_comments', 'reviews'):
       monkeypatch.setattr(poll_pr.pulls, name, lambda *a: [])
     monkeypatch.setattr(poll_pr.api, 'viewer_login', lambda *a: 'alice')
@@ -834,7 +847,6 @@ class TestCheckTracker:
 
 class TestCheckEvents:
   def _baseline(self, monkeypatch):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
     monkeypatch.setattr(poll_pr.pulls, 'issue_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
@@ -925,7 +937,6 @@ class TestCheckEvents:
 
 class TestConflictDetection:
   def _baseline(self, monkeypatch):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
     monkeypatch.setattr(poll_pr.pulls, 'issue_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
@@ -977,7 +988,6 @@ class TestConflictDetection:
 
 class TestTokenAndSelf:
   def _baseline(self, monkeypatch):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'alice')
     monkeypatch.setattr(poll_pr.pulls, 'issue_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
@@ -1018,10 +1028,8 @@ class TestTokenAndSelf:
     assert '"comment"' not in out
     assert json.loads(out.strip().splitlines()[-1]) == {'event': 'merged', 'pr': 1}
 
-  def test_a_party_seeded_from_a_baseline_review_fires_later_comments(self, monkeypatch, capsys):
+  def test_a_baseline_review_does_not_admit_later_comments(self, monkeypatch, capsys):
     self._baseline(monkeypatch)
-    # 'critic' is neither the author nor the repo owner — only the review it
-    # posted before the watch started makes it a party
     monkeypatch.setattr(
       poll_pr.pulls, 'reviews', lambda *a: [_review(100, 'critic', 'CHANGES_REQUESTED')]
     )
@@ -1036,10 +1044,10 @@ class TestTokenAndSelf:
     monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
     assert _poll() == 0
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
-    assert [e['event'] for e in events] == ['comment', 'merged']
+    assert [e['event'] for e in events] == ['untrusted', 'merged']
     assert events[0]['user'] == 'critic'
 
-  def test_a_reviewer_side_watch_hears_the_bot_author(self, monkeypatch, capsys):
+  def test_a_reviewer_side_watch_hears_a_trusted_bot_author(self, monkeypatch, capsys, tmp_path):
     self._baseline(monkeypatch)
     monkeypatch.setattr(
       poll_pr.pulls,
@@ -1053,7 +1061,9 @@ class TestTokenAndSelf:
     )
     monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *a: [])
     monkeypatch.setattr(poll_pr.api, 'viewer_login', lambda *a: 'eyebro')
-    assert _poll() == 0
+    trust_file = tmp_path / 'trust'
+    trust_file.write_text('app[bot]\n')
+    assert _poll(trust_file=trust_file) == 0
     events = [json.loads(line) for line in capsys.readouterr().out.strip().splitlines()]
     assert [e['event'] for e in events] == ['comment', 'merged']
     assert events[0]['user'] == 'app[bot]'
@@ -1061,7 +1071,6 @@ class TestTokenAndSelf:
 
 class TestPushedEvents:
   def _baseline(self, monkeypatch):
-    monkeypatch.setattr(poll_pr, '_owner_login', lambda *a: 'owner')
     monkeypatch.setattr(poll_pr.pulls, 'issue_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *a: [])
     monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *a: [])
@@ -1186,11 +1195,24 @@ class TestMain:
   def _capture_poll(self, monkeypatch) -> dict:
     captured = {}
 
-    def fake_poll(owner, repo, pr, token, interval, failure_grace, disconnect_after, local_tip):
+    def fake_poll(
+      owner,
+      repo,
+      pr,
+      token,
+      interval,
+      failure_grace,
+      disconnect_after,
+      local_tip,
+      trust_file,
+      replay,
+    ):
       captured['token'] = token
       captured['failure_grace'] = failure_grace
       captured['disconnect_after'] = disconnect_after
       captured['local_tip'] = local_tip
+      captured['trust_file'] = trust_file
+      captured['replay'] = replay
       return 0
 
     monkeypatch.setattr(poll_pr, 'poll_pr', fake_poll)
@@ -1203,12 +1225,15 @@ class TestMain:
     (tmp_path / 'creds.json').write_text(json.dumps({'defaults': ['github+reviewer']}))
     registry = {'github': credentials.CredentialKind('github', 'GitHub access')}
     with credentials.as_default_store(credentials.Store(registry, tmp_path, {})):
-      assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+      assert poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', '/dev/null']) == 0
       assert captured['token']() == 'reviewer-token'
 
   def test_failure_grace_flag_reaches_the_watch(self, monkeypatch):
     captured = self._capture_poll(monkeypatch)
-    assert poll_pr.main(['poll-pr', 'x/y', '1', '--failure-grace', '60']) == 0
+    assert (
+      poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', '/dev/null', '--failure-grace', '60'])
+      == 0
+    )
     assert captured['failure_grace'] == 60
 
   def test_a_producer_keeps_the_log_out_of_the_watch_output(self, monkeypatch, tmp_path):
@@ -1217,17 +1242,252 @@ class TestMain:
     redirected: list[Path] = []
     monkeypatch.setattr(poll_pr.watches, 'diagnostics_path', lambda: diagnostics)
     monkeypatch.setattr(poll_pr.log, 'to_file', redirected.append)
-    assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', '/dev/null']) == 0
     assert redirected == [diagnostics]
 
   def test_disconnect_after_flag_reaches_the_watch(self, monkeypatch):
     captured = self._capture_poll(monkeypatch)
-    assert poll_pr.main(['poll-pr', 'x/y', '1']) == 0
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', '/dev/null']) == 0
     assert captured['disconnect_after'] == 60
-    assert poll_pr.main(['poll-pr', 'x/y', '1', '--disconnect-after', '20']) == 0
+    assert (
+      poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', '/dev/null', '--disconnect-after', '20'])
+      == 0
+    )
     assert captured['disconnect_after'] == 20
 
   def test_repo_flag_names_the_checkout_whose_tips_stay_quiet(self, monkeypatch, checkout):
     captured = self._capture_poll(monkeypatch)
-    assert poll_pr.main(['poll-pr', 'x/y', '1', '--repo', str(checkout)]) == 0
+    assert (
+      poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', '/dev/null', '--repo', str(checkout)])
+      == 0
+    )
     assert captured['local_tip'](_git(checkout, 'rev-parse', 'HEAD'))
+
+
+class TestHeldFeedback:
+  def test_held_feedback_is_emitted_once_in_order_with_fresh_inline_comments(self, monkeypatch):
+    early = {**_issue_comment(40, 'reviewer', 'question'), 'created_at': '2026-11-01T09:00:00Z'}
+    review = _review(100, 'reviewer', 'APPROVED', 'approval')
+    inline = _inline(200, 100, 'reviewer', 'fix this first')
+    api = _FakeAPI(issue_comments=[early], reviews=[review], review_inline={100: [inline]})
+    _install(monkeypatch, api)
+    conversation = _conversation()
+    warnings = _run(conversation=conversation)
+    assert [event['event'] for event in warnings] == ['untrusted'] * 3
+    assert all(set(event) == {'event', 'user', 'kind', 'url'} for event in warnings)
+    assert _run(conversation=conversation) == []
+
+    api.review_inline[100].append(_inline(201, 100, 'reviewer', 'another detail'))
+    conversation._trust.logins.add('reviewer')
+    events = _run(conversation=conversation)
+    assert [event['event'] for event in events] == ['comment', 'review']
+    assert events[0]['id'] == 40
+    assert [comment['id'] for comment in events[1]['comments']] == [200, 201]
+    assert events[1]['commit_id'] == 'reviewed-head'
+    assert events[1]['user_type'] == 'User'
+    assert _run(conversation=conversation) == []
+
+  def test_deleted_held_items_never_fire(self, monkeypatch):
+    api = _FakeAPI(
+      issue_comments=[_issue_comment(40, 'stranger', 'deleted question')],
+      reviews=[_review(100, 'stranger', 'APPROVED')],
+      review_inline={100: [_inline(200, 100, 'stranger', 'deleted inline')]},
+    )
+    _install(monkeypatch, api)
+    conversation = _conversation()
+    assert len(_run(conversation=conversation)) == 3
+    api.issue_comments.clear()
+    api.reviews.clear()
+    conversation._trust.logins.add('stranger')
+    assert _run(conversation=conversation) == []
+    assert conversation._held == set()
+
+  def test_a_deleted_inline_is_not_rebundled_when_the_review_is_released(self, monkeypatch):
+    api = _FakeAPI(
+      reviews=[_review(100, 'stranger', 'APPROVED')],
+      review_inline={100: [_inline(200, 100, 'stranger', 'deleted inline')]},
+    )
+    _install(monkeypatch, api)
+    conversation = _conversation()
+    _run(conversation=conversation)
+    api.review_inline[100].clear()
+    conversation._trust.logins.add('stranger')
+    events = _run(conversation=conversation)
+    assert events[0]['comments'] == []
+
+  def test_an_untrusted_inline_cannot_leak_through_a_trusted_review(self, monkeypatch):
+    api = _FakeAPI(
+      reviews=[_review(100, 'alice', 'APPROVED')],
+      review_inline={100: [_inline(200, 100, 'stranger', 'hostile text')]},
+      all_inline=[_inline(200, 100, 'stranger', 'hostile text')],
+    )
+    _install(monkeypatch, api)
+    conversation = _conversation()
+    events = _run(conversation=conversation)
+    assert events[0]['event'] == 'untrusted'
+    assert events[1]['comments'] == []
+    assert 'hostile text' not in json.dumps(events)
+    conversation._trust.logins.add('stranger')
+    assert _run(conversation=conversation)[0]['body'] == 'hostile text'
+
+  def test_issue_and_inline_comment_ids_do_not_collide(self, monkeypatch):
+    api = _FakeAPI(
+      issue_comments=[_issue_comment(50, 'alice', 'conversation')],
+      all_inline=[_inline(50, 99, 'alice', 'inline')],
+    )
+    _install(monkeypatch, api)
+    assert [event['body'] for event in _run()] == ['conversation', 'inline']
+
+
+class TestTrustFile:
+  def _watch(self, monkeypatch):
+    TestSourceFailures()._baseline(monkeypatch)
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *args: [])
+    monkeypatch.setattr(
+      poll_pr.pulls, 'pull_request', _Stepper([_open_pr()] * 4 + [{'merged': True}])
+    )
+
+  def test_the_file_is_reread_each_cycle_and_releases_held_feedback(
+    self, monkeypatch, tmp_path, capsys
+  ):
+    self._watch(monkeypatch)
+    path = tmp_path / 'trust'
+    path.write_text('')
+    comment = _issue_comment(50, 'reviewer[bot]', 'answer')
+    monkeypatch.setattr(
+      poll_pr.pulls, 'issue_comments', _Stepper([[], [comment], [comment], [comment]])
+    )
+    cycles = []
+
+    def sleep(seconds):
+      cycles.append(seconds)
+      if len(cycles) == 1:
+        path.write_text('reviewer[bot]\n')
+
+    monkeypatch.setattr(poll_pr.time, 'sleep', sleep)
+    assert _poll(trust_file=path) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event['event'] for event in events] == ['untrusted', 'comment', 'merged']
+    assert events[1]['user_type'] == 'Bot'
+
+  @pytest.mark.parametrize('at_start', [True, False])
+  def test_an_unreadable_file_ends_the_watch_outside_the_github_sources(
+    self, monkeypatch, tmp_path, capsys, at_start
+  ):
+    self._watch(monkeypatch)
+    path = tmp_path / 'trust'
+    if not at_start:
+      path.write_text('')
+      monkeypatch.setattr(poll_pr.time, 'sleep', lambda seconds: path.unlink())
+    assert _poll(trust_file=path) == 2
+    event = json.loads(capsys.readouterr().out)
+    assert event['event'] == 'watch_failed'
+    assert event['source'] == 'trust-file'
+    assert str(path) in event['reason']
+
+  @pytest.mark.parametrize('status', [403, 404])
+  def test_a_refused_permission_lookup_never_fails_the_watch(
+    self, monkeypatch, tmp_path, capsys, status
+  ):
+    self._watch(monkeypatch)
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'issue_comments',
+      _Stepper([[], *[[_issue_comment(50, 'stranger', 'untrusted')]] * 3]),
+    )
+    calls = []
+
+    def refused(request, **kwargs):
+      calls.append(request)
+      raise _http_error(status)
+
+    monkeypatch.setattr(poll_pr.api.urllib.request, 'urlopen', refused)
+    monkeypatch.setattr(poll_pr.api, 'get', _API_GET)
+    assert _poll() == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event['event'] for event in events] == ['untrusted', 'merged']
+    assert len(calls) == 1
+
+
+_API_GET = poll_pr.api.get
+
+
+class TestReplay:
+  def test_existing_feedback_is_ordered_and_complete_before_any_live_event(
+    self, monkeypatch, capsys, tmp_path
+  ):
+    TestSourceFailures()._baseline(monkeypatch)
+    path = tmp_path / 'trust'
+    path.write_text('alice\n')
+    monkeypatch.setattr(poll_pr.api, 'viewer_login', lambda token: 'me')
+    early = {**_issue_comment(50, 'alice', 'early'), 'created_at': '2026-11-01T09:00:00Z'}
+    review = _review(100, 'alice', 'APPROVED')
+    root = {**_inline(200, 100, 'alice', 'root'), 'created_at': '2026-11-01T09:59:00Z'}
+    reply = {
+      **_inline(201, 101, 'alice', 'reply'),
+      'in_reply_to_id': 200,
+      'created_at': '2026-11-01T11:00:00Z',
+    }
+    hostile = {
+      **_issue_comment(51, 'stranger', 'hostile text'),
+      'created_at': '2026-11-01T12:00:00Z',
+    }
+    own_pending = {**_review(101, 'me', 'PENDING'), 'submitted_at': None}
+    live = {**_issue_comment(52, 'alice', 'live'), 'created_at': '2026-11-01T13:00:00Z'}
+    monkeypatch.setattr(poll_pr.pulls, 'reviews', lambda *args: [own_pending, review])
+    monkeypatch.setattr(
+      poll_pr.pulls, 'issue_comments', _Stepper([[hostile, early], [hostile, early, live]])
+    )
+    monkeypatch.setattr(poll_pr.pulls, 'review_comments', lambda *args: [reply, root])
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'review_inline_comments',
+      lambda owner, repo, pr, id, token: [root] if id == 100 else [],
+    )
+    monkeypatch.setattr(
+      poll_pr.pulls,
+      'pull_request',
+      _Stepper([_open_pr(), _open_pr(mergeable=False), {'merged': True}]),
+    )
+    monkeypatch.setattr(poll_pr, '_fetch_check_runs', lambda *args: [])
+    assert _poll(trust_file=path, replay=True) == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event['event'] for event in events] == [
+      'comment',
+      'review',
+      'comment',
+      'untrusted',
+      'replay_complete',
+      'conflicts',
+      'comment',
+      'merged',
+    ]
+    assert [event.get('id') for event in events[:3]] == [50, 100, 201]
+    assert all(event['replayed'] for event in events[:4])
+    assert all('replayed' not in event for event in events[4:])
+    assert events[1]['commit_id'] == review['commit_id']
+    assert events[1]['user_type'] == 'User'
+    assert events[1]['comments'][0]['in_reply_to'] is None
+    assert events[2]['in_reply_to'] == 200
+    assert events[4]['count'] == 4
+    assert 'hostile text' not in json.dumps(events)
+    assert 'me' not in [event.get('user') for event in events]
+
+  def test_without_replay_existing_feedback_is_baselined_silently(self, monkeypatch):
+    api = _FakeAPI(
+      issue_comments=[_issue_comment(50, 'stranger', 'old')],
+      reviews=[_review(100, 'stranger', 'APPROVED')],
+    )
+    _install(monkeypatch, api)
+    conversation = _conversation()
+    events = []
+    assert conversation.emit_cycle('x', 'y', 1, 't', events.append, baseline=True) == 0
+    assert _run(conversation=conversation) == []
+    assert events == []
+
+  def test_cli_trust_file_and_replay_reach_the_watch(self, monkeypatch, tmp_path):
+    captured = TestMain()._capture_poll(monkeypatch)
+    path = tmp_path / 'trust'
+    assert poll_pr.main(['poll-pr', 'x/y', '1', '--trust-file', str(path), '--replay']) == 0
+    assert captured['trust_file'] == path
+    assert captured['replay'] is True
