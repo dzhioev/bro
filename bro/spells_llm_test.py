@@ -109,7 +109,7 @@ async def _resolutions(command: str, bro_name: str = 'bro') -> list:
     ),
     pytest.param('watch', None, id='missing-command'),
     pytest.param(
-      'ask bro-eyebro to watch poll-pr dzhioev/bro 902 and report what it sees',
+      'ask eyebro to watch poll-pr dzhioev/bro 902 and report what it sees',
       ('ask', {}),
       id='spell-word-in-another-spells-request',
     ),

@@ -605,7 +605,7 @@ def allowance_control(tmp_path, owner):
   source = reading(
     config={
       'defaults': {'summon-depth': 2, 'grant': ['@*', 'webview']},
-      'homes': {'test-home': {'bros': {'bro-eyebro': {'summon-depth': 0}}}},
+      'homes': {'test-home': {'bros': {'eyebro': {'summon-depth': 0}}}},
     }
   )
   owner = replace(owner, bro='lead', mission_record=mission(target='lead', source=source, top=True))
@@ -648,10 +648,10 @@ def test_allowance_chain_refuses_both_summons_and_webviews(allowance_control, pl
   assert context.denied == []
   assert peers.for_mission(developer).allowance.value == 1
   _undertake(peers, developer, 'bro-dev')
-  reviewer, context = _summon(control, 'bro-eyebro')
+  reviewer, context = _summon(control, 'eyebro')
   assert context.denied == []
   assert peers.for_mission(reviewer).allowance.value == 0
-  _undertake(peers, reviewer, 'bro-eyebro')
+  _undertake(peers, reviewer, 'eyebro')
 
   for message in (
     request('launch', {'type': 'bro', 'target': 'bro-dev', 'prompt': 'work'}),
@@ -661,7 +661,7 @@ def test_allowance_chain_refuses_both_summons_and_webviews(allowance_control, pl
     [(_, error, _)] = context.denied
     assert 'allowance 0' in error
     assert 'defaults.summon-depth=2' in error
-    assert 'homes.test-home.bros.bro-eyebro.summon-depth=0' in error
+    assert 'homes.test-home.bros.eyebro.summon-depth=0' in error
     assert not context.spawned
 
 
@@ -695,9 +695,9 @@ def test_non_bro_mission_inherits_and_consumes_allowance(tmp_path, owner):
 
 def test_manual_prepare_defers_exhausted_allowance_check_to_commit(allowance_control, monkeypatch):
   control, peers = allowance_control
-  identifier, context = _summon(control, 'bro-eyebro')
+  identifier, context = _summon(control, 'eyebro')
   assert not context.denied
-  _undertake(peers, identifier, 'bro-eyebro')
+  _undertake(peers, identifier, 'eyebro')
   token, context = _summon(control, 'bro-dev', manual=True)
   assert not context.denied
   assert context.expected
@@ -717,5 +717,5 @@ def test_manual_prepare_defers_exhausted_allowance_check_to_commit(allowance_con
   [reply] = replies
   assert reply['outcome'] == 'denied'
   assert 'allowance 0' in reply['error']
-  assert 'homes.test-home.bros.bro-eyebro.summon-depth=0' in reply['error']
+  assert 'homes.test-home.bros.eyebro.summon-depth=0' in reply['error']
   assert peers.for_mission(token).allowance is None
