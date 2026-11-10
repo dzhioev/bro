@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro.base import credentials
-from bro.base.condition import Entry, Iff, Variables, When, select
+from bro.base.condition import Entry, Iff, StringVariable, Variables, When, select
 from bro.procedures import parse_frontmatter
 
 if TYPE_CHECKING:
@@ -19,6 +19,10 @@ if TYPE_CHECKING:
 NAMESPACE = 'spell'
 CAST_SECRET = 'mu'
 _NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+_CHOICE_PATTERN = re.compile(r'[A-Za-z0-9_.-]+')
+_CHOICE_RESERVED_NAMES = frozenset(
+  {'harness', 'creds', 'may_summon', 'talk', 'hold', 'features', 'true', 'false'}
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,30 @@ class Parameter:
   name: str
   description: str
   required: bool
+  choices: tuple[str, ...] = ()
+  default: str | None = None
+
+  def schema(self) -> dict[str, Any]:
+    schema: dict[str, Any] = {'type': 'string', 'description': self.description}
+    if self.choices:
+      schema['enum'] = list(self.choices)
+    if self.default is not None:
+      schema['default'] = self.default
+    return schema
+
+  def bind(self, arguments: Mapping[str, Any]) -> str | None:
+    if self.name not in arguments:
+      if self.required:
+        raise ValueError(f'missing required spell argument {self.name!r}')
+      return self.default
+    value = arguments[self.name]
+    if not isinstance(value, str):
+      raise ValueError(f'spell argument {self.name!r} must be a string')
+    if self.choices and value not in self.choices:
+      raise ValueError(
+        f'spell argument {self.name!r}: {value!r} is outside choices {self.choices!r}'
+      )
+    return value
 
 
 @dataclass(frozen=True)
@@ -35,6 +63,21 @@ class Spell:
   description: str
   parameters: tuple[Parameter, ...]
   body: str
+
+
+@dataclass(frozen=True)
+class SpellCall:
+  spell: Spell
+  arguments: dict[str, str]
+  defaulted: frozenset[str]
+
+
+class _ChoiceDeclaration(BaseModel):
+  model_config = ConfigDict(extra='forbid', strict=True)
+
+  description: str
+  choices: list[str]
+  default: str | None = None
 
 
 class _ArgumentPair(BaseModel):
@@ -166,16 +209,37 @@ def _parse_parameters(raw: str, path: Path) -> tuple[Parameter, ...]:
 
   parameters: list[Parameter] = []
   names: set[str] = set()
-  for declared_name, description in value.items():
-    if not isinstance(declared_name, str) or not isinstance(description, str):
-      raise ValueError(f'spell {path}: parameter names and descriptions must be strings')
+  for declared_name, declaration in value.items():
     required = not declared_name.endswith('?')
     name = declared_name if required else declared_name[:-1]
     _validate_name('parameter name', name, path)
     if name in names:
       raise ValueError(f'spell {path}: duplicate parameter name {name!r}')
     names.add(name)
-    parameters.append(Parameter(name, description, required))
+    if isinstance(declaration, str):
+      parameters.append(Parameter(name, declaration, required))
+      continue
+    if not isinstance(declaration, dict):
+      raise ValueError(f'spell {path}: parameter descriptions must be strings or choice objects')
+    if name in _CHOICE_RESERVED_NAMES:
+      raise ValueError(f'spell {path}: choice parameter {name!r} conflicts with a rendering fact')
+    choice = _ChoiceDeclaration.model_validate(declaration)
+    if not choice.choices or any(
+      _CHOICE_PATTERN.fullmatch(item) is None for item in choice.choices
+    ):
+      raise ValueError(f'spell {path}: choices must be nonempty literals matching [A-Za-z0-9_.-]+')
+    if len(set(choice.choices)) != len(choice.choices):
+      raise ValueError(f'spell {path}: repeated choice for parameter {name!r}')
+    has_default = 'default' in choice.model_fields_set
+    if required and has_default:
+      raise ValueError(f'spell {path}: required choice {name!r} must not have a default')
+    if not required and not has_default:
+      raise ValueError(f'spell {path}: optional choice {name!r} requires a default')
+    if has_default and choice.default not in choice.choices:
+      raise ValueError(f'spell {path}: default for {name!r} is outside its choices')
+    parameters.append(
+      Parameter(name, choice.description, required, tuple(choice.choices), choice.default)
+    )
   return tuple(parameters)
 
 
@@ -211,10 +275,7 @@ def _cast_roster(spells: list[Spell]) -> list[dict[str, Any]]:
       'description': spell.description,
       'parameters': {
         'type': 'object',
-        'properties': {
-          parameter.name: {'type': 'string', 'description': parameter.description}
-          for parameter in spell.parameters
-        },
+        'properties': {parameter.name: parameter.schema() for parameter in spell.parameters},
         'required': [parameter.name for parameter in spell.parameters if parameter.required],
         'additionalProperties': False,
       },
@@ -225,21 +286,32 @@ def _cast_roster(spells: list[Spell]) -> list[dict[str, Any]]:
 
 def _render_spell_call(
   bro: 'BaseBro',
-  spell: Spell,
-  arguments: dict[str, Any],
+  call: SpellCall,
   *,
   harness: mcp.HarnessLike,
   hold: str,
 ) -> str:
-  body = bro.get_spell_body(spell.name, harness=harness, hold=hold)
-  return call_text(spell, body, arguments)
+  choices = {
+    parameter.name: call.arguments[parameter.name]
+    for parameter in call.spell.parameters
+    if parameter.choices
+  }
+  body = bro.get_spell_body(call.spell.name, harness=harness, hold=hold, choices=choices)
+  return call_text(call.spell, body, call.arguments, defaulted=call.defaulted)
 
 
-def call_text(spell: Spell, body: str, arguments: Mapping[str, Any]) -> str:
+def call_text(
+  spell: Spell,
+  body: str,
+  arguments: Mapping[str, Any],
+  *,
+  defaulted: frozenset[str] = frozenset(),
+) -> str:
   """the instructions a call of `spell` returns: its rendered `body`, then a
-  `# Arguments` section listing the values passed for its declared parameters."""
+  `# Arguments` section listing passed values and marked defaults."""
   passed = [
     f'{parameter.name}: {arguments[parameter.name]}'
+    + (' (default)' if parameter.name in defaulted else '')
     for parameter in spell.parameters
     if parameter.name in arguments
   ]
@@ -248,9 +320,35 @@ def call_text(spell: Spell, body: str, arguments: Mapping[str, Any]) -> str:
   return f'{body}\n\n# Arguments\n\n' + '\n'.join(passed)
 
 
-def _validated_call(
-  interpretation: _Interpretation, spells: list[Spell]
-) -> tuple[Spell, dict[str, str]]:
+def _bind_call(spell: Spell, arguments: Mapping[str, Any]) -> SpellCall:
+  unknown = set(arguments) - {parameter.name for parameter in spell.parameters}
+  if unknown:
+    raise ValueError(f'unknown arguments for spell {spell.name!r}: {sorted(unknown)}')
+  bound: dict[str, str] = {}
+  defaulted: set[str] = set()
+  for parameter in spell.parameters:
+    value = parameter.bind(arguments)
+    if value is not None:
+      bound[parameter.name] = value
+      if parameter.name not in arguments:
+        defaulted.add(parameter.name)
+  return SpellCall(spell, bound, frozenset(defaulted))
+
+
+def choice_variables(spell: Spell, choices: Mapping[str, str]) -> dict[str, StringVariable]:
+  parameters = {parameter.name: parameter for parameter in spell.parameters if parameter.choices}
+  unknown = set(choices) - parameters.keys()
+  if unknown:
+    raise ValueError(f'unknown choices for spell {spell.name!r}: {sorted(unknown)}')
+  variables: dict[str, StringVariable] = {}
+  for parameter in parameters.values():
+    value = parameter.bind(choices)
+    assert value is not None
+    variables[parameter.name] = StringVariable(value, domain=frozenset(parameter.choices))
+  return variables
+
+
+def _validated_call(interpretation: _Interpretation, spells: list[Spell]) -> SpellCall:
   assert interpretation.spell is not None
   assert interpretation.arguments is not None
   spells_by_name = {_canonical_name(spell): spell for spell in spells}
@@ -259,30 +357,16 @@ def _validated_call(
     raise ValueError(f'spell interpreter selected unknown spell {interpretation.spell!r}')
 
   arguments: dict[str, str] = {}
-  parameters_by_name = {parameter.name: parameter for parameter in spell.parameters}
   for pair in interpretation.arguments:
     if pair.name in arguments:
       raise ValueError(f'spell interpreter returned duplicate argument {pair.name!r}')
-    if pair.name not in parameters_by_name:
-      raise ValueError(
-        f'spell interpreter returned unknown argument {pair.name!r} for {interpretation.spell}'
-      )
     arguments[pair.name] = pair.value
-  missing = [
-    parameter.name
-    for parameter in spell.parameters
-    if parameter.required and parameter.name not in arguments
-  ]
-  if len(missing) > 0:
-    raise ValueError(
-      f'spell interpreter omitted required arguments for {interpretation.spell}: {missing}'
-    )
-  return spell, arguments
+  return _bind_call(spell, arguments)
 
 
-async def interpret(command: str, spells: list[Spell]) -> tuple[Spell, dict[str, str]] | str:
-  """the spell a free-form command resolves to among `spells` and the arguments
-  extracted for it, or the interpreter's reason it resolves to none."""
+async def interpret(command: str, spells: list[Spell]) -> SpellCall | str:
+  """the bound call a free-form command resolves to among `spells`, or the
+  interpreter's reason it resolves to none."""
   from bro.llm.mu import mu
   from bro.llm.wire import Text
   from bro.prompts import get_prompt
@@ -311,9 +395,8 @@ async def _interpret(
   resolved = await interpret(command, spells)
   if isinstance(resolved, str):
     return {'error': resolved}
-  spell, arguments = resolved
-  rendered = _render_spell_call(bro, spell, arguments, harness=harness, hold=hold)
-  return f'spell: {_canonical_name(spell)}\n\n{rendered}'
+  rendered = _render_spell_call(bro, resolved, harness=harness, hold=hold)
+  return f'spell: {_canonical_name(resolved.spell)}\n\n{rendered}'
 
 
 class SpellTool(llm_mcp.Tool):
@@ -330,8 +413,7 @@ class SpellTool(llm_mcp.Tool):
     self._harness: mcp.HarnessLike = harness
     self._hold = hold
     properties: dict[str, dict[str, Any]] = {
-      parameter.name: {'type': 'string', 'description': parameter.description}
-      for parameter in spell.parameters
+      parameter.name: parameter.schema() for parameter in spell.parameters
     }
     self._parameters = {
       'type': 'object',
@@ -353,23 +435,8 @@ class SpellTool(llm_mcp.Tool):
     return self._parameters
 
   async def call(self, arguments: dict[str, Any]) -> str:
-    parameter_names = {parameter.name for parameter in self._spell.parameters}
-    unknown = set(arguments) - parameter_names
-    if len(unknown) > 0:
-      raise ValueError(f'unknown arguments for spell {self.name!r}: {sorted(unknown)}')
-    missing = [
-      parameter.name
-      for parameter in self._spell.parameters
-      if parameter.required and parameter.name not in arguments
-    ]
-    if len(missing) > 0:
-      raise ValueError(f'missing required arguments for spell {self.name!r}: {missing}')
-    for parameter in self._spell.parameters:
-      if parameter.name in arguments and not isinstance(arguments[parameter.name], str):
-        raise ValueError(f'spell argument {parameter.name!r} must be a string')
-    return _render_spell_call(
-      self._bro, self._spell, arguments, harness=self._harness, hold=self._hold
-    )
+    call = _bind_call(self._spell, arguments)
+    return _render_spell_call(self._bro, call, harness=self._harness, hold=self._hold)
 
 
 class SkillTool(llm_mcp.Tool):

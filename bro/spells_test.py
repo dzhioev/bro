@@ -1,8 +1,9 @@
 import json
 import sys
 import types
+from itertools import product
 from pathlib import Path
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 import pytest
 
@@ -10,9 +11,10 @@ import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
 from bro import bro as bro_module, results, spells as spell_store
 from bro.base.condition import SetVariable, when
+from bro.base.template import TemplateError
 from bro.base.text_window import BYTE_LIMIT
 from bro.bro import BaseBro, feature
-from bro.harness import get_harness, installed_harness_names
+from bro.harness import Harness, get_harness, installed_harness_names
 from bro.llm.mcp import InProcessMCPServer, ToolRegistry
 from bro.mcp import MCPServerSpec, creds
 from bro.monitor import SESSION_DIR_ENV
@@ -25,7 +27,7 @@ from bro.spells_test_helper import SpellPackage, spell_package
 def _spell(
   description: str = 'run the procedure',
   body: str = 'procedure body',
-  parameters: Optional[dict[str, str]] = None,
+  parameters: Optional[dict[str, Any]] = None,
 ) -> str:
   lines = ['---', f'description: {description}']
   if parameters is not None:
@@ -267,6 +269,347 @@ class TestSpellValidation:
       ('task', True),
       ('notes', False),
     ]
+
+
+class TestChoiceParameters:
+  @pytest.mark.parametrize(
+    ('declaration', 'match'),
+    [
+      ({'description': 'mode', 'choices': []}, 'nonempty literals'),
+      ({'description': 'mode', 'choices': ['']}, 'nonempty literals'),
+      ({'description': 'mode', 'choices': ['one', 'one']}, 'repeated choice'),
+      *[
+        ({'description': 'mode', 'choices': [value]}, 'nonempty literals')
+        for value in ('two words', 'a/b', 'a:b', 'é', '#one')
+      ],
+      ({'description': 'mode', 'choices': [1]}, 'valid string'),
+      ({'description': 'mode', 'choices': 'one'}, 'valid list'),
+      ({'description': 'mode'}, 'Field required'),
+      ({'choices': ['one']}, 'Field required'),
+      ({'description': 1, 'choices': ['one']}, 'valid string'),
+      ({'description': 'mode', 'choices': ['one'], 'extra': True}, 'Extra inputs'),
+      ({'description': 'mode', 'choices': ['one'], 'default': 'one'}, 'must not have a default'),
+    ],
+  )
+  def test_invalid_choice_declarations_fail_at_load(self, fake_packages, declaration, match):
+    package = fake_packages('_choice_invalid', {'choose': _spell(parameters={'mode': declaration})})
+    with pytest.raises(ValueError, match=match):
+      package.bro_class()()
+
+  @pytest.mark.parametrize('default', ['missing', None, 1])
+  def test_optional_default_must_be_in_choices(self, fake_packages, default):
+    package = fake_packages(
+      '_choice_default_invalid',
+      {
+        'choose': _spell(
+          parameters={
+            'mode?': {'description': 'mode', 'choices': ['one'], 'default': default},
+          }
+        )
+      },
+    )
+    with pytest.raises(ValueError, match='outside its choices|valid string'):
+      package.bro_class()()
+
+  def test_optional_choice_requires_a_default(self, fake_packages):
+    package = fake_packages(
+      '_choice_default_missing',
+      {
+        'choose': _spell(
+          parameters={
+            'mode?': {'description': 'mode', 'choices': ['one']},
+          }
+        )
+      },
+    )
+    with pytest.raises(ValueError, match='requires a default'):
+      package.bro_class()()
+
+  @pytest.mark.parametrize(
+    'name',
+    [
+      'harness',
+      'creds',
+      'may_summon',
+      'talk',
+      'hold',
+      'features',
+      'true',
+      'false',
+    ],
+  )
+  def test_choice_cannot_shadow_a_rendering_fact(self, fake_packages, name):
+    package = fake_packages(
+      '_choice_reserved',
+      {
+        'choose': _spell(
+          parameters={
+            name: {'description': 'mode', 'choices': ['one']},
+          }
+        )
+      },
+    )
+    with pytest.raises(ValueError, match='conflicts with a rendering fact'):
+      package.bro_class()()
+
+  def test_harness_fact_collision_fails_at_render_not_construction(self, fake_packages):
+    class ModeHarness(Harness):
+      def facts(self):
+        return {'mode': True}
+
+    package = fake_packages(
+      '_choice_harness_collision',
+      {
+        'choose': _spell(
+          parameters={
+            'mode?': {'description': 'mode', 'choices': ['one'], 'default': 'one'},
+          }
+        )
+      },
+    )
+    bro = package.bro_class()()
+    with pytest.raises(ValueError, match='conflict with harness facts: mode'):
+      bro.get_spell_body('choose', harness=ModeHarness('test'), hold='unattended')
+
+  def test_template_literal_punctuation_is_a_valid_choice(self, fake_packages):
+    package = fake_packages(
+      '_choice_literal',
+      {
+        'choose': _spell(
+          parameters={'mode': {'description': 'mode', 'choices': ['A.z_9-']}},
+          body='{{iff #mode = A.z_9-}}matched{{end}}',
+        )
+      },
+    )
+    assert (
+      package.bro_class()().get_spell_body(
+        'choose',
+        harness='bro',
+        hold='unattended',
+        choices={'mode': 'A.z_9-'},
+      )
+      == 'matched'
+    )
+
+  @pytest.mark.parametrize(
+    ('choices', 'match'),
+    [
+      ({}, 'missing required'),
+      ({'format': 'xml'}, 'outside choices'),
+      ({'format': 'text', 'notes': 'context'}, 'unknown choices'),
+    ],
+  )
+  def test_direct_body_render_validates_choice_values(self, choice_package, choices, match):
+    with pytest.raises(ValueError, match=match):
+      choice_package.bro_class()().get_spell_body(
+        'choose',
+        harness='bro',
+        hold='unattended',
+        choices=choices,
+      )
+
+  @pytest.fixture
+  def choice_package(self, fake_packages):
+    return fake_packages(
+      '_choice_calls',
+      {
+        'choose': _spell(
+          parameters={
+            'mode?': {
+              'description': 'output mode',
+              'choices': ['short', 'full'],
+              'default': 'short',
+            },
+            'format': {'description': 'output format', 'choices': ['text', 'json']},
+            'notes?': 'context',
+          },
+          body='{{iff #mode = short}}BRIEF{{eliff #mode = full}}COMPLETE{{end}} '
+          '{{iff #format = text}}TEXT{{eliff #format = json}}JSON{{end}}',
+        )
+      },
+    )
+
+  @pytest.mark.asyncio
+  async def test_both_schemas_expose_choices_and_default(self, choice_package):
+    bro = choice_package.bro_class()()
+    tool = (await _spell_server(bro).list_tools())[0]
+    spell = load_spell('choose', choice_package.files['choose'].path)
+    roster_schema = spell_store._cast_roster([spell])[0]['parameters']
+    for schema in (tool.parameters, roster_schema):
+      assert schema['required'] == ['format']
+      for parameter in spell.parameters:
+        exposed = schema['properties'][parameter.name]
+        assert exposed['description'] == parameter.description
+        if parameter.choices:
+          assert exposed['enum'] == list(parameter.choices)
+        else:
+          assert 'enum' not in exposed
+        if parameter.default is not None:
+          assert exposed['default'] == parameter.default
+        else:
+          assert 'default' not in exposed
+
+  @pytest.mark.asyncio
+  @pytest.mark.parametrize('route', ['tool', 'cast'])
+  @pytest.mark.parametrize('harness', ['bro', 'claude'])
+  @pytest.mark.parametrize(
+    ('arguments', 'expected'),
+    [
+      ({'format': 'text'}, 'BRIEF TEXT\n\n# Arguments\n\nmode: short (default)\nformat: text'),
+      (
+        {'mode': 'short', 'format': 'json'},
+        'BRIEF JSON\n\n# Arguments\n\nmode: short\nformat: json',
+      ),
+      (
+        {'mode': 'full', 'format': 'text', 'notes': 'detail'},
+        'COMPLETE TEXT\n\n# Arguments\n\nmode: full\nformat: text\nnotes: detail',
+      ),
+    ],
+  )
+  async def test_binding_and_rendering_on_every_route(
+    self,
+    choice_package,
+    monkeypatch,
+    route,
+    harness,
+    arguments,
+    expected,
+  ):
+    bro = choice_package.bro_class()()
+    if route == 'tool':
+      server = spell_store.build_spell_server(bro, harness=harness, hold='unattended')
+      tool = (await server.list_tools())[0]
+      assert await tool.call(arguments) == expected
+    else:
+      import bro.llm.mu as mu_module
+
+      async def fake_mu(prompt, result_class, *contents, role=None):
+        return result_class.model_validate(
+          {
+            'spell': 'spell::choose',
+            'arguments': [{'name': name, 'value': value} for name, value in arguments.items()],
+            'error': None,
+          }
+        )
+
+      monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
+      tool = spell_store.build_cast_tool(bro, harness=harness, hold='unattended')
+      assert await tool.call({'command': 'choose'}) == f'spell: spell::choose\n\n{expected}'
+
+  @pytest.mark.asyncio
+  async def test_native_registry_refuses_invalid_choice_before_rendering(
+    self, choice_package, monkeypatch
+  ):
+    bro = choice_package.bro_class()()
+
+    def fail_render(*args, **kwargs):
+      pytest.fail('invalid call reached rendering')
+
+    monkeypatch.setattr(bro, 'get_spell_body', fail_render)
+    tool = (await ToolRegistry([_spell_server(bro)]).resolve())[0]
+    for arguments in ({'format': 'xml'}, {'format': 'text', 'mode': 'other'}):
+      with pytest.raises(ValueError, match='outside choices'):
+        await tool.call(arguments)
+
+  @pytest.mark.asyncio
+  async def test_cast_refuses_invalid_choice_before_rendering(self, choice_package, monkeypatch):
+    import bro.llm.mu as mu_module
+
+    bro = choice_package.bro_class()()
+
+    def fail_render(*args, **kwargs):
+      pytest.fail('invalid call reached rendering')
+
+    async def fake_mu(prompt, result_class, *contents, role=None):
+      return result_class.model_validate(
+        {
+          'spell': 'spell::choose',
+          'arguments': [{'name': 'format', 'value': 'xml'}],
+          'error': None,
+        }
+      )
+
+    monkeypatch.setattr(bro, 'get_spell_body', fail_render)
+    monkeypatch.setattr(mu_module, 'mu', types.SimpleNamespace(aio=fake_mu))
+    tool = spell_store.build_cast_tool(bro, harness='bro', hold='unattended')
+    with pytest.raises(ValueError, match='outside choices'):
+      await tool.call({'command': 'choose xml'})
+
+  def test_claude_server_validates_enum_before_calling_tool(self, choice_package, monkeypatch):
+    from starlette.testclient import TestClient
+
+    from bro.runtime.mcp_server import create_http_app
+
+    bro = choice_package.bro_class()()
+
+    def fail_call(*args, **kwargs):
+      pytest.fail('invalid call reached spell tool')
+
+    monkeypatch.setattr(spell_store.SpellTool, 'call', fail_call)
+    server = spell_store.build_spell_server(bro, harness='claude', hold='unattended')
+    with TestClient(create_http_app([server], 'test-token')) as client:
+      response = client.post(
+        '/spell',
+        headers={
+          'Authorization': 'Bearer test-token',
+          'Accept': 'application/json, text/event-stream',
+        },
+        json={
+          'jsonrpc': '2.0',
+          'id': 1,
+          'method': 'tools/call',
+          'params': {'name': 'choose', 'arguments': {'format': 'xml'}},
+        },
+      )
+    result = response.json()['result']
+    assert result['isError'] is True
+    assert result['content'][0]['text'].startswith('Input validation error:')
+    assert 'xml' in result['content'][0]['text']
+
+  @pytest.mark.parametrize(
+    ('body', 'choices', 'match'),
+    [
+      ('{{iff #mode = shrot}}typo{{else}}other{{end}}', {}, 'shrot'),
+      ('{{iff #mode = short}}brief{{end}}', {'mode': 'full'}, 'no branch'),
+    ],
+  )
+  def test_choice_conditions_are_domain_checked_and_exhaustive(
+    self, fake_packages, body, choices, match
+  ):
+    package = fake_packages(
+      '_choice_condition',
+      {
+        'choose': _spell(
+          parameters={
+            'mode?': {'description': 'mode', 'choices': ['short', 'full'], 'default': 'short'},
+          },
+          body=body,
+        )
+      },
+    )
+    with pytest.raises(TemplateError, match=match):
+      package.bro_class()().get_spell_body(
+        'choose', harness='bro', hold='unattended', choices=choices
+      )
+
+  def test_included_fragment_receives_choice_variables(self, fake_packages, monkeypatch):
+    import bro.prompts
+
+    package = fake_packages(
+      '_choice_include',
+      {
+        'choose': _spell(
+          parameters={
+            'mode?': {'description': 'mode', 'choices': ['short', 'full'], 'default': 'short'},
+          },
+          body='{{include fragment.md}}',
+        )
+      },
+    )
+    monkeypatch.setattr(bro.prompts, 'get_prompt', lambda name: '{{insert #mode}}')
+    assert (
+      package.bro_class()().get_spell_body('choose', harness='bro', hold='unattended') == 'short'
+    )
 
 
 class TestSpellServer:
@@ -568,10 +911,10 @@ class TestCast:
             {'name': 'extra', 'value': 'no'},
           ],
         },
-        'unknown argument',
+        'unknown arguments',
       ),
-      ({'spell': 'spell::do-work', 'arguments': []}, 'omitted required'),
-      ({'spell': 'spell::do-work', 'arguments': None}, 'omitted required'),
+      ({'spell': 'spell::do-work', 'arguments': []}, 'missing required'),
+      ({'spell': 'spell::do-work', 'arguments': None}, 'missing required'),
     ],
   )
   async def test_invalid_model_selection_fails_validation(
@@ -676,21 +1019,91 @@ def test_every_spell_call_fits_one_window(name, monkeypatch):
   every_persona = tuple(declared_specs())
   for spell_name, path in bro.spell_paths.items():
     spell = load_spell(spell_name, path)
-    arguments = {parameter.name: 'x' * _ARGUMENT_ROOM for parameter in spell.parameters}
-    for harness_name in installed_harness_names():
-      for hold in mcp.HOLDS:
-        for granted in (every_persona, ()):
-          for enabled in (features.universe, frozenset()):
-            body = mcp.render_text(
-              spell.body,
-              harness=get_harness(harness_name),
-              creds=spell_store.credentials.known_names(),
-              may_summon=granted,
-              hold=hold,
-              extra={'features': SetVariable(enabled, universe=features.universe)},
-            ).strip()
-            text = spell_store.call_text(spell, body, arguments)
-            assert len(text) <= BYTE_LIMIT, (
-              f'spell::{spell_name} of {name} overflows one window on {harness_name} '
-              f'at {hold} ({len(text):,} characters)'
-            )
+    for choices in _choice_combinations(spell):
+      arguments = {
+        parameter.name: choices.get(parameter.name, 'x' * _ARGUMENT_ROOM)
+        for parameter in spell.parameters
+      }
+      defaulted = frozenset(
+        parameter.name
+        for parameter in spell.parameters
+        if parameter.default is not None and choices[parameter.name] == parameter.default
+      )
+      for harness_name in installed_harness_names():
+        for hold in mcp.HOLDS:
+          for granted in (every_persona, ()):
+            for enabled in (features.universe, frozenset()):
+              body = mcp.render_text(
+                spell.body,
+                harness=get_harness(harness_name),
+                creds=spell_store.credentials.known_names(),
+                may_summon=granted,
+                hold=hold,
+                extra={
+                  'features': SetVariable(enabled, universe=features.universe),
+                  **spell_store.choice_variables(spell, choices),
+                },
+              ).strip()
+              text = f'spell: spell::{spell_name}\n\n' + spell_store.call_text(
+                spell, body, arguments, defaulted=defaulted
+              )
+              assert len(text) <= BYTE_LIMIT, (
+                f'spell::{spell_name} of {name} overflows one window on {harness_name} '
+                f'at {hold} with {choices} ({len(text):,} characters)'
+              )
+
+
+def _choice_combinations(spell):
+  parameters = [parameter for parameter in spell.parameters if parameter.choices]
+  for values in product(*(parameter.choices for parameter in parameters)):
+    yield dict(zip((parameter.name for parameter in parameters), values, strict=True))
+
+
+def test_size_probe_visits_every_choice_combination(tmp_path):
+  path = tmp_path / 'choose.md'
+  path.write_text(
+    _spell(
+      parameters={
+        'mode?': {'description': 'mode', 'choices': ['short', 'full'], 'default': 'short'},
+        'format': {'description': 'format', 'choices': ['text', 'json']},
+        'notes?': 'context',
+      }
+    )
+  )
+  spell = load_spell('choose', path)
+  assert list(_choice_combinations(spell)) == [
+    {'mode': 'short', 'format': 'text'},
+    {'mode': 'short', 'format': 'json'},
+    {'mode': 'full', 'format': 'text'},
+    {'mode': 'full', 'format': 'json'},
+  ]
+
+
+@pytest.mark.parametrize('optional_choices', [1, 2])
+def test_window_probe_rejects_a_defaulted_call_that_would_page(
+  fake_packages,
+  monkeypatch,
+  optional_choices,
+):
+  parameters = {
+    f'mode{index}?': {
+      'description': 'mode',
+      'choices': ['short', 'full'],
+      'default': 'short',
+    }
+    for index in range(optional_choices)
+  }
+  package = fake_packages('_choice_window_boundary', {'choose': _spell(parameters=parameters)})
+  path = package.files['choose'].path
+  spell = load_spell('choose', path)
+  arguments = {parameter.name: parameter.default for parameter in spell.parameters}
+  prefix = 'spell: spell::choose\n\n'
+  argument_listing = spell_store.call_text(spell, '', arguments)
+  body = 'x' * (BYTE_LIMIT - len(prefix) - len(argument_listing))
+  path.write_text(_spell(parameters=parameters, body=body))
+  assert len(prefix + spell_store.call_text(spell, body, arguments)) == BYTE_LIMIT
+
+  bro = package.bro_class()()
+  monkeypatch.setattr(sys.modules[__name__], 'create_bro', lambda name: bro)
+  with pytest.raises(AssertionError, match='overflows one window'):
+    test_every_spell_call_fits_one_window('boundary', monkeypatch)
