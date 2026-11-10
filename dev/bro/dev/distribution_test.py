@@ -68,6 +68,11 @@ def test_development_personas_are_declared_by_bro_dev(entry_points):
 
 
 def test_development_scripts_are_declared_by_bro_dev(entry_points):
-  assert {'commit-footer', 'fold-branch', 'land-pr', 'poll-pr'} <= set(
+  assert {'commit-footer', 'fold-branch', 'land-pr', 'poll-pr', 'check-head', 'land-push'} <= set(
     entry_points['console_scripts']
   )
+
+
+def test_landing_commands_are_exposed_to_managed_sessions(entry_points):
+  for name in ('check-head', 'land-push'):
+    assert entry_points['bro.session_commands'][name] == entry_points['console_scripts'][name]
