@@ -147,7 +147,7 @@ this spell only says how a phase differs from a one-shot ask.
   do not broaden every run of that bro when an authorized per-phase pass is available.{{when #may_summon contains eyebro}}
 - **The eyebro.** Every phase that opens or lands a pull request gets it granted,
   under the name your banner's `may_summon` gives rather than `eyebro` itself:
-  a child renders [[run pr]]'s and [[land]]'s reviewer steps only where its initial usable bro targets include one.{{end}}
+  a child renders [[run pr]]'s reviewer handoff only where its initial usable bro targets include one.{{end}}
 - **Self-contained prompts.** A bro shares no context with you:
   spell out the root task URL,
   what to produce,
