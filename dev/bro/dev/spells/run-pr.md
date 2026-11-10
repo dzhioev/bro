@@ -2,592 +2,463 @@
 name: run-pr
 description:
 
-This spell should be used when the user signals that the worktree's changes are ready for review and a PR should be opened
-— "open a PR", "[[run pr]]", "send for review", "PR it", "ship it", "ready for review", "finalize".
-Covers commit hygiene (docs sync, policy audit, commit splitting),
-the repo's commit-message conventions,
-rebases onto the base branch (the repository's default branch unless told otherwise),
-folds the branch into the commits the base will carry so what is reviewed is what lands,
-opens the PR via `gh pr create`,
-then launches the `poll-pr` review watcher to handle review comments, failing CI checks, merge conflicts, and APPROVED events.
-On approval, chains into [[land]] for the merge step.
-A PR that is already open with nothing watching it is [[resume pr]]'s.
+Deliver a finished change through an explicit review channel, roles, gates and landing method
+— "open a PR", "[[run pr]]", "send for review", "ship it", or "resume PR <url-or-number>".
+Resolves and checks the delivery plan before preparing, folds the branch into landing shape, publishes only what the plan needs, and drives review rounds and the landing fold to a head-bound verdict.
+Channels are github, talk and local; landing is a GitHub rebase merge or a fast-forward push onto a remote or local base ref.
+Human approval is required by default; omitting it requires an explicit plan.
+With pr, recovers the task and recorded plan and resumes at review through [[follow pr]]'s replay-safe watch.
+Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
-parameters: {"base?": "base branch for the pull request instead of the repository's default branch"}
-version: 8.1.0
+parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "pr?": "pull request URL or number to resume at review", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
+version: 9.0.0
 ---
 
 # run-pr
 
-Take worktree changes from "work is finished" to "PR open and through review".
-Stops at APPROVED — [[land]] does the merge.
+Deliver the finished change under the resolved plan, not a substitute that happens to be available.
+With `pr`, resume at review; otherwise prepare the branch.
+Batch independent reads and bookkeeping.
 
-## Arguments
+## Delivery plan
 
-Passed values appear in the `# Arguments` section appended by the spell tool:
+Read the appended `# Arguments`; resolve choices before preparing or publishing and refuse unknown role, placement or gate values.
 
-- `base` — base the PR on this branch instead of the repository's default branch:
-  rebase onto it (step 7), fold against it (step 8), scope the commit list against it (steps 4, 10), and pass `--base <branch>` to `gh pr create` (step 12).
-  Default: the branch `default-branch` prints.
-  A coordinator driving multi-stage work passes its integration branch here so each stage opens its PR into that branch rather than the default branch.
-  Below, `<base>` means this value.
+| parameter | meaning and default |
+|---|---|
+| `base` | the ref to land on; default `origin/<the branch default-branch prints>` only where origin exists |
+| `pr` | an existing PR to resume, otherwise none |
+| `channel` | {{insert #channel}} in this rendering |
+| `reviewer` | {{iff #may_summon contains eyebro}}`summon` by default: an eyebro target is granted{{else}}`others` by default: no eyebro target is granted{{end}}; also `coordinator` |
+| `approver` | `human` by default, or `summoner` |
+| `lander` | `self` by default, or `summon`, `coordinator`, `others` |
+| `landing` | {{insert #landing}} in this rendering |
+| `gates` | replaces the default whole, including an explicitly empty subset |
+| `placement` | `boxed` by default, or `unboxed`, `join`; applies to bros you summon |
+| `trust` | explicitly trusted GitHub logins, otherwise none |
 
-## Preconditions
+`<base>` below is **the ref as given**, never a branch with an implied origin prefix.
+A remote base travels with that remote's URL; in another checkout map the URL to its own remote, adding one under an unused name if necessary.
+Joined sessions share the checkout and add nothing.
 
-- You are in a managed workspace (under the runtime state root's `workspaces/` or otherwise on a branch other than `<base>`).
-  Do NOT run this against the main checkout's working copy.
-- The work looks finished.
-  If edits look WIP, a refactor is half-done, or the suite is known-red, confirm with the user before proceeding.
+### Resolve the base and gates
 
-## Workflow
+Read `AGENTS.md` and relevant subsystem guides, including the gate, CI workflow and deploy rules.
+Resolve `<base>` with the same rules as `fold-branch`, `check-head` and `land-push`:
 
-### 1. Survey the change
+- `<remote>/<branch>` means that remote's branch where its first component names a configured remote.
+  Fetch that remote before reading the base tip or rebasing; never assume origin.
+- `refs/heads/<branch>` means this checkout's local branch; fetch nothing.
+- A bare branch is accepted only in a repository without remotes.
+  With remotes, refuse it, naming `refs/heads/<branch>` and each `<remote>/<branch>` that exists.
+- Refuse an omitted base without origin, naming `base=refs/heads/<branch>` or `base=<remote>/<branch>`; refuse a ref that does not exist, naming existing explicit alternatives, not creating a base.
+  For example, an absent `integration/x` names `origin/integration/x` where that exists.
 
-Run in parallel:
-- `git status` — no `-uall` flag (memory issue on large repos).
-- `git diff` — staged and unstaged together.
-- `git log origin/<base>..HEAD --oneline` — what the branch already carries.
+Retain the base ref, full base commit and, for a remote, its URL.
+For a GitHub remote resolve its `<owner>/<repo>` and base branch; bind **every** `gh` call to that repository, never the repository gh happens to pick for this checkout.
+Use `gh`, never `curl` against `api.github.com`.
 
-Stop only when all three are empty
-— a clean worktree, nothing untracked to add, and no commit ahead of `<base>`:
-nothing to land.
-A clean worktree over unlanded commits is the ordinary shape of a hand-off from a flow that committed as it went ([[fix]]'s checkpoints, [[bump bro]]'s commits) and continues at step 4.
+The gates are independent of the method:
 
-### 2. Pre-commit gates
+- `verdict`: the engaged reviewer approved the landing fold's head.
+- `checks`: CI concluded green on this exact head.
+  CI covers a merge where `gh api 'repos/<owner>/<repo>/actions/runs?event=pull_request&per_page=1' --jq .total_count` is above zero.
+  It covers a push only to a GitHub remote whose documented CI workflow accepts `workflow_dispatch`.
+- `tests`: the whole local gate passed on this exact head in the landing session's workspace, reporting unavailable stages skipped.
+  Your own run is the reviewer's evidence before a handover; another lander must run it again itself.
+- `approval`: the chosen approver's go-ahead for this head.
 
-Run before committing:
-- The repo's formatter (its own docs name the command).
-  Stage any formatter-induced changes alongside your own.
+Absent `gates`, select `verdict`, `approval`, and `checks` where CI covers the method, otherwise `tests`.
+Omitting approval must be explicit, never inferred from an unattended hold.
+Without `verdict`, engage **no reviewer**, record `reviewer none`, skip review handoff and rounds, and make one landing fold.
+Its channel, reviewer selection and reviewer placement are moot.
+The plan opens a PR only for `landing=merge` or an engaged `github` reviewer.
 
-No test run here:
-the gate is step 9, paid once on the tree that ships
-— a pass before the rebase is evidence the rebase discards.
+### Check the plan
 
-**Policy audit**:
-before each commit, call `dev-style-source::read` and the `man-source::read` guide of every area the commit reaches, and audit that commit's `git diff` against the returned policy text.
-The tool read is part of the gate
-— it puts the policy fresh in context instead of relying on recall of a read far behind.
-The policies carry their own specifics, so this gate just re-applies all of them.
+Refuse before preparing anything, naming the explicit choice that would work:
 
-Treat it as a precondition of the `git commit`, run at the moment of committing
-— not an intention you form earlier and carry across other steps.
-**State the verdict as visible output before the commit**:
-a one-line `clean`, or the violation(s) you found and how you fixed them.
-An audit done only in your head is indistinguishable from one skipped, so an interruption (a `[Request interrupted]`, a "continue") can silently drop it;
-a written verdict can't be dropped unnoticed.
-It's the cheapest place to catch a violation
-— the alternative is a review round-trip.
+- An engaged reviewer on `talk` or `local` must be `summon`; name `reviewer=summon` or `channel=github`.
+- A `summon` role needs a granted target answering to `eyebro` for review, or to `dev` with [[land]] for landing.
+  Use the banner's granted target name, not an ungranted ancestor it answers to.
+  Without it, name the needed grant or an explicit `reviewer=others` on github / `lander=self`; never silently switch.
+- An engaged reviewer or lander `coordinator`, or approver `summoner` with approval selected, needs a summoned session and `worker.question` on its quest.
+  Name the missing talk right or `reviewer=others`, `lander=self`, `approver=human` as appropriate.
+- `placement=join` for an engaged reviewer requires `channel=local`, and any selected join needs `bro.placement=join` authority.
+  Name `channel=local`, `placement=boxed`, or the needed launch grant.
+- Lander `others` requires `landing=merge`; name `landing=merge` or `lander=self`.
+- A local base cannot be carried to a different checkout's lander: `lander=summon` needs `placement=join`; `lander=coordinator` needs the author already joined to its coordinator's party.
+  Name a joined lander, `lander=self`, or an explicit remote base.
+- An engaged `talk` reviewer needs a remote base; name a remote base or `channel=local`.
+- A merge needs a GitHub remote base; name one or `landing=push`.
+- Where approval is selected, `approver=human` needs questions that reach the user or a plan that opens a PR.
+  Without either, name `approver=summoner` with a speaking summoner, or an explicit `gates` list without approval.
+- `checks` needs CI covering this method as defined above; name a dispatch-enabled documented workflow where applicable, or an explicit gates list using `tests` instead.
+- For a push onto GitHub, read `gh api repos/<owner>/<repo>/rules/branches/<base branch>`.
+  A rule requiring a PR refuses push, naming `landing=merge`.
+  That endpoint omits classic branch protection; the remote enforces it at the push.
 
-### 3. Sync the repo docs
+Channel/reviewer checks apply **only with `verdict`**, not to moot reviewer choices.
+Platform rules always bind, independent of gates.
+Report a refusal and stop where questions reach the user; unattended, rescue unpushed work as below and `raise` with it.
+A plan changed by the user or coordinator is checked and recorded again, never silently substituted.
 
-If the repo documents itself (`AGENTS.md` files or an equivalent) and the change affects architecture, modules, commands, spells, code style, or any documented section, update the docs.
-Bundle the update into the relevant commit, or make it its own commit if the docs change stands alone.
+### State and record the plan
 
-### 4. Decide commit splits
+State the plan in one line; record it in the PR body, lander prompt and coordinator ready answer:
 
-If [[fix]] already checkpointed completed units as it implemented, those commits are your splits
-— review them with `git log origin/<base>..HEAD`, commit any remaining uncommitted work the same way, and don't reorganize what's already on the branch.
-Otherwise, split the uncommitted work:
+```text
+Delivery: base <base> (<remote URL, omitted for a local base>) · channel <channel> · reviewer <role or none> · approver <role> · lander <role> · landing <method> · gates <selected gates>
+```
 
-Split commits logically by feature/concern.
-Group by concern, not by file:
-- Two unrelated fixes → two commits.
-- A feature plus the docs for that feature → one commit.
-- A rename plus its call-site updates → one commit.
-- A docs overhaul that documents pre-existing state → its own commit.
+Also retain explicit placement and trust choices with the delivery context; include them on the line when non-default so a resume recovers them.
 
-Don't fragment trivially (every hunk as its own commit) and don't bundle unrelated work.
-If the split isn't obvious, ask the user.
+## Resume with `pr`
 
-### 5. Draft each commit message
+Resolve the PR repository from its URL or, for a number, the checkout; read metadata:
 
-Follow the commit conventions the repo's docs state;
-only where they state none, survey `git log --oneline -10` and match the recent history.
-Then:
+```bash
+gh pr view <pr> --repo <owner>/<repo> --json number,url,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,title,body
+gh api repos/<owner>/<repo>/pulls/<n> --jq .base.repo.clone_url
+```
 
-- **Task metadata**:
-  add the task link the repo requires (resolve it via `brog::get_task(task_id).url`; the task is the one this session works on — the one [[fix]] ran against, or one created earlier in the session).
-  Omit task metadata when no task id is available.
-- **Never** hand-write `Co-Authored-By:` lines or generated-by boilerplate.
-  An interactive session's commit hook adds the co-author trailer itself (`bro.workflow.co_author`);
-  a repo whose policy wants more says so.
+Read feedback only through trusted `pr-state` or [[follow pr]].
 
-### 6. Commit
+1. Recover the task from the body's `Task:` line and the plan from its `Delivery:` line.
+   Without a Delivery line use the defaults above.
+   **The base comes from the PR itself**, its base branch on a remote at its base repository's URL, whatever the Delivery line records.
+2. If the recorded `channel` or `landing` differs from this rendering, cast [[run pr]] again with `pr` and those recorded choices before continuing.
+   Recover other roles, gates, placement and trust; recorded `reviewer none` denotes no verdict gate, not an invocation role.
+   Apply an explicit plan change through the plan check and update the line.
+3. A merged PR gets [[land]]'s "Bookkeeping and report" only, then stops; a closed PR gets a report and stops.
+   Do not attempt a second landing or checkout for a terminal PR.
+4. Otherwise check out the PR's head branch unless already on it, with `gh pr checkout <pr> --repo <owner>/<repo>`.
+   Do not discard uncommitted work.
+   Confirm its SHA matches the PR and recover its push destination, including a fork's head repository.
+5. Check the resolved plan, state and record it, then enter at "Review handoff", not branch preparation.
+   [[Follow pr]] reconciles the whole replay before any round or gate is acted on.
 
-Use a HEREDOC to preserve formatting.
-Stage specific files — never `git add -A` or `git add .` (risks committing credential stores or other untracked secrets).
-Never `git add -N` (intent-to-add)
-— it breaks `git stash create`, which stash-based review tooling and some hooks rely on.
+A reviewer's verdict does not survive the session that owned it.
+Start the reviewer again: on github it reconstructs earlier rounds from trusted PR history; talk/local starts afresh on the current head unless this live session retains a predecessor verdict commissioning delta review.
+A lost watch resumes here too; silence clears no gate.
+
+## Prepare the branch
+
+Work in the managed workspace or a branch other than the base, never the main checkout's working copy.
+Surface unfinished or red work instead of publishing it.
+
+### Survey and format
+
+Read `git status` (no `-uall`), staged and unstaged diffs, and `git log <base>..HEAD --oneline` in parallel.
+Stop only if the worktree is clean, nothing untracked needs adding, and no commits are ahead of the base.
+A clean branch with unlanded checkpoints continues normally.
+Run the repository's formatter and include its changes with their logical units.
+Do not pay the gate before rebasing: "Pre-push gate" verifies the tree that ships.
+
+### Policy audit
+
+Immediately before **each commit**, call `dev-style-source::read` and the `man-source::read` guides for every area it reaches, then audit that commit's diff against the returned policy text.
+State a visible one-line `clean` verdict, or the violations found and fixed, before committing.
+Repeat for each commit.
+
+### Docs, splits and commit messages
+
+Sync the repository's docs wherever architecture, modules, commands, spells or behavior changed; bundle them with the relevant concern.
+Keep completed checkpoint units until the fold.
+Group uncommitted work by concern, not file: feature with docs, rename with consumers, unrelated fixes apart.
+
+Follow repo commit conventions, or `git log --oneline -10` where none exist.
+Resolve the task's URL through `brog::get_task` where a task exists, and add the repo's required task metadata.
+Do not invent task metadata without a task.
+Never hand-write, edit or strip generated trailers, co-author lines or token footers; the hooks own them.
+
+### Commit
+
+Stage **specific paths**, never `git add -A`, `git add .` or `git add -N` (intent-to-add breaks stash-based tooling).
+Never stage credentials, key files or minting configs; surface suspected secrets first.
+Use a quoted HEREDOC to preserve the message:
 
 ```bash
 git add path/to/file1 path/to/file2
 git commit -m "$(cat <<'EOF'
-<short imperative summary in the repo's style>
+<imperative subject in the repo's style>
 
-<optional terse body>
+<why and shape where needed>
 
-<task metadata required by the repo's policy>
+<task metadata required by the repo>
 EOF
 )"
 ```
 
-If a pre-commit hook fails:
-fix the issue, re-stage, and create a **new** commit.
-Never `--amend` (the original commit didn't happen — amend would modify the previous one and destroy work).
-Never `--no-verify`.
+If a hook fails, fix, re-stage and create a new commit, never `--amend` (that failed commit did not happen) or `--no-verify`.
+To verify a test catches a bug by reverting the fix, use `git stash push <fix-file>`, never bare stash which also hides the test.
 
-Repo hooks may append trailers to the committed message (e.g. a token-accounting footer);
-never hand-write, edit, or strip them.
+### Rebase onto `<base>`
 
-Repeat steps 5–6 for each logical commit.
+Fetch the base's remote if it has one, then `git rebase <base>`; a local base needs no fetch.
+When it conflicts, call `rebase-conflicts-source::read` and follow its in-band resolution, escalation and task-comment rules.
+Never prepend origin to the given ref.
 
-To verify a new test catches a bug (revert-and-rerun), use `git stash push <path-to-fix-file>`
-— bare `git stash` would also hide the new test, masking the verification.
+### Fold the branch
 
-### 7. Rebase onto the base branch
+Fold before first review, and once more for landing when nothing is open; **not after every fix**.
+Without verdict this one preparation fold is the landing fold.
 
-```bash
-git fetch origin <base> && git rebase origin/<base>
-```
+Read `git log <base>..HEAD --oneline` and decide the landing shape.
+One commit is the default for one task; checkpoints are not independent changes.
+Keep multiple commits for independent changes, a split already settled by the user or the handing-off workflow (such as a framework bump and its adoptions).
 
-When it stops on a conflict, call `rebase-conflicts-source::read` and follow it:
-resolving in-band, the escalation bar, and the task comment.
+Write an untracked scratch plan, never staged, with one `fold` line per landing commit, oldest first:
 
-### 8. Fold the branch into what `<base>` will carry
-
-`<base>` carries one commit per logical change, and the branch is rarely shaped that way already:
-[[fix]]'s checkpoints are commits about *making* the change, not changes of their own.
-The reviewer approves commits, not a diff
-— so the branch is folded into the ones that will land before anyone looks at it, and the merge rewrites nothing afterwards.
-
-Read what the branch became and decide what it should land as:
-
-```bash
-git log origin/<base>..HEAD --oneline
-```
-
-One commit is the default:
-a branch that does one thing lands as one commit, checkpoint noise folded away.
-Land several when the branch carries a change that stands on its own beside the task
-— the unrelated bug fixed along the way, a drive-by cleanup worth its own line in the history
-— or when the flow that handed off here decided the split already:
-[[bump bro]] lands the bump and each adoption apart, and that decision holds like the user's words do.
-The user's own words settle it either way ("land these as two commits", "one commit please").
-
-Write the plan as a scratch file (untracked — never stage it), one `fold` line per landed commit, oldest first, with that commit's message in the lines under it:
-
-```
+```text
 fold
-<the subject the branch lands under>
+<landing subject>
 
-<body, written exactly as a commit message>
-
-<task metadata required by the repo's policy>
+<body and task metadata, exactly as the base will carry them>
 
 fold <sha>
 ```
 
-A `fold` line naming no commits takes every commit the others leave
-— the whole branch when it is the only line
-— so the one-commit plan names no shas at all.
-A `fold` line with nothing written under it keeps the message of the first commit it folds, which is what a commit that already names its unit wants.
-The messages here are what `<base>` carries:
-nothing downstream composes one, so they follow the repo's commit conventions and carry the task metadata (step 5).
+A `fold` naming no commits takes everything the other lines leave; alone it folds the whole branch.
+A line without a message keeps the first folded commit's message.
+Messages follow "Docs, splits and commit messages".
 
 ```bash
-fold-branch --plan plan.txt --base origin/<base>
+fold-branch --plan <scratch plan> --base <base>
 ```
 
-It refuses a dirty worktree, refuses a plan that does not partition the branch, and proves the fold moved only commit boundaries before it writes anything.
-Conflicts are the fold's own failure mode
-— grouping reorders the branch, and hoisting one fold above another can collide;
-it aborts, leaves the branch untouched, and names what collided.
-Regroup so the colliding commits keep their relative order, or land them as one commit.
-When a single commit straddles two landing commits
-— it changed the feature and the unrelated thing together
-— no grouping of whole commits is clean:
-split it first (`git rebase -i`, `edit` on that commit), then plan over the commits you now have.
+It requires a clean tree and a partition of the commits, and proves the tree unchanged.
+A grouping conflict leaves the branch untouched; preserve relative order or group together.
+A commit straddling two landing units must first be split with interactive rebase, then grouped.
+The fold aggregates the existing accounting footers; spend after the landing fold is not counted.
 
-The fold is also where the token-accounting footers are aggregated onto the landed commits, so the accounting rides what lands.
-Whatever the session spends after the last fold
-— the approval wait, the landing turns
-— is credited to nothing;
-a branch that is final before review cannot account for the work that follows it.
+### Pre-push gate
 
-### 9. The pre-push gate
-
-The flow's one mandatory local pass
-— on the folded, rebased tree, which is the tree that ships.
-Run the repo's gate over what the change reaches:
-a selection scoped to the diff against `<base>` where offered, otherwise affected tests (the repo's command and environment flags).
+Run the repository's gate on the rebased, folded tree, scoped to the diff against **`<base>`** where offered, otherwise the affected tests and documented environment flags.
 Give a long-running gate an explicit timeout large enough for the full run.
+Without CI coverage run the whole gate; otherwise CI runs it after the scoped pass.
+The `tests` gate additionally requires the whole local gate on the final landing head.
 
-What this pass is worth is keeping a broken branch away from a reviewer, and a change-scoped selection buys that at a fraction of the price.
-The whole gate is the pull request's:
-its CI runs every stage on the head you push, a runner per stage and stages the workspace often cannot run at all, and the merge is blocked until that run is green.
-The exception is a repo whose CI does not cover pull requests
-— there nothing else will ever run the gate, so run it whole here.
-Whether it does is one question to GitHub, not a judgment call:
+A red pass blocks publication: diagnose and fix with new commits, or surface the pre-existing failure; do not publish over it.
+Published CI failures are rounds.
 
-```bash
-gh api 'repos/{owner}/{repo}/actions/runs?event=pull_request&per_page=1' --jq .total_count
-```
+### Verify scope
 
-Zero means no workflow has ever run on a pull request here:
-treat the gate as yours to run whole.
+Read `git log <base>..HEAD --oneline` and confirm the full change matches the intended title and body.
+Move unrelated work to its own branch, widen the stated scope explicitly, or ask where questions reach the user; never silently publish a narrower title over a wider change.
 
-A red gate blocks the PR.
-Do not interpret or triage failures
-— fix with new commits, or propose fixing pre-existing failures in this session or a separate one;
-do not open a PR over failures.
-A check that goes red on the PR once it is open is answered in the review rounds like any other finding (step 15).
+## Publish the change
 
-### 10. Verify PR scope
+Publish only what this plan needs; a push landing with no engaged reviewer publishes nothing yet.
+The review code on `local` travels through the ride, never a review-branch push or remote fetch.
+A PR required by `landing=merge` is still published normally; local constrains review delivery, not a separately chosen landing method.
+
+A PR is needed for `landing=merge` or an engaged reviewer on github.
+Open it **on the base remote's repository**, from a head branch pushed to that remote, not an assumed origin:
 
 ```bash
-git log origin/<base>..HEAD --oneline
+git push -u <base remote> HEAD:<head branch>
+gh pr create --repo <owner>/<repo> --base <base branch> --head <head branch> --title '<title>' --body-file <outside-tree body file>
 ```
 
-Confirm the commit list matches the intended PR title and body.
-If the worktree carries unrelated in-flight commits, either:
-- Split the branch (move unrelated commits to a separate branch), or
-- Rewrite the planned PR title/body to cover the full set, or
-- Ask the user.
+An already-published branch rewritten by the preparation fold needs `--force-with-lease`; never force the base.
+A resume uses the PR's head destination, including a fork.
+For an engaged talk reviewer, push a review branch on the base remote, reusing the PR head branch where one was opened.
+For local review or no reviewer with a push landing, create no remote review branch.
 
-Do not silently open a PR whose scope is wider than its title says.
+A one-commit PR takes that commit's title; several commits get a concise summary in the same style.
+The body carries review context rather than repeating commit text: `Task:` with the task URL where known, the `Delivery:` line, and a `## Test plan` checklist with verified items ticked.
+Do not list an unavailable local step as an unchecked promise: unchecked test-plan boxes block landing.
+An integration branch of reviewed stages names their PRs and landing branches, so a reviewer can reconcile those approvals.
 
-### 11. Push the branch
+Report `[#<n>](<pr-url>/files)` at creation and after review-fix pushes.
+Record `brog::add_comment(topic='PR opened')` on the task where available, with the PR link and each commit's hash link and subject, using the base remote's repository URL for links.
+Show the task hyperlink and what was recorded.
+Arm [[follow pr <pr>]] before engaging a reviewer; consume its replay through `replay_complete:` before starting any round or clearing any gate.
+Keep that watch alive throughout review and gating.
 
-```bash
-git push -u origin HEAD
-```
+## Review handoff
 
-A branch already on the remote needs `git push --force-with-lease origin HEAD` instead
-— the fold rewrote it.
+For every open PR, including a no-verdict resume, arm [[follow pr <pr>]] if no watch is alive and reconcile its replay before any round or gate.
+Then, without `verdict`, skip the reviewer engagement below and "Review rounds"; continue to the final head's selected gates.
+Retain the named head, base commit, delivery plan, previous deliveries and the live review's conversation.
 
-### 12. Open the PR
+{{iff #channel = github}}
+### GitHub review
 
-Use `gh` for everything GitHub-related
-— it's pre-authenticated, auto-detects the repo from the origin remote, and handles JSON encoding.
-Do not use `curl` against `api.github.com`.
+The conversation and code live on the PR.
+Push appended fixes normally to its head destination; use `--force-with-lease` only after a fold or rebase.
+Keep a trust file **outside the tree**, initially holding `trust` logins, one per line, and pass its path to [[follow pr]].
+Only named accounts, engaged reviewers and repository owners or accounts with write access are trusted; never read unfiltered feedback to fill a gap.
 
-Build the PR title and body:
-- **Title**:
-  if the branch lands as one commit, use its title.
-  If several, a brief summary in the same style.
-- **Body**:
-  review context, not commit text
-  — the landed commits carry the change's own story.
-  A `Task:` line linking the task URL (if a task id is known), a `## Test plan` checklist of what you verified with each box ticked, and whatever else the reviewer needs that the commits do not carry.
-  A branch carrying commits another pull request's review already approved
-  — an integration branch of reviewed stages
-  — names each such PR and the branch their commits landed on, so the reviewer reconciles those approvals rather than re-reads what they cover.
-  Don't list a step this session cannot run
-  — the repo's own CI gate runs on the PR, and an unticked box blocks [[land]] later with nobody able to clear it.
+- `reviewer=summon`: {{iff #may_summon contains eyebro}}use `bro::summon` targeting the eyebro your banner grants, with timeout `14400`, the plan's placement, and talk `worker.say` and `worker.question`.
+  Its self-contained prompt casts `[[review <pr-url> on github]]` and carries the Delivery line, selected gates, named trust, base URL, current full head, and any predecessor evidence.
+  Keep its quest id; its **answer**, not its GitHub approval, is the verdict.
+  When it asks `reviewing <pr> as <login>`, append that login to your trust file before acknowledging with `bro::quest_say` and the question id.
+  The watch rereads the file and releases held events.{{else}}refuse unless a reviewer target is granted; `reviewer=others` is the explicit GitHub alternative.{{end}}
+- `reviewer=coordinator`: ask the summoner `review requested: <pr> at <head>`.
+  It arranges the reviewer and replies with its announced login; append it to the trust file.
+  Once every other author-clearable gate is clear, ask `verdict for <pr> at <head>?` and require its reviewer's verdict line for this head.
+- `reviewer=others`: wait on trusted accounts' PR reviews.
+  Their approving review with `commit_id` naming the landing fold's head is the verdict; no bot quest is implied.
 
-```bash
-gh pr create --base <base> --title "<title>" --body "$(cat <<'EOF'
-Task: https://tracker.example.com/...
+A GitHub reviewer sharing the author's identity refuses before reviewing, naming `talk` and `local`.
+That blocks this plan; never fall back to human review or a different channel silently.
+{{eliff #channel = talk}}
+### Talk review
 
-## Test plan
-- [ ] ...
-EOF
-)"
-```
+The reviewer must be `summon`.
+{{iff #may_summon contains eyebro}}Use `bro::summon` targeting the eyebro your banner grants, timeout `14400`, the plan's placement, talk `worker.say` and `worker.question`.
+Its prompt casts `[[review <base commit>..<head> on talk]]` and supplies the full head and base SHAs, base ref and **remote URL**, review branch, Delivery line, gates and predecessor evidence.
+Keep the quest id; questions carry rounds and its answer is the verdict.{{else}}Refuse until an eyebro target is granted; do not silently use github or others.{{end}}
 
-Report the PR to the user as a **review link**:
-a markdown hyperlink titled `#<n>` (the PR number) whose target is the review section
-— the PR URL with `/files` appended (the Files changed tab, where the review UI lives)
-— not the main PR page.
-`gh pr create` prints the PR URL;
-`<n>` is its last path segment.
+Deliver each changed head by pushing the **review branch on the base remote**; append fixes with a normal push, and use `--force-with-lease` only after a fold or rebase rewrites that branch.
+The reviewer fetches through the supplied remote URL, never an assumed origin.
+A fetch refusal names `local` and blocks the plan until explicitly changed.
+An unchanged head is delivered by naming it alone, with no push.
+{{eliff #channel = local}}
+### Local review
 
-```markdown
-[#<n>](https://github.com/<owner>/<repo>/pull/<n>/files)
-```
+The reviewer must be `summon`; neither side uses a remote or credential **for review delivery**.
+{{iff #may_summon contains eyebro}}Use `bro::summon` targeting the eyebro your banner grants, timeout `14400`, the plan's placement, talk `worker.say` and `worker.question`.
+Its prompt casts `[[review <base commit>..<head> locally]]` and carries the full SHAs, base ref, Delivery line, gates and predecessor evidence.
+Keep the quest id; questions carry rounds and its answer is the verdict.{{else}}Refuse until an eyebro target is granted; do not silently use github or others.{{end}}
 
-Surface this link every time the PR enters review-pending:
-here at creation, and again after each push of review-fix commits (step 15).
+- Started reviewer (`boxed` or `unboxed`): round 1 is based on your current HEAD, including local-only commits.
+  Later changed heads are bundles rooted at the **last head actually delivered**, which the reviewer holds:
+  ```bash
+  mkdir -p .git/review
+  git bundle create .git/review/<head>.bundle <last delivered head>..HEAD
+  artifact mint .git/review/<head>.bundle
+  ```
+  Share the printed ref with `bro::quest_share`, then name it and the full new SHA in the reply.
+  End the range at `HEAD`, not a bare SHA; this carries rewrites and rebases too.
+  Supply new base objects and a successor's approved predecessor head beside the new head where needed, using additional bundle refs if they are not already reachable.
+- Joined reviewer (`placement=join`): leave the shared tree clean at the named head.
+  It checks `git --no-optional-locks status --porcelain` and HEAD every turn and never checks out, stages, commits, stashes or resets.
+  Ordinary scratch stays outside the tree; its ignored check outputs and the review spell's narrow oversized-report staging exception are its only allowed writes.
+- An unchanged head is delivered by naming it alone: **no bundle**, since an empty range is refused.
 
-### 13. Log "PR opened" to the task (sessions with a task)
-
-If the session has a task (the one [[fix]] ran against, or one resolved earlier in this session) and the brog tools are available, record the event with `brog::add_comment(task_id, topic='PR opened', body=...)`:
-
-```
-[PR:<n>](<pr-url>)
-- [`<short-hash>`](<repo-url>/commit/<full-hash>) <commit title>
-- [`<short-hash>`](<repo-url>/commit/<full-hash>) <commit title>
-```
-
-Build commit links from `git remote get-url origin` (strip trailing `.git`).
-
-### 14. Launch the review watcher
-
-The watcher is one long-lived `poll-pr` process.
-It authenticates as the session's `github` credential, re-resolved each cycle so the watch survives short-lived minted tokens, and filters out the account that credential acts for
-— your own comments and reviews:
-
-```bash
-poll-pr <owner>/<repo> <pr_number>
-```
-
-`poll-pr` prints each event to stdout as `<kind>:` on a first line, then its fields indented beneath, `at` (the UTC emit time) first:
-a body or multi-line value is a `|` block, a list is `-` items, a missing value is `none`, and a `_for` value counts seconds.
-
-- `merged:` with `merged_by`, `merge_commit` (the base's tip after the merge) and `commits` (`sha`, `subject`, as the PR carried them — a rebase merge rewrites them on the base)
-  — PR was merged
-- `closed:`
-  — PR was closed without merging
-- `conflicts:`
-  — the PR became unmergeable into its base (GitHub's `mergeable` turned false, typically after something landed on the base).
-  Fires once per conflicted episode
-  — it re-arms only after the PR turns mergeable again.
-- `checks:` with `head`, `state` (`red|green|pending`) and `failing` (`name`, `conclusion`, `url` per failed run)
-  — the check result changed on `head`, the PR head it was read for.
-  `red` fires once per red episode;
-  `green` fires once every check run has concluded without failure
-  — and before any check reports, once GitHub's merge state holds the merge for none:
-  the checks the base requires decide a head nothing reported on, and a check that reports later gates it from then on;
-  `pending` fires when a green head stops being green without failing, a check starting on it or GitHub's merge state holding it again.
-  Watcher silence is not evidence that checks are green.
-- `pushed:` with `head`
-  — a push from somewhere other than this checkout moved the PR's head;
-  your own pushes stay silent.
-- `comment:` with `id`, `user`, `path`, `url`, `body`
-  — new comment from a party to the review:
-  the PR author, the repo owner, or anyone with a review on the PR (self filtered out — a reviewing session hears the author this way).
-  Standalone inline review comments (replies to existing review threads) fire here;
-  inline comments attached to a fresh review are bundled into the `review` event instead.
-- `review:` with `id`, `user`, `state` (`APPROVED|CHANGES_REQUESTED|COMMENTED|DISMISSED`), `review_decision` (`APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED|none`), `url`, `body`, and `comments` (`id`, `path`, `line`, `url`, `body` per inline comment)
-  — new review.
-  `state` is this reviewer's verdict;
-  `review_decision` is GitHub's over the whole PR, read as the review fired.
-  `REVIEW_REQUIRED` there means the base branch is still owed a review from an account its rules count
-  — an approval from one they don't leaves the decision standing
-  — and `none` means the base asks for no review at all.
-  `comments` are the inline comments attached to this review at the moment `poll-pr` saw it (typically all of them;
-  rarely none if the inline-comments endpoint lags the reviews endpoint — late arrivals then fire as standalone `comment` events on a later cycle).
-- `disconnected:` with `source`, `reason`, `failing_for`
-  — an event source has been unreachable for that long (a minute by default).
-  Fires once per outage, and the watch keeps running:
-  treat the silence as unknown, not quiet.
-- `reconnected:` with `disconnected_for`
-  — every source answers again; what happened meanwhile follows as ordinary events.
-- `watch_failed:` with `source` (`baseline|pull-request|checks|reviews`), `reason`, `failing_for`
-  — terminal:
-  the named event source kept failing past the grace window, so the watch ended rather than going quiet on those events
-  — the process exits nonzero right after.
-  A short blip costs nothing:
-  one source failing is tolerated for `--failure-grace` seconds while the others keep reporting.
-  `baseline` means the watch never started at all.
-
-How to run it:
-[[watch poll-pr <owner>/<repo> <pr_number>]], and react to every line per step 15.
-An exit of the watched command right after `merged:`, `closed:`, or `watch_failed:` is terminal;
-an exit without one means the watcher died:
-[[resume pr]] with its number rather than starting the watch again.
-When chaining into [[land]], end the watch.
-
-**The watch loop is the rest of the run.**
-Your terminal answer comes only after the PR reaches a terminal state
-— merged (typically via the [[land]] chain on APPROVED) or closed.
-Until then, keep waiting on the watch however quiet the PR stays;
-that idling is the run working as designed, not a stall to wrap up.
-Do not end the watch and the run with a "waiting for review" report
-— an ended run watches nothing, and every later review event goes unhandled.
-{{when #may_summon contains eyebro}}
-
-### Hand the review to the eyebro
-
-Don't wait for a review to arrive — hand it over:
-
-1. Summon the eyebro with the watcher already running
-   — the watcher baselines existing events as seen at start, so a review posted before it starts would never fire.
-   `bro::summon` targeting the eyebro your banner's `may_summon` names, with a four-hour timeout (`14400`) and a self-contained prompt naming the PR
-   — the child shares no context with this session:
-   `[[review pr <pr-url>]]`.
-2. The conversation runs through the PR:
-   the eyebro's reviews and comments fire as ordinary step-15 events, and your replies and pushed fixes reach it the same way.
-   Its verdict does not.
-   **Keep the quest id**: the child's own answer is what gates the merge, and `bro::quest_check` is the only channel that carries it.
-   Nothing on the PR records which account you handed the review to, so an approving review read off the PR says a review approved, not that the reviewer you delegated to did.
-   The child runs as long as the review takes;
-   step 15's APPROVED handler is where you collect it.
-   It is not the only place, because the child can finish without posting anything new:
-   one that finds the head already approved reconciles that as a completed review and reports rather than approving twice, so no event fires and the handler never runs.
-   The session watch's `ended` line for the quest carries that end
-   — `bro::quest_check` on the quest id then, and a completed answer is the verdict whether or not a PR event carried it.
-3. A summon denied at launch, or a child that raises before it reviews anything
-   — typically because its GitHub identity is the PR author's own, which GitHub refuses to let approve
-   — means no reviewer ran.
-   A raise arrives as `ended failed:raised` on the session watch, with its reason on `bro::quest_check`;
-   report the reason and carry on under human review, with the merge left to whatever the base branch requires of it.
-   A child that ran and ended without approving is the opposite case and blocks the merge;
-   step 15 handles it.
-
+Never fix a local review delivery failure by pushing or fetching from a remote.
 {{end}}
 
-### 15. React to review events
+## Review rounds
 
-**`comment` event** or **`review` with `state: "CHANGES_REQUESTED"` or non-empty `comments`**:
+### Turns and batched answers
 
-A non-empty `comments` array on an APPROVED review counts as actionable feedback too
-— the reviewer may be saying "ship after fix" via inline nits even when the top-level review body is empty.
-Read every comment in the array before chaining.
+On talk/local the named head belongs to the reviewer from your delivery until its next question or final answer.
+During its turn change nothing that head names: no commit, push or fold, and in a joined review nothing in the tree.
+Queue PR events until your turn returns, even a red check or conflict; do not race the reviewer.
+Read oversized round artifacts the reviewer names; a progress message is not a question returning the turn.
 
-Handle pending feedback as one batch:
-address every comment that has arrived, then pay one verification pass and one push for the batch
-— not a suite run per comment.
+Handle all pending feedback as **one batch**, the body and every inline comment even on an APPROVED review:
 
-1. Read and understand the feedback (review body + every `comments[]` entry).
-2. Make the requested code changes locally.
-3. Re-run the pre-commit gates (step 2).
-4. Commit (a **new** commit, not `--amend`) with the same conventions as step 5–6.
-5. Verify what the round changed
-   — the repo's change-scoped selection diffed against the head you last pushed where it offers one, otherwise the round's affected test files.
-   **Not the full suite:**
-   the push in step 7 puts the branch back through the PR's own CI, which runs the whole gate, and the merge is blocked on it
-   — a full local pass here duplicates a run that is about to happen anyway and that nothing can land without.
-6. Re-fold with `--base origin/<base>` (step 8):
-   the branch has to be back in landing shape before it is pushed, or the approval that follows would cover commits that are not the ones landing.
-   Write the plan over the branch
-   — the last fold rewrote the shas
-   — and let a `fold` line naming no commits absorb what this round added, or name the round's commit in the fold whose unit it serves.
-   The re-approval this costs is the point:
-   the commits genuinely changed.
-7. Push:
-   `git push --force-with-lease origin HEAD`
-   — the fold rewrote the branch.
-8. Reply on the PR confirming the fix (reference the commit SHA).
-   Never place Markdown containing backticks or `$()` directly inside a double-quoted shell argument.
+1. Read each finding, answer questions, fix the ones you accept, and re-explain a contested finding at most once each way.
+   A deadlock goes to the user where questions reach them; otherwise the reviewer answers `blocked`, which does not clear verdict.
+2. Format and run "Policy audit" immediately before each commit.
+   Append fixes with `git commit --fixup=<the landing commit it serves>`, retaining repo-required task metadata and hook-owned footers; never amend or re-fold the whole branch each round.
+3. Verify what this round changed: the repo's change-scoped selection against the **last delivered head**, otherwise the affected test files.
+   Do not run the full gate for each finding; selected whole tests belong on the landing head.
+4. Deliver the exact new full SHA through the rendered channel, or name an unchanged SHA alone without a push or bundle.
+   Reply to the batch with each fix/answer and the SHA; talk/local also reports the head's checks as far as they have run.
+   Use `bro::quest_say` with the round question's id as `reply_to` on talk/local; the reply gives the reviewer its turn.
+
+On GitHub reply in the PR's threads (inline replies use the thread root id), or a conversation comment for general points; bind calls to the base repository.
+Use a quoted HEREDOC or body file for Markdown, never backticks or `$()` inside a double-quoted shell argument.
+After a push surface `[#<n>](<pr-url>/files)` again.
+
+### Landing fold and reconfirmation
+
+Nothing is open when the reviewer says it waits for the landing fold; this is **not a verdict**.
+Under reviewer `others`, require no trusted open thread and green head checks before folding.
+Even a first round without findings requires this landing fold and reconfirmation:
+
+1. Run "Fold the branch" again, grouping fixups into the commits they serve and finalizing the messages.
+   Retain the last reviewed head and prove `git diff <last reviewed head> <folded head>` is empty.
+   A content change requires another round, not blind reconfirmation.
+2. Deliver the folded head through the channel; a rewritten published branch uses `--force-with-lease`, never the base.
+   Wait for its selected checks to conclude and run the selected whole `tests` gate on it, reporting skipped stages.
+   {{iff #landing = merge}}For `checks`, use the PR's current-head checks from [[follow pr]], not watcher silence or GitHub's review decision.{{eliff #landing = push}}For `checks`, run:
    ```bash
-   read -r -d '' body <<'EOF' || true
-   <markdown reply>
-   EOF
-   gh pr comment <n> --body "$body"
-   # or:
-   gh api -X POST repos/<owner>/<repo>/pulls/<n>/comments/<comment_id>/replies -f body="$body"
+   check-head --base <base> --workflow <documented CI workflow file>
    ```
-9. Surface the review link again (step 12's `[#<n>](<pr-url>/files)` format)
-   — the pushed commits put the PR back into review-pending.
+   Size its wait and tool timeout for CI; retain the JSON head, run and conclusion.
+   Red or timed-out checks are not green and cannot be waived.{{end}}
+3. Announce the **landing fold**, full head, current base SHA and concluded checks/tests to the reviewer, replying to its round question on talk/local or commenting on the PR on github.
+   The reviewer checks the unchanged tree, final split/messages (not footer lines), selected green gates and clean merge into the base commit it names.
+4. Split/message findings cause another fold and reconfirmation; content/check/conflict findings cause rounds with the same live reviewer.
+   Only its final answer clears verdict; for `others`, a trusted approval must name this folded head.
 
-**`review` with `state: "APPROVED"` and empty `comments`**:
+A verdict reads:
 
-Four gates stand between this event and the merge.
-Read all four before you touch the watcher:
-stopping it is what you would have to undo, and a fresh `poll-pr` baselines every existing event as seen.
+```text
+approved <head sha> on <base sha>
+checks: <each selected checks/tests result and where it ran>
+<each finding>: <how it settled>
+```
 
-**The reviewer's verdict.**{{iff #may_summon contains eyebro}}
-With no eyebro summoned this event is it.
-Where you did summon one, its own answer is the verdict:
-`bro::quest_check` on the quest id
-— the child exits moments after posting its approval, so a `running` state means its `ended` line is still coming:
-check again when it arrives.
-An answer that is not an approval
-— findings still standing, a `raise`, an error
-— blocks the merge whatever the PR says:
-report it and stop where questions reach the user, `raise` when unattended.
-Never read the PR's own approval as the missing verdict.
-An approval you already read covers the head it was given for, so a later review event on that same head calls for no second read
-— `bro::quest_check` is repeatable and returns the host-retained approval again.{{else}}
-This event is it.{{end}}
+A `blocked <head sha> on <base sha>: <reason>` answer blocks landing.
+Collect a summoned reviewer's answer on its ended notification with `bro::quest_check` even if no PR event fires; a running state means keep waiting, not infer approval from GitHub.
 
-**The base's gate**, in this event's `review_decision`.
-`APPROVED` or `null` clears it.
-`REVIEW_REQUIRED` does not, and nothing waives it:
-the review that just landed came from an account the base's rules give no standing to{{when #may_summon contains eyebro}}
-— an eyebro posting under an app identity is the usual one{{end}}
-— so a review from an account they do count is still owed.
-`land-pr` refuses on this same field, so reaching for it here buys an error rather than an answer.
-**Leave the watcher running** and ask the user for that review, naming whose approval did not count and what else is clear (the reviewer's verdict, the checks);
-where the session has a task, log the same as a task comment, so the block survives the session that reported it.
-Their review arrives as another `review` event on the watch you kept, carrying `review_decision: "APPROVED"`, and lands through this branch
-— which is why an unattended run holds here rather than raising:
-nothing is broken, and the approval is still coming.
-`CHANGES_REQUESTED` is a standing review elsewhere on the PR asking for work:
-handle it as feedback above.
+### Failures and successors
 
-**The head checks.**
-Only a `checks` event with `state: "green"` whose `head` is the current head clears this gate.
-Retain all cleared gates against that head SHA;
-a push invalidates every one of them together, while a `red` or `pending` event clears the check result.
-Watcher silence is not evidence that checks finished.
-If this gate is not clear, leave the watcher running, retain the cleared review gates for this head, and wait for its green event.
+A denied summon or reviewer that raises/errors before a verdict blocks verdict: report and stop where questions reach the user, rescue and `raise` unattended.
+No reviewer or channel stands in unless the plan is explicitly changed and rechecked.
+A timed-out reviewer instead gets a successor **on the same channel and plan**, with the same timeout, placement and talk rights.
+Pass its `bro::quest_history` conversation, verbatim, as an artifact if past the message bound; truncated history requires judging the whole change.
+Settled findings stay settled where the evidence supports them; github also carries the rounds on the PR.
+Repeat for a successor that times out, within this author's run.
 
-**The owner's approval**, where questions reach the user.
-The repo owner's approving review on this head clears it, and so do `review_decision: "APPROVED"` and the user's own ask to land this PR;
-retain it with the other gates.
-A `null` decision is no evidence either way:
-it reads the base's rules, not who approved.
-With none retained once the other gates are clear, **leave the watcher running** and report the PR ready to merge with the reviewer's verdict and the checks;
-either answer then clears it
-— the user saying to land it, or the owner approving on GitHub, which arrives as another `review` event on the watch you kept.
+After a verdict, a moved base that needs conflict resolution or a CI fix, or a delegated landing's red tests, gets a **successor reviewing only the delta since the approved head**.
+Keep that approved head reachable, pass the earlier verdict verbatim as `bro::quest_check` returned it, obtain both heads for the successor, and have it judge their base-to-head range-diff, changed integration and new checks.
+On github it also reconstructs its earlier approval from the PR; talk/local receives the approved head beside the new one.
+Then fold, clear all selected gates anew and hand over again.
+A base move that still merges cleanly, or a rebase whose every commit is unchanged (`=`), needs no new reviewer; checks/tests must rerun on any new head.
 
-With all four gates clear, chain into the merge, and batch it
-— stop the watcher with `bro::unwatch('poll-pr <owner>/<repo> <pr_number>')`, then [[land]] **in the same response** and follow it through the merge.
+## Gates and landing handover
 
-**`review` with `state: "COMMENTED"` or `"DISMISSED"`**:
-informational;
-the actionable feedback (if any) is in this event's `comments` array or arrives via accompanying `comment` events.
+Retain gates **per full head SHA**:
+verdict and approval cover the named head or a rebase onto a newer base whose complete one-to-one `git range-diff` shows every commit unchanged (`=`); checks and tests cover the exact head only.
+An appended fix, fold, conflict resolution or someone else's push clears **every gate**; never carry an approval across one just because the final diff looks similar.
+An unchanged rebase comparison uses `<merge-base of approved head and current base>..<approved head>` against `<current base tip>..HEAD`; keep the approved object reachable.
 
-**`checks` event with `state: "red"`**:
-CI went red on what you pushed;
-clear any green state retained for the current head.
-Fetch the failing run's log (`gh run view --log-failed <run-id>`, the id is the tail of the event's `url`) and diagnose it as your own breakage
-— a failure the local gate missed is the interesting kind (environment-dependent, ordering-dependent, or a file you forgot to stage).
-Fix it exactly like review feedback:
-gates (step 2), a new commit (steps 5–6), step 15's narrow verification, the re-fold (step 8), a force-with-lease push.
-Report the failure and your fix to the user;
-never wait for it to disappear on a re-run you didn't trigger, and never land around it
-— `land-pr` refuses a failed check anyway.
+Without verdict, the preparation fold is the landing fold: run the selected final-head checks/tests without starting review rounds.
+{{iff #landing = merge}}Use the PR watch's exact-head checks for a merge; GitHub's platform review decision must also permit the merge.
+{{eliff #landing = push}}For push checks, run `check-head --base <base> --workflow <documented CI workflow file>` before gating or handover, retaining its exact-head green result.{{end}}
+Selected tests always mean the whole local gate on the final head, reporting unavailable stages skipped.
 
-**`checks` event with `state: "pending"`**:
-a check started on a head that was green, or GitHub holds its merge again;
-clear the green retained for that `head` and keep watching.
+- Approver `human`, where questions reach the user: their go-ahead to land this change, including their own initial request, clears approval.
+  Elsewhere it requires a trusted GitHub approving review naming this head from `user_type: User`, never a Bot.
+  A summoner's prompt is **never** a human's go-ahead; an aggregate `review_decision` proves platform standing, not a human approval.
+- Approver `summoner`: ask `approve landing <ref> at <head>?` and require `approved <head>`.
+  With reviewer `coordinator`, combine this with `verdict for <pr> at <head>?` once the other author-clearable gates hold; require both the reviewer verdict and approval in the reply.
+- Under reviewer `coordinator`, collect its verdict only once the other author-clearable gates hold, combining approval as above; do not wait on a verdict before asking for it.
+- Missing human or platform approval with an open PR is an ordinary wait, not a broken run: report what remains and keep watching.
+  Record a durable task comment if blocked on a review the base counts; an App's approval may not count for it.
+  Untrusted feedback never clears a gate; retain its account/kind/URL for the final report.
 
-**`checks` event with `state: "green"`**:
-retain that its `head` is green.
-If an APPROVED review already cleared the reviewer and base gates for this same head, resume that handler and chain into the merge;
-otherwise keep watching for review events.
+Every gate you can clear must hold before handover: all for `self`; all but `tests` for a different lander, which receives your passing tests as evidence and reruns them itself; all but `approval` for `others`, whose merge is the approval.
+Platform rules still bind independently.
 
-**`pushed` event**:
-someone else pushed to the PR branch (typically the user amending it directly).
-Clear every gate retained for the previous head, including the reviewer verdict and base decision;
-`git fetch origin` and reset your local branch onto the pushed head before your next commit
-— continuing from the stale head would discard their commits on your next force-with-lease push.
+- `lander=self`: stop your PR watch if one exists, then cast [[land]] with this rendering's `landing` in the **same response**, retaining the plan and gates, and follow it through bookkeeping.
+- `lander=summon`: summon the granted dev target with [[land <pr or base> at <head> by <method>]], the plan's placement and current HEAD as its base (or join).
+  Supply the Delivery line and remote URL, cleared gates and evidence, task URL and how to obtain the head.
+  It resolves its own credentials, not yours; GitHub landing requires a github credential configured for that target.
+  Wait for its answer while your PR watch remains alive.
+  Relay a successful landing without duplicate bookkeeping; a `blocked <head>: tests` or changed-head failure returns to the successor flow above.
+- `lander=coordinator`: answer `ready <ref> at <head>` with the Delivery line, cleared gates, task URL and how the head is reached: PR, pushed branch, or a bundle artifact the summoner can share onward.
+  Stop your PR watch and end; the coordinator owns the landing and bookkeeping.
+- `lander=others`: report ready once every gate but approval holds, then **keep the PR watch running until `merged`**.
+  Its merge is approval and landing; do [[land]]'s bookkeeping then.
 
-**`conflicts` event**:
-call `rebase-conflicts-source::read` and follow its section on this event.
+A delegated lander's failed attempt is never a landing, and never closes the task.
+A self landing that returns to review resumes this live plan and successor flow; do not start again with defaults.
 
-**`merged` / `closed`**:
-someone (the user, a [[land]] run, or external action) terminated the PR.
-If `merged`, run [[land]]'s post-merge bookkeeping
-— the `merged` comment and task closure.
-If `closed` without merge, log it and report to the user.
-
-**`disconnected` / `reconnected` events**:
-no action;
-never read the silence between them as a clear gate.
-
-**`watch_failed` event**:
-the watch is over and the PR is not
-— [[resume pr]] with its number.
 {{when #hold = unattended}}
-
 ## Rescue committed work before a raise
 
-{{include fragments/rescue_before_raise.md}}
+Before raising with unpushed commits, abort a conflicted rebase to restore them and retain recoverable work.
+For a remote delivery push the working branch, never the base, to the plan's remote (or a fresh `rescue/<session name>` ref if rejected); record a `rescue` task comment and name that ref in the raise.
+Without a remote, retain a local rescue ref and mint a complete bundle artifact for the summoner; report it through the quest without adding a remote or borrowing credentials.
+Skip when nothing is unpushed.
 {{end}}
-
-## Safety rules
-
-- Never commit credential material
-  — credential stores, key files, minting configs.
-  If anything that looks like a secret shows up in `git status`, warn the user before staging.
-- Never skip hooks (`--no-verify`, `--no-gpg-sign`, etc.).
-- Never force-push (`--force`, `--force-with-lease`) to `<base>`.
-- Never stage with `git add -A` / `git add .`
-  — stage by explicit path.
-- Never `git add -N`
-  — breaks `git stash create`.
-- For verify-test-catches-bug, use `git stash push <file>`, never bare `git stash`.

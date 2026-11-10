@@ -82,9 +82,10 @@ def test_gate_timeout_guidance_is_harness_neutral():
 
 def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):
   bro = _TrackerDev()
-  assert 'summon' not in bro.get_spell_body('run-pr', harness='claude', hold='unattended').lower()
+  marker = 'use `bro::summon` targeting the eyebro'
+  assert marker not in bro.get_spell_body('run-pr', harness='claude', hold='unattended')
   publish(monkeypatch, targets=('eyebro',))
-  assert 'eyebro' in bro.get_spell_body('run-pr', harness='claude', hold='unattended')
+  assert marker in bro.get_spell_body('run-pr', harness='claude', hold='unattended')
 
 
 @pytest.mark.parametrize('landing', ['merge', 'push'])
@@ -114,7 +115,7 @@ def test_review_delegation_uses_one_asynchronous_tool_shape(monkeypatch):
   claude_body = bro.get_spell_body('run-pr', harness='claude', hold='unattended')
 
   assert native_body == claude_body
-  assert '`bro::summon` targeting the eyebro' in native_body
+  assert 'use `bro::summon` targeting the eyebro' in native_body
   assert 'detach' not in native_body
 
 
@@ -137,20 +138,65 @@ def test_run_pr_cannot_be_offered_without_the_spells_it_runs():
     Incomplete()
 
 
-def test_run_pr_and_resume_pr_are_offered_together():
+def test_run_pr_requires_its_follow_pr_handoff():
   class Pair(Bro):
     name = 'pair'
     description = 'test bro'
-    spells = (dev.spells.run_pr, dev.spells.land, dev.spells.resume_pr)
+    spells = (dev.spells.run_pr, dev.spells.land, dev.spells.follow_pr)
 
   class RunPrOnly(Bro):
     name = 'run-pr-only'
     description = 'test bro'
     spells = (dev.spells.run_pr, dev.spells.land)
 
-  assert {'run-pr', 'resume-pr'} <= set(Pair().spell_paths)
-  with pytest.raises(ValueError, match="requires spell 'resume-pr'"):
+  assert {'run-pr', 'follow-pr'} <= set(Pair().spell_paths)
+  with pytest.raises(ValueError, match="requires spell 'follow-pr'"):
     RunPrOnly()
+
+
+def test_follow_pr_requires_landing_for_terminal_bookkeeping():
+  class Incomplete(Bro):
+    name = 'incomplete'
+    description = 'test bro'
+    spells = (dev.spells.follow_pr,)
+
+  with pytest.raises(ValueError, match="requires spell 'land'"):
+    Incomplete()
+
+
+@pytest.mark.parametrize('channel', ['github', 'talk', 'local'])
+@pytest.mark.parametrize('landing', ['merge', 'push'])
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+def test_delivery_routes_select_only_their_channel_and_method(
+  channel, landing, harness, monkeypatch
+):
+  publish(monkeypatch, targets=('eyebro',))
+  body = _TrackerDev().get_spell_body(
+    'run-pr', harness=harness, hold='unattended', choices={'channel': channel, 'landing': landing}
+  )
+  channel_markers = {
+    'github': '### GitHub review',
+    'talk': '### Talk review',
+    'local': '### Local review',
+  }
+  for name, marker in channel_markers.items():
+    assert (marker in body) == (name == channel)
+  method_marker = 'For push checks, run `check-head'
+  assert (method_marker in body) == (landing == 'push')
+  assert len(body) <= BYTE_LIMIT
+
+
+def test_run_pr_defaults_select_the_github_merge_route():
+  bro = _TrackerDev()
+  assert bro.get_spell_body('run-pr', harness='bro', hold='unattended') == bro.get_spell_body(
+    'run-pr', harness='bro', hold='unattended', choices={'channel': 'github', 'landing': 'merge'}
+  )
+
+
+def test_follow_pr_serves_the_replay_watch_within_one_window():
+  body = _TrackerDev().get_spell_body('follow-pr', harness='bro', hold='unattended')
+  assert '## Arm replay and reconcile' in body
+  assert len(body) <= BYTE_LIMIT
 
 
 @pytest.mark.asyncio
