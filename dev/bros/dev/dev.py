@@ -77,7 +77,7 @@ class Dev(Bro):
     dev.spells.land,
     when(feature('brog'), dev.spells.open_task),
     dev.spells.reflect,
-    dev.spells.resume_pr,
+    dev.spells.follow_pr,
     dev.spells.run_pr,
   )
   system_prompt = SYSTEM_PROMPT

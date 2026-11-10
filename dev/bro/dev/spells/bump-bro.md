@@ -216,7 +216,7 @@ a failure the pin move causes is the bump's to adapt, and one it does not cause 
 
 ## Step 6 — commit and hand off
 
-Two kinds of commit, each in the repository's own conventions ([[run pr]]'s steps 5-6 for the message, the task metadata, and staging by path):
+Two kinds of commit, each in the repository's own conventions ([[run pr]]'s "Docs, splits and commit messages" and "Commit" sections for the message, the task metadata, and staging by path):
 
 - **The bump**:
   the pin move (the sources where they changed, the lock) together with every adaptation step 3 forced, so the tree works at this commit.
@@ -225,7 +225,7 @@ Two kinds of commit, each in the repository's own conventions ([[run pr]]'s step
   — followed by each adaptation and the contract change that forced it.
 - **Each adoption** from step 4 on its own, its body naming the ability or fix and what it replaced.
 
-Before each commit, run [[run pr]]'s step 2 policy audit as that commit's own precondition:
+Before each commit, run [[run pr]]'s "Policy audit" as that commit's own precondition:
 call `dev-style-source::read` and the `man-source::read` guide of every area the commit reaches, audit the commit's diff against the returned text, and state the verdict as visible output before the `git commit`.
 The hand-off comes after these commits exist, so its audit cannot stand in for this one.
 
