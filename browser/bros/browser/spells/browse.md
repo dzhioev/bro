@@ -35,7 +35,7 @@ Markdown formatting is fine.
 Keep the reply within the 16 KiB message bound;
 write longer data to a file and report its artifact ref.
 
-If the instruction is ambiguous or crosses a policy line it did not settle, ask a counter-question on `self` with `reply_to` set to the instruction's question id.
+If the instruction is ambiguous, asks for analysis outside your scope, or crosses a policy line it did not settle, ask a counter-question on `self` with `reply_to` set to the instruction's question id before acting on it.
 The owner answers that clarification with another question in the same thread;
 after acting, reply to that question with the outcome.
 If the owner answers as a plain say instead, send the outcome as a say because there is no question to close.
