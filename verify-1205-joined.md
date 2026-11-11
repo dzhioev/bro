@@ -1,3 +1,3 @@
 # Disposable verification fixture
 
-The verification fixture has no selected value.
+The verification fixture selects the author value.
