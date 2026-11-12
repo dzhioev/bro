@@ -32,6 +32,9 @@ def result(process):
   return json.loads(process.stdout)
 
 
+# Only a test whose outcome Landlock can decide takes this. Seccomp decides at
+# syscall entry, before any Landlock hook, so a test of the filter alone runs
+# once, under the production confinement.
 @pytest.fixture(scope='module', params=range(1, MAXIMUM_LANDLOCK_ABI + 1))
 def abi(request):
   report = result(probe('report'))
@@ -107,8 +110,8 @@ DENIED = sorted(
 
 
 @pytest.mark.parametrize('name', DENIED)
-def test_every_denied_syscall_is_blocked(abi, name):
-  process = probe('syscall', abi=abi, name=name)
+def test_every_denied_syscall_is_blocked(name):
+  process = probe('syscall', name=name)
   # Kernel probe trampolines bypass seccomp but reject direct callers.
   if name == 'uprobe' and process.returncode == 0:
     outcome = result(process)
@@ -121,19 +124,19 @@ def test_every_denied_syscall_is_blocked(abi, name):
 
 
 @pytest.mark.parametrize('family', list(socket.AddressFamily))
-def test_every_socket_family_is_denied(abi, family):
-  assert probe('socket', abi=abi, family=family).returncode == -signal.SIGSYS
+def test_every_socket_family_is_denied(family):
+  assert probe('socket', family=family).returncode == -signal.SIGSYS
 
 
 @pytest.mark.parametrize('action', ['exec', 'fork', 'thread', 'setsid'])
-def test_process_and_thread_creation_and_session_escape_kill(abi, action):
-  assert probe(action, abi=abi).returncode == -signal.SIGSYS
+def test_process_and_thread_creation_and_session_escape_kill(action):
+  assert probe(action).returncode == -signal.SIGSYS
 
 
 @pytest.mark.parametrize(
   'name', ['kill', 'tgkill', 'rt_sigqueueinfo', 'rt_tgsigqueueinfo', 'prlimit64']
 )
-def test_another_process_cannot_be_signalled_or_have_its_limits_changed(abi, name):
+def test_another_process_cannot_be_signalled_or_have_its_limits_changed(name):
   with decoy_process() as process:
     if name == 'kill':
       assert (
@@ -145,21 +148,21 @@ def test_another_process_cannot_be_signalled_or_have_its_limits_changed(abi, nam
       if name in ('tgkill', 'rt_tgsigqueueinfo')
       else [process.pid, 0, 0, 0]
     )
-    assert probe('syscall', abi=abi, name=name, arguments=arguments).returncode == -signal.SIGSYS
+    assert probe('syscall', name=name, arguments=arguments).returncode == -signal.SIGSYS
     assert process.poll() is None
 
 
 @pytest.mark.parametrize('target', [0, -1, -100, (1 << 32) + 1])
-def test_pid_aliases_and_process_groups_are_not_self(abi, target):
-  assert probe('syscall', abi=abi, name='kill', arguments=[target, 0]).returncode == -signal.SIGSYS
+def test_pid_aliases_and_process_groups_are_not_self(target):
+  assert probe('syscall', name='kill', arguments=[target, 0]).returncode == -signal.SIGSYS
 
 
 def test_native_abort_can_signal_itself(abi):
   assert probe('abort', abi=abi).returncode == -signal.SIGABRT
 
 
-def test_resource_limits_cannot_be_raised(abi):
-  assert probe('raise_limit', abi=abi).returncode == -signal.SIGSYS
+def test_resource_limits_cannot_be_raised():
+  assert probe('raise_limit').returncode == -signal.SIGSYS
 
 
 def test_cpu_overrun_is_sigxcpu_not_the_hard_limit_sigkill(abi):
@@ -179,20 +182,17 @@ def test_cpu_overrun_is_sigxcpu_not_the_hard_limit_sigkill(abi):
     10000,
   ],
 )
-def test_unassigned_syscalls_return_enosys_including_holes(abi, number):
-  assert result(probe('syscall', abi=abi, number=number)) == {'result': -1, 'errno': errno.ENOSYS}
+def test_unassigned_syscalls_return_enosys_including_holes(number):
+  assert result(probe('syscall', number=number)) == {'result': -1, 'errno': errno.ENOSYS}
 
 
-def test_x32_flagged_numbers_kill(abi):
-  assert (
-    probe('syscall', abi=abi, number=0x40000000 | TABLES[ARCH]['getpid']).returncode
-    == -signal.SIGSYS
-  )
+def test_x32_flagged_numbers_kill():
+  assert probe('syscall', number=0x40000000 | TABLES[ARCH]['getpid']).returncode == -signal.SIGSYS
 
 
 @pytest.mark.skipif(ARCH != 'x86_64', reason='x86 instruction')
-def test_int80_foreign_audit_architecture_kills(abi):
-  assert probe('int80', abi=abi).returncode == -signal.SIGSYS
+def test_int80_foreign_audit_architecture_kills():
+  assert probe('int80').returncode == -signal.SIGSYS
 
 
 @pytest.mark.parametrize(
@@ -219,9 +219,9 @@ def test_the_wall_clock_backstop_is_armed():
 
 
 @pytest.mark.parametrize('action', ['chmod', 'utime'])
-def test_file_attributes_cannot_be_changed(abi, decoy, action):
+def test_file_attributes_cannot_be_changed(decoy, action):
   before = decoy.stat()
-  assert probe(action, abi=abi, path=str(decoy)).returncode == -signal.SIGSYS
+  assert probe(action, path=str(decoy)).returncode == -signal.SIGSYS
   after = decoy.stat()
   assert (after.st_mode, after.st_mtime_ns) == (before.st_mode, before.st_mtime_ns)
 
@@ -235,7 +235,7 @@ def test_file_attributes_cannot_be_changed(abi, decoy, action):
     (socket.AF_UNIX, socket.SOCK_STREAM),
   ],
 )
-def test_connect_on_an_existing_socket_cannot_reach_a_listener(abi, tmp_path, family, kind):
+def test_connect_on_an_existing_socket_cannot_reach_a_listener(tmp_path, family, kind):
   with socket.socket(family, kind) as listener:
     listener.bind(
       str(tmp_path / 'listener')
@@ -248,13 +248,13 @@ def test_connect_on_an_existing_socket_cannot_reach_a_listener(abi, tmp_path, fa
       listener.listen(8)
     arguments = {'family': family, 'kind': kind, 'address': listener.getsockname()}
     assert result(probe('connect', unconfined=True, **arguments)) == 'connected'
-    assert probe('connect', abi=abi, **arguments).returncode == -signal.SIGSYS
+    assert probe('connect', **arguments).returncode == -signal.SIGSYS
 
 
-def test_ptrace_cannot_attach_to_a_decoy(abi):
+def test_ptrace_cannot_attach_to_a_decoy():
   with decoy_process() as process:
     assert (
-      probe('syscall', abi=abi, name='ptrace', arguments=[16, process.pid, 0, 0]).returncode
+      probe('syscall', name='ptrace', arguments=[16, process.pid, 0, 0]).returncode
       == -signal.SIGSYS
     )
     assert process.poll() is None
@@ -309,19 +309,16 @@ def test_a_worker_dies_when_its_spawning_parent_exits():
 
 
 @pytest.mark.parametrize('resource', range(16))
-def test_limit_mutations_are_blocked_before_the_kernel_can_use_capabilities(abi, resource):
+def test_limit_mutations_are_blocked_before_the_kernel_can_use_capabilities(resource):
   assert (
-    probe('syscall', abi=abi, name='prlimit64', arguments=[0, resource, 1, 0]).returncode
-    == -signal.SIGSYS
+    probe('syscall', name='prlimit64', arguments=[0, resource, 1, 0]).returncode == -signal.SIGSYS
   )
 
 
 @pytest.mark.parametrize('method', ['owner', 'owner_ex', 'signal', 'async_flags'])
-def test_async_io_cannot_redirect_a_signal_to_a_decoy(abi, method):
+def test_async_io_cannot_redirect_a_signal_to_a_decoy(method):
   with decoy_process() as process:
-    assert (
-      probe('async_signal', abi=abi, method=method, pid=process.pid).returncode == -signal.SIGSYS
-    )
+    assert probe('async_signal', method=method, pid=process.pid).returncode == -signal.SIGSYS
     assert process.poll() is None
 
 
@@ -334,10 +331,8 @@ def test_an_unconfined_async_io_negative_control_signals_only_a_decoy():
 
 
 @pytest.mark.parametrize('command', [0x8901, 0x8902, 0x5410, 0x5412, 0x40045436, 0x5452])
-def test_native_ioctl_signal_commands_are_denied(abi, command):
-  assert (
-    probe('syscall', abi=abi, name='ioctl', arguments=[0, command, 0]).returncode == -signal.SIGSYS
-  )
+def test_native_ioctl_signal_commands_are_denied(command):
+  assert probe('syscall', name='ioctl', arguments=[0, command, 0]).returncode == -signal.SIGSYS
 
 
 def test_ordinary_descriptor_flags_and_ioctl_queries_still_work(abi):
@@ -349,20 +344,18 @@ def test_ordinary_descriptor_flags_and_ioctl_queries_still_work(abi):
   [fcntl.F_SETOWN, fcntl.F_SETSIG, 15, fcntl.F_SETLEASE, fcntl.F_NOTIFY, fcntl.F_SETPIPE_SZ],
 )
 @pytest.mark.parametrize('upper_word', [0, 1 << 32])
-def test_native_fcntl_restricted_commands_and_integer_aliases_are_denied(abi, command, upper_word):
+def test_native_fcntl_restricted_commands_and_integer_aliases_are_denied(command, upper_word):
   assert (
-    probe('syscall', abi=abi, name='fcntl', arguments=[0, command | upper_word, 0]).returncode
+    probe('syscall', name='fcntl', arguments=[0, command | upper_word, 0]).returncode
     == -signal.SIGSYS
   )
 
 
 @pytest.mark.parametrize('option,value', [(1, 0), (4, 1)])
 @pytest.mark.parametrize('upper_word', [0, 1 << 32])
-def test_setup_prctl_protections_cannot_be_reset_or_aliased(abi, option, value, upper_word):
+def test_setup_prctl_protections_cannot_be_reset_or_aliased(option, value, upper_word):
   assert (
-    probe(
-      'syscall', abi=abi, name='prctl', arguments=[option | upper_word, value, 0, 0, 0]
-    ).returncode
+    probe('syscall', name='prctl', arguments=[option | upper_word, value, 0, 0, 0]).returncode
     == -signal.SIGSYS
   )
 
@@ -376,10 +369,10 @@ def test_prctl_queries_observe_the_worker_backstops(abi):
 
 
 @pytest.mark.parametrize('command', [1, 2, 3])
-def test_core_scheduling_cannot_mutate_a_decoy(abi, command):
+def test_core_scheduling_cannot_mutate_a_decoy(command):
   with decoy_process() as process:
     assert (
-      probe('syscall', abi=abi, name='prctl', arguments=[62, command, process.pid, 0, 0]).returncode
+      probe('syscall', name='prctl', arguments=[62, command, process.pid, 0, 0]).returncode
       == -signal.SIGSYS
     )
     assert process.poll() is None
