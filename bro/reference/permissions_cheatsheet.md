@@ -308,13 +308,13 @@ Configuration preparation and result commands are in the [benchmark guide](../..
 ## Change a running session
 
 On the host, find the root with `ride list` and its tree with `ride missions <root>`.
-Use the mission id from `ride missions` in place of `my-session`:
+Pass the mission id from `ride missions`:
 
 ```sh
-ride override my-session --grant @browser
-ride override my-session --cred github+reviewer
-ride override my-session --revoke github
-ride override my-session --revoke @browser
+ride override <mission-id> --grant @browser
+ride override <mission-id> --cred github+reviewer
+ride override <mission-id> --revoke github
+ride override <mission-id> --revoke @browser
 ```
 
 These respectively enable browser delegation, switch/add GitHub, remove GitHub, and stop future browser summons.
@@ -381,7 +381,7 @@ ride missions my-session
 
 `scope` shows the prospective descriptor, base permissions, picks, and whether instances are present, missing, or optional-and-skipped.
 An instance named only by permission may be absent without making scope inspection fail.
-`missions` lists a running tree's names for operations such as override.
+`missions` lists a running tree's mission ids for operations such as override.
 Inside a session, call `bro::banner` or run:
 
 ```sh

@@ -1,4 +1,3 @@
-import os
 from abc import ABC
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ from bro.base.condition import (
   var,
 )
 from bro.base.offload import off_loop
-from bro.broker.environment import BROKER_CHANNEL, BROKER_UPSTREAM
+from bro.broker.environment import channel_intended
 from bro.datasources.base import DataSource
 from bro.datasources.file import FileSource
 from bro.datasources.man import manual
@@ -631,7 +630,7 @@ def _build_service_server(
   session_harness = _harness_object(harness)
   has_cast = len(bro.spell_paths) > 0 and spell_store.cast_available()
   has_raise = hold == UNATTENDED and session_harness.can_end_session()
-  has_broker = any(os.environ.get(name) is not None for name in (BROKER_CHANNEL, BROKER_UPSTREAM))
+  has_broker = channel_intended()
   has_answer = has_broker and summoned() and session_harness.can_end_session()
   has_quest_watch = has_broker and len(summon.effective_may_summon()) > 0
   brash = bro.reach().brash
