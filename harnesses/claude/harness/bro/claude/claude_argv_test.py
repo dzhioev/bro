@@ -114,9 +114,7 @@ class TestRideSessionLaunch:
     assert set(native_tools.READ) <= set(tools)
     assert set(native_tools.WRITE).isdisjoint(tools)
 
-  def test_a_finite_command_list_runs_bash_and_monitor_through_the_command_gate(
-    self, monkeypatch, tmp_path
-  ):
+  def test_a_finite_command_list_runs_bash_through_the_command_gate(self, monkeypatch, tmp_path):
     monkeypatch.setattr(
       'bro.registry.create_bro', lambda name: _declaring(files(), brash('git status'))
     )
@@ -133,6 +131,19 @@ class TestRideSessionLaunch:
         console_script('brash'),
         str(policy),
       ]
+
+  def test_a_served_monitor_runs_through_the_command_gate_beside_bash(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(native_tools, 'SHELL', (*native_tools.SHELL, 'Monitor'))
+    monkeypatch.setattr(
+      'bro.registry.create_bro', lambda name: _declaring(files(), brash('git status'))
+    )
+    argv = _ride_session_launch(
+      _spec(bro='declaring'), brash_policy=tmp_path / 'brash-policy.json'
+    ).argv
+    assert 'Monitor' in _tools(argv)
+    hooks = {entry['matcher']: entry['hooks'] for entry in _settings(argv)['hooks']['PreToolUse']}
+    assert set(hooks) == {'Bash', 'Monitor'}
+    assert hooks['Monitor'] == hooks['Bash']
 
   def test_a_brash_policy_goes_with_a_finite_command_list_and_nothing_else(
     self, monkeypatch, tmp_path

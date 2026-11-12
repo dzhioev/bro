@@ -58,7 +58,7 @@ The package `bro.claude` imports nothing from its `__init__.py`.
   `claude_plugin_llm_test.py` holds it to the pinned release's validator, its own `*.test.ts`, and a live rewake.
 - `command_gate.py`, `read_gate.py`, `watch_waiter.py`, and `session_end.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`spawn.module_argv('bro.claude.<module>')`);
-  the command gate rewrites each Bash call of a finite command list into a brash call,
+  the command gate rewrites each Bash and Monitor call of a finite command list into a brash call,
   the read gate holds the `Read` of a persona without files to the session's own Claude folders,
   the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch, each watch's lines kept in the session's results store,
   and the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`bro/reference/ride.md`, "Claude harness").

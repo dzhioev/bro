@@ -48,13 +48,25 @@ class TestGate:
       )
       assert json.loads(started.stdout) == ['--policy', '/state/brash policy.json', '-c', line]
 
-  def test_the_rewrite_keeps_the_calls_other_fields_and_decides_nothing(self, monkeypatch, capsys):
+  @pytest.mark.parametrize('tool_name', ['Bash', 'Monitor'])
+  def test_the_rewrite_keeps_the_calls_other_fields_and_decides_nothing(
+    self, monkeypatch, capsys, tool_name
+  ):
     tool_input = {'command': 'git status', 'description': 'd', 'run_in_background': True}
-    output = _gate(monkeypatch, capsys, {'tool_name': 'Bash', 'tool_input': tool_input})
+    output = _gate(monkeypatch, capsys, {'tool_name': tool_name, 'tool_input': tool_input})
 
     assert output.keys() == {'hookEventName', 'updatedInput'}
     assert output['hookEventName'] == 'PreToolUse'
     assert {**output['updatedInput'], 'command': 'git status'} == tool_input
+
+  def test_a_call_carrying_no_command_is_denied(self, monkeypatch, capsys):
+    # Monitor's WebSocket form
+    payload = {'tool_name': 'Monitor', 'tool_input': {'ws': {'url': 'wss://example.com/stream'}}}
+    decision = _gate(monkeypatch, capsys, payload)
+
+    assert decision['permissionDecision'] == 'deny'
+    assert 'Monitor' in decision['permissionDecisionReason']
+    assert 'updatedInput' not in decision
 
   def test_a_failing_gate_blocks_the_call(self):
     # Claude blocks a call whose PreToolUse hook exits 2, showing the model its stderr
