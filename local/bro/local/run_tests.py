@@ -707,7 +707,8 @@ def unit_stage(roster: Sequence[str] = PYTEST_FILES) -> None:
 class Selection:
   """the gate work a change can reach: what each narrowed stage runs, and what is dropped whole."""
 
-  roster: Sequence[str]
+  unit: Sequence[str]
+  sandbox: Sequence[str]
   distributions: Sequence[Distribution]
   dropped: frozenset[str]
 
@@ -755,21 +756,22 @@ def select(base: str) -> Selection:
       or module_name(source_roots, DIR / test) in hit
     )
 
+  sandbox = (
+    SANDBOX_PYTEST_FILES
+    if any(
+      path.startswith(('bro/files/', 'filetypes/'))
+      or path in ('local/bro/local/run_tests.py', '.github/workflows/tests.yml')
+      for path in changed
+    )
+    else [test for test in SANDBOX_PYTEST_FILES if module_name(source_roots, DIR / test) in hit]
+  )
   return Selection(
-    roster=[test for test in PYTEST_FILES if reached(test)],
+    unit=[test for test in PYTEST_FILES if reached(test)],
+    sandbox=sandbox,
     distributions=touched_distributions(changed),
     dropped=frozenset(
       [project.stage for project in PROJECTS if not project_reached(project)]
-      + (
-        []
-        if any(
-          path.startswith(('bro/files/', 'filetypes/'))
-          or path in ('local/bro/local/run_tests.py', '.github/workflows/tests.yml')
-          for path in changed
-        )
-        or any(module_name(source_roots, DIR / test) in hit for test in SANDBOX_PYTEST_FILES)
-        else ['sandbox']
-      )
+      + ([] if sandbox else ['sandbox'])
     ),
   )
 
@@ -837,15 +839,24 @@ os._exit(0)
   return None
 
 
-def sandbox_stage() -> None:
+def sandbox_scope(roster: Sequence[str]) -> str:
+  scope = (
+    'the whole confinement roster'
+    if len(roster) == len(SANDBOX_PYTEST_FILES)
+    else f'{len(roster)} of {len(SANDBOX_PYTEST_FILES)} confinement modules'
+  )
+  return f'pytest over {scope}'
+
+
+def sandbox_stage(roster: Sequence[str] = SANDBOX_PYTEST_FILES) -> None:
   step('probe kernel confinement')
   reason = sandbox_unavailable()
   if reason is not None:
     if 'GITHUB_ACTIONS' in os.environ:
       raise subprocess.CalledProcessError(1, ('sandbox-probe',), output=reason + '\n')
     raise StageUnavailable(reason)
-  step('pytest over the kernel confinement roster')
-  run(*pytest_command(sys.executable), *SANDBOX_PYTEST_FILES)
+  step(f'pytest, {len(roster)} confinement modules in the worker pool')
+  run(*pytest_command(sys.executable), '-n', 'auto', *roster)
 
 
 def llm_stage() -> None:
@@ -882,7 +893,7 @@ STAGES = [
   Stage('lint', lint_stage, lint_scope(DISTRIBUTIONS)),
   Stage('types', types_stage, 'pyright'),
   Stage('unit', unit_stage, unit_scope(PYTEST_FILES)),
-  Stage('sandbox', sandbox_stage, 'pytest over the kernel confinement roster'),
+  Stage('sandbox', sandbox_stage, sandbox_scope(SANDBOX_PYTEST_FILES)),
   *(
     Stage(
       project.stage,
@@ -935,9 +946,20 @@ def narrow(stage: Stage, selected: Selection) -> Stage:
   if stage.name == 'unit':
     return replace(
       stage,
-      run=functools.partial(unit_stage, selected.roster),
-      scope=unit_scope(selected.roster),
-      work=WHOLE if len(selected.roster) == len(PYTEST_FILES) else work_digest(selected.roster),
+      run=functools.partial(unit_stage, selected.unit),
+      scope=unit_scope(selected.unit),
+      work=WHOLE if len(selected.unit) == len(PYTEST_FILES) else work_digest(selected.unit),
+    )
+  if stage.name == 'sandbox':
+    return replace(
+      stage,
+      run=functools.partial(sandbox_stage, selected.sandbox),
+      scope=sandbox_scope(selected.sandbox),
+      work=(
+        WHOLE
+        if len(selected.sandbox) == len(SANDBOX_PYTEST_FILES)
+        else work_digest(selected.sandbox)
+      ),
     )
   return stage
 

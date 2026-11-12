@@ -250,8 +250,10 @@ def invocations(monkeypatch):
 
 @pytest.fixture
 def repository(monkeypatch, tmp_path):
-  """a checkout the whole --changed deduction runs over: a roster covering both
-  halves of its rule, and a nested project only part of the tree reaches."""
+  """a checkout the whole --changed deduction runs over: a unit roster covering
+  both halves of its rule, a sandbox roster whose modules reach one subject
+  apiece, one through the other's, and a nested project only part of the tree
+  reaches."""
 
   def write(path: str, text: str = '') -> None:
     full = tmp_path / path
@@ -267,6 +269,10 @@ def repository(monkeypatch, tmp_path):
   write('thing/elsewhere.py')
   write('thing/elsewhere_test.py', 'from thing import elsewhere\n')
   write('thing/policy_test.py', 'import json\n')
+  write('thing/worker.py')
+  write('thing/worker_sandbox_test.py', 'from thing import worker\n')
+  write('thing/pool.py', 'from thing import worker\n')
+  write('thing/pool_sandbox_test.py', 'from thing import pool\n')
   write(f'{run_tests.BENCHMARK}/pyproject.toml', '[project]\nname = "probe-benchmark"\n')
   write(f'{run_tests.BENCHMARK}/bro/benchmark/job.py', 'from thing import store\n')
   for command in (
@@ -290,6 +296,11 @@ def repository(monkeypatch, tmp_path):
   )
   monkeypatch.setattr(
     run_tests,
+    'SANDBOX_PYTEST_FILES',
+    ['thing/worker_sandbox_test.py', 'thing/pool_sandbox_test.py'],
+  )
+  monkeypatch.setattr(
+    run_tests,
     'PROJECTS',
     [run_tests.Project(stage='benchmark', directory=run_tests.BENCHMARK, pytest_files=[])],
   )
@@ -307,7 +318,7 @@ def repository(monkeypatch, tmp_path):
 def test_a_change_selects_the_tests_that_reach_it(repository):
   (repository / 'thing/store.py').write_text('CHANGED = 1\n')
 
-  assert run_tests.select('main').roster == [
+  assert run_tests.select('main').unit == [
     'thing/store_test.py',
     'thing/api_test.py',
     'thing/policy_test.py',
@@ -324,7 +335,7 @@ def test_an_empty_selection_runs_no_pytest_at_all(invocations):
 def test_a_test_module_with_no_source_module_of_its_own_always_runs(repository):
   (repository / 'thing/elsewhere.py').write_text('CHANGED = 1\n')
 
-  selected = run_tests.select('main').roster
+  selected = run_tests.select('main').unit
 
   assert 'thing/policy_test.py' in selected
   assert 'thing/store_test.py' not in selected
@@ -404,7 +415,7 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
     run_tests,
     'select',
     lambda base: run_tests.Selection(
-      roster=(), distributions=(), dropped=frozenset({'benchmark', 'sandbox'})
+      unit=(), sandbox=(), distributions=(), dropped=frozenset({'benchmark', 'sandbox'})
     ),
   )
 
@@ -476,9 +487,9 @@ def test_every_selected_stage_runs_and_each_failed_command_is_replayed_whole(mon
 
 @pytest.fixture
 def rosters(repository, monkeypatch):
-  """the checkout above with every roster over its own test modules: the two it
-  sets, a broker e2e module at the root, and a benchmark module named from the
-  benchmark project."""
+  """the checkout above with every roster over its own test modules: the unit
+  and sandbox rosters it sets, a broker e2e module at the root, and a benchmark
+  module named from the benchmark project."""
   (repository / 'thing/e2e_test.py').write_text('')
   (repository / f'{run_tests.BENCHMARK}/bro/benchmark/job_test.py').write_text('')
   monkeypatch.setattr(run_tests, 'BROKER_E2E_PYTEST_FILE', 'thing/e2e_test.py')
@@ -496,7 +507,6 @@ def rosters(repository, monkeypatch):
     'WEBVIEW_E2E_PYTEST_FILES',
     'LLM_PYTEST_FILES',
     'CONFORMANCE_PYTEST_FILES',
-    'SANDBOX_PYTEST_FILES',
     'BENCHMARK_E2E_PYTEST_FILES',
   ):
     monkeypatch.setattr(run_tests, name, [])
@@ -605,12 +615,69 @@ def test_a_worktree_with_edits_notes_nothing(noted, monkeypatch):
   assert ran == ['types', 'unit', 'types', 'unit']
 
 
-@pytest.mark.parametrize('path', ['bro/files/worker.py', 'filetypes/bro/pdf/engine.py'])
-def test_the_sandbox_stage_follows_workers_and_providers_reached_by_name(repository, path):
+@pytest.mark.parametrize(
+  ('path', 'share'),
+  [
+    ('thing/pool.py', ['thing/pool_sandbox_test.py']),
+    ('thing/worker.py', ['thing/worker_sandbox_test.py', 'thing/pool_sandbox_test.py']),
+  ],
+)
+def test_the_sandbox_stage_runs_the_roster_modules_a_change_reaches(repository, path, share):
+  (repository / path).write_text('CHANGED = 1\n')
+
+  selected = run_tests.select('main')
+
+  assert selected.sandbox == share
+  assert 'sandbox' not in selected.dropped
+
+
+@pytest.mark.parametrize(
+  'path',
+  [
+    'bro/files/worker.py',
+    'filetypes/bro/pdf/engine.py',
+    'local/bro/local/run_tests.py',
+    '.github/workflows/tests.yml',
+  ],
+)
+def test_the_sandbox_stage_runs_its_whole_roster_for_workers_providers_and_the_gate(
+  repository, path
+):
   file = repository / path
   file.parent.mkdir(parents=True, exist_ok=True)
   file.write_text('CHANGED = 1\n')
-  assert 'sandbox' not in run_tests.select('main').dropped
+
+  assert run_tests.select('main').sandbox == run_tests.SANDBOX_PYTEST_FILES
+
+
+def test_a_sandbox_stage_the_change_cannot_reach_is_dropped_with_the_reason(
+  rosters, monkeypatch, capsys
+):
+  ran = []
+  monkeypatch.setattr(
+    run_tests, 'STAGES', [run_tests.Stage('sandbox', lambda: ran.append('sandbox'), 'a probe')]
+  )
+  (rosters / 'thing/elsewhere.py').write_text('CHANGED = 1\n')
+
+  assert run_tests.main(['run-tests', '--changed', '--base', 'main']) is None
+  assert ran == []
+  written = capsys.readouterr().err
+  assert 'skipping the sandbox stage (--changed: the diff reaches nothing it runs)' in written
+  assert written.endswith('gate: sandbox skipped\n')
+
+
+def test_a_narrowed_sandbox_stage_names_its_share_and_notes_it_apart_from_the_whole():
+  [stage] = [stage for stage in run_tests.STAGES if stage.name == 'sandbox']
+  roster = run_tests.SANDBOX_PYTEST_FILES
+
+  def narrowed(share):
+    return run_tests.narrow(
+      stage, run_tests.Selection(unit=(), sandbox=share, distributions=(), dropped=frozenset())
+    )
+
+  assert narrowed(roster[:2]).scope.endswith(f'2 of {len(roster)} confinement modules')
+  assert narrowed(roster[:2]).work == run_tests.work_digest(roster[:2])
+  assert narrowed(roster).work == run_tests.WHOLE
 
 
 @pytest.mark.parametrize(
@@ -625,7 +692,7 @@ def test_the_sandbox_stage_follows_workers_and_providers_reached_by_name(reposit
 )
 def test_the_sandbox_stage_follows_serving_tests_and_their_imported_dependencies(monkeypatch, path):
   monkeypatch.setattr(run_tests, 'changed_paths', lambda root, base: [path])
-  assert 'sandbox' not in run_tests.select('main').dropped
+  assert 'local/bro/local/files_sandbox_test.py' in run_tests.select('main').sandbox
 
 
 def test_an_unavailable_sandbox_is_skipped_with_its_reason_off_ci(monkeypatch, capsys):
@@ -652,11 +719,11 @@ def test_an_unavailable_sandbox_fails_ci_instead_of_skipping(monkeypatch, capsys
   assert 'sandbox FAILED' in written
 
 
-def test_an_available_sandbox_runs_its_whole_roster(monkeypatch, invocations):
+def test_an_available_sandbox_runs_its_roster_in_the_worker_pool(monkeypatch, invocations):
   monkeypatch.setattr(run_tests, 'sandbox_unavailable', lambda: None)
   run_tests.sandbox_stage()
   assert invocations == [
-    (*run_tests.pytest_command(sys.executable), *run_tests.SANDBOX_PYTEST_FILES)
+    (*run_tests.pytest_command(sys.executable), '-n', 'auto', *run_tests.SANDBOX_PYTEST_FILES)
   ]
 
 
