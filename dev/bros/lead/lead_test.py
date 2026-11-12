@@ -39,7 +39,8 @@ def test_orchestrate_selects_stage_delivery_and_coordinator_roles_within_one_win
   bro = Lead()
   body = bro.get_spell_body('orchestrate', harness=harness, hold=hold)
 
-  assert 'with gates verdict and checks' in body
+  assert 'verdict and checks where CI covers' in body
+  assert 'otherwise verdict and tests' in body
   assert ('**Reviewer coordinator.**' in body) == reviewer
   assert ('**Lander coordinator.**' in body) == lander
   assert '**Summoner approval.**' in body
