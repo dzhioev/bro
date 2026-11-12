@@ -189,6 +189,7 @@ def test_delivery_routes_select_only_their_channel_and_method(
     assert (marker in body) == (name == channel)
   method_marker = 'For push checks, run `check-head'
   assert (method_marker in body) == (landing == 'push')
+  assert 'check-head --base <base>' in _section(body, '### Pre-review check')
   assert len(body) <= BYTE_LIMIT
 
 

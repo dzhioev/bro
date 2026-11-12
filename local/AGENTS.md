@@ -74,8 +74,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   A stage that passes over a clean worktree is noted on the tree `HEAD` names,
   and a later run on that tree skips it where the note covers its work, the whole stage or the same narrowed share, and reads `ok` for it;
   `--rerun` runs it anyway.
-  `run-tests --changed --base origin/<base>`, `<base>` the pull request's base, is the pre-push gate;
-  the whole gate is the pull request's, a runner per stage and per `broker_e2e` shard, with `webview_e2e` on its own runner (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
+  The whole gate is CI's, a runner per stage and per `broker_e2e` shard, with `webview_e2e` on its own runner (`.github/workflows/tests.yml`, on `pull_request`, on `push` to `master`, and on `workflow_dispatch`
   — a push to a feature branch triggers nothing, so a branch that never opens a PR runs on a dispatch or not at all)
 - `run-tests --only llm` — the live-LLM behavior probes (`*_llm_test.py`):
   a real bro against the configured provider, asserting on the artifacts it produces.

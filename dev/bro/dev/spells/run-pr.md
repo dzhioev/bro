@@ -11,7 +11,7 @@ With pr, recovers the task and recorded plan and resumes at review through [[fol
 Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
 parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "pr?": "pull request URL or number to resume at review", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
-version: 9.0.0
+version: 9.1.0
 ---
 
 # run-pr
@@ -153,7 +153,7 @@ Read `git status` (no `-uall`), staged and unstaged diffs, and `git log <base>..
 Stop only if the worktree is clean, nothing untracked needs adding, and no commits are ahead of the base.
 A clean branch with unlanded checkpoints continues normally.
 Run the repository's formatter and include its changes with their logical units.
-Do not pay the gate before rebasing: "Pre-push gate" verifies the tree that ships.
+Do not pay the gate before rebasing: "Pre-review check" verifies the tree that ships.
 
 ### Policy audit
 
@@ -232,14 +232,17 @@ A grouping conflict leaves the branch untouched; preserve relative order or grou
 A commit straddling two landing units must first be split with interactive rebase, then grouped.
 The fold aggregates the existing accounting footers; spend after the landing fold is not counted.
 
-### Pre-push gate
+### Pre-review check
 
-Run the repository's gate on the rebased, folded tree, scoped to the diff against **`<base>`** where offered, otherwise the affected tests and documented environment flags.
+Where the plan selects `checks` and CI covers a push to `<base>`, run `check-head --base <base> --workflow <documented CI workflow file>` on the rebased, folded head instead of a local gate, sizing its wait and tool timeout for CI.
+Otherwise run the repository's gate on it, scoped to the diff against **`<base>`** where offered, else the affected tests and documented environment flags;
+without CI coverage run the whole gate.
 Give a long-running gate an explicit timeout large enough for the full run.
-Without CI coverage run the whole gate; otherwise CI runs it after the scoped pass.
-The `tests` gate additionally requires the whole local gate on the final landing head.
 
-A red pass blocks publication: diagnose and fix with new commits, or surface the pre-existing failure; do not publish over it.
+A red or timed-out result blocks publication:
+diagnose it (on CI, `gh run view <run id> --repo <owner>/<repo> --log-failed`), fix with new commits, fold again and check the new head, or surface the pre-existing failure;
+do not publish over it.
+{{iff #landing = push}}A green result is that head's `checks` evidence.{{eliff #landing = merge}}The PR's own run then runs the whole gate; the review handoff does not wait for it.{{end}}
 Published CI failures are rounds.
 
 ### Verify scope
@@ -424,7 +427,7 @@ An unchanged rebase comparison uses `<merge-base of approved head and current ba
 
 Without verdict, the preparation fold is the landing fold: run the selected final-head checks/tests without starting review rounds.
 {{iff #landing = merge}}Use the PR watch's exact-head checks for a merge; GitHub's platform review decision must also permit the merge.
-{{eliff #landing = push}}For push checks, run `check-head --base <base> --workflow <documented CI workflow file>` before gating or handover, retaining its exact-head green result.{{end}}
+{{eliff #landing = push}}For push checks, run `check-head --base <base> --workflow <documented CI workflow file>` before gating or handover unless its exact-head green result is retained.{{end}}
 Selected tests always mean the whole local gate on the final head, reporting unavailable stages skipped.
 
 - Approver `human`, where questions reach the user: their go-ahead to land this change, including their own initial request, clears approval.
