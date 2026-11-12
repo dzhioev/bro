@@ -9,7 +9,7 @@ Reconciles a predecessor's review, judges appended fixes, and reconfirms the lan
 For a standalone findings report rather than a conversation, use [[review diff]].
 
 parameters: {"channel": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"]}, "change": "pull request URL or number on github; otherwise <base commit>..<head>, the base ref, plus its remote URL and the review branch on talk; for a successor also the approved head and earlier verdict, or the predecessor's conversation"}
-version: 1.0.0
+version: 1.1.0
 ---
 
 # review
@@ -183,7 +183,7 @@ For the announced folded head:
    A problem here is a finding: the author folds again and you reconfirm again.
 4. Require every selected checks/tests gate to pass on **this head**.
    Where `checks` is selected, wait for green checks from your own PR watch and current GitHub state.
-   Where `tests` is selected, require the author's passed result for this exact head and check it wherever readable.
+   Where `tests` is selected, require the author's passed result for this head's tree, naming the tree `git rev-parse <head>^{tree}` prints, and check it wherever readable.
    If neither is selected, no checks/tests result is required.
    Confirm the PR still names this head and GitHub reports a clean merge into the current base; unknown mergeability is not clean.
    Record that base's commit SHA, fetching it again if it moved.
@@ -331,7 +331,8 @@ Obtain the folded head through this channel's delivery and turn rules, then:
    Otherwise judge the changed content in another round before reconfirming.
 2. Review the final split and messages, excluding footer lines.
    Any problem is a finding; the author folds again and you reconfirm again.
-3. Require every selected checks/tests gate to pass on this exact head: `checks` concluded green and `tests` passed, as the author's reply reports and checked wherever you can read the results yourself.
+3. Require every selected checks/tests gate to pass on this head: `checks` concluded green on it and `tests` passed on the tree `git rev-parse <head>^{tree}` prints,
+   as the author's reply reports and checked wherever you can read the results yourself.
    Pending selected gates mean another question and wait, never a provisional approval.
    A plan selecting neither requires no checks/tests result.
 4. Confirm it merges cleanly into the base commit the verdict names: for a PR GitHub's mergeability, for a push a fast-forward or a conflict-free rebase.
@@ -345,10 +346,10 @@ Obtain the folded head through this channel's delivery and turn rules, then:
 
 ## Verdict
 
-Approve only the landing fold's head, with every selected checks/tests gate passed on that exact head, and a clean merge into the named base commit.
+Approve only the landing fold's head, with every selected checks/tests gate passed, checks on that exact head and tests on its tree, and a clean merge into the named base commit.
 If the plan selects both, both must pass; if it selects neither, no checks/tests result is required.
 A verdict is information, not courtesy.
-It holds for that head, or a rebase onto a newer base whose `git range-diff` shows **every commit unchanged (`=`)**; checks and tests hold only for the exact head they ran on.
+It holds for that head, or a rebase onto a newer base whose `git range-diff` shows **every commit unchanged (`=`)**; checks hold only for the exact head they ran on, tests for every head naming the tree they ran on.
 An appended fix, another fold, a conflict resolution or someone else's push clears the old verdict.
 
 The answer is:

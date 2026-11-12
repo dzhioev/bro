@@ -31,6 +31,6 @@ Without the fetch, a rebase onto a stale remote-tracking ref may change nothing.
 Resolve as above, then push the rewritten **PR head branch** with `--force-with-lease` to its head destination, never the base.
 
 Before a verdict, the same live reviewer judges the new head and conflict resolution as another round.
-After a verdict, preserve verdict and approval only if the complete one-to-one range-diff shows every commit unchanged (`=`); checks and tests must rerun on the new head.
+After a verdict, preserve verdict and approval only if the complete one-to-one range-diff shows every commit unchanged (`=`); checks must rerun on the new head, and tests where its tree changed.
 A resolution or CI fix needs [[run pr]]'s "Failures and successors" delta review, then its landing fold and fresh gates.
 For CI-covered changes, the pushed head's whole CI gate covers integration breakage that a branch-only local selection may miss; a selected `tests` gate also runs whole on the final head.

@@ -11,7 +11,7 @@ With pr, recovers the task and recorded plan and resumes at review through [[fol
 Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
 parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "pr?": "pull request URL or number to resume at review", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
-version: 9.1.0
+version: 9.2.0
 ---
 
 # run-pr
@@ -64,7 +64,8 @@ The gates are independent of the method:
 - `checks`: CI concluded green on this exact head.
   CI covers a merge where `gh api 'repos/<owner>/<repo>/actions/runs?event=pull_request&per_page=1' --jq .total_count` is above zero.
   It covers a push only to a GitHub remote whose documented CI workflow accepts `workflow_dispatch`.
-- `tests`: the whole local gate passed on this exact head in the landing session's workspace, reporting unavailable stages skipped.
+- `tests`: the whole local gate passed on this head's tree in the landing session's workspace, reporting unavailable stages skipped.
+  Commit metadata is the verdict's and CI's to check, so a pass retained with its tree covers every head naming it.
   Your own run is the reviewer's evidence before a handover; another lander must run it again itself.
 - `approval`: the chosen approver's go-ahead for this head.
 
@@ -236,7 +237,7 @@ The fold aggregates the existing accounting footers; spend after the landing fol
 
 Where the plan selects `checks` and CI covers a push to `<base>`, run `check-head --base <base> --workflow <documented CI workflow file>` on the rebased, folded head instead of a local gate, sizing its wait and tool timeout for CI.
 Otherwise run the repository's gate on it, scoped to the diff against **`<base>`** where offered, else the affected tests and documented environment flags;
-without CI coverage run the whole gate.
+without CI coverage run the whole gate, whose pass is `tests` evidence for the folded tree.
 Give a long-running gate an explicit timeout large enough for the full run.
 
 A red or timed-out result blocks publication:
@@ -380,7 +381,7 @@ Even a first round without findings requires this landing fold and reconfirmatio
    Retain the last reviewed head and prove `git diff <last reviewed head> <folded head>` is empty.
    A content change requires another round, not blind reconfirmation.
 2. Deliver the folded head through the channel; a rewritten published branch uses `--force-with-lease`, never the base.
-   Wait for its selected checks to conclude and run the selected whole `tests` gate on it, reporting skipped stages.
+   Wait for its selected checks to conclude and run the selected whole `tests` gate on it unless its tree already passed, reporting skipped stages.
    {{iff #landing = merge}}For `checks`, use the PR's current-head checks from [[follow pr]], not watcher silence or GitHub's review decision.{{eliff #landing = push}}For `checks`, run:
    ```bash
    check-head --base <base> --workflow <documented CI workflow file>
@@ -416,19 +417,18 @@ After a verdict, a moved base that needs conflict resolution or a CI fix, or a d
 Keep that approved head reachable, pass the earlier verdict verbatim as `bro::quest_check` returned it, obtain both heads for the successor, and have it judge their base-to-head range-diff, changed integration and new checks.
 On github it also reconstructs its earlier approval from the PR; talk/local receives the approved head beside the new one.
 Then fold, clear all selected gates anew and hand over again.
-A base move that still merges cleanly, or a rebase whose every commit is unchanged (`=`), needs no new reviewer; checks/tests must rerun on any new head.
+A base move that still merges cleanly, or a rebase whose every commit is unchanged (`=`), needs no new reviewer; checks must rerun on any new head, tests on any new tree.
 
 ## Gates and landing handover
 
-Retain gates **per full head SHA**:
-verdict and approval cover the named head or a rebase onto a newer base whose complete one-to-one `git range-diff` shows every commit unchanged (`=`); checks and tests cover the exact head only.
-An appended fix, fold, conflict resolution or someone else's push clears **every gate**; never carry an approval across one just because the final diff looks similar.
+Retain gates **per full head SHA**, and `tests` per tree:
+verdict and approval cover the named head or a rebase onto a newer base whose complete one-to-one `git range-diff` shows every commit unchanged (`=`); checks cover the exact head only.
+An appended fix, fold, conflict resolution or someone else's push clears **every gate** but a `tests` pass on an unchanged tree; never carry an approval across one just because the final diff looks similar.
 An unchanged rebase comparison uses `<merge-base of approved head and current base>..<approved head>` against `<current base tip>..HEAD`; keep the approved object reachable.
 
-Without verdict, the preparation fold is the landing fold: run the selected final-head checks/tests without starting review rounds.
+Without verdict, the preparation fold is the landing fold: clear the selected final-head checks/tests without starting review rounds.
 {{iff #landing = merge}}Use the PR watch's exact-head checks for a merge; GitHub's platform review decision must also permit the merge.
 {{eliff #landing = push}}For push checks, run `check-head --base <base> --workflow <documented CI workflow file>` before gating or handover unless its exact-head green result is retained.{{end}}
-Selected tests always mean the whole local gate on the final head, reporting unavailable stages skipped.
 
 - Approver `human`, where questions reach the user: their go-ahead to land this change, including their own initial request, clears approval.
   Elsewhere it requires a trusted GitHub approving review naming this head from `user_type: User`, never a Bot.
@@ -440,7 +440,7 @@ Selected tests always mean the whole local gate on the final head, reporting una
   Record a durable task comment if blocked on a review the base counts; an App's approval may not count for it.
   Untrusted feedback never clears a gate; retain its account/kind/URL for the final report.
 
-Every gate you can clear must hold before handover: all for `self`; all but `tests` for a different lander, which receives your passing tests as evidence and reruns them itself; all but `approval` for `others`, whose merge is the approval.
+Every gate you can clear must hold before handover: all for `self`; all but `tests` for a different lander; all but `approval` for `others`, whose merge is the approval.
 Platform rules still bind independently.
 
 - `lander=self`: stop your PR watch if one exists, then cast [[land]] with this rendering's `landing` in the **same response**, retaining the plan and gates, and follow it through bookkeeping.

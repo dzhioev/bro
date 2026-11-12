@@ -9,7 +9,7 @@ Review rounds belong to [[run pr]], not to landing.
 The author normally passes no arguments; a delegated lander receives the head, the PR or base, and the Delivery line and cleared gates in its prompt.
 
 parameters: {"landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "pr?": "pull request URL or number to merge, or associated with a push", "head?": "full commit SHA to land; omitted by an author landing its own change", "base?": "base ref as remote/branch or refs/heads/branch; omitted by an author with a retained delivery plan"}
-version: 6.0.0
+version: 6.1.0
 ---
 
 # land
@@ -90,8 +90,8 @@ git range-diff --no-color <merge-base-of-approved-head-and-current-base>..<appro
 
 Only a complete one-to-one series of `=` entries preserves coverage; a changed, added or dropped commit does not.
 Keep the approved commit reachable for this comparison and for the push command.
-Any other rewrite, fold, fix or someone else's push clears every gate.
-Checks and tests cover the exact head only, even when an unchanged rebase preserves verdict and approval.
+Any other rewrite, fold, fix or someone else's push clears every gate but a `tests` pass on an unchanged tree.
+Checks cover the exact head only, even when an unchanged rebase preserves verdict and approval; tests cover every head naming the tree they passed on.
 
 Where `approval` is selected, take it from the author's retained gate or the caller's supplied approval for this head.
 Approver `summoner` requires `approved <head>` in reply to the landing-approval question, not the bare fact that a session was summoned.
@@ -106,8 +106,8 @@ For a merge, inspect the PR's checks on this exact head; the merge command also 
 For a push onto GitHub, inspect this head's check runs and use the documented workflow with the push command below, which dispatches one if none ran.
 A plan cannot select `checks` for a local base or a non-GitHub remote.
 
-Where `tests` is selected, the whole local gate must pass on the head in the landing session's workspace, with unavailable stages reported skipped.
-The author may retain its own run; a different lander runs the gate itself even when its prompt carries the author's passing run.
+Where `tests` is selected, the whole local gate must pass on the head's tree (`<head>^{tree}`) in the landing session's workspace, with unavailable stages reported skipped.
+The author's own run retained for that tree covers the head; a different lander runs the gate itself even when its prompt carries the author's passing run.
 On failure, end the delegated landing with `blocked <head sha>: tests`, including the failed command and evidence.
 Never land, close the task or replace tests with the author's result after this failure.
 
@@ -186,7 +186,7 @@ Do not treat any other refusal as that condition.
    Follow the rebase-conflicts reference for retaining recoverable work if a raise is required.
 3. Confirm the rebased HEAD and compare the old and new series with the verdict-coverage rule above, also preserving the approval only when every commit is unchanged.
    A changed, added or dropped commit goes back to review; do not push it.
-4. Run the `tests` gate again on the new head where selected, reporting skipped stages.
+4. Run the `tests` gate again on the new head where selected and its tree changed, reporting skipped stages.
    A failure returns `blocked <new head sha>: tests` rather than continuing.
 5. Run `land-push` again with the same plan-derived flags and the **original approved head**.
    Checks must pass on the rebased head; a red run returns to review, and a range-diff refusal does too.

@@ -79,11 +79,10 @@ def test_gate_timeout_guidance_is_harness_neutral():
   bro = _TrackerDev()
   marker = 'explicit timeout large enough for the full run'
 
-  for spell_name in ('run-pr', 'bump-bro'):
-    native = bro.get_spell_body(spell_name, harness=get_harness('bro'), hold='unattended')
-    claude = bro.get_spell_body(spell_name, harness=get_harness('claude'), hold='unattended')
-    assert marker in native
-    assert marker in claude
+  native = bro.get_spell_body('run-pr', harness=get_harness('bro'), hold='unattended')
+  claude = bro.get_spell_body('run-pr', harness=get_harness('claude'), hold='unattended')
+  assert marker in native
+  assert marker in claude
 
 
 def test_review_delegation_renders_only_for_a_granted_eyebro(monkeypatch):

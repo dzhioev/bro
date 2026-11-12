@@ -10,13 +10,13 @@ cross-checks every changed framework surface against the repository's call sites
 — sourced shell libraries, commands, declaration strings the type checker cannot see, declarative schemas, copied files, inherited prompts —
 and adapts what no longer matches,
 reads the range for abilities and fixes that replace the repository's workarounds and adopts them,
-runs the repository's gate,
+smokes the persona construction against the new framework,
 commits the bump with the range as its body,
 and hands off to [[run pr]].
 The framework checkout itself has nothing to bump.
 
 parameters: {"to?": "framework ref to pin — a commit, branch, or tag; default: the head of the branch the sources name"}
-version: 1.1.0
+version: 1.2.0
 ---
 
 # bump bro
@@ -201,18 +201,19 @@ Then decide:
 Each adoption is its own commit (step 6):
 a reviewer judges it apart from the bump, and a wrong one reverts alone.
 
-## Step 5 — gate
+## Step 5 — smoke
 
 Run the repository's formatter, then a persona construction smoke through the project environment
 — `uv run --project <project> bro show <default bro>` for the installation's `default-bro`, and `uv run --project <project> bro list`
 — which resolves entry points and loads spells and declarations against the new framework, so an import or declaration error surfaces before the suite does.
-Then run the repository's own gate (its docs name the command).
-Give a long-running gate an explicit timeout large enough for the full run.
 
+The repository's own gate runs once, in [[run pr]]'s "Pre-review check" on the tree that ships, and is this bump's gate.
 Deploy scripts are exercised by none of this;
 step 3 is their gate.
-A red gate is fixed here, in this bump:
-a failure the pin move causes is the bump's to adapt, and one it does not cause is reported to the user rather than worked around.
+A red smoke or gate is fixed in this bump:
+a failure the pin move causes is the bump's to adapt
+— after step 6, a fixup the fold groups into the bump commit, its contract change added to the bump's body —
+and one it does not cause is reported to the user rather than worked around.
 
 ## Step 6 — commit and hand off
 

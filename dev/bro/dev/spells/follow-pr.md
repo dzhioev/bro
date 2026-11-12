@@ -9,7 +9,7 @@ Handles comments, reviews, checks, conflicts, outside pushes and terminal events
 The delivery plan and review rounds belong to run-pr; resuming a lost author session uses run-pr with pr.
 
 parameters: {"pr": "pull request URL or number to follow"}
-version: 1.0.0
+version: 1.1.0
 ---
 
 # follow-pr
@@ -115,13 +115,13 @@ fetch the **base's remote** where one exists, rebase onto `<base>` as given, res
 Without the fetch a stale rebase may change nothing.
 
 Before a verdict, the same reviewer handles the new head and conflict resolution as another round.
-After a verdict, an unchanged rebase preserves verdict/approval only by the complete one-to-one all-`=` range-diff; new-head checks/tests must rerun.
+After a verdict, an unchanged rebase preserves verdict/approval only by the complete one-to-one all-`=` range-diff; new-head checks must rerun, and tests where the tree changed.
 A resolution or CI fix gets a successor reviewing the delta since the approved head, with that verdict and both heads, then a landing fold and fresh gates.
 
 ### `pushed:`
 
 Carries `head`: someone outside this checkout moved the PR head; your own pushes stay silent.
-Clear **every gate for the old head**, including verdict and approval, and retain the old objects for comparison.
+Clear **every gate for the old head**, including verdict and approval, but a `tests` pass on a tree the new head keeps, and retain the old objects for comparison.
 Before the next commit fetch and synchronize the local branch to this exact PR head, including a rewrite: `gh pr checkout <pr> --repo <owner>/<repo> --force` resets it to the PR branch.
 First preserve any uncommitted work; never discard it or force-push stale local commits over the outside push.
 Confirm HEAD equals the event/current PR head before continuing, reconciling newer pushes if it moved again.
