@@ -219,16 +219,29 @@ def test_command_signal_exit_is_preserved_through_the_supervisor():
   assert job.foreground_result() == 'exited (code -15)'
 
 
+# exec makes the TERM-ignoring python the direct child (the group leader), so
+# the group SIGTERM is fully ignored and only the SIGKILL escalation lands.
+_TERM_IGNORING_COMMAND = (
+  "exec python3 -c 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+  'print("ready", flush=True); time.sleep(30)\''
+)
+
+
 def test_kill_escalates_to_sigkill_when_sigterm_is_ignored():
-  # exec makes the TERM-ignoring python the direct child (the group leader), so
-  # the group SIGTERM is fully ignored and only the SIGKILL escalation lands.
-  script = (
-    'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '
-    'print("ready", flush=True); time.sleep(30)'
-  )
-  job = Job('job-1', f"exec python3 -c '{script}'")
+  job = Job('job-1', _TERM_IGNORING_COMMAND)
   _await_spool(job, 'ready\n')
   assert job.kill(grace_seconds=0.3) == 'job-1 exited (code -9)'
+
+
+def test_kill_returns_on_the_supervisors_exit_while_its_output_stays_open():
+  with contextlib.closing(Job('job-1', _TERM_IGNORING_COMMAND)) as job:
+    _await_spool(job, 'ready\n')
+    with (
+      ThreadPoolExecutor(max_workers=1) as pool,
+      open(f'/proc/{job.process.pid}/fd/1', 'wb'),
+    ):
+      killing = pool.submit(job.kill, grace_seconds=0.3)
+      assert killing.result(timeout=10) == 'job-1 exited (code -9)'
 
 
 def _process_is_running(process_id: int) -> bool:
@@ -249,6 +262,22 @@ def test_supervisor_anchors_the_group_until_nested_descendants_exit():
   assert _process_is_running(child_process_id)
   assert job.kill(grace_seconds=0.3) == 'job-1 exited (code -15)'
   assert not _process_is_running(child_process_id)
+
+
+@pytest.mark.parametrize(
+  ('end', 'expected'),
+  [(Job.kill, 'job-1 exited (code -15)'), (Job.close, None)],
+  ids=['kill', 'close'],
+)
+def test_ending_a_job_ends_a_descendant_that_left_its_group(end, expected):
+  job = Job('job-1', "setsid sh -c 'echo $$; exec sleep 30' &")
+  _await_spool(job, '\n')
+  with job._condition:
+    escaped_process_id = int(job._unread_locked())
+  assert os.getsid(escaped_process_id) == escaped_process_id
+
+  assert end(job) == expected
+  assert not _process_is_running(escaped_process_id)
 
 
 def test_supervisor_keeps_the_group_when_the_readiness_reader_dies(tmp_path):

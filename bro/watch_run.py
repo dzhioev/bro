@@ -55,7 +55,7 @@ class _Copier:
     except BaseException as error:
       self._error = error
       # the command would block writing into a pipe nobody reads any more
-      job_supervisor.end_group()
+      job_supervisor.end()
 
   def _copy(self) -> None:
     os.set_blocking(self._output, False)
