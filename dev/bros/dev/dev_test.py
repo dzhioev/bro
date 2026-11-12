@@ -137,7 +137,7 @@ def test_run_pr_cannot_be_offered_without_the_spells_it_runs():
   class Incomplete(Bro):
     name = 'incomplete'
     description = 'test bro'
-    spells = (dev.spells.run_pr,)
+    spells = (dev.spells.run_pr, dev.spells.commit)
 
   with pytest.raises(ValueError, match="requires spell 'land'"):
     Incomplete()
@@ -147,12 +147,12 @@ def test_run_pr_requires_its_follow_pr_handoff():
   class Pair(Bro):
     name = 'pair'
     description = 'test bro'
-    spells = (dev.spells.run_pr, dev.spells.land, dev.spells.follow_pr)
+    spells = (dev.spells.run_pr, dev.spells.commit, dev.spells.land, dev.spells.follow_pr)
 
   class RunPrOnly(Bro):
     name = 'run-pr-only'
     description = 'test bro'
-    spells = (dev.spells.run_pr, dev.spells.land)
+    spells = (dev.spells.run_pr, dev.spells.commit, dev.spells.land)
 
   assert {'run-pr', 'follow-pr'} <= set(Pair().spell_paths)
   with pytest.raises(ValueError, match="requires spell 'follow-pr'"):
@@ -163,7 +163,7 @@ def test_follow_pr_requires_landing_for_terminal_bookkeeping():
   class Incomplete(Bro):
     name = 'incomplete'
     description = 'test bro'
-    spells = (dev.spells.follow_pr,)
+    spells = (dev.spells.follow_pr, dev.spells.commit)
 
   with pytest.raises(ValueError, match="requires spell 'land'"):
     Incomplete()

@@ -73,6 +73,7 @@ class Dev(Bro):
   spells = (
     dev.spells.audit,
     dev.spells.bump_bro,
+    dev.spells.commit,
     dev.spells.design,
     when(feature('brog'), dev.spells.fix),
     dev.spells.land,
