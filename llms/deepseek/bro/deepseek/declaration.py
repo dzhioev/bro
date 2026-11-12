@@ -79,7 +79,7 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 # Off-peak rates are half of these peak rates; call timestamps do not determine billing here.
 PRICE_TABLE = price_table_from_content(
   'https://api-docs.deepseek.com/quick_start/pricing/',
-  '2026-10-29',
+  '2026-11-12',
   {
     'deepseek-v4-pro': {'cache_hit': '0.044', 'cache_miss': '1.32', 'output': '3.96'},
     'deepseek-flash': {'cache_hit': '0.006', 'cache_miss': '0.3', 'output': '1.2'},
