@@ -156,8 +156,15 @@ Both depend on `bro-ride`, which discovers installed harnesses by entry point an
 
 ## Operator channel
 
-`ride missions <root>` lists a running root's mission tree as JSON, including each mission's id, display name, workspace, joined member, type, and state.
-The display name is the joined member's name, the workspace name for a started party, or the mission id for a worker without a workspace or an unclaimed manual launch.
+`ride missions <root>` lists a running root's mission tree as JSON, one row per mission.
+Every row carries the same common fields:
+the mission's `id`, its `parent` mission id (null for the root), its `type` and `state`, and its `workspace`, null for a mission that runs in no tree.
+A joined bro member's `workspace` is its summoner's.
+`options` holds the mission's admitted option values as its type declares them, current through every override;
+it is null for a manual launch the operator has not committed yet.
+`extension` is the type's own view of the launch, carrying what the options do not, or null for a type that keeps none:
+a bro reports its effective `isolation` and, for a joined member, its `member` name;
+a webview reports its `allowed_origins` and `blocked_origins`.
 The command re-executes into the root's runtime before contacting its broker.
 A root with no operator control file is refused by name.
 
@@ -1208,10 +1215,12 @@ A resumed session is a fresh root and receives a root allowance from its new rea
 ### Host launch records
 
 Host side, `PeerFacts` (`ride/ride/peer_facts.py`) holds a generic `WorkerFacts` row keyed by the mission a peer undertakes:
-type, workspace and optional joined-member name, expected/artifact-view state, published ports, summon allowance with its sources, and a type-owned extension.
-The bro extension carries its name and resolved placement.
+type, workspace, the session records directory where it is not the workspace's own, expected/artifact-view state, published ports, summon allowance with its sources, and a type-owned extension.
+The extension is the `bro.worker_types.Extension` a type's run carries, and its `view()` is the JSON the host lists and audits for it;
+the bro extension carries its name, resolved placement, and a joined member's name.
 The journal's host-anchored mission seeds the root row;
-an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace, a joined bro’s inherited workspace plus channel-named member, or the claimed workspace for an expected bro filled at launch.
+an authorized launch adds its worker row before starting, with a started bro’s channel-named workspace or the claimed workspace for an expected bro filled at launch;
+a joined bro’s row carries its inherited workspace and its channel-named member's `party/<member>/` records directory.
 Every owner resolves through one join
 — peer to undertaken mission through the dispatcher's worker binding, then mission to facts row
 — and depth is the journal ancestry length.
@@ -1222,19 +1231,16 @@ A peer the control cannot attribute to a mission is denied.
 Every launch is subject to the [summon allowance](#summon-allowance), independently of its authority.
 Denials reply immediately and land in the journal and audit as `denied` transitions (reason, quest id, summoner, and bounded request args).
 Each spawned child records `summoned_by` provenance from the summoner's current trail plus the summoning bro's own `tool_call` step id when the request carries one.
-Owner attribution has one shape in the audit: `{workspace, type, member?, bro?, trail_id?}`.
-The trail is read from that session’s pointer for every request because Claude segments move it
-— the workspace’s `session/` for its first member, or `party/<member>/session/` for a joined one
-— with the answered quest’s journal `trail` mark as fallback.
+Owner attribution has one shape in the audit: `{workspace, type, extension?, trail_id?}`, with the owner's extension view.
+The trail is read from the pointer under that session's records directory for every request because Claude segments move it, with the answered quest’s journal `trail` mark as fallback.
 The authorized spawn carries its `SummonSpawner` into the dispatcher with the requesting peer as parent.
 `SummonSpawner` lowers the request off-loop through the started-party launcher or joined-member builder, then dispatches its concrete Docker, process, or member-exec description;
 a grandchild’s lifecycle routes to the child that summoned it, and root exit still tears down the whole tree.
 Every event lands a host log line and a durable audit row under `<runtime-root>/launch/<name>.jsonl`.
 Each row keys the ride under `ride`, using the root workspace name.
 Each entry names its actual `owner`, worker `type`, `published_ports`, bounded request args, transition, trail id, and terminal outcome.
-Type-owned audit fields are isolated under `extension`;
-the bro contributes its target and resolved `placement` as `{party, isolation}` there.
-The placement records the effective isolation inherited by a join, while a manual summon's isolation stays null because the user's launch settles it.
+Type-owned audit fields are isolated under `extension`, as the extension's view at that event:
+a join reports the isolation it inherits and its member name from its spawn on, while a manual summon's isolation stays null because the user's launch settles it.
 Live readers never read that audit back:
 check, list, watch, and the session-local statusLine projector query the caller-scoped in-memory journal over their own broker channel, so the same surfaces work at any summon depth.
 Quest verbs keep the bro workflow's type filter, while the mission surface, turn-end guards, and statusLine account for every owned mission.

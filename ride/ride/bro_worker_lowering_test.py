@@ -933,7 +933,7 @@ raise SystemExit(3)
     assert lowered_talk == frozenset({'worker.say'})
 
   @pytest.mark.asyncio
-  async def test_boxed_join_records_an_artifact_view(self, lowering_harness, monkeypatch):
+  async def test_boxed_join_records_its_member_facts(self, lowering_harness, monkeypatch):
     class RecordingExec(workspace_spawn.ExecSpawner):
       def __init__(self):
         pass
@@ -976,7 +976,13 @@ raise SystemExit(3)
       frozenset(),
     )
 
-    assert facts.for_mission('X-1').artifact_view == PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
+    joined = facts.for_mission('X-1')
+    assert joined.workspace == parent.name
+    assert facts.records_directory('X-1') == parent.path / 'party' / 'broker-CH'
+    assert joined.artifact_view == PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
+    assert joined.extension == ride.bro_worker.BroFacts(
+      'dev', ride.bro_worker.Placement('join', Isolation.BOXED), member='broker-CH'
+    )
 
   @pytest.mark.asyncio
   async def test_lowering_failure_propagates_out_of_spawn(self, lowering_harness):

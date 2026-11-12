@@ -17,6 +17,7 @@ from bro.monitor import party_member_dir
 from ride import credential_overrides
 from ride.authority_launch import mission_view
 from ride.authority_test_helper import mission, reading
+from ride.bro_worker import BroFacts, Placement
 from ride.credential_applier import CredentialApplier
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
@@ -78,7 +79,11 @@ def running(tmp_path, monkeypatch):
     )
   )
   facts = WorkerFacts(
-    'bro', workspace.name, record=original, credential_applier=CredentialApplier(environment)
+    'bro',
+    workspace.name,
+    record=original,
+    extension=BroFacts('bro'),
+    credential_applier=CredentialApplier(environment),
   )
   peers = PeerFacts(facts, root_tree=workspace.tree, root_path=workspace.path)
   journal = Journal()
@@ -103,6 +108,13 @@ def running(tmp_path, monkeypatch):
     manager=manager,
     store=directed,
     environment=environment,
+  )
+
+
+def _join(running, records):
+  running.facts.records = records
+  running.facts.extension = BroFacts(
+    'bro', Placement('join', Isolation.UNBOXED), member=records.name
   )
 
 
@@ -229,7 +241,7 @@ async def test_next_resume_commits_only_a_receipted_operation(running, monkeypat
 async def test_joined_member_uses_its_records_without_touching_the_party_resume(running):
   member = party_member_dir(running.workspace.path, 'credential-member')
   member.mkdir(parents=True)
-  running.facts.member = 'credential-member'
+  _join(running, member)
   saved = running.workspace.resume_file.read_bytes()
   async with running.manager.lifetime():
     result = await change(running, ('cred', 'brave+two')).result()
@@ -271,7 +283,7 @@ async def test_member_ending_during_apply_drops_the_pending_operation(running, m
   monkeypatch.setattr(credential_overrides, 'ACK_TIMEOUT', 0.01)
   member = party_member_dir(running.workspace.path, 'ending-member')
   member.mkdir(parents=True)
-  running.facts.member = 'ending-member'
+  _join(running, member)
   entered, released = threading.Event(), threading.Event()
 
   class FinishingApplier:

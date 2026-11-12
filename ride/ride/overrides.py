@@ -15,10 +15,9 @@ from bro.authority.syntax import parse_layer
 from bro.base import credentials
 from bro.base.lulid import lulid
 from bro.broker.journal import Journal
-from bro.monitor import party_member_dir
-from bro.workspace.paths import workspace_dir
 from ride.authority_launch import credential_values, mission_view, replace_operator_layer
 from ride.authority_reading import Reading
+from ride.bro_worker import bro_facts
 from ride.peer_facts import PeerFacts, WorkerFacts
 
 
@@ -121,7 +120,7 @@ def apply(
   requested = changes(args['changes'])
   mission_id = args['id']
   record = journal.records.get(mission_id)
-  if record is None or mission_id not in {row['id'] for row in peers.missions()}:
+  if record is None or mission_id not in peers:
     raise ValueError(f'override check: {mission_id!r} is not a mission of this root')
   facts = peers.for_mission(mission_id)
   if record.state != 'started' or facts.type != 'bro':
@@ -149,11 +148,9 @@ def apply(
     'may_summon': mission_view(proposed)['may_summon'],
   }
   with pending(facts, operation):
-    if facts.workspace is None:
-      raise ValueError('override check: mission has no workspace')
-    path = workspace_dir(facts.workspace)
-    if facts.member is not None:
-      atomic_record(party_member_dir(path, facts.member) / 'override.json', operation)
+    path = peers.records_directory(mission_id)
+    if bro_facts(facts).member is not None:
+      atomic_record(path / 'override.json', operation)
     else:
       resume = path / 'resume.json'
       if resume.exists():

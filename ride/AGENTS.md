@@ -52,7 +52,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/manual_credentials.py` — the manual launcher's retained applier connection.
 - `ride/operator.py` — root-lifetime operator channels, private control records and their cleanup, guarded operator request registration, and the mission-listing, joint-start commit/claim, and artifact share/get clients.
 - `ride/peer_facts.py` — the mission-keyed generic worker facts and peer directory for one broker root:
-  peer resolution through the journal worker binding, workspace/member/type attribution, type-owned extensions, ancestry, and per-member current-trail attribution shared by launch, artifacts, and audit.
+  peer resolution through the journal worker binding, workspace/records/type attribution, type-owned extensions, ancestry, the operator's mission rows, and per-session current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.get`, owner-authorized `artifact.share`, and `bro.export`-gated `artifact.export` kinds,
   the operator's `operator.artifact.share` and `operator.artifact.get`, and the broker's `JobOutput`:
   reflink-or-copy ingest into content-addressed objects, per-peer view directories behind read-only mounts at each peer's declared artifact-view path, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store.

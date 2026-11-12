@@ -44,7 +44,6 @@ def store(workspace):
 def PeerIdentity(
   workspace: str,
   tree: Path,
-  member: str | None = None,
   manual: bool = False,
   artifact_view: PurePosixPath | None = _DEFAULT_ARTIFACT_VIEW,
 ) -> PeerDescription:
@@ -55,8 +54,6 @@ def PeerIdentity(
     workspace=workspace,
     tree=tree,
     type='bro',
-    bro='dev',
-    member=member,
     expected=manual,
     artifact_view=artifact_view,
     published_ports=(),
@@ -373,9 +370,7 @@ class TestMaterialize:
   def test_an_unboxed_joined_member_uses_the_partys_workspace_view(self, workspace):
     store = ArtifactStore(workspace, root_boxed=False)
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    member = PeerIdentity(
-      workspace='ws', tree=workspace.tree, member='broker-CH', artifact_view=None
-    )
+    member = PeerIdentity(workspace='ws', tree=workspace.tree, artifact_view=None)
 
     path = Path(store.materialize(member, ref))
 

@@ -37,19 +37,25 @@ class ArtifactDenied(Exception):
   """An artifact operation the host refuses."""
 
 
+class Extension(ABC):
+  """A worker type's own facts about one launch, opaque to the host."""
+
+  @abstractmethod
+  def view(self) -> Mapping[str, Any]:
+    """Return the JSON fields these facts add to the launch's option values."""
+
+
 @dataclass(frozen=True)
 class PeerDescription:
   mission: str
   workspace: str
   tree: Path
   type: str
-  bro: str | None
-  member: str | None
   expected: bool
   artifact_view: PurePosixPath | None
   published_ports: tuple[tuple[int, int], ...]
   depth: int
-  extension: Any = None
+  extension: Extension | None = None
   mission_record: Mission | None = None
 
 
@@ -213,25 +219,25 @@ class WorkerContainer:
 class Spawn:
   launch: Any
   spawner: Any
-  extension: Any = None
+  extension: Extension | None = None
 
 
 @dataclass(frozen=True)
 class Job:
   command: CommandJob
-  extension: Any = None
+  extension: Extension | None = None
 
 
 @dataclass(frozen=True)
 class Container:
   spec: WorkerContainer
-  extension: Any = None
+  extension: Extension | None = None
 
 
 @dataclass(frozen=True)
 class Expect:
   pending: dict[str, Any]
-  extension: Any = None
+  extension: Extension | None = None
 
 
 Run = Spawn | Job | Container | Expect
@@ -290,9 +296,6 @@ class WorkerType(ABC):
   @abstractmethod
   def launch(self, request: LaunchRequest) -> Run:
     """Check existence and choose a host run for an admitted descriptor."""
-
-  def audit_fields(self, extension: Any) -> Mapping[str, Any]:
-    return {}
 
   def subscribers(self) -> Sequence[JournalSubscriber]:
     return ()

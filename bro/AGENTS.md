@@ -80,7 +80,7 @@ A subpackage with a map of its own is pointed at, not described here.
   quote-aware entry parsing, tree-sitter-bash validation, preflight and expanded-argv admission, the admitted shell language and builtins, word expansion, redirects classified by file reach, and status-126 refusals.
   It imports no other framework module, so each command-line start pays only for the interpreter.
 - `shell.py` (`bro-shell-dir`) — validates the packaged shell helpers and prints their installed directory for shell consumers
-- `worker_types.py` — the core contract for a worker type, its launch request and run shapes, peer descriptions, host ports, registry, and shared artifact/path helpers.
+- `worker_types.py` — the core contract for a worker type, its launch request, run shapes and their type-owned `Extension`, peer descriptions, host ports, registry, and shared artifact/path helpers.
   `WorkerContainer` is the validated, host-neutral container declaration:
   packaged build-context bytes over the runtime image, a command and environment, and container ports mapped to requested-or-available loopback host ports.
   `authority_declaration` and `option_values` declare governed options and map wire fields to option values and ungoverned content.

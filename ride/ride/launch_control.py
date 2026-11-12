@@ -84,10 +84,9 @@ class LaunchControl:
     self._worker_container_spawner = worker_container_spawner
     self._prepared: dict[str, Prepared] = {}
     self._commits: dict[str, dict[str, Any]] = {}
-    self._audit_fields: dict[str, dict[str, Any]] = {}
     self._audit_passes: dict[str, tuple[str, ...]] = {}
     self._refusals: dict[str, dict[str, str]] = {}
-    self._owners: dict[str, dict[str, str]] = {}
+    self._owners: dict[str, dict[str, Any]] = {}
     from ride.credential_overrides import CredentialOverrides
 
     self.credential_overrides = CredentialOverrides(peers, journal, reading)
@@ -134,14 +133,14 @@ class LaunchControl:
           run,
           pending=_json_object(run.pending, 'an expected worker pending value'),
         )
-      fields = _json_object(worker_type.audit_fields(run.extension), 'worker audit fields')
+      if run.extension is not None:
+        _json_object(run.extension.view(), 'a worker extension view')
     except (LaunchDenied, ValueError) as error:
       self._deny(context, peer, str(error), self._usable_type(requested_type), message.request_id)
       return
 
     facts.extension = run.extension
     facts.expected = isinstance(run, Expect)
-    self._audit_fields[request.id] = fields
     self._audit_passes[request.id] = request.passes
     self._owners[request.id] = self._peers.attribution_for_mission(context.journal, owner.mission)
     if isinstance(run, Spawn):
@@ -439,7 +438,6 @@ class LaunchControl:
     if event.transition == 'ended' and self._is_expected(event.mission):
       pending_launch.discard(event.mission)
     if event.transition in ('ended', 'denied'):
-      self._audit_fields.pop(event.mission, None)
       self._audit_passes.pop(event.mission, None)
       self._owners.pop(event.mission, None)
       self._refusals.pop(event.mission, None)
@@ -463,6 +461,8 @@ class LaunchControl:
       facts = None
     if facts is not None:
       entry['published_ports'] = [list(pair) for pair in facts.published_ports]
+      if facts.extension is not None:
+        entry['extension'] = dict(facts.extension.view())
       if isinstance(facts.record, Mission):
         mission = facts.record
         entry['descriptor'] = {
@@ -471,9 +471,6 @@ class LaunchControl:
         }
         entry['gift'] = dump_authority(mission.request.gift, mission.descriptor)
         entry['cap'] = dump_authority(mission.request.cap, mission.descriptor)
-    fields = self._audit_fields.get(event.mission)
-    if fields:
-      entry['extension'] = fields
     try:
       self._audit_file.parent.mkdir(parents=True, exist_ok=True)
       with self._audit_file.open('a') as audit:

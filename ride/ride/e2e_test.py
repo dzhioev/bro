@@ -4184,7 +4184,8 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
         for row in mission_rows(workspace.name):
           if row['workspace'] is not None:
             path = workspace_paths.workspace_dir(row['workspace']) / 'tree'
-            if (path / ('.credential-' + row['name'] + '-ready-0')).exists():
+            name = row['extension']['member'] or row['workspace']
+            if (path / ('.credential-' + name + '-ready-0')).exists():
               target = row
               return True
         return False
@@ -4192,7 +4193,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
       _wait_until(ready, 150, 'credential probe readiness', None)
       assert target is not None, 'root ended before credential probe readiness'
       tree = workspace_paths.workspace_dir(target['workspace']) / 'tree'
-      name = target['name']
+      name = target['extension']['member'] or target['workspace']
       operations = [
         [('cred', 'github+two'), ('cred', 'brave+two')],
         [('revoke', 'github'), ('revoke', 'brave')],
