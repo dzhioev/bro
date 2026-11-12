@@ -42,7 +42,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   `lint` (console-script drift, deptry, ruff's lint and format checks, ShellCheck over the shell scripts),
   `types` (pyright),
   `unit` (the pytest roster, run in parallel),
-  `sandbox` (a separate roster for tests needing a confining Linux kernel, run on native x86_64 and arm64 CI runners;
+  `sandbox` (a separate roster for tests needing a confining Linux kernel, run in parallel, and on native x86_64 and arm64 CI runners;
   it probes the protections in a child, reports `skipped` with the reason when unavailable locally, and fails instead when `GITHUB_ACTIONS` is set),
   `benchmark` and `cdk` (one per project outside the workspace, `benchmark/` and `oops/cdk/`: each syncs the project's own `.venv` and runs pyright and pytest inside it, since the workspace venv cannot import the project at all),
   the opt-in `llm` and `conformance` (live-LLM probes, each run only when `--only` names the stage, since they spend real tokens),
@@ -65,7 +65,8 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   — a roster module with no source module of its own holds a repository-wide invariant and runs whatever changed;
   `lint` runs `sync-scripts` and deptry only for the distributions the change lands in, leaving both ruff checks and ShellCheck repo-wide;
   a project's stage is skipped whole unless the change reaches something that project imports or edits any project's metadata;
-  `sandbox` runs when a change reaches a test in its roster through the import graph, as well as for changes under `bro/files/` or `filetypes/` and changes to the gate or its workflow, because providers and workers are loaded by name;
+  `sandbox` runs its whole roster for a change under `bro/files/` or `filetypes/` or to the gate or its workflow, because providers and workers are loaded by name,
+  and otherwise only the roster modules the change reaches, dropping the stage when it reaches none;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
   It leaves the host-only stages to CI whatever the diff, since they launch real containers and whole `ride` sessions, which the import graph cannot narrow;
   `--only` naming one of them beside `--changed` is a usage error.
