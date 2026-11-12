@@ -16,7 +16,7 @@ and hands off to [[run pr]].
 The framework checkout itself has nothing to bump.
 
 parameters: {"to?": "framework ref to pin — a commit, branch, or tag; default: the head of the branch the sources name"}
-version: 1.2.0
+version: 1.3.0
 ---
 
 # bump bro
@@ -217,7 +217,7 @@ and one it does not cause is reported to the user rather than worked around.
 
 ## Step 6 — commit and hand off
 
-Two kinds of commit, each in the repository's own conventions ([[run pr]]'s "Docs, splits and commit messages" and "Commit" sections for the message, the task metadata, and staging by path):
+Two kinds of commit, each made through [[commit]]:
 
 - **The bump**:
   the pin move (the sources where they changed, the lock) together with every adaptation step 3 forced, so the tree works at this commit.
@@ -225,10 +225,6 @@ Two kinds of commit, each in the repository's own conventions ([[run pr]]'s "Doc
   — one line per commit taken, `<short sha> <subject>`, oldest first
   — followed by each adaptation and the contract change that forced it.
 - **Each adoption** from step 4 on its own, its body naming the ability or fix and what it replaced.
-
-Before each commit, run [[run pr]]'s "Policy audit" as that commit's own precondition:
-call `dev-style-source::read` and the `man-source::read` guide of every area the commit reaches, audit the commit's diff against the returned text, and state the verdict as visible output before the `git commit`.
-The hand-off comes after these commits exist, so its audit cannot stand in for this one.
 
 The split is decided here, and [[run pr]]'s fold keeps it:
 the bump and each adoption reach the base branch as the commits they are, so a reviewer judges each apart and a wrong adoption reverts alone.

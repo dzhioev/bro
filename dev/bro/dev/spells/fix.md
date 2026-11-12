@@ -14,7 +14,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.11.1
+version: 4.12.0
 ---
 
 # fix
@@ -122,10 +122,9 @@ a future reader only needs the *why*.
 ## Step 5 — implement
 
 Make the change.
-For anything beyond a small, single-commit edit, **commit completed logical units as you go** rather than leaving the whole change uncommitted until [[run pr]]
+For anything beyond a small, single-commit edit, [[commit]] **completed logical units as you go** rather than leaving the whole change uncommitted until [[run pr]]
 — the session can exhaust its output budget mid-implementation, and uncommitted work is then lost, while committed units survive on the branch as a recoverable checkpoint.
-Keep each checkpoint conventional (commit style from [[run pr]]'s "Docs, splits and commit messages" and "Commit" sections);
-don't run the gate per checkpoint
+Don't run the gate per checkpoint
 — its one mandatory pass is [[run pr]]'s.
 
 Stop and ask if the approach turns out to need a different direction than the design you put to the user.
@@ -156,7 +155,7 @@ Reach for the gate early only when broad breakage is plausible
 ## Step 7 — hand off
 
 When the work is ready to land, [[run pr]]
-— it owns commit hygiene, rebase, PR creation, and the review watcher, and chains into [[land]] on approval.
+— it owns the fold, rebase, PR creation, and the review watcher, and chains into [[land]] on approval.
 
 For tasks that don't produce code (investigation, confirming existing behavior, external coordination):
 there is no pr step.

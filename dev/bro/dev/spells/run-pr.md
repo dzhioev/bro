@@ -11,7 +11,7 @@ With pr, recovers the task and recorded plan and resumes at review through [[fol
 Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
 parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "pr?": "pull request URL or number to resume at review", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
-version: 9.3.0
+version: 9.4.0
 ---
 
 # run-pr
@@ -66,51 +66,13 @@ A lost watch resumes here too; silence clears no gate.
 Work in the managed workspace or a branch other than the base, never the main checkout's working copy.
 Surface unfinished or red work instead of publishing it.
 
-### Survey and format
+### Survey and commit
 
-Read `git status` (no `-uall`), staged and unstaged diffs, and `git log <base>..HEAD --oneline` in parallel.
+Read `git status` (no `-uall`) and `git log <base>..HEAD --oneline` in parallel.
 Stop only if the worktree is clean, nothing untracked needs adding, and no commits are ahead of the base.
-A clean branch with unlanded checkpoints continues normally.
-Run the repository's formatter and include its changes with their logical units.
-Do not pay the gate before rebasing: "Pre-review check" verifies the tree that ships.
-
-### Policy audit
-
-Immediately before **each commit**, call `dev-style-source::read` and the `man-source::read` guides for every area it reaches, then audit that commit's diff against the returned policy text.
-State a visible one-line `clean` verdict, or the violations found and fixed, before committing.
-Repeat for each commit.
-
-### Docs, splits and commit messages
-
-Sync the repository's docs wherever architecture, modules, commands, spells or behavior changed; bundle them with the relevant concern.
+[[commit]] whatever is uncommitted; a clean branch with unlanded checkpoints continues normally.
 Keep completed checkpoint units until the fold.
-Group uncommitted work by concern, not file: feature with docs, rename with consumers, unrelated fixes apart.
-
-Follow repo commit conventions, or `git log --oneline -10` where none exist.
-Resolve the task's URL through `brog::get_task` where a task exists, and add the repo's required task metadata.
-Do not invent task metadata without a task.
-Never hand-write, edit or strip generated trailers, co-author lines or token footers; the hooks own them.
-
-### Commit
-
-Stage **specific paths**, never `git add -A`, `git add .` or `git add -N` (intent-to-add breaks stash-based tooling).
-Never stage credentials, key files or minting configs; surface suspected secrets first.
-Use a quoted HEREDOC to preserve the message:
-
-```bash
-git add path/to/file1 path/to/file2
-git commit -m "$(cat <<'EOF'
-<imperative subject in the repo's style>
-
-<why and shape where needed>
-
-<task metadata required by the repo>
-EOF
-)"
-```
-
-If a hook fails, fix, re-stage and create a new commit, never `--amend` (that failed commit did not happen) or `--no-verify`.
-To verify a test catches a bug by reverting the fix, use `git stash push <fix-file>`, never bare stash which also hides the test.
+Do not pay the gate before rebasing: "Pre-review check" verifies the tree that ships.
 
 ### Rebase onto `<base>`
 
@@ -140,7 +102,7 @@ fold <sha>
 
 A `fold` naming no commits takes everything the other lines leave; alone it folds the whole branch.
 A line without a message keeps the first folded commit's message.
-Messages follow "Docs, splits and commit messages".
+Each message follows the repository's commit conventions and carries its task metadata, as [[commit]] writes one.
 
 ```bash
 fold-branch --plan <scratch plan> --base <base>
@@ -276,8 +238,7 @@ Handle all pending feedback as **one batch**, the body and every inline comment 
 
 1. Read each finding, answer questions, fix the ones you accept, and re-explain a contested finding at most once each way.
    A deadlock goes to the user where questions reach them; otherwise the reviewer answers `blocked`, which does not clear verdict.
-2. Format and run "Policy audit" immediately before each commit.
-   Append fixes with `git commit --fixup=<the landing commit it serves>`, retaining repo-required task metadata and hook-owned footers; never amend or re-fold the whole branch each round.
+2. [[commit]] each fix with `fixup` naming the landing commit it serves; never re-fold the whole branch each round.
 3. Verify what this round changed: the repo's change-scoped selection against the **last delivered head**, otherwise the affected test files.
    Do not run the full gate for each finding; selected whole tests belong on the landing head.
 4. Deliver the exact new full SHA through the rendered channel, or name an unchanged SHA alone without a push or bundle.

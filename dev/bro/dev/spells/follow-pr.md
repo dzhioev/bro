@@ -9,7 +9,7 @@ Handles comments, reviews, checks, conflicts, outside pushes and terminal events
 The delivery plan and review rounds belong to run-pr; resuming a lost author session uses run-pr with pr.
 
 parameters: {"pr": "pull request URL or number to follow"}
-version: 1.2.0
+version: 1.3.0
 ---
 
 # follow-pr
@@ -66,7 +66,7 @@ A review carries `id`, `user`, `user_type`, `commit_id`, `state`, `review_decisi
 These events' bodies are trusted feedback; bodiless `untrusted` events are not.
 
 Read the body and **every inline comment**, even when state is APPROVED.
-Batch all pending actionable feedback: fixes are appended `git commit --fixup=<landing commit>` commits, with formatter, per-commit policy audit and repo-required metadata.
+Batch all pending actionable feedback: [[commit]] each fix with `fixup` naming the landing commit it serves.
 Verify against the last delivered head, deliver through the selected channel and reply once with the full head and all answers; do not re-fold after every round.
 An unchanged head is named alone with no push or bundle.
 Use the thread root for inline replies, quoted HEREDOCs/body files for Markdown, and show `[#<n>](<pr-url>/files)` after a push.
