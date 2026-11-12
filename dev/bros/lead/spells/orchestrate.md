@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.22.0
+version: 2.23.0
 ---
 
 # orchestrate
@@ -84,7 +84,8 @@ complete all these amendments before any stage launch.
    If a phase wants a different bro than the rest
    — the one that does rollouts, say
    — settle that now too.
-   The design and review-and-plan bros must expose `spell::design`;
+   Each phase bro must expose the spell its phase casts
+   — `spell::design` for design, `spell::plan` for review and plan, `spell::fix` for stages, `spell::integrate` for integration;
    check their `bro show` cards before choosing them.
    Then check every phase's summon the way you check any summon, all of them at once, so the user settles each way out before the work starts.
 3. [[Open a task]] from the seed, with the body under a `## Goal` heading;
@@ -149,14 +150,14 @@ this spell only says how a phase differs from a one-shot ask.
   When a phase needs a credential kind its bro does not declare, pass the required instance if this coordinator may use the matching `bro.cred=<kind>+<instance>` permission.
   Otherwise the kind and instance must come from `homes.<installation home>.bros.<phase-bro>` in the host configuration;
   do not broaden every run of that bro when an authorized per-phase pass is available.
-  Grant every reviewer or lander the phase's delivery plan summons, under the actual target name your banner's `may_summon` gives, not an ancestor it answers to.
-  A reviewer answers to `eyebro`; a lander answers to `dev` and exposes [[land]].
+  Grant every reviewer or lander the phase's delivery plan summons, the target the delivery reference's plan check names (`man-source::read`, topic `delivery`).
   Coordinator-owned roles need targets here rather than in the author's grant.
   Settle missing authority before launch;
   never substitute `others` silently.
 - **Self-contained prompts.** A bro shares no context with you:
-  spell out the root task URL,
-  what to produce,
+  a phase prompt carries the root task URL,
+  and either casts the phase's spell with every argument it takes
+  or spells out what to produce,
   where to put it,
   and what not to touch.
   Ask for the open questions and unmet prerequisites in its *answer* rather than on the page
@@ -184,7 +185,7 @@ ride along --summoned <token> <bro> <launch line> --harness <claude|bro>
 - No base ref:
   neither phase needs one
   — design only reads the codebase,
-  and review-and-plan resets the integration branch to origin's default branch itself.{{when #may_summon contains eyebro}}
+  and [[plan]] creates the integration branch from origin's default branch itself.{{when #may_summon contains eyebro}}
 - The eyebro goes to review-and-plan alone, on its summon request rather than the launch line, since the prepared request fixes a manual child's gift and cap;
   the design phase opens its pull request without it.{{end}}
 - No talk beyond the default:
@@ -242,67 +243,14 @@ the design file on its pull request, `## Design` on the page linking it, and an 
 
 A fresh session supplies independent eyes.
 Attended hold lets it bring material objections and open design decisions to the user before finalizing the design.{{when #may_summon contains eyebro}}
-The eyebro reviews the design as a document on the design's pull request:
-a line-addressable surface, and approvals on record.{{end}}
+The eyebro reviews the design as a document on the design's pull request.{{end}}
 Reviewing and planning are one phase:
 the reviewer ends up holding the deepest understanding of the design, which is what splitting it into stages needs.
 
-> Design-review and planning phase of multi-phase work coordinated by another session.
-> Read the whole task at `<root-task-url>`, then the design file its `## Design` links, with fresh eyes:
-> find the problems and the improvements,
-> and verify the design's assumptions wherever you can reach them
-> — introspect the real schemas,
-> APIs,
-> and call sites instead of leaving them as open questions;
-> for every contract shared with a separately deployed process, state the rollout order and how mixed versions remain operable.
-> Bring material objections and open design decisions to the user before editing the design.
-> Use [[design]] for agreed revisions, without restarting settled decisions;
-> revise the file on the design branch and push, never copying the specification back to the page.{{when #may_summon contains eyebro}}
-> The design's pull request is the design review:
-> watch it with `poll-pr` using [[follow pr]]'s trust-file and replay procedure, armed before the reviewer is summoned.
-> Reconcile the whole replay before acting; this is document review only, with no code folds or landing.
-> [[Ask <the eyebro>]] to review that pull request as a document, not code:
-> gaps, contradictions, unverified assumptions, a missing rollout order, and better alternatives, not tests or CI.
-> Fold its findings into the file until it approves, settling with the user in this session whatever needs their opinion;
-> the design is settled when both the eyebro and the user have approved the pull request on GitHub.{{end}}
-> Finalize the design in the file and update the summary under `## Design` (`brog::edit_description`, leaving the other sections intact).
-> Then close the pull request without merging and keep its branch:
-> the file on the branch is the specification that stages and verification read, and the pull request is only its review.
-> Then plan the implementation of the design you just finalized and split it into stages
-> — one stage if the work is small.
-> Group the stages into landings, each a merge to the default branch through an integration branch of its own:
-> one landing, unless the rollout needs steps between those merges
-> — deploying what accepts both shapes before anything writes the new one, say.
-> For EACH stage call `brog::create_task` to open a stage task whose body carries:
-> the stage's goal and details;
-> "part of the multi-phase work tracked at [`<root-task-name>`](`<root-task-url>`) — read its `## Design`, including the design file it links on the kept branch, and `## Design changelog` before starting";
-> "land via [[run pr]] with its base argument set to `origin/<integration branch>`, reviewed on github by a reviewer you summon, with gates verdict and checks where CI covers its landing method, otherwise verdict and tests
-> — the human approval comes at the integration landing";
-> "when the PR merges, mark this task done — do not hold it for a rollout, the coordinator rolls the work out after its landing merges";
-> and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
-> The first stage of each later landing carries one more line, since its branch can only start from what the landing before it left on the default branch:
-> "first create `<its landing's integration branch>` on origin from the default branch, staying on your own workspace branch:
-> `base=$(default-branch) && git fetch origin "$base" && git push origin "origin/$base:refs/heads/<branch>"`, skipped where origin already has it".
-> Record any chosen coordinator roles and gates explicitly, including `approval` for summoner approval.
-> Every end-to-end route the design names is owed automated coverage by the last stage that completes it, and that stage's task names the routes it owes;
-> the verification phase confirms the shipped result against the real system and is never where a route runs for the first time.
-> Then establish the first landing's integration branch, every landing's named after the root task rather than left as the workspace's own:
-> `base=$(default-branch) && git fetch origin "$base" && git reset --hard "origin/$base" && git checkout -b integration/<root-task-id>-<short-slug> && git push -u origin HEAD`.
-> The prefix is what lets a repository write branch rules over the branches stages merge into, so the name is part of the contract, not decoration.
-> Finally write `## Implementation plan` on the root task (`brog::append_description`):
-> the landings in order, each with its integration branch and its ordered stages linking their stage tasks,
-> and, when the work needs a rollout to go live, a `### Rollout` of ordered steps.
-> Each step carries its commands, the check that confirms it, its rollback, and the landing it follows,
-> and names the session that runs it:
-> the bro, its isolation, and the credentials it needs.
-> A step is the user's only where nothing but a human can do it, such as an approving review.
-> Do NOT implement code or open a PR other than the design's,
-> and do not change any task's status.
-> Answer with what you changed in the design and why,
-> the closed design pull request and its branch,
-> the landings with their integration branches and stages,
-> the rollout steps with the session each names,
-> and any prerequisite implementation or rollout will still need.
+> Review-and-plan phase of multi-phase work coordinated by another session:
+> [[plan <root-task-url>]].
+
+Where coordinator roles or gates are already chosen for the stages, name them inside the cast, as its `delivery` argument.
 
 Outcome:
 a finalized design file on the kept branch, its closed pull request linked from `## Design`,
@@ -378,28 +326,8 @@ Once every stage task of the landing is done, tell the user what the last step n
 where the default branch is protected, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
 Then summon:
 
-> Integration phase of multi-phase work coordinated by another session.
-> This workspace is on the integration branch `<integration-branch>`.
-> Sync it against origin and rebase it onto `origin/$(default-branch)`.
-> Then take the rebased result onto a branch of its own before doing anything else:
-> `git checkout -b integration-pr/<the integration branch's own slug>`.
-> The pull request goes up from THAT branch;
-> the integration branch is never pushed again.
-> A repository that gates the branches stages merge into refuses every direct push to them, the rebase's included, so a phase that pushed the integration branch would be stuck with nothing to open a PR from
-> — and the two roles want separating anyway, since what stages merge into should not be the thing a merge to the default branch rewrites.
-> Then open ONE pull request for all the landing's stages together with [[run pr]], its base argument `origin/<default branch>` and its default human-approval gate retained, and land it with [[land]].
-> Its body names the stage pull requests and the integration branch their commits landed on
-> — the task's comments carry them
-> — so the reviewer reconciles those approvals instead of re-reading the stages.
-> Record the pull request on the task at `<root-task-url>` as soon as it is open (`brog::add_comment`, topic `integration pr`), so the page carries the one that took the stages to the default branch.
-> Where the default branch is protected, the approving review that clears the merge has to come from the user:
-> an agent's own approval does not satisfy the base's rule, so a land refused for want of a review is the expected state there rather than a blocker.
-> Keep [[follow pr <integration-pr>]] running through it, restarting that watch if needed, and land when the user's approval arrives.
-> Keep the task at `<root-task-url>` open whatever happens
-> — the coordinating session closes it after verification.
-> Roll nothing out, even where [[land]] would hand a deploy off:
-> the coordinating session runs the rollout as a phase of its own.
-> Answer with the merged PR and the landed commit.
+> Integration phase of multi-phase work coordinated by another session:
+> [[integrate <integration-branch> for <root-task-url>]].
 
 Outcome:
 the landing on the default branch as a single commit.

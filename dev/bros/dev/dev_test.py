@@ -126,11 +126,20 @@ def test_review_delegation_uses_one_asynchronous_tool_shape(monkeypatch):
 
 def test_the_task_spells_are_offered_only_where_a_tracker_resolves(monkeypatch):
   monkeypatch.setattr('bro.base.credentials.available', lambda name: False)
-  assert {'fix', 'open-task'}.isdisjoint(Dev().spell_paths)
+  assert {'fix', 'open-task', 'plan', 'integrate'}.isdisjoint(Dev().spell_paths)
   assert 'run-pr' in Dev().spell_paths
 
   monkeypatch.setattr('bro.base.credentials.available', lambda name: name == 'brog')
-  assert {'fix', 'open-task'} <= set(Dev().spell_paths)
+  assert {'fix', 'open-task', 'plan', 'integrate'} <= set(Dev().spell_paths)
+
+
+@pytest.mark.parametrize(('targets', 'reviewed'), [((), False), (('eyebro',), True)])
+def test_plan_reviews_the_design_through_an_eyebro_only_where_its_own_session_may_summon_one(
+  monkeypatch, targets, reviewed
+):
+  publish(monkeypatch, targets=targets)
+  body = _TrackerDev().get_spell_body('plan', harness='claude', hold='attended')
+  assert ('[[Ask <the eyebro' in body) == reviewed
 
 
 def test_run_pr_cannot_be_offered_without_the_spells_it_runs():
