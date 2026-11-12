@@ -206,7 +206,7 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 def _rates(
   input_rate: str, cached_input: Optional[str], cache_write: Optional[str], output: str
 ) -> TokenRates:
-  """rates in the vendor page's column order, None for a blank cell."""
+  """rates in parameter order, None for a blank vendor-page cell."""
   return TokenRates(
     input=Decimal(input_rate),
     cached_input=None if cached_input is None else Decimal(cached_input),
@@ -217,10 +217,12 @@ def _rates(
 
 # Rates are copied from the vendor page and updated by hand in a PR together
 # with this date. Pricing never fetches vendor data at run time. The page's Fast
-# tier is the one a response reports as `priority`.
+# tier is the one a response reports as `priority`. The cache-write rate is the
+# page's 30m write: the client requests no longer cache retention, and usage
+# does not split cache writes by retention.
 PRICE_TABLE = PriceTable(
   source='https://developers.openai.com/api/docs/pricing',
-  as_of=date(2026, 10, 12),
+  as_of=date(2026, 11, 12),
   models=MappingProxyType(
     {
       'gpt-6-astra': ModelRates(

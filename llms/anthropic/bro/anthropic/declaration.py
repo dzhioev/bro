@@ -175,7 +175,7 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 # speed and bills it at standard rates.
 PRICE_TABLE = PriceTable(
   source='https://platform.claude.com/docs/en/about-claude/pricing',
-  as_of=date(2026, 10, 12),
+  as_of=date(2026, 11, 12),
   models=MappingProxyType(
     {
       'claude-fable-5-1': ModelRates(
