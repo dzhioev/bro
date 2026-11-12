@@ -70,8 +70,9 @@ A subpackage with a map of its own is pointed at, not described here.
   the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   `artifact_mcp.py` is the registered `artifact` toolset, fetching and listing reachable refs and reading and grepping fetched text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
-- `job_supervisor.py` — the shared process-group supervisor behind core's `watch-run` and bro-native's jobs:
-  it remains the live group leader until every command descendant exits, and exits when the owner-liveness handle closes.
+- `job_supervisor.py` — the shared supervisor behind core's `watch-run` and bro-native's jobs:
+  it runs the command in a process group of its own and outlives every descendant;
+  SIGTERM terminates them, `KILL_SIGNAL` kills them, and the owner-liveness handle closing asks for both in turn.
   The native job registry, spool, and inbox keep their public `bro.jobs` and `bro.inbox` paths under `harnesses/native/harness/`.
 - `brash_policy.py` — a session's brash policy file, written from a reach's finite command list and files level, and the argv a line starts as:
   brash under a policy, bash under `brash(ANY)`.

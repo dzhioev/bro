@@ -65,8 +65,9 @@ _POLL_DESCRIPTION = (
 )
 
 _KILL_DESCRIPTION = (
-  'terminate a job’s whole supervised process group with SIGTERM, escalating to SIGKILL after '
-  'the grace period. waits for and consumes the exit it forces, so no later exit notification '
+  'terminate a job’s command and its descendants with SIGTERM, escalating to SIGKILL after '
+  'the grace period; one it may not kill is named in the job’s output and waited for. waits for '
+  'and consumes the exit it forces, so no later exit notification '
   'follows; unread output remains available to `poll`, and unread watch output remains eligible '
   'for notification delivery.'
 )

@@ -157,7 +157,7 @@ class TestCopier:
 
     monkeypatch.setattr(watches.Watch, 'publish_journal_head', publish)
     # in-process, a failed copy would end the test runner's own process group
-    monkeypatch.setattr(watch_run.job_supervisor, 'end_group', lambda: None)
+    monkeypatch.setattr(watch_run.job_supervisor, 'end', lambda: None)
     watch = watches.Watch('producer', tmp_path, watches.slug('producer'))
     output_read, output_write = os.pipe()
     journal_read, journal_write = os.pipe()
@@ -198,7 +198,7 @@ class TestCopier:
 
     monkeypatch.setattr(watches.Watch, 'publish_journal_head', publish)
     # in-process, a failed copy would end the test runner's own process group
-    monkeypatch.setattr(watch_run.job_supervisor, 'end_group', lambda: None)
+    monkeypatch.setattr(watch_run.job_supervisor, 'end', lambda: None)
     watch = watches.Watch('producer', tmp_path, watches.slug('producer'))
     output_read, output_write = os.pipe()
     journal_read, journal_write = os.pipe()

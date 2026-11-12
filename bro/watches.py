@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Optional, Self
 
+from bro import job_supervisor
 from bro.base import log, spawn
 from bro.base.credential_environment import overlay
 from bro.base.text_window import format_size
@@ -709,8 +710,7 @@ class Store:
         started = ready.read(1)
     except OSError as error:
       if process is not None:
-        with contextlib.suppress(ProcessLookupError):
-          os.killpg(process.pid, signal.SIGKILL)
+        process.send_signal(job_supervisor.KILL_SIGNAL)
         process.wait()
       self._discard_failed_start(watch, resume)
       raise WatchError(f'cannot start `{watch.command}`: {error}') from error
@@ -765,18 +765,18 @@ class Store:
       return
     with os.fdopen(process_fd):
       try:
-        os.killpg(identity.process_id, signal.SIGTERM)
+        signal.pidfd_send_signal(process_fd, signal.SIGTERM)
       except ProcessLookupError:
         return
       if len(select.select([process_fd], [], [], _TERM_GRACE_SECONDS)[0]) == 0:
         with contextlib.suppress(ProcessLookupError):
-          os.killpg(identity.process_id, signal.SIGKILL)
+          signal.pidfd_send_signal(process_fd, job_supervisor.KILL_SIGNAL)
         select.select([process_fd], [], [])
 
   @staticmethod
   def _terminate_without_pidfd(identity: ProcessIdentity) -> None:
     try:
-      os.killpg(identity.process_id, signal.SIGTERM)
+      os.kill(identity.process_id, signal.SIGTERM)
     except ProcessLookupError:
       return
     deadline = time.monotonic() + _TERM_GRACE_SECONDS
@@ -784,7 +784,7 @@ class Store:
       time.sleep(0.05)
     if identity.alive():
       with contextlib.suppress(ProcessLookupError):
-        os.killpg(identity.process_id, signal.SIGKILL)
+        os.kill(identity.process_id, job_supervisor.KILL_SIGNAL)
     while identity.alive():
       time.sleep(0.05)
 
