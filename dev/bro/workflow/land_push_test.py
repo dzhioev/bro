@@ -193,3 +193,41 @@ def test_conflict_resolution_requires_a_successors_approved_head(repository, cap
   assert result['coverage'] == 'head'
   assert result['head'] == head
   assert repository.git('ls-remote', 'origin', 'main').split()[0] == head
+
+
+@pytest.mark.parametrize('conclusion', ['success', 'failure'])
+def test_current_ci_retry_controls_the_push(repository, conclusion, capsys):
+  head = repository.git('rev-parse', 'HEAD')
+  old_conclusion = 'failure' if conclusion == 'success' else 'success'
+  old_workflow = {'databaseId': 41, 'status': 'completed', 'conclusion': old_conclusion}
+  workflow = {'databaseId': 42, 'status': 'completed', 'conclusion': conclusion}
+  old_check = {
+    'id': 10,
+    'app': {'id': 1},
+    'name': 'tests',
+    'status': 'completed',
+    'conclusion': old_conclusion,
+  }
+  retry = {**old_check, 'id': 20, 'conclusion': conclusion}
+  with (
+    patch.object(land_push.head_checks, 'repository', return_value='owner/project'),
+    patch.object(
+      land_push.head_checks,
+      'command',
+      side_effect=[
+        json.dumps([workflow, old_workflow]),
+        json.dumps([{'check_runs': [old_check]}, {'check_runs': [retry]}]),
+      ],
+    ),
+  ):
+    assert _land(workflow='tests.yml') == (None if conclusion == 'success' else 1)
+  remote_head = repository.git('ls-remote', 'origin', 'main').split()[0]
+  if conclusion == 'success':
+    assert remote_head == head
+    result = json.loads(capsys.readouterr().out)
+    assert result['checks']['check_runs'] == [retry]
+    assert result['checks']['run'] == workflow
+  else:
+    assert remote_head == repository.git('rev-parse', 'main')
+    assert remote_head != head
+    assert not capsys.readouterr().out

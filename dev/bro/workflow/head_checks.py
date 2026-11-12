@@ -89,6 +89,16 @@ def passed(result: dict[str, Any]) -> bool:
   return check_state('completed', result['conclusion']) == 'passed'
 
 
+def _latest_checks(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+  latest: dict[tuple[int, str], dict[str, Any]] = {}
+  for page in pages:
+    for run in page['check_runs']:
+      key = (run['app']['id'], run['name'])
+      if key not in latest or run['id'] > latest[key]['id']:
+        latest[key] = run
+  return list(latest.values())
+
+
 def ensure(base: Base, workflow: str, head: str, wait: int) -> dict[str, Any]:
   repo = repository(base)
   deadline = time.monotonic() + wait
@@ -107,10 +117,10 @@ def ensure(base: Base, workflow: str, head: str, wait: int) -> dict[str, Any]:
         'api',
         '--paginate',
         '--slurp',
-        f'repos/{repo}/commits/{head}/check-runs?per_page=100',
+        f'repos/{repo}/commits/{head}/check-runs?per_page=100&filter=all',
       )
     )
-    checks = [run for page in pages for run in page['check_runs']]
+    checks = _latest_checks(pages)
     states = [
       check_state(workflow_run['status'], workflow_run['conclusion']),
       *(check_state(run['status'], run['conclusion']) for run in checks),
