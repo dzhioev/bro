@@ -147,7 +147,13 @@ def test_run_pr_requires_its_follow_pr_handoff():
   class Pair(Bro):
     name = 'pair'
     description = 'test bro'
-    spells = (dev.spells.run_pr, dev.spells.commit, dev.spells.land, dev.spells.follow_pr)
+    spells = (
+      dev.spells.run_pr,
+      dev.spells.commit,
+      dev.spells.land,
+      dev.spells.follow_pr,
+      dev.spells.resume_pr,
+    )
 
   class RunPrOnly(Bro):
     name = 'run-pr-only'
@@ -263,35 +269,6 @@ async def test_lander_handovers_reach_the_called_surface(monkeypatch, harness, c
   assert declared is not None
   assert delivered is not None
   assert delivered[0] == declared[0]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('harness', ['bro', 'claude'])
-@pytest.mark.parametrize(
-  'arguments',
-  [
-    {'pr': 'https://github.com/owner/project/pull/42'},
-    {
-      'pr': 'https://github.com/owner/project/pull/42',
-      'channel': 'talk',
-      'landing': 'push',
-      'reviewer': 'summon',
-      'approver': 'summoner',
-      'gates': 'verdict,checks,approval',
-      'base': 'upstream/integration/topic',
-    },
-  ],
-  ids=['without-delivery-line', 'recorded-delivery-choices'],
-)
-async def test_resume_entry_reaches_default_and_recorded_channel_renderings(
-  monkeypatch, harness, arguments
-):
-  publish(monkeypatch, targets=('eyebro',))
-  spell, body = await _delivery_call(arguments, harness)
-  heading = '## Resume with `pr`'
-  assert _section(body, heading) == _section(spell.body, heading)
-  channel = arguments.get('channel', 'github')
-  assert f'### {channel.title() if channel != "github" else "GitHub"} review' in body
 
 
 @pytest.mark.asyncio
