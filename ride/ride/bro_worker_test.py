@@ -62,9 +62,7 @@ def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), source=Non
     workspace='ws',
     tree=tmp_path,
     type=type,
-    bro='bro-dev' if type == 'bro' else None,
     mission_record=mission(grant=grant, revoke=revoke, source=source),
-    member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
@@ -290,13 +288,12 @@ def test_a_manual_summon_leaves_the_recipe_to_the_operators_launch(tmp_path):
   assert isinstance(BroType(host).launch(_request(tmp_path, host=host, manual=True)), Expect)
 
 
-def test_audit_fields_are_projected_from_bro_facts(tmp_path):
-  worker = BroType(Host())
-  run = worker.launch(_request(tmp_path))
-  assert worker.audit_fields(run.extension) == {
-    'placement': {'party': 'start', 'isolation': 'boxed'},
-    'target': 'dev',
-  }
+def test_bro_facts_view_is_the_isolation_and_member_the_options_do_not_carry(tmp_path):
+  run = BroType(Host()).launch(_request(tmp_path))
+  assert run.extension is not None
+  assert run.extension.view() == {'isolation': 'boxed', 'member': None}
+  joined = BroFacts('dev', Placement('join', Isolation.UNBOXED), member='broker-CH')
+  assert joined.view() == {'isolation': 'unboxed', 'member': 'broker-CH'}
 
 
 def test_a_bro_launch_requires_an_admitted_record(tmp_path):

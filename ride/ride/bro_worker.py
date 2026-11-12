@@ -10,7 +10,7 @@ import contextlib
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal, Optional, Protocol, cast
 
@@ -18,6 +18,7 @@ from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_request
 from bro.authority.rules import Mission, Prepared
 from bro.base import log
+from bro.monitor import party_member_dir
 from bro.quest import BRO
 from bro.summon import (
   DEFAULT_TALK,
@@ -27,13 +28,14 @@ from bro.summon import (
 )
 from bro.worker_types import (
   Expect,
+  Extension,
   LaunchDenied,
   LaunchRequest,
   Spawn,
   UnattributablePeer,
   WorkerType,
 )
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
 from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
@@ -43,7 +45,7 @@ if TYPE_CHECKING:
   from bro.broker.transport import Provisioned
   from ride.artifacts import ArtifactStore
   from ride.authority_reading import Reading
-  from ride.peer_facts import PeerFacts
+  from ride.peer_facts import PeerFacts, WorkerFacts
   from ride.repository import Repository
   from ride.runtime_bundle import RuntimeBundle
   from ride.session import ScopedLaunch, SessionSpec
@@ -371,7 +373,6 @@ def _lower_join(
 ) -> ProcessLaunchSpec | ExecLaunchSpec:
   """Prepare a member beside its summoner: a process in an unboxed party's
   tree, an exec into a boxed party's running container."""
-  from bro.monitor import party_member_dir
   from ride.repository import as_repository
   from ride.workspace.model import Workspace
   from ride.workspace.spawn import ExecLaunchSpec, ProcessLaunchSpec
@@ -470,14 +471,17 @@ class SummonSpawner:
     assert isinstance(launch, SummonLaunchSpec)
     child_name = _workspace_name(channel.channel)
     if launch.party == 'join':
-      self._facts.note_member(
+      isolation = workspace_isolation(launch.parent)
+      facts = self._facts.for_mission(mission)
+      facts.extension = replace(
+        bro_facts(facts), placement=Placement('join', isolation), member=child_name
+      )
+      self._facts.note_workspace(
         mission,
         launch.parent,
-        child_name,
+        records=party_member_dir(workspace_dir(launch.parent), child_name),
         artifact_view=(
-          PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
-          if workspace_isolation(launch.parent) is Isolation.BOXED
-          else None
+          PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if isolation is Isolation.BOXED else None
         ),
       )
       lowered = await asyncio.to_thread(
@@ -517,9 +521,22 @@ class Placement:
 
 
 @dataclass(frozen=True)
-class BroFacts:
+class BroFacts(Extension):
   bro: str
   placement: Placement = Placement('start', Isolation.BOXED)
+  member: str | None = None
+
+  def view(self) -> Mapping[str, Any]:
+    return {
+      'isolation': None if self.placement.isolation is None else self.placement.isolation.value,
+      'member': self.member,
+    }
+
+
+def bro_facts(facts: WorkerFacts) -> BroFacts:
+  if not isinstance(facts.extension, BroFacts):
+    raise TypeError('bro launch facts are missing')
+  return facts.extension
 
 
 class BroType(WorkerType):
@@ -598,7 +615,7 @@ class BroType(WorkerType):
     )
 
   @staticmethod
-  def _summoned_by(attribution: dict[str, str], args: dict[str, Any]) -> dict[str, Any] | None:
+  def _summoned_by(attribution: dict[str, Any], args: dict[str, Any]) -> dict[str, Any] | None:
     trail_id = attribution.get('trail_id')
     if trail_id is None:
       return None
@@ -609,19 +626,6 @@ class BroType(WorkerType):
       if args.get('index') is not None:
         value['index'] = args['index']
     return value
-
-  def audit_fields(self, extension: Any) -> Mapping[str, Any]:
-    if not isinstance(extension, BroFacts):
-      raise TypeError('bro launch facts are missing')
-    return {
-      'placement': {
-        'party': extension.placement.party,
-        'isolation': (
-          None if extension.placement.isolation is None else extension.placement.isolation.value
-        ),
-      },
-      'target': extension.bro,
-    }
 
   def subscribers(self) -> Sequence[Callable[[Event, Record], None]]:
     return (self._observe_journal,)

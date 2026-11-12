@@ -4,14 +4,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from bro.authority.records import dump_values
+from bro.authority.rules import Mission
 from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
 from bro.monitor import party_member_dir
 from bro.worker_types import PeerDescription, UnattributablePeer
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_tree
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
 from ride import pending_launch
 from ride.authority_test_helper import mission, reading
-from ride.bro_worker import BroFacts
+from ride.bro_worker import BroFacts, Placement
 from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
@@ -85,9 +87,7 @@ def test_root_row_is_seeded_by_the_host_anchored_mission(facts):
     workspace='ws',
     tree=workspace.tree,
     type='bro',
-    bro='bro-dev',
     mission_record=table.for_mission('root-mission').record,
-    member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
@@ -117,8 +117,8 @@ def test_joined_peer_uses_the_party_tree_and_its_own_trail_pointer(facts):
     WorkerFacts(
       'bro',
       'ws',
-      member='broker-CH',
-      extension=BroFacts('dev'),
+      records=party_member_dir(workspace.path, 'broker-CH'),
+      extension=BroFacts('dev', Placement('join', Isolation.BOXED), member='broker-CH'),
     ),
   )
   record = context.journal.open(
@@ -133,8 +133,7 @@ def test_joined_peer_uses_the_party_tree_and_its_own_trail_pointer(facts):
   assert table.attribution(context, CHILD) == {
     'workspace': 'ws',
     'type': 'bro',
-    'bro': 'dev',
-    'member': 'broker-CH',
+    'extension': {'isolation': 'boxed', 'member': 'broker-CH'},
     'trail_id': 'member-trail',
   }
 
@@ -184,30 +183,61 @@ def test_attribution_reads_the_current_pointer_then_the_journal_fallback(facts):
   assert table.attribution(context, ROOT)['trail_id'] == 'current-trail'
 
 
-def test_operator_listing_names_workspaces_members_and_unplaced_missions(facts, monkeypatch):
+def test_operator_listing_rows_carry_common_fields_options_and_the_type_extension(
+  facts, monkeypatch
+):
   table, context, workspace = facts
   _spawned(table, context, CHILD, 'child-mission', 'root-mission')
   _spawned(table, context, GRANDCHILD, 'expected-mission', 'root-mission', expected=True)
-  table.add('joined-mission', WorkerFacts('bro', workspace.name, member='member-name'))
-  context.journal.open('joined-mission', 'launch', 'root-mission', ROOT, {}, type='bro')
+  joined = BroFacts('dev', Placement('join', Isolation.UNBOXED), member='member-name')
+  table.add('joined-mission', WorkerFacts('bro', workspace.name, extension=joined))
+  context.journal.open('joined-mission', 'launch', 'child-mission', CHILD, {}, type='bro')
   table.add('job-mission', WorkerFacts('benchmark', None))
   context.journal.open('job-mission', 'launch', 'root-mission', ROOT, {}, type='benchmark')
   monkeypatch.setattr(pending_launch, 'claimed_workspace', lambda _mission: None)
 
   rows = {row['id']: row for row in table.missions()}
-  assert rows['root-mission']['name'] == workspace.name
-  assert rows['child-mission']['name'] == f'broker-{CHILD}'
-  assert rows['joined-mission']['name'] == 'member-name'
+  root = cast(Mission, table.for_mission('root-mission').record)
+  assert rows['root-mission']['parent'] is None
+  assert rows['root-mission']['workspace'] == workspace.name
+  assert rows['root-mission']['options'] == dump_values(root.descriptor.values)
+  assert rows['root-mission']['extension'] == {'isolation': 'boxed', 'member': None}
+  assert rows['child-mission']['workspace'] == f'broker-{CHILD}'
+  assert rows['joined-mission']['parent'] == 'child-mission'
   assert rows['joined-mission']['workspace'] == workspace.name
-  assert rows['joined-mission']['member'] == 'member-name'
+  assert rows['joined-mission']['extension'] == {'isolation': 'unboxed', 'member': 'member-name'}
   assert rows['expected-mission']['workspace'] is None
-  assert rows['expected-mission']['name'] == 'expected-mission'
-  assert rows['job-mission']['name'] == 'job-mission'
-  assert rows['job-mission']['type'] == 'benchmark'
+  assert rows['expected-mission']['options'] is None
+  assert rows['job-mission'] == {
+    'id': 'job-mission',
+    'parent': 'root-mission',
+    'type': 'benchmark',
+    'state': rows['job-mission']['state'],
+    'workspace': None,
+    'options': None,
+    'extension': None,
+  }
 
   monkeypatch.setattr(pending_launch, 'claimed_workspace', lambda _mission: 'manual-workspace')
   claimed = {row['id']: row for row in table.missions()}
-  assert claimed['expected-mission']['name'] == 'manual-workspace'
+  assert claimed['expected-mission']['workspace'] == 'manual-workspace'
+
+
+def test_operator_listing_options_follow_the_live_mission_record(facts):
+  table, _, _ = facts
+  table.for_mission('root-mission').record = mission(grant=('@dev',), values={'hold': 'guided'})
+  [row] = table.missions()
+  assert row['options']['hold'] == 'guided'
+
+
+def test_records_directory_is_the_noted_one_else_the_workspace_directory(facts):
+  table, context, workspace = facts
+  _spawned(table, context, CHILD, 'child-mission', 'root-mission')
+  assert table.records_directory('root-mission') == workspace.path
+  assert table.records_directory('child-mission') == workspace_dir(f'broker-{CHILD}')
+  member_records = party_member_dir(workspace.path, 'member')
+  table.note_workspace('child-mission', workspace.name, records=member_records)
+  assert table.records_directory('child-mission') == member_records
 
 
 @pytest.mark.parametrize('attached', [False, True])
@@ -250,4 +280,3 @@ def test_first_listing_after_manual_worker_ends_retains_claimed_workspace(facts,
   [row] = [row for row in table.missions() if row['id'] == mission]
   assert row['state'] == 'ended'
   assert row['workspace'] == 'manual-workspace'
-  assert row['name'] == 'manual-workspace'

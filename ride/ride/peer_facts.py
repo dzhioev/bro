@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from bro.authority.records import dump_values
 from bro.authority.rules import Mission, Prepared
-from bro.monitor import party_member_dir
 from bro.monitor.trail_pointer import read, session_pointer
-from bro.worker_types import PeerDescription, UnattributablePeer
+from bro.worker_types import Extension, PeerDescription, UnattributablePeer
 from bro.workspace.paths import workspace_dir
 from ride import pending_launch
 from ride.authority_reading import SummonAllowance
@@ -28,11 +28,11 @@ class WorkerFacts:
   type: str
   workspace: str | None
   tree: Path | None = None
-  member: str | None = None
+  records: Path | None = None
   expected: bool = False
   artifact_view: PurePosixPath | None = None
   published_ports: tuple[tuple[int, int], ...] = ()
-  extension: Any = None
+  extension: Extension | None = None
   record: Mission | Prepared | None = None
   allowance: SummonAllowance | None = None
   pending_override: dict[str, Any] | None = None
@@ -76,24 +76,12 @@ class PeerFacts:
     mission: str,
     workspace: str,
     *,
+    records: Path | None = None,
     artifact_view: PurePosixPath | None = None,
   ) -> None:
     facts = self.for_mission(mission)
     facts.workspace = workspace
-    facts.member = None
-    facts.artifact_view = artifact_view
-
-  def note_member(
-    self,
-    mission: str,
-    workspace: str,
-    member: str,
-    *,
-    artifact_view: PurePosixPath | None,
-  ) -> None:
-    facts = self.for_mission(mission)
-    facts.workspace = workspace
-    facts.member = member
+    facts.records = records
     facts.artifact_view = artifact_view
 
   def note_published_ports(self, mission: str, ports: tuple[tuple[int, int], ...]) -> None:
@@ -104,6 +92,17 @@ class PeerFacts:
     if facts is None:
       raise UnattributablePeer(f'{_UNATTRIBUTABLE} to facts for mission {mission!r}')
     return facts
+
+  def __contains__(self, mission: str) -> bool:
+    return mission in self._facts
+
+  def records_directory(self, mission: str) -> Path:
+    facts = self.for_mission(mission)
+    if facts.records is not None:
+      return facts.records
+    if mission == self._root_mission:
+      return self._root_path
+    return workspace_dir(self._workspace(mission, facts))
 
   def describe(self, mission_id: str) -> PeerDescription:
     if self._journal is None:
@@ -120,16 +119,11 @@ class PeerFacts:
     facts = self.for_mission(mission)
     workspace = self._workspace(mission, facts)
     tree = self._tree(mission, workspace, facts)
-    bro = getattr(facts.extension, 'bro', None)
-    if bro is not None and not isinstance(bro, str):
-      raise UnattributablePeer(f'{_UNATTRIBUTABLE} to a bro')
     return PeerDescription(
       mission=mission,
       workspace=workspace,
       tree=tree,
       type=facts.type,
-      bro=bro,
-      member=facts.member,
       expected=facts.expected,
       artifact_view=facts.artifact_view,
       published_ports=facts.published_ports,
@@ -152,11 +146,16 @@ class PeerFacts:
       missions.append(
         {
           'id': mission,
-          'name': facts.member or facts.workspace or mission,
-          'workspace': facts.workspace,
-          'member': facts.member,
+          'parent': view['parent'],
           'type': facts.type,
           'state': view['state'],
+          'workspace': facts.workspace,
+          'options': (
+            dump_values(facts.record.descriptor.values)
+            if isinstance(facts.record, Mission)
+            else None
+          ),
+          'extension': None if facts.extension is None else dict(facts.extension.view()),
         }
       )
     return missions
@@ -169,25 +168,15 @@ class PeerFacts:
       workspaces.append(self._workspace(ancestor, facts))
     return tuple(workspaces)
 
-  def attribution(self, context: Dispatcher, peer: Peer) -> dict[str, str]:
+  def attribution(self, context: Dispatcher, peer: Peer) -> dict[str, Any]:
     return self.attribution_for_mission(context.journal, self.resolve(context, peer).mission)
 
-  def attribution_for_mission(self, journal: Journal, mission: str) -> dict[str, str]:
+  def attribution_for_mission(self, journal: Journal, mission: str) -> dict[str, Any]:
     description = self._description(mission, journal)
-    attribution = {'workspace': description.workspace, 'type': description.type}
-    if description.bro is not None:
-      attribution['bro'] = description.bro
-    if description.member is not None:
-      attribution['member'] = description.member
-    workspace_path = (
-      self._root_path if mission == self._root_mission else workspace_dir(description.workspace)
-    )
-    records_path = (
-      workspace_path
-      if description.member is None
-      else party_member_dir(workspace_path, description.member)
-    )
-    trail_id = read(session_pointer(records_path))
+    attribution: dict[str, Any] = {'workspace': description.workspace, 'type': description.type}
+    if description.extension is not None:
+      attribution['extension'] = dict(description.extension.view())
+    trail_id = read(session_pointer(self.records_directory(mission)))
     if trail_id is None:
       record = journal.records.get(mission)
       trail_id = record.trail_id if record is not None else None

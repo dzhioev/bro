@@ -34,8 +34,6 @@ def _owner(
     workspace='workspace',
     tree=tmp_path,
     type=type,
-    bro='bro-dev' if type == 'bro' else None,
-    member=None,
     expected=False,
     artifact_view=None,
     published_ports=(),
@@ -112,7 +110,7 @@ class TestWebviewType:
       'allowed_origins': [],
       'blocked_origins': [],
     }
-    assert run.extension == worker.WebviewFacts(False, None, False, (), ())
+    assert run.extension == worker.WebviewFacts((), ())
 
   def test_vnc_and_origins_reach_the_container_facts(self, tmp_path):
     run = _worker_type().launch(
@@ -134,24 +132,19 @@ class TestWebviewType:
       'blocked_origins': ['https://blocked.example'],
     }
     assert run.extension == worker.WebviewFacts(
-      True,
-      None,
-      False,
       ('https://one.example', '*.trusted.example'),
       ('https://blocked.example',),
     )
 
-  def test_downloads_reach_the_container_options_and_facts(self, tmp_path):
+  def test_downloads_reach_the_container_options(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {'downloads': True}))
 
     assert json.loads(run.spec.env['WEBVIEW_OPTIONS'])['downloads'] is True
-    assert run.extension.downloads is True
 
   def test_vnc_port_pins_the_published_host_port(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {'vnc': True, 'vnc_port': 46080}))
 
     assert run.spec.published_ports == {worker.VNC_PORT: 46080}
-    assert run.extension.vnc_port == 46080
 
   @pytest.mark.parametrize(
     ('args', 'message'),
@@ -182,7 +175,7 @@ class TestWebviewType:
 
   def test_webview_builds_an_admitted_request_from_a_webview_owner(self, tmp_path):
     run = _worker_type().launch(_request(tmp_path, {}, type=worker.WEBVIEW))
-    assert run.extension == worker.WebviewFacts(False, None, False, (), ())
+    assert run.extension == worker.WebviewFacts((), ())
 
   def test_one_owner_may_hold_several_live_webviews(self, tmp_path):
     worker_type = _worker_type()
@@ -194,20 +187,13 @@ class TestWebviewType:
 
     worker_type.launch(_request(tmp_path, {}, request_id='second'))
 
-  def test_audit_fields_are_json_facts(self):
-    facts = worker.WebviewFacts(True, 46080, True, ('https://allowed',), ('https://blocked',))
+  def test_facts_view_is_the_origins_the_options_do_not_carry(self):
+    facts = worker.WebviewFacts(('https://allowed',), ('https://blocked',))
 
-    assert _worker_type().audit_fields(facts) == {
-      'vnc': True,
-      'vnc_port': 46080,
-      'downloads': True,
+    assert facts.view() == {
       'allowed_origins': ['https://allowed'],
       'blocked_origins': ['https://blocked'],
     }
-
-  def test_audit_fields_reject_an_unrelated_extension(self):
-    with pytest.raises(TypeError, match='WebviewFacts'):
-      _worker_type().audit_fields(object())
 
   def test_packaged_dockerfile_is_a_stable_worker_image_input(self, tmp_path):
     first = _worker_type().launch(_request(tmp_path, {})).spec

@@ -22,6 +22,7 @@ from bro.authority.values import (
 from bro.base.credentials import INSTANCE_CHARACTERS
 from bro.worker_types import (
   Container,
+  Extension,
   LaunchDenied,
   LaunchRequest,
   OptionValues,
@@ -39,12 +40,15 @@ def vnc_url(host_port: int) -> str:
 
 
 @dataclass(frozen=True)
-class WebviewFacts:
-  vnc: bool
-  vnc_port: int | None
-  downloads: bool
+class WebviewFacts(Extension):
   allowed_origins: tuple[str, ...]
   blocked_origins: tuple[str, ...]
+
+  def view(self) -> Mapping[str, Any]:
+    return {
+      'allowed_origins': list(self.allowed_origins),
+      'blocked_origins': list(self.blocked_origins),
+    }
 
 
 def _origins(args: dict[str, Any], name: str) -> tuple[str, ...]:
@@ -150,7 +154,6 @@ class WebviewType(WorkerType):
     vnc_port = None if values['vnc_port'] == 'auto' else cast(int, values['vnc_port'])
     allowed_origins = _origins(request.args, 'allowed_origins')
     blocked_origins = _origins(request.args, 'blocked_origins')
-    facts = WebviewFacts(vnc, vnc_port, downloads, allowed_origins, blocked_origins)
     options = json.dumps(
       {
         'allowed_origins': list(allowed_origins),
@@ -169,17 +172,5 @@ class WebviewType(WorkerType):
         published_ports={VNC_PORT: vnc_port} if vnc else {},
         artifact_view=ARTIFACT_VIEW,
       ),
-      extension=facts,
+      extension=WebviewFacts(allowed_origins, blocked_origins),
     )
-
-  @override
-  def audit_fields(self, extension: Any) -> dict[str, Any]:
-    if not isinstance(extension, WebviewFacts):
-      raise TypeError('webview audit fields need WebviewFacts')
-    return {
-      'vnc': extension.vnc,
-      'vnc_port': extension.vnc_port,
-      'downloads': extension.downloads,
-      'allowed_origins': list(extension.allowed_origins),
-      'blocked_origins': list(extension.blocked_origins),
-    }

@@ -128,7 +128,11 @@ def test_root_provisions_operator_channel_before_spawning_and_removes_it(
   assert observed['refused']['outcome'] == 'denied'
   assert 'operator channel required' in observed['refused']['error']
   assert observed['listed']['outcome'] == 'ok'
-  assert observed['listed']['value']['missions'][0]['name'] == workspace.name
+  [root] = observed['listed']['value']['missions']
+  assert root['parent'] is None
+  assert root['workspace'] == workspace.name
+  assert root['options']['target'] == 'bro'
+  assert root['extension'] == {'isolation': workspace.isolation.value, 'member': None}
   assert not _path().exists()
 
 

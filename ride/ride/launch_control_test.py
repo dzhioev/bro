@@ -1,5 +1,6 @@
 import json
-from dataclasses import replace
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
@@ -18,6 +19,7 @@ from bro.worker_types import (
   ArtifactDenied,
   Container,
   Expect,
+  Extension,
   Job,
   LaunchDenied,
   LaunchRequest,
@@ -104,10 +106,6 @@ class SampleType(WorkerType):
     self.run = run
     self.calls = []
     self.requests = []
-    self.fields: dict[str, Any] = {
-      'detail': {'accepted': True},
-      'transition': 'type-owned',
-    }
 
   def talk(self, request: LaunchRequest) -> Talk:
     self.calls.append('talk')
@@ -122,9 +120,13 @@ class SampleType(WorkerType):
       raise LaunchDenied('run refused')
     return self.run
 
-  def audit_fields(self, extension):
-    self.calls.append('audit')
-    return self.fields
+
+@dataclass(frozen=True)
+class SampleFacts(Extension):
+  detail: Any
+
+  def view(self) -> Mapping[str, Any]:
+    return {'detail': self.detail}
 
 
 class FixedTalkType(SampleType):
@@ -209,9 +211,7 @@ def owner(tmp_path):
     workspace='ws',
     tree=tmp_path,
     type='bro',
-    bro='dev',
     mission_record=mission(top=True),
-    member=None,
     expected=False,
     artifact_view=PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
     published_ports=(),
@@ -229,7 +229,9 @@ def _control(
   worker_type = type_class(host, run)
   peers = Peers(owner)
   peers.facts[owner.mission] = WorkerFacts(
-    owner.type, owner.workspace, allowance=source.root_allowance(owner.bro or '')
+    owner.type,
+    owner.workspace,
+    allowance=source.root_allowance(cast(str, owner.mission_record.descriptor.values['target'])),
   )
   runtime = SimpleNamespace(reference='/runtime')
   control = LaunchControl(
@@ -265,7 +267,7 @@ def test_spawn_resolves_talk_before_launch_and_records_facts(tmp_path, owner):
   message = _message(value=1, talk=['owner.say'])
   context = _handle(control, message)
 
-  assert worker_type.calls == ['talk', 'launch', 'audit']
+  assert worker_type.calls == ['talk', 'launch']
   assert context.spawned[0][3] == {
     'type': 'test',
     'talk': frozenset({'worker.say', 'owner.say'}),
@@ -303,7 +305,7 @@ def test_pass_is_authorized_before_the_type_and_reaches_the_request(tmp_path, ow
   context = _handle(control, _message(**{'pass': ['github+work']}))
 
   assert context.spawned
-  assert worker_type.calls == ['talk', 'launch', 'audit']
+  assert worker_type.calls == ['talk', 'launch']
   assert worker_type.requests[0].passes == ('github+work',)
   assert 'pass' not in worker_type.requests[0].args
 
@@ -466,7 +468,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   control, _, peers, _ = _control(
     tmp_path,
     owner,
-    Container(spec, extension={'worker': 'facts'}),
+    Container(spec, extension=SampleFacts('container')),
     worker_container_spawner=spawner,
   )
   message = _message(share=[ref])
@@ -482,7 +484,7 @@ def test_container_run_hands_the_spec_and_share_to_the_host_spawner(tmp_path, ow
   assert peer == ROOT
   assert options['type'] == 'test'
   facts = peers.facts[message.request_id]
-  assert facts.extension == {'worker': 'facts'}
+  assert facts.extension == SampleFacts('container')
   assert facts.record is not None
   assert facts.artifact_view is None
 
@@ -567,17 +569,25 @@ def test_manual_launch_writes_and_discards_the_pending_record(tmp_path, monkeypa
     pending_launch.peek(message.request_id)
 
 
-def test_audit_fields_and_passes_are_snapshotted_at_acceptance(tmp_path, owner):
+def test_a_launch_whose_extension_view_is_not_json_is_denied(tmp_path, owner):
+  control, _, peers, _ = _control(tmp_path, owner, Spawn(object(), object(), SampleFacts(object())))
+  message = _message()
+  [(_, error, _)] = _handle(control, message).denied
+  assert 'a worker extension view is not JSON-serializable' in error
+  assert peers.facts[message.request_id].extension is None
+
+
+def test_audit_reads_the_current_extension_view_and_the_passes_accepted(tmp_path, owner):
   owner = replace(owner, mission_record=mission(top=True))
   message = _message(**{'pass': ['github+work']})
-  control, worker_type, peers, _ = _control(
+  control, _, peers, _ = _control(
     tmp_path,
     owner,
-    Spawn(object(), object()),
+    Spawn(object(), object(), SampleFacts('launched')),
     type_class=PassType,
   )
   _handle(control, message)
-  worker_type.fields['detail']['accepted'] = False
+  peers.facts[message.request_id].extension = SampleFacts('spawned')
   event = SimpleNamespace(
     mission=message.request_id,
     transition='accepted',
@@ -591,10 +601,7 @@ def test_audit_fields_and_passes_are_snapshotted_at_acceptance(tmp_path, owner):
   assert entry['pass'] == ['github+work']
   assert entry['published_ports'] == []
   assert entry['transition'] == 'accepted'
-  assert entry['extension'] == {
-    'detail': {'accepted': True},
-    'transition': 'type-owned',
-  }
+  assert entry['extension'] == {'detail': 'spawned'}
   assert peers.facts[message.request_id].type == 'test'
 
 
@@ -608,7 +615,7 @@ def allowance_control(tmp_path, owner):
       'homes': {'test-home': {'bros': {'eyebro': {'summon-depth': 0}}}},
     }
   )
-  owner = replace(owner, bro='lead', mission_record=mission(target='lead', source=source, top=True))
+  owner = replace(owner, mission_record=mission(target='lead', source=source, top=True))
   control, _, peers, host = _control(tmp_path, owner, Spawn(object(), object()), source=source)
   host = SimpleNamespace(
     artifacts=host.artifacts,
@@ -629,12 +636,11 @@ def _summon(control, target, **fields):
   return message.request_id, context
 
 
-def _undertake(peers, identifier, target):
+def _undertake(peers, identifier):
   facts = peers.for_mission(identifier)
   peers.owner = replace(
     peers.owner,
     mission=identifier,
-    bro=target,
     mission_record=facts.record,
     extension=facts.extension,
   )
@@ -647,11 +653,11 @@ def test_allowance_chain_refuses_both_summons_and_webviews(allowance_control, pl
   developer, context = _summon(control, 'bro-dev', placement=placement)
   assert context.denied == []
   assert peers.for_mission(developer).allowance.value == 1
-  _undertake(peers, developer, 'bro-dev')
+  _undertake(peers, developer)
   reviewer, context = _summon(control, 'eyebro')
   assert context.denied == []
   assert peers.for_mission(reviewer).allowance.value == 0
-  _undertake(peers, reviewer, 'eyebro')
+  _undertake(peers, reviewer)
 
   for message in (
     request('launch', {'type': 'bro', 'target': 'bro-dev', 'prompt': 'work'}),
@@ -681,9 +687,7 @@ def test_non_bro_mission_inherits_and_consumes_allowance(tmp_path, owner):
   assert not _handle(control, first).denied
   child = peers.for_mission(first.request_id)
   assert child.allowance.value == 1
-  peers.owner = replace(
-    owner, mission=first.request_id, type='test', bro=None, mission_record=child.record
-  )
+  peers.owner = replace(owner, mission=first.request_id, type='test', mission_record=child.record)
   second = _message()
   assert not _handle(control, second).denied
   grandchild = peers.for_mission(second.request_id)
@@ -697,7 +701,7 @@ def test_manual_prepare_defers_exhausted_allowance_check_to_commit(allowance_con
   control, peers = allowance_control
   identifier, context = _summon(control, 'eyebro')
   assert not context.denied
-  _undertake(peers, identifier, 'eyebro')
+  _undertake(peers, identifier)
   token, context = _summon(control, 'bro-dev', manual=True)
   assert not context.denied
   assert context.expected

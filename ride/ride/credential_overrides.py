@@ -22,24 +22,16 @@ from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Event, Journal, Record
 from bro.broker.runtime import Peer
 from bro.broker.transports.tcp import LOCAL_HOST
-from bro.monitor import party_member_dir
 from bro.worker_types import UnattributablePeer
-from bro.workspace.paths import workspace_dir
 from ride.authority_launch import hydrate, mission_view
 from ride.authority_reading import Reading
+from ride.bro_worker import bro_facts
 from ride.overrides import apply as apply_authority, atomic_record, candidate, changes
-from ride.peer_facts import PeerFacts, WorkerFacts
+from ride.peer_facts import PeerFacts
 from ride.workspace.store import ScopedSecrets
 
 ACK_TIMEOUT = 10.0
 LIFETIME_READY = b'1'
-
-
-def records_directory(facts: WorkerFacts) -> Path:
-  if facts.workspace is None:
-    raise ValueError('override check: mission has no workspace')
-  path = workspace_dir(facts.workspace)
-  return path if facts.member is None else party_member_dir(path, facts.member)
 
 
 def receipt_path(directory: Path, operation: str) -> Path:
@@ -127,11 +119,12 @@ class CredentialOverrides:
             watcher.cancel()
           await asyncio.gather(*watchers, return_exceptions=True)
 
-  def _record(self, facts: WorkerFacts, operation: dict[str, Any], *, commit: bool) -> None:
-    directory = records_directory(facts)
+  def _record(self, mission_id: str, operation: dict[str, Any], *, commit: bool) -> None:
+    directory = self.peers.records_directory(mission_id)
+    joined = bro_facts(self.peers.for_mission(mission_id)).member is not None
     resume = directory / 'resume.json'
-    path = resume if facts.member is None and resume.exists() else directory / 'override.json'
-    if path.exists() and facts.member is None:
+    path = resume if not joined and resume.exists() else directory / 'override.json'
+    if path.exists() and not joined:
       data = json.loads(path.read_text())
       if commit:
         data.update(operation['values'])
@@ -152,7 +145,7 @@ class CredentialOverrides:
       if set(message.args) != {'id', 'changes'} or not isinstance(message.args['id'], str):
         raise ValueError('override check: id and changes required')
       mission_id = message.args['id']
-      if mission_id not in {row['id'] for row in self.peers.missions()}:
+      if mission_id not in self.peers:
         raise ValueError('override check: id does not identify a mission of this root')
       facts = self.peers.for_mission(mission_id)
       record = self.journal.records[mission_id]
@@ -192,7 +185,7 @@ class CredentialOverrides:
       }
       facts.pending_override = operation
       try:
-        self._record(facts, operation, commit=False)
+        self._record(mission_id, operation, commit=False)
       except BaseException:
         facts.pending_override = None
         raise
@@ -256,7 +249,7 @@ class CredentialOverrides:
             asyncio.to_thread(
               facts.credential_applier.apply,
               request,
-              receipt_path(records_directory(facts), operation['id']),
+              receipt_path(self.peers.records_directory(mission_id), operation['id']),
             )
           )
           self._inflight.add(work)
@@ -273,7 +266,7 @@ class CredentialOverrides:
         ) as error:
           log.warning('credential operation %s awaiting applier: %s', operation['id'], error)
         self._active.discard(mission_id)
-      elif receipt(records_directory(facts), operation['id']) is not None:
+      elif receipt(self.peers.records_directory(mission_id), operation['id']) is not None:
         self.settle(mission_id)
       record = self.journal.records.get(mission_id)
       if (
@@ -291,19 +284,20 @@ class CredentialOverrides:
       return
     proposed, operation, _ = self._pending[mission_id]
     facts = self.peers.for_mission(mission_id)
-    if ended and facts.member is not None:
-      (records_directory(facts) / 'override.json').unlink(missing_ok=True)
+    directory = self.peers.records_directory(mission_id)
+    if ended and bro_facts(facts).member is not None:
+      (directory / 'override.json').unlink(missing_ok=True)
       operation['state'] = 'dropped'
       facts.pending_override = None
       self._pending.pop(mission_id)
       self._signals[mission_id].set()
       return
-    acknowledged = receipt(records_directory(facts), operation['id'])
+    acknowledged = receipt(directory, operation['id'])
     if acknowledged is None and not ended:
       return
     state = 'applied' if acknowledged else 'dropped'
     settled = {**operation, 'state': state}
-    self._record(facts, settled, commit=acknowledged is not None)
+    self._record(mission_id, settled, commit=acknowledged is not None)
     operation['state'] = state
     if acknowledged is not None:
       facts.record = proposed

@@ -13,6 +13,7 @@ from bro.monitor import party_member_dir
 from ride import overrides
 from ride.authority_launch import mission_view
 from ride.authority_test_helper import mission, reading
+from ride.bro_worker import BroFacts, Placement
 from ride.peer_facts import PeerFacts, WorkerFacts
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -23,7 +24,7 @@ def running():
   workspace = Workspace.ensure('root', None, Isolation.UNBOXED)
   source = reading()
   original = mission(source=source, revoke=['@bro'])
-  facts = WorkerFacts('bro', workspace.name, record=original)
+  facts = WorkerFacts('bro', workspace.name, record=original, extension=BroFacts('bro'))
   peers = PeerFacts(facts, root_tree=workspace.tree, root_path=workspace.path)
   journal = Journal()
   peers.bind_journal(journal)
@@ -116,7 +117,8 @@ def test_failed_resume_write_leaves_authority_journal_and_record_unchanged(runni
 def test_member_operation_uses_member_records_and_never_rewrites_party_resume(running):
   member = party_member_dir(running.workspace.path, 'member')
   member.mkdir(parents=True)
-  running.facts.member = 'member'
+  running.facts.records = member
+  running.facts.extension = BroFacts('bro', Placement('join', Isolation.UNBOXED), member='member')
   saved = running.workspace.resume_file.read_bytes()
   result = apply(running, ('grant', '@bro'))
   assert json.loads((member / 'override.json').read_text())['id'] == result['operation']
