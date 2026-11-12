@@ -14,7 +14,7 @@ The canonical entry point for task-driven development work;
 `dive-in` seeds this spell as its first user message.
 
 parameters: {"task?": "ref of the existing task to work on", "new?": "seed text for a new task to create first"}
-version: 4.11.0
+version: 4.11.1
 ---
 
 # fix
@@ -149,7 +149,7 @@ Run the repo's formatter (the repo's own docs name the command), then verify the
 — the affected test files, a CLI smoke, a targeted spell.
 
 Leave the repo's gate to [[run pr]]:
-it runs the gate once, on the folded tree that ships, and the pull request's CI runs the suite whole.
+it runs the gate once, on the folded tree that ships, on CI where the repository's CI can be dispatched and locally otherwise.
 Reach for the gate early only when broad breakage is plausible
 — a shared abstraction changed, a wide import surface moved.
 

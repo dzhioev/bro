@@ -10,7 +10,7 @@ Resolve the conflicts yourself, in-band:
 merge each conflict, `git add` the resolved paths, `git rebase --continue`.
 Then, where the session has a task and the brog tools are available, record the resolution on it:
 `brog::add_comment(task_id, topic='rebase conflicts', body=...)` naming the conflicted files and the resolution each one took
-— [[run pr]]'s "Pre-push gate" verifies the prepared result.
+— [[run pr]]'s "Pre-review check" verifies the prepared result.
 
 Escalate only when a resolution is not obvious
 — the two sides carry contradicting logic or intent that no merged version can honor both of:
