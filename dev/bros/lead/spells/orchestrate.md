@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.19.0
+version: 2.20.0
 ---
 
 # orchestrate
@@ -276,7 +276,8 @@ the reviewer ends up holding the deepest understanding of the design, which is w
 > For EACH stage call `brog::create_task` to open a stage task whose body carries:
 > the stage's goal and details;
 > "part of the multi-phase work tracked at [`<root-task-name>`](`<root-task-url>`) — read its `## Design`, including the design file it links on the kept branch, and `## Design changelog` before starting";
-> "land via [[run pr]] with its base argument set to `origin/<integration branch>`, reviewed on github by a reviewer you summon, with gates verdict and checks — the human approval comes at the integration landing";
+> "land via [[run pr]] with its base argument set to `origin/<integration branch>`, reviewed on github by a reviewer you summon, with gates verdict and checks where CI covers its landing method, otherwise verdict and tests
+> — the human approval comes at the integration landing";
 > "when the PR merges, mark this task done — do not hold it for a rollout, the coordinator rolls the work out after its landing merges";
 > and "if you change a design decision mid-build, append it to the root task's `## Design changelog` for the history and the later stages".
 > The first stage of each later landing carries one more line, since its branch can only start from what the landing before it left on the default branch:
