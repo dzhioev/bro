@@ -17,3 +17,5 @@ follow_pr = SpellFile(
 )
 bump_bro = SpellFile(_DIRECTORY / 'bump-bro.md', requires=('commit', 'run-pr'))
 fix = SpellFile(_DIRECTORY / 'fix.md', requires=('open-task', 'design', 'commit', 'run-pr'))
+plan = SpellFile(_DIRECTORY / 'plan.md', requires=('design', 'follow-pr', 'ask'))
+integrate = SpellFile(_DIRECTORY / 'integrate.md', requires=('run-pr', 'land', 'follow-pr'))
