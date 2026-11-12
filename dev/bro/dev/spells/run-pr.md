@@ -3,21 +3,19 @@ name: run-pr
 description:
 
 Deliver a finished change through an explicit review channel, roles, gates and landing method
-— "open a PR", "[[run pr]]", "send for review", "ship it", or "resume PR <url-or-number>".
+— "open a PR", "[[run pr]]", "send for review", or "ship it".
 Resolves and checks the delivery plan before preparing, folds the branch into landing shape, publishes only what the plan needs, and drives review rounds and the landing fold to a head-bound verdict.
 Channels are github, talk and local; landing is a GitHub rebase merge or a fast-forward push onto a remote or local base ref.
 Human approval is required by default; omitting it requires an explicit plan.
-With pr, recovers the task and recorded plan and resumes at review through [[follow pr]]'s replay-safe watch.
 Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
-parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "pr?": "pull request URL or number to resume at review", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
-version: 9.4.0
+parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
+version: 10.0.0
 ---
 
 # run-pr
 
 Deliver the finished change under the resolved plan, not a substitute that happens to be available.
-With `pr`, resume at review; otherwise prepare the branch.
 Batch independent reads and bookkeeping.
 
 ## Delivery plan
@@ -33,33 +31,6 @@ Then, before preparing or publishing anything:
 3. State the plan in its `Delivery:` line, retaining it with explicit placement and trust choices as the delivery context.
 
 Without `verdict`, skip review handoff and rounds and make one landing fold.
-
-## Resume with `pr`
-
-Resolve the PR repository from its URL or, for a number, the checkout; read metadata:
-
-```bash
-gh pr view <pr> --repo <owner>/<repo> --json number,url,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,title,body
-gh api repos/<owner>/<repo>/pulls/<n> --jq .base.repo.clone_url
-```
-
-Read feedback only through trusted `pr-state` or [[follow pr]].
-
-1. Recover the task from the body's `Task:` line and the plan from the PR, as the delivery reference's "Record the plan" recovers one.
-2. If the recorded `channel` or `landing` differs from this rendering, cast [[run pr]] again with `pr` and those recorded choices before continuing.
-   Recover other roles, gates, placement and trust; recorded `reviewer none` denotes no verdict gate, not an invocation role.
-   Apply an explicit plan change through the plan check and update the line.
-3. A merged PR gets [[land]]'s "Bookkeeping and report" only, then stops; a closed PR gets a report and stops.
-   Do not attempt a second landing or checkout for a terminal PR.
-4. Otherwise check out the PR's head branch unless already on it, with `gh pr checkout <pr> --repo <owner>/<repo>`.
-   Do not discard uncommitted work.
-   Confirm its SHA matches the PR and recover its push destination, including a fork's head repository.
-5. Check the resolved plan, state and record it, then enter at "Review handoff", not branch preparation.
-   [[Follow pr]] reconciles the whole replay before any round or gate is acted on.
-
-A reviewer's verdict does not survive the session that owned it.
-Start the reviewer again: on github it reconstructs earlier rounds from trusted PR history; talk/local starts afresh on the current head unless this live session retains a predecessor verdict commissioning delta review.
-A lost watch resumes here too; silence clears no gate.
 
 ## Prepare the branch
 
@@ -145,7 +116,6 @@ gh pr create --repo <owner>/<repo> --base <base branch> --head <head branch> --t
 ```
 
 An already-published branch rewritten by the preparation fold needs `--force-with-lease`; never force the base.
-A resume uses the PR's head destination, including a fork.
 For an engaged talk reviewer, push a review branch on the base remote, reusing the PR head branch where one was opened.
 For local review or no reviewer with a push landing, create no remote review branch.
 

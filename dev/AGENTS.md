@@ -49,7 +49,7 @@ build the wheel with `uv build --package bro-dev`.
 - `bro/prompts/dev/delivery.md` — the delivery plan and the gates that clear its landing, declared by the Dev, Eyebro and Lead personas into their `man` manual
 - `bro/prompts/dev/rebase_conflicts.md` — resolving a rebase that stops on a conflict, tool-served by the Dev persona through `rebase-conflicts-source::read`
 - `bro/dev/spells/` — the spells more than one development persona offers, as `SpellFile` values in the `bro.dev.spells` package:
-  audit, framework bump, commit, design, task, task creation (`open-task`), reflection (`reflect`), delivery (`run-pr`, including PR resume), PR following (`follow-pr`), and landing
+  audit, framework bump, commit, design, task, task creation (`open-task`), reflection (`reflect`), delivery (`run-pr`), PR resume (`resume-pr`), PR following (`follow-pr`), and landing
 - `bros/dev/` — generic developer with the `files`, unrestricted `brash`, `web`, and `delegation` tool groups, and those spells (the task ones gated on its `brog` feature).
   Its optional `brog` feature mounts tracker tooling;
   its provisioning declaration installs the commit hooks

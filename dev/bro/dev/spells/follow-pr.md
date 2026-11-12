@@ -6,10 +6,10 @@ Watch an open pull request through trusted, replay-safe review events
 — "follow PR <url-or-number>" or the PR-watch handoff from [[run pr]].
 Arms poll-pr with a trust file and replay, reconciles all existing feedback before acting, and drives the author's rounds, exact-head gates and selected landing handover.
 Handles comments, reviews, checks, conflicts, outside pushes and terminal events without losing feedback during a watch restart.
-The delivery plan and review rounds belong to run-pr; resuming a lost author session uses run-pr with pr.
+The delivery plan and review rounds belong to run-pr; resuming a lost author session uses [[resume pr]].
 
 parameters: {"pr": "pull request URL or number to follow"}
-version: 1.3.0
+version: 1.4.0
 ---
 
 # follow-pr
@@ -17,7 +17,7 @@ version: 1.3.0
 Hold the PR watch under the author's retained delivery plan.
 Read `pr` from the appended `# Arguments`; resolve its repository explicitly and bind every `gh` call to `<owner>/<repo>`.
 The plan, full head, base ref and URL, task, live reviewer quest and cleared gates remain the caller's context, with the delivery reference (`man-source::read`, topic `delivery`) its gates follow.
-If that context is missing, report that the PR needs resuming through run-pr's `pr` entry rather than inventing a plan or treating this as an independent approval workflow.
+If that context is missing, report that the PR needs resuming through [[resume pr]] rather than inventing a plan or treating this as an independent approval workflow.
 
 ## Arm replay and reconcile
 
@@ -154,9 +154,9 @@ The watch tolerates transient failure while other sources keep reporting, then r
 `watch_failed` carries `source`, `reason`, `failing_for` and ends the process nonzero; an unreadable trust file also fails it.
 Report the exact source/reason and stop where questions reach the user; unattended, rescue committed work and `raise` with that failure.
 Do not blindly restart against a known-broken credential or read unfiltered feedback instead.
-Once the cause is fixed, resume through run-pr with `pr` and replay the missing interval.
+Once the cause is fixed, [[resume pr]] to replay the missing interval.
 An exit after merged, closed or watch_failed is terminal; an exit without any such event means the watcher died, not that review finished.
-A still-live author may re-arm this command with `--replay`, reconcile the whole replay again and retain only still-valid exact-head evidence; a lost author session resumes with run-pr's `pr`.
+A still-live author may re-arm this command with `--replay`, reconcile the whole replay again and retain only still-valid exact-head evidence; a lost author session resumes through [[resume pr]].
 
 ## Waiting and handoff
 

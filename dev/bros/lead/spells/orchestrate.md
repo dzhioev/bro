@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.21.0
+version: 2.22.0
 ---
 
 # orchestrate
@@ -368,7 +368,7 @@ a local base needs an authorized joined lander in the same checkout.
 The lander uses its own credentials, rechecks gates and platform rules, reruns selected tests and owns bookkeeping and stage closure.
 Wait for its result before advancing;
 a `blocked <head>: <reason>` is not a landing.
-Route failure to a fresh author with the plan, earlier head/base/verdict and failure evidence; resume a PR through [[run pr]]'s `pr` argument for fixes and successor review, then accept a new handover.{{end}}
+Route failure to a fresh author with the plan, earlier head/base/verdict and failure evidence; resume a PR through [[resume pr]] for fixes and successor review, then accept a new handover.{{end}}
 
 ### 4 — integrate
 
@@ -404,7 +404,7 @@ Then summon:
 Outcome:
 the landing on the default branch as a single commit.
 A phase whose time runs out waiting for that approval leaves the pull request open:
-re-fire it on that PR, which [[run pr]] resumes through its `pr` argument, rather than opening a second one.
+re-fire it on that PR through [[resume pr]] rather than opening a second one.
 
 ### 5 — roll out
 

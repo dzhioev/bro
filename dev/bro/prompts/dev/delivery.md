@@ -1,7 +1,7 @@
 # Delivery
 
 The delivery plan a change ships under, and the gates that clear its landing.
-[[run pr]] resolves, checks and records the plan, [[land]] recovers it where none was handed over, and a coordinator composes one for each stage it delegates.
+[[run pr]] resolves, checks and records the plan, [[resume pr]] and [[land]] recover it where none was retained, and a coordinator composes one for each stage it delegates.
 `<base>` throughout is **the ref as given**, never a branch with an implied origin prefix.
 
 ## The plan
