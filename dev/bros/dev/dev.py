@@ -63,6 +63,7 @@ class Dev(Bro):
     source(references.rebase_conflicts),
     man(extending),
     *(man(guide) for guide in references.guides),
+    man(references.delivery),
     man(llm_providers),
     man(mu),
     man(permission_model),

@@ -9,14 +9,14 @@ Handles comments, reviews, checks, conflicts, outside pushes and terminal events
 The delivery plan and review rounds belong to run-pr; resuming a lost author session uses run-pr with pr.
 
 parameters: {"pr": "pull request URL or number to follow"}
-version: 1.1.0
+version: 1.2.0
 ---
 
 # follow-pr
 
 Hold the PR watch under the author's retained delivery plan.
 Read `pr` from the appended `# Arguments`; resolve its repository explicitly and bind every `gh` call to `<owner>/<repo>`.
-The plan, full head, base ref and URL, task, live reviewer quest and cleared gates remain the caller's context.
+The plan, full head, base ref and URL, task, live reviewer quest and cleared gates remain the caller's context, with the delivery reference (`man-source::read`, topic `delivery`) its gates follow.
 If that context is missing, report that the PR needs resuming through run-pr's `pr` entry rather than inventing a plan or treating this as an independent approval workflow.
 
 ## Arm replay and reconcile
@@ -82,8 +82,7 @@ An APPROVED event clears no gate automatically:
   Running means wait for its answer; a blocked, missing, raised or errored answer is not approval, whatever the PR says.
 - For reviewer `coordinator`, collect the coordinator's relayed reviewer verdict through the retained exchange once the other author-clearable gates hold.
 - For reviewer `others`, a trusted approving review whose `commit_id` is the landing head is verdict evidence.
-- A selected human approval where questions do not reach the user needs a trusted approval of this head from `user_type: User`, not Bot.
-  The aggregate `review_decision` proves neither a human approval nor an engaged reviewer's verdict.
+- A selected approval clears only as the reference's "Approval" defines it.
 
 `review_decision` APPROVED or none permits the platform review condition; REVIEW_REQUIRED means an account the base counts still owes approval.
 Report whose approval did not count and which plan gates are already clear, record that blocker on the task where available, and **keep watching**; this is an ordinary wait even unattended, not a failed run.
@@ -115,13 +114,13 @@ fetch the **base's remote** where one exists, rebase onto `<base>` as given, res
 Without the fetch a stale rebase may change nothing.
 
 Before a verdict, the same reviewer handles the new head and conflict resolution as another round.
-After a verdict, an unchanged rebase preserves verdict/approval only by the complete one-to-one all-`=` range-diff; new-head checks must rerun, and tests where the tree changed.
+After a verdict, the reference's "What a pass covers" decides which gates the rebased head keeps.
 A resolution or CI fix gets a successor reviewing the delta since the approved head, with that verdict and both heads, then a landing fold and fresh gates.
 
 ### `pushed:`
 
 Carries `head`: someone outside this checkout moved the PR head; your own pushes stay silent.
-Clear **every gate for the old head**, including verdict and approval, but a `tests` pass on a tree the new head keeps, and retain the old objects for comparison.
+Clear **every gate for the old head**, verdict and approval included, but what the reference's "What a pass covers" extends to the new one, and retain the old objects for comparison.
 Before the next commit fetch and synchronize the local branch to this exact PR head, including a rewrite: `gh pr checkout <pr> --repo <owner>/<repo> --force` resets it to the PR branch.
 First preserve any uncommitted work; never discard it or force-push stale local commits over the outside push.
 Confirm HEAD equals the event/current PR head before continuing, reconciling newer pushes if it moved again.

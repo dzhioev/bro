@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.20.0
+version: 2.21.0
 ---
 
 # orchestrate
@@ -337,7 +337,8 @@ the retry is a fresh summon on the same stage task.
 
 ### Coordinator roles for a stage
 
-Choose `reviewer=coordinator`, `approver=summoner` and `lander=coordinator` independently per stage, recording them before launch.
+Choose `reviewer=coordinator`, `approver=summoner` and `lander=coordinator` independently per stage, recording them before launch;
+the roles, gates and `Delivery:` line are the delivery reference's (`man-source::read`, topic `delivery`).
 You arrange review and landing, never judge code or land yourself.{{when #may_summon contains eyebro}}
 
 **Reviewer coordinator.** For `reviewer=coordinator`:

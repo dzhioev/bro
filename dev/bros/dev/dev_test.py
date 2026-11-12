@@ -218,6 +218,17 @@ async def test_provider_adoption_page_reaches_the_man_tool(persona, monkeypatch,
     assert llm_providers.read() == llm_providers._path.read_text()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('persona', [Dev, Eyebro, Lead])
+async def test_delivery_reference_reaches_every_delivery_persona(persona, monkeypatch, tmp_path):
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+  with closing(persona()) as bro:
+    servers = bro.assemble(harness='claude', hold='attended')
+    manual = next(server for server in servers if server.namespace == 'man-source')
+    [read] = await manual.list_tools()
+    assert await read.call({'topic': references.delivery.name}) == references.delivery.read()
+
+
 def _section(text, heading):
   level = len(heading.split()[0])
   match = re.search(rf'(?ms)^{re.escape(heading)}\n(.*?)(?=^#{{1,{level}}} |\Z)', text)
@@ -294,19 +305,6 @@ async def test_successor_and_delta_routes_survive_every_delivery_rendering(
   spell, body = await _delivery_call({'channel': channel, 'landing': landing}, harness)
   heading = '### Failures and successors'
   assert _section(body, heading) == _section(spell.body, heading)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('harness', ['bro', 'claude'])
-@pytest.mark.parametrize('channel', ['github', 'talk', 'local'])
-@pytest.mark.parametrize('gates', ['verdict,checks', 'checks', ''])
-async def test_plan_refusals_and_no_verdict_bypass_survive_channel_selection(
-  monkeypatch, harness, channel, gates
-):
-  publish(monkeypatch, targets=('eyebro',))
-  spell, body = await _delivery_call({'channel': channel, 'gates': gates}, harness)
-  for heading in ('### Resolve the base and gates', '### Check the plan'):
-    assert _section(body, heading) == _section(spell.body, heading)
 
 
 @pytest.mark.parametrize('rewrite', ['append', 'fold', 'rebase'])

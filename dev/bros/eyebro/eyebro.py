@@ -54,6 +54,7 @@ class Eyebro(Bro):
     web(),
     source(references.dev_style),
     *(man(guide) for guide in references.guides),
+    man(references.delivery),
     man(llm_providers),
     man(mu),
     man(permission_model),

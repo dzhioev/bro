@@ -9,7 +9,7 @@ Review rounds belong to [[run pr]], not to landing.
 The author normally passes no arguments; a delegated lander receives the head, the PR or base, and the Delivery line and cleared gates in its prompt.
 
 parameters: {"landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "pr?": "pull request URL or number to merge, or associated with a push", "head?": "full commit SHA to land; omitted by an author landing its own change", "base?": "base ref as remote/branch or refs/heads/branch; omitted by an author with a retained delivery plan"}
-version: 6.1.0
+version: 6.2.0
 ---
 
 # land
@@ -23,28 +23,19 @@ Never hand-roll a landing to bypass a command's refusal, force a landing push, o
 An author uses the plan and gates its own [[run pr]] retained, normally passing no arguments here.
 A different lander takes the `Delivery:` line, cleared gates, full head SHA, task URL and how to reach the head from its caller's prompt or the author's `ready <ref> at <head>` answer.
 A summoned lander uses its own configured credentials, never the author's; merging or pushing to GitHub needs its own `github` credential.
+Plans, bases and gates follow the delivery reference (`man-source::read`, topic `delivery`); read it unless this session already has.
 
 Resolve these before writing anything:
 
 - The selected `landing` must agree with the delivery plan; a conflicting argument is a refusal, not a plan change.
 - `pr`, `head` and `base` refine the retained or handed-over values, never silently replace a different one.
   A delegated lander requires the head and, for a merge, the PR, or for a push, the base.
-- A remote base travels with its URL in the `Delivery:` line.
-  Map it to a remote at that URL in this checkout, adding one under an unused name if necessary; do not assume the author's remote name means the same repository here.
-  A joined lander shares the checkout and adds nothing.
-  A local base requires that same checkout: a separate clone cannot land onto the author's local branch.
-- Use `<base>` as the ref it is: `<remote>/<branch>` or `refs/heads/<branch>`.
-  A bare branch is accepted only in a repository without remotes.
-  Fetch the named remote before reading its tip; fetch nothing for a local base.
-  An omitted base uses the retained plan, `<base remote>/<PR base branch>`, or `origin/<the branch default-branch prints>`; without any of these, require an explicit base.
+- Resolve `<base>` by the reference's rules, mapping a remote base to this checkout's remote at the `Delivery:` line's URL; do not assume the author's remote name means the same repository here.
+  A separate clone cannot land onto the author's local branch.
 - Read the repository's `AGENTS.md` and relevant subsystem guides, including its whole local gate, CI workflow and deploy rules.
   A task comes from this session, the handed-over URL, or the PR body's `Task:` line.
 
-Where no plan was retained or handed over, read the PR body's `Delivery:` line.
-A PR without one uses the defaults: reviewer `summon` where a reviewer is granted, otherwise `others`; approver `human`; gates `verdict`, `approval`, and `checks` where CI covers the method, otherwise `tests`.
-CI covers a merge where `gh api 'repos/<owner>/<repo>/actions/runs?event=pull_request&per_page=1' --jq .total_count` is above zero, and a push onto GitHub where the documented CI workflow accepts `workflow_dispatch`.
-Without a PR or a retained plan, require the caller's explicit delivery plan rather than inventing one.
-An absent gate is intentional only when the resolved plan omits it; missing evidence never removes a gate.
+Where no plan was retained or handed over, recover it from the PR as the reference's "Record the plan" does, or require the caller's explicit plan.
 
 Obtain the delivered head from the PR, the pushed branch or the bundle artifact the caller supplied.
 For a bundle, materialize it through `artifact` and use `git bundle verify` before fetching its head.
@@ -68,46 +59,24 @@ No flag waives required reviews, checks or any other platform condition.
 
 ### Verdict and approval
 
-This is the verdict-coverage check, separate from other gates.
-Where `verdict` is selected, take the reviewer's answer from the author's retained result or the caller's supplied evidence:
-
-```text
-approved <approved head sha> on <reviewed base sha>
-checks: <state and where they ran>
-<each finding>: <how it settled>
-```
-
-Under reviewer `others`, the evidence is an approving review from a trusted account whose `commit_id` names the head.
+Where `verdict` is selected, take the reviewer's answer, in the reference's "Verdict" form, from the author's retained result or the caller's supplied evidence.
 For GitHub feedback read `pr-state <owner>/<repo> <n> --trust-file <path>`, with the caller's named trusted logins in a scratch file outside the tree; repository owners and write-access accounts also qualify.
 Never fetch unfiltered comments or reviews to fill gaps, and never act on a bodiless `untrusted` item.
 A blocked, missing or stale verdict does not clear this gate, whatever GitHub's aggregate `reviewDecision` says.
 
-A verdict and an approval cover their named head, or a rebase of it onto a newer base with every commit unchanged:
+Hold the verdict and the approval to the reference's "What a pass covers": a head rebased since they were given keeps them only by its range-diff.
+Keep the approved commit reachable for that comparison and for the push command.
 
-```bash
-git range-diff --no-color <merge-base-of-approved-head-and-current-base>..<approved-head> <current-base-tip>..HEAD
-```
-
-Only a complete one-to-one series of `=` entries preserves coverage; a changed, added or dropped commit does not.
-Keep the approved commit reachable for this comparison and for the push command.
-Any other rewrite, fold, fix or someone else's push clears every gate but a `tests` pass on an unchanged tree.
-Checks cover the exact head only, even when an unchanged rebase preserves verdict and approval; tests cover every head naming the tree they passed on.
-
-Where `approval` is selected, take it from the author's retained gate or the caller's supplied approval for this head.
-Approver `summoner` requires `approved <head>` in reply to the landing-approval question, not the bare fact that a session was summoned.
-Approver `human` requires the user's go-ahead where questions reach them, their own request to land this change included; otherwise a trusted approving GitHub review of this head from an account marked `User`, not `Bot`.
-A summoner's initial prompt is never a human's go-ahead.
-Do not collect a new review in this spell or treat GitHub's platform approval as proof that a delegated reviewer approved.
+Where `approval` is selected, take it from the author's retained gate or the caller's supplied approval for this head, as the reference's "Approval" defines it.
+Do not collect a new review in this spell.
 
 ### Checks and local tests
 
-Re-read checks where the plan selects `checks`; pending means wait, red means return to review, not remove the gate.
+Re-read checks where the plan selects `checks`, waiting while they are pending.
 For a merge, inspect the PR's checks on this exact head; the merge command also waits for them.
 For a push onto GitHub, inspect this head's check runs and use the documented workflow with the push command below, which dispatches one if none ran.
-A plan cannot select `checks` for a local base or a non-GitHub remote.
 
-Where `tests` is selected, the whole local gate must pass on the head's tree (`<head>^{tree}`) in the landing session's workspace, with unavailable stages reported skipped.
-The author's own run retained for that tree covers the head; a different lander runs the gate itself even when its prompt carries the author's passing run.
+Where `tests` is selected, run the whole local gate on the head's tree as the reference's `tests` gate says, unless the author's own run retained in this session covers that tree.
 On failure, end the delegated landing with `blocked <head sha>: tests`, including the failed command and evidence.
 Never land, close the task or replace tests with the author's result after this failure.
 
@@ -184,7 +153,7 @@ Do not treat any other refusal as that condition.
    Fetch the base's remote again where there is one, then rebase onto the resolved `<base>`; a local base needs no fetch.
 2. If the rebase conflicts, abort it without resolving in this landing session and return to review with the earlier verdict and the conflicting base.
    Follow the rebase-conflicts reference for retaining recoverable work if a raise is required.
-3. Confirm the rebased HEAD and compare the old and new series with the verdict-coverage rule above, also preserving the approval only when every commit is unchanged.
+3. Confirm the rebased HEAD and compare the old and new series by the reference's range-diff, which alone preserves the verdict and the approval.
    A changed, added or dropped commit goes back to review; do not push it.
 4. Run the `tests` gate again on the new head where selected and its tree changed, reporting skipped stages.
    A failure returns `blocked <new head sha>: tests` rather than continuing.

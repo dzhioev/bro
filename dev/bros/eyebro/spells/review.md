@@ -9,12 +9,13 @@ Reconciles a predecessor's review, judges appended fixes, and reconfirms the lan
 For a standalone findings report rather than a conversation, use [[review diff]].
 
 parameters: {"channel": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"]}, "change": "pull request URL or number on github; otherwise <base commit>..<head>, the base ref, plus its remote URL and the review branch on talk; for a successor also the approved head and earlier verdict, or the predecessor's conversation"}
-version: 1.1.0
+version: 1.2.0
 ---
 
 # review
 
 Review the named head, not a moving branch.
+The delivery plan you are handed, its gates and your verdict follow the delivery reference: read it before the first round (`man-source::read`, topic `delivery`).
 Use [[review diff]] for its grounding in the repository's standards, judging method, narrow read-only checks and findings format.
 Read the log as well as the diff: the split and messages are part of the review, but token-accounting footer lines are not.
 Never run the repository's whole gate, edit the author's code, commit or push.
@@ -184,7 +185,6 @@ For the announced folded head:
 4. Require every selected checks/tests gate to pass on **this head**.
    Where `checks` is selected, wait for green checks from your own PR watch and current GitHub state.
    Where `tests` is selected, require the author's passed result for this head's tree, naming the tree `git rev-parse <head>^{tree}` prints, and check it wherever readable.
-   If neither is selected, no checks/tests result is required.
    Confirm the PR still names this head and GitHub reports a clean merge into the current base; unknown mergeability is not clean.
    Record that base's commit SHA, fetching it again if it moved.
 5. Only with every condition satisfied, post an `APPROVE` review bound to the folded head through the reviews API (`commit_id`, `event`, `body`).
@@ -334,7 +334,6 @@ Obtain the folded head through this channel's delivery and turn rules, then:
 3. Require every selected checks/tests gate to pass on this head: `checks` concluded green on it and `tests` passed on the tree `git rev-parse <head>^{tree}` prints,
    as the author's reply reports and checked wherever you can read the results yourself.
    Pending selected gates mean another question and wait, never a provisional approval.
-   A plan selecting neither requires no checks/tests result.
 4. Confirm it merges cleanly into the base commit the verdict names: for a PR GitHub's mergeability, for a push a fast-forward or a conflict-free rebase.
    Use read-only checks; do not rewrite the reviewed commits to probe a rebase.
    On `local`, establish this from the supplied base and local objects, without a remote or credential.
@@ -346,20 +345,8 @@ Obtain the folded head through this channel's delivery and turn rules, then:
 
 ## Verdict
 
-Approve only the landing fold's head, with every selected checks/tests gate passed, checks on that exact head and tests on its tree, and a clean merge into the named base commit.
-If the plan selects both, both must pass; if it selects neither, no checks/tests result is required.
+What you may approve, how long a verdict holds and the answer's form are the delivery reference's "Verdict" and "What a pass covers".
 A verdict is information, not courtesy.
-It holds for that head, or a rebase onto a newer base whose `git range-diff` shows **every commit unchanged (`=`)**; checks hold only for the exact head they ran on, tests for every head naming the tree they ran on.
-An appended fix, another fold, a conflict resolution or someone else's push clears the old verdict.
-
-The answer is:
-
-```text
-approved <head sha> on <base sha>
-checks: <each selected checks/tests result and where it ran; not selected for absent gates>
-<each finding>: <how it settled>
-```
-
-When you cannot approve, answer `blocked <head sha> on <base sha>: <reason>` with the same body, leaving each unsettled finding explicit.
+When you cannot approve, answer `blocked`, leaving each unsettled finding explicit.
 Include the round count, narrow checks you ran and any untrusted-feedback metadata in the body.
 Never turn a terminal PR event, a deadlock, missing delivery or an unfinished review into an approval.

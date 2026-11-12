@@ -11,7 +11,7 @@ With pr, recovers the task and recorded plan and resumes at review through [[fol
 Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
 parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "pr?": "pull request URL or number to resume at review", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
-version: 9.2.0
+version: 9.3.0
 ---
 
 # run-pr
@@ -22,97 +22,17 @@ Batch independent reads and bookkeeping.
 
 ## Delivery plan
 
-Read the appended `# Arguments`; resolve choices before preparing or publishing and refuse unknown role, placement or gate values.
-
-| parameter | meaning and default |
-|---|---|
-| `base` | the ref to land on; default `origin/<the branch default-branch prints>` only where origin exists |
-| `pr` | an existing PR to resume, otherwise none |
-| `channel` | {{insert #channel}} in this rendering |
-| `reviewer` | {{iff #may_summon contains eyebro}}`summon` by default: an eyebro target is granted{{else}}`others` by default: no eyebro target is granted{{end}}; also `coordinator` |
-| `approver` | `human` by default, or `summoner` |
-| `lander` | `self` by default, or `summon`, `coordinator`, `others` |
-| `landing` | {{insert #landing}} in this rendering |
-| `gates` | replaces the default whole, including an explicitly empty subset |
-| `placement` | `boxed` by default, or `unboxed`, `join`; applies to bros you summon |
-| `trust` | explicitly trusted GitHub logins, otherwise none |
-
-`<base>` below is **the ref as given**, never a branch with an implied origin prefix.
-A remote base travels with that remote's URL; in another checkout map the URL to its own remote, adding one under an unused name if necessary.
-Joined sessions share the checkout and add nothing.
-
-### Resolve the base and gates
-
+The plan's vocabulary, base resolution, checks and gates are the delivery reference's: read it whole first (`man-source::read`, topic `delivery`).
 Read `AGENTS.md` and relevant subsystem guides, including the gate, CI workflow and deploy rules.
-Resolve `<base>` with the same rules as `fold-branch`, `check-head` and `land-push`:
+Then, before preparing or publishing anything:
 
-- `<remote>/<branch>` means that remote's branch where its first component names a configured remote.
-  Fetch that remote before reading the base tip or rebasing; never assume origin.
-- `refs/heads/<branch>` means this checkout's local branch; fetch nothing.
-- A bare branch is accepted only in a repository without remotes.
-  With remotes, refuse it, naming `refs/heads/<branch>` and each `<remote>/<branch>` that exists.
-- Refuse an omitted base without origin, naming `base=refs/heads/<branch>` or `base=<remote>/<branch>`; refuse a ref that does not exist, naming existing explicit alternatives, not creating a base.
-  For example, an absent `integration/x` names `origin/integration/x` where that exists.
+1. Read the appended `# Arguments`, refusing unknown role, placement or gate values;
+   `channel` is {{insert #channel}} and `landing` {{insert #landing}} in this rendering.
+2. Resolve `<base>` and the gates, and check the plan.
+   An unattended refusal rescues unpushed work as below before it raises.
+3. State the plan in its `Delivery:` line, retaining it with explicit placement and trust choices as the delivery context.
 
-Retain the base ref, full base commit and, for a remote, its URL.
-For a GitHub remote resolve its `<owner>/<repo>` and base branch; bind **every** `gh` call to that repository, never the repository gh happens to pick for this checkout.
-Use `gh`, never `curl` against `api.github.com`.
-
-The gates are independent of the method:
-
-- `verdict`: the engaged reviewer approved the landing fold's head.
-- `checks`: CI concluded green on this exact head.
-  CI covers a merge where `gh api 'repos/<owner>/<repo>/actions/runs?event=pull_request&per_page=1' --jq .total_count` is above zero.
-  It covers a push only to a GitHub remote whose documented CI workflow accepts `workflow_dispatch`.
-- `tests`: the whole local gate passed on this head's tree in the landing session's workspace, reporting unavailable stages skipped.
-  Commit metadata is the verdict's and CI's to check, so a pass retained with its tree covers every head naming it.
-  Your own run is the reviewer's evidence before a handover; another lander must run it again itself.
-- `approval`: the chosen approver's go-ahead for this head.
-
-Absent `gates`, select `verdict`, `approval`, and `checks` where CI covers the method, otherwise `tests`.
-Omitting approval must be explicit, never inferred from an unattended hold.
-Without `verdict`, engage **no reviewer**, record `reviewer none`, skip review handoff and rounds, and make one landing fold.
-Its channel, reviewer selection and reviewer placement are moot.
-The plan opens a PR only for `landing=merge` or an engaged `github` reviewer.
-
-### Check the plan
-
-Refuse before preparing anything, naming the explicit choice that would work:
-
-- An engaged reviewer on `talk` or `local` must be `summon`; name `reviewer=summon` or `channel=github`.
-- A `summon` role needs a granted target answering to `eyebro` for review, or to `dev` with [[land]] for landing.
-  Use the banner's granted target name, not an ungranted ancestor it answers to.
-  Without it, name the needed grant or an explicit `reviewer=others` on github / `lander=self`; never silently switch.
-- An engaged reviewer or lander `coordinator`, or approver `summoner` with approval selected, needs a summoned session and `worker.question` on its quest.
-  Name the missing talk right or `reviewer=others`, `lander=self`, `approver=human` as appropriate.
-- `placement=join` for an engaged reviewer requires `channel=local`, and any selected join needs `bro.placement=join` authority.
-  Name `channel=local`, `placement=boxed`, or the needed launch grant.
-- Lander `others` requires `landing=merge`; name `landing=merge` or `lander=self`.
-- A local base cannot be carried to a different checkout's lander: `lander=summon` needs `placement=join`; `lander=coordinator` needs the author already joined to its coordinator's party.
-  Name a joined lander, `lander=self`, or an explicit remote base.
-- An engaged `talk` reviewer needs a remote base; name a remote base or `channel=local`.
-- A merge needs a GitHub remote base; name one or `landing=push`.
-- Where approval is selected, `approver=human` needs questions that reach the user or a plan that opens a PR.
-  Without either, name `approver=summoner` with a speaking summoner, or an explicit `gates` list without approval.
-- `checks` needs CI covering this method as defined above; name a dispatch-enabled documented workflow where applicable, or an explicit gates list using `tests` instead.
-- For a push onto GitHub, read `gh api repos/<owner>/<repo>/rules/branches/<base branch>`.
-  A rule requiring a PR refuses push, naming `landing=merge`.
-  That endpoint omits classic branch protection; the remote enforces it at the push.
-
-Channel/reviewer checks apply **only with `verdict`**, not to moot reviewer choices.
-Platform rules always bind, independent of gates.
-Report a refusal and stop where questions reach the user; unattended, rescue unpushed work as below and `raise` with it.
-A plan changed by the user or coordinator is checked and recorded again, never silently substituted.
-
-### State and record the plan
-
-State the plan in one line; record it in the PR body, lander prompt and coordinator ready answer:
-
-```text
-Delivery: base <base> (<remote URL, omitted for a local base>) · channel <channel> · reviewer <role or none> · approver <role> · lander <role> · landing <method> · gates <selected gates>
-```
-
-Also retain explicit placement and trust choices with the delivery context; include them on the line when non-default so a resume recovers them.
+Without `verdict`, skip review handoff and rounds and make one landing fold.
 
 ## Resume with `pr`
 
@@ -125,9 +45,7 @@ gh api repos/<owner>/<repo>/pulls/<n> --jq .base.repo.clone_url
 
 Read feedback only through trusted `pr-state` or [[follow pr]].
 
-1. Recover the task from the body's `Task:` line and the plan from its `Delivery:` line.
-   Without a Delivery line use the defaults above.
-   **The base comes from the PR itself**, its base branch on a remote at its base repository's URL, whatever the Delivery line records.
+1. Recover the task from the body's `Task:` line and the plan from the PR, as the delivery reference's "Record the plan" recovers one.
 2. If the recorded `channel` or `landing` differs from this rendering, cast [[run pr]] again with `pr` and those recorded choices before continuing.
    Recover other roles, gates, placement and trust; recorded `reviewer none` denotes no verdict gate, not an invocation role.
    Apply an explicit plan change through the plan check and update the line.
@@ -257,8 +175,7 @@ Publish only what this plan needs; a push landing with no engaged reviewer publi
 The review code on `local` travels through the ride, never a review-branch push or remote fetch.
 A PR required by `landing=merge` is still published normally; local constrains review delivery, not a separately chosen landing method.
 
-A PR is needed for `landing=merge` or an engaged reviewer on github.
-Open it **on the base remote's repository**, from a head branch pushed to that remote, not an assumed origin:
+Open the PR the plan needs **on the base remote's repository**, from a head branch pushed to that remote, not an assumed origin:
 
 ```bash
 git push -u <base remote> HEAD:<head branch>
@@ -393,15 +310,7 @@ Even a first round without findings requires this landing fold and reconfirmatio
 4. Split/message findings cause another fold and reconfirmation; content/check/conflict findings cause rounds with the same live reviewer.
    Only its final answer clears verdict; for `others`, a trusted approval must name this folded head.
 
-A verdict reads:
-
-```text
-approved <head sha> on <base sha>
-checks: <each selected checks/tests result and where it ran>
-<each finding>: <how it settled>
-```
-
-A `blocked <head sha> on <base sha>: <reason>` answer blocks landing.
+The verdict reads as the delivery reference's "Verdict" gives it.
 Collect a summoned reviewer's answer on its ended notification with `bro::quest_check` even if no PR event fires; a running state means keep waiting, not infer approval from GitHub.
 
 ### Failures and successors
@@ -417,28 +326,22 @@ After a verdict, a moved base that needs conflict resolution or a CI fix, or a d
 Keep that approved head reachable, pass the earlier verdict verbatim as `bro::quest_check` returned it, obtain both heads for the successor, and have it judge their base-to-head range-diff, changed integration and new checks.
 On github it also reconstructs its earlier approval from the PR; talk/local receives the approved head beside the new one.
 Then fold, clear all selected gates anew and hand over again.
-A base move that still merges cleanly, or a rebase whose every commit is unchanged (`=`), needs no new reviewer; checks must rerun on any new head, tests on any new tree.
+A base move that still merges cleanly, or an unchanged rebase, needs no new reviewer; gates the delivery reference's "What a pass covers" no longer extends to the new head clear anew.
 
 ## Gates and landing handover
 
-Retain gates **per full head SHA**, and `tests` per tree:
-verdict and approval cover the named head or a rebase onto a newer base whose complete one-to-one `git range-diff` shows every commit unchanged (`=`); checks cover the exact head only.
-An appended fix, fold, conflict resolution or someone else's push clears **every gate** but a `tests` pass on an unchanged tree; never carry an approval across one just because the final diff looks similar.
-An unchanged rebase comparison uses `<merge-base of approved head and current base>..<approved head>` against `<current base tip>..HEAD`; keep the approved object reachable.
+Retain each gate for what the delivery reference's "What a pass covers" extends it to, keeping approved objects reachable.
 
 Without verdict, the preparation fold is the landing fold: clear the selected final-head checks/tests without starting review rounds.
 {{iff #landing = merge}}Use the PR watch's exact-head checks for a merge; GitHub's platform review decision must also permit the merge.
 {{eliff #landing = push}}For push checks, run `check-head --base <base> --workflow <documented CI workflow file>` before gating or handover unless its exact-head green result is retained.{{end}}
 
-- Approver `human`, where questions reach the user: their go-ahead to land this change, including their own initial request, clears approval.
-  Elsewhere it requires a trusted GitHub approving review naming this head from `user_type: User`, never a Bot.
-  A summoner's prompt is **never** a human's go-ahead; an aggregate `review_decision` proves platform standing, not a human approval.
-- Approver `summoner`: ask `approve landing <ref> at <head>?` and require `approved <head>`.
-  With reviewer `coordinator`, combine this with `verdict for <pr> at <head>?` once the other author-clearable gates hold; require both the reviewer verdict and approval in the reply.
+- Approval clears as the delivery reference's "Approval" defines it.
+  For approver `summoner`, ask `approve landing <ref> at <head>?`; with reviewer `coordinator`, combine this with `verdict for <pr> at <head>?` once the other author-clearable gates hold, requiring both the reviewer verdict and approval in the reply.
 - Under reviewer `coordinator`, collect its verdict only once the other author-clearable gates hold, combining approval as above; do not wait on a verdict before asking for it.
 - Missing human or platform approval with an open PR is an ordinary wait, not a broken run: report what remains and keep watching.
   Record a durable task comment if blocked on a review the base counts; an App's approval may not count for it.
-  Untrusted feedback never clears a gate; retain its account/kind/URL for the final report.
+  Retain untrusted feedback's account/kind/URL for the final report.
 
 Every gate you can clear must hold before handover: all for `self`; all but `tests` for a different lander; all but `approval` for `others`, whose merge is the approval.
 Platform rules still bind independently.

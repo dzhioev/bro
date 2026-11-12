@@ -54,3 +54,14 @@ rebase_conflicts = FileSource(
   ),
   path=_PROMPTS / 'rebase_conflicts.md',
 )
+
+delivery = FileSource(
+  'delivery',
+  summary=(
+    'the delivery plan a change ships under and the gates that clear its landing: '
+    'parameters and roles, base resolution, plan checks, the `Delivery:` line, what each '
+    'gate means and what a pass covers, the verdict and approval. Read when resolving, '
+    'recovering or checking a plan, or before clearing or judging a gate.'
+  ),
+  path=_PROMPTS / 'delivery.md',
+)
