@@ -5,7 +5,7 @@ import json
 from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from bro.base import log
 from bro.base.time_util import Moment, utc_now
@@ -32,7 +32,7 @@ MAX_MESSAGE_BYTES = 16 << 10
 MAX_PENDING_QUESTIONS = 16
 MAX_RECORD_MESSAGES = 32
 CHAT_TRANSITIONS = frozenset({'message', 'refused', 'listening'})
-WORKER_TRANSITIONS = CHAT_TRANSITIONS | {'override'}
+WORKER_TRANSITIONS = CHAT_TRANSITIONS | {'override', 'share'}
 
 
 @dataclass
@@ -50,6 +50,7 @@ class Record:
   messages: list[dict[str, Any]] = field(default_factory=list)
   messages_truncated: bool = False
   overrides: list[dict[str, Any]] = field(default_factory=list)
+  shares: list[dict[str, Any]] = field(default_factory=list)
   chat_seq: int = 0
   state: str = 'accepted'
   accepted_at: Optional[Moment] = None
@@ -85,6 +86,7 @@ class Record:
     if include_messages:
       view['messages'] = self.conversation()
       view['overrides'] = list(self.overrides)
+      view['shares'] = list(self.shares)
       if self.messages_truncated:
         view['messages_truncated'] = True
     else:
@@ -284,6 +286,12 @@ class Journal:
     event = self._append(record, 'override', payload)
     record.overrides.append(event.view())
     del record.overrides[:-MAX_RECORD_MESSAGES]
+
+  def share(self, record: Record, ref: str, sharer: Literal['owner', 'operator']) -> None:
+    self._require_live(record)
+    event = self._append(record, 'share', {'ref': ref, 'by': sharer})
+    record.shares.append(event.view())
+    del record.shares[:-MAX_RECORD_MESSAGES]
 
   def listening(self, record: Record) -> bool:
     self._require_live(record)

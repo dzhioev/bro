@@ -791,3 +791,64 @@ async def test_operator_overrides_deliver_the_contract_once_without_hiding_worke
         )
       assert await worker_line == 'mission BENCHMARK (benchmark) ended ok'
       assert take_deferred_contract() is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('replayed', [False, True])
+async def test_shares_into_the_sessions_own_mission_wake_it_with_their_refs(monkeypatch, replayed):
+  own = {'kind': 'root', 'mission': 'ROOT', 'parent': None, 'args': {}, 'transition': 'share'}
+  shares = [
+    {**own, 'seq': 4, 'ref': 'sha256:aa/notes.txt', 'by': 'operator'},
+    {**own, 'seq': 5, 'ref': 'sha256:bb/build', 'by': 'owner'},
+  ]
+  child = {'kind': 'launch', 'type': 'bro', 'mission': 'CHILD', 'parent': 'ROOT'}
+  child_share = {
+    **child,
+    'seq': 6,
+    'args': {'target': 'dev'},
+    'transition': 'share',
+    'ref': 'sha256:cc/input',
+    'by': 'owner',
+  }
+  child_end = {**child, 'seq': 7, 'args': {'target': 'dev'}, 'transition': 'ended', 'outcome': 'ok'}
+  async with running_server(monkeypatch) as server:
+    with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
+      first_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      channel, arm = await next_message(server)
+      await reply(server, channel, arm, outcome='ok', value={'head': 5 if replayed else 3})
+      channel, own_query = await next_message(server)
+      await reply(
+        server,
+        channel,
+        own_query,
+        outcome='ok',
+        value={
+          'mission': {
+            **quest_record('ROOT', 'started', kind='root'),
+            'shares': shares if replayed else [],
+          }
+        },
+      )
+      channel, listing = await next_message(server)
+      await reply(server, channel, listing, outcome='ok', value={'missions': []})
+      if not replayed:
+        channel, poll = await next_message(server)
+        await reply(
+          server,
+          channel,
+          poll,
+          outcome='ok',
+          value={'head': 7, 'events': [*shares, child_share, child_end]},
+        )
+      prefix = 'before the watch: ' if replayed else ''
+      assert await first_line == f'{prefix}operator shared artifact sha256:aa/notes.txt'
+      assert await asyncio.to_thread(next, watch) == (
+        f'{prefix}summoner shared artifact sha256:bb/build'
+      )
+      child_line = asyncio.create_task(asyncio.to_thread(next, watch))
+      if replayed:
+        channel, poll = await next_message(server)
+        await reply(
+          server, channel, poll, outcome='ok', value={'head': 7, 'events': [child_share, child_end]}
+        )
+      assert await child_line == 'mission CHILD (bro to dev) ended ok'

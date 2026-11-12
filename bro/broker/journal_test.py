@@ -415,6 +415,35 @@ def test_own_quest_event_visibility_is_limited_to_chat_transitions():
   assert not journal.visible('child-peer', child, {'child-peer': 'child'})
 
 
+def test_a_share_reaches_its_worker_and_the_bounded_tail_of_the_by_id_view(monkeypatch):
+  monkeypatch.setattr(journal_module, 'MAX_RECORD_MESSAGES', 2)
+  journal = Journal()
+  root = journal.open('root', 'root', None, None, {}, type='bro')
+  journal.bind(root, 'root-peer')
+  child = journal.open(
+    'child', 'summon', 'root', 'root-peer', {}, talk=frozenset({'owner.say'}), type='bro'
+  )
+  journal.bind(child, 'child-peer')
+  workers = {'root-peer': 'root', 'child-peer': 'child'}
+  journal.share(child, 'sha256:a/first', 'operator')
+  journal.share(child, 'sha256:b/second', 'owner')
+  journal.share(child, 'sha256:c/third', 'operator')
+
+  _, events = journal.events_after(0, 'child-peer', workers)
+  assert [(event['transition'], event['ref'], event['by']) for event in events] == [
+    ('share', 'sha256:a/first', 'operator'),
+    ('share', 'sha256:b/second', 'owner'),
+    ('share', 'sha256:c/third', 'operator'),
+  ]
+  assert journal.visible_head('child-peer', workers) == journal.head
+  shares = child.view(include_messages=True)['shares']
+  assert [entry['ref'] for entry in shares] == ['sha256:b/second', 'sha256:c/third']
+
+  journal.end(child, {'outcome': 'ok'})
+  with pytest.raises(RuntimeError, match='already terminal'):
+    journal.share(child, 'sha256:d/late', 'operator')
+
+
 def test_the_visible_head_is_the_newest_event_the_caller_is_handed():
   journal = Journal()
   root = journal.open('root', 'root', None, None, {}, type='bro')

@@ -58,7 +58,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Sequence
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 from bro.artifact import (
   REF_FORM,
@@ -79,6 +79,7 @@ from ride.workspace.model import Workspace
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message
   from bro.broker.dispatcher import Dispatcher
+  from bro.broker.environment import Talk
   from bro.broker.runtime import Peer
 
 # refusal bound on the store's committed bytes — a runaway-ingest guard, not a
@@ -92,6 +93,10 @@ _MINT_KEYS = frozenset({'path', 'name'})
 _GET_KEYS = frozenset({'ref'})
 _SHARE_KEYS = frozenset({'id', 'ref'})
 _EXPORT_KEYS = frozenset({'ref'})
+# an owner's live share is announced to the worker where the owner may start a
+# message, and refused where no talk move could carry the ref to it at all
+_OWNER_STARTS: Talk = frozenset({'owner.say', 'owner.question'})
+_REF_CARRIERS: Talk = frozenset({*_OWNER_STARTS, 'worker.question'})
 JOB_RUN_NAME = 'run'  # the name a collected job run's ref carries
 
 
@@ -688,6 +693,16 @@ class ArtifactControl:
         f'no live mission {mission_id!r} owned by this peer',
       )
       return
+    if record.talk.isdisjoint(_REF_CARRIERS):
+      self._deny(
+        context,
+        peer,
+        message,
+        owner,
+        f'artifact share denied: the talk of mission {mission_id!r} carries no ref to its '
+        f'worker; it needs one of {", ".join(sorted(_REF_CARRIERS))}',
+      )
+      return
     ref = args['ref']
     try:
       self._store.resolve(ref, owner.workspace)
@@ -705,11 +720,13 @@ class ArtifactControl:
     except ArtifactDenied as reason:
       self._deny(context, peer, message, owner, str(reason))
       return
+    announced = not record.talk.isdisjoint(_OWNER_STARTS)
     self._answer_off_loop(
       context,
       peer,
       message.request_id,
       lambda: self._shared(ref, owner=owner.workspace, worker=worker),
+      then=(lambda _: self._announce(context, mission_id, ref, 'owner')) if announced else None,
     )
 
   def _worker_workspace(self, mission_id: str) -> str:
@@ -774,10 +791,18 @@ class ArtifactControl:
     except ArtifactDenied as reason:
       self._deny(context, peer, message, None, str(reason))
       return
+
+    def announce(value: dict[str, Any]) -> None:
+      self._announce(context, mission_id, value['ref'], 'operator')
+
     if 'ref' in args:
       ref = args['ref']
       self._answer_off_loop(
-        context, peer, message.request_id, lambda: self._host_shared_ref(ref, worker)
+        context,
+        peer,
+        message.request_id,
+        lambda: self._host_shared_ref(ref, worker),
+        then=announce,
       )
       return
     source = Path(args['path'])
@@ -787,7 +812,11 @@ class ArtifactControl:
       self._deny(context, peer, message, None, str(reason))
       return
     self._answer_off_loop(
-      context, peer, message.request_id, lambda: self._host_shared_path(source, name, worker)
+      context,
+      peer,
+      message.request_id,
+      lambda: self._host_shared_path(source, name, worker),
+      then=announce,
     )
 
   def _host_shared_ref(self, ref: str, worker: str) -> dict[str, Any]:
@@ -818,15 +847,34 @@ class ArtifactControl:
     self._store.share((ref,), to=worker, by=owner)
     return {}
 
+  def _announce(
+    self, context: Dispatcher, mission_id: str, ref: str, sharer: Literal['owner', 'operator']
+  ) -> None:
+    record = context.journal.records.get(mission_id)
+    if record is not None and not record.terminal:
+      context.journal.share(record, ref, sharer)
+
   def resolve(self, ref: str, peer: PeerDescription) -> Path:
     return self._store.resolve(ref, peer.workspace)
 
   def _answer_off_loop(
-    self, context: Dispatcher, peer: Peer, request_id: str, work: Callable[[], dict[str, Any]]
+    self,
+    context: Dispatcher,
+    peer: Peer,
+    request_id: str,
+    work: Callable[[], dict[str, Any]],
+    *,
+    then: Optional[Callable[[dict[str, Any]], None]] = None,
   ) -> None:
     from bro.broker import brotocol
 
-    task = asyncio.ensure_future(asyncio.to_thread(work))
+    async def answer() -> dict[str, Any]:
+      value = await asyncio.to_thread(work)
+      if then is not None:
+        then(value)
+      return value
+
+    task = asyncio.ensure_future(answer())
 
     def _answered(finished: asyncio.Task) -> None:
       if finished.cancelled():

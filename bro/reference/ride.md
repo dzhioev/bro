@@ -206,7 +206,7 @@ A harness that draws a batch for its human may show an event as one row.
 Where a persona declares shell reach, both harnesses mount `bro::watch(command, wake_on_quiet)` and `bro::unwatch(command)`.
 Under a finite command list a watch runs its line in brash under the session's brash policy, as the bro harness's jobs do, and under `brash(ANY)` in bash;
 `wake_on_quiet` sets the watch to wake on its quiet lines, while `unwatch` stops the watch it names without checking the command list and refuses the runtime-owned session watch.
-`do-ride` arms `mission watch` before the harness starts for every session with a broker channel, so operator scope changes wake sessions that started without summon targets too.
+`do-ride` arms `mission watch` before the harness starts for every session with a broker channel, so operator scope changes and artifact shares wake sessions that started without summon targets too.
 `do-ride` restarts the session watch once a second while its producer is gone, keeping its log and the journal head it last published;
 the dead producer's exit line reaches the session as usual, and the new one opens with a `mission watch resumed after …` line.
 A restarted watch reads the journal on from that head, so no event is lost while the journal still retains it, and one the dead producer yielded but had not yet published may repeat;
@@ -1281,7 +1281,10 @@ Peers pass files by content-addressed reference through the ride's store the lau
 - Reach follows the launch tree, and nothing a peer says widens it:
   a mint is readable by the minting peer and its summoners up to the ride root;
   a launch request's `share` list (`summon --share <ref>`, the service tool's `share` field, or another worker type's corresponding launch argument) hands refs the owner itself can read down as the mission opens;
-  and `mission share <id> <ref>` gives one such ref to a live mission owned by the caller.
+  and `mission share <id> <ref>` gives one such ref to a live mission owned by the caller,
+  provided the mission's talk can carry a ref to its worker at all
+  — `owner.say`, `owner.question`, or a reply to a `worker.question`.
+  Where the talk lets the owner start a message (`owner.say` or `owner.question`), the share also reaches the worker's session watch as a `summoner shared artifact <ref>` line.
   A share into a boxed worker appears in its mounted artifact view without a remount.
   There is no other path
   — knowing a ref is not access, and a denial is uniform whether or not the ref exists.
@@ -1295,7 +1298,8 @@ Peers pass files by content-addressed reference through the ride's store the lau
   Each audit row keys the ride under `ride`.
 
 - The host side is the operator, who reaches the store through the root's operator channel (`ride artifact`, re-executing into the root's runtime like `ride override`):
-  `ride artifact share <mission> <path-or-ref> [--name N]` ingests a host file or directory, or takes a ref the operator can already read, and shares it with any live mission by its id from `ride missions <root>`.
+  `ride artifact share <mission> <path-or-ref> [--name N]` ingests a host file or directory, or takes a ref the operator can already read, and shares it with any live mission by its id from `ride missions <root>`,
+  whose session watch announces it as an `operator shared artifact <ref>` line.
   A member of a joined party shares its summoner's view, so the whole party reads what is shared with one of them.
   `ride artifact get <ref> [--to <directory>] [--root <root>]` copies an exported ref to `<directory>/<name>` (the current directory by default) and prints the path, refusing to replace an existing one;
   `--root` is needed only when several roots are live.
