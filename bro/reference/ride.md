@@ -1363,10 +1363,10 @@ The gate names both from its hook input, with the transcript's folder as the pro
 it denies every other path, and blocks the call when it cannot read its input.
 Such a persona thus reads its own output whole and no workspace file through a tool, while the repository's `CLAUDE.md`, or its `AGENTS.md` where it has none, and project skills still load as its instructions.
 `harnesses/claude/harness/bro/claude/read_gate_llm_test.py` holds both folders and the denials against the pinned release.
-`brash(...)` brings `Monitor`, which the pinned release withholds while telemetry is off, as the session's settings keep it.
-Under a finite command list a `PreToolUse` hook on `Bash` and `Monitor` (`bro.claude.command_gate`) rewrites each call's command through `updatedInput` into one argv:
+`brash(...)` leaves `Monitor` unmapped, since a session watches a command through `bro::watch`, which, unlike a `Monitor` watch, carries no deadline.
+Under a finite command list a `PreToolUse` hook on `Bash` (`bro.claude.command_gate`) rewrites each call's command through `updatedInput` into one argv:
 the runtime's `brash` by path with the session's brash policy, `-c`, and the model's line untouched, quoted so that Claude's shell reads only single-quoted words.
-It keeps the call's other fields, decides no permission, so a `guided` session still prompts, and denies a call that carries no command, `Monitor`'s WebSocket form.
+It keeps the call's other fields and decides no permission, so a `guided` session still prompts.
 The runner writes the policy from the bro's reach into the session's `claude/` state dir and names it to the session-local MCP server, whose `bro::watch` starts lines under it.
 Before it starts anything, the runner refuses to start a session whose own Claude configuration could take a call around either gate, naming each place (`bro.claude.competing_hooks`):
 a `PreToolUse` hook matching a tool the session is served behind a gate, as Claude's matcher reads it,

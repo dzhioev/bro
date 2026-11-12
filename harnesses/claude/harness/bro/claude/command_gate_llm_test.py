@@ -1,11 +1,11 @@
 """Live probes of the command gate against the pinned Claude Code.
 
-Under a finite command list the gate rewrites each `Bash` and `Monitor` call into
-a brash call. These probes hold that a line reaches brash untouched and only
-brash starts its programs, that brash's refusal reaches the model, that
-`Monitor`'s WebSocket form is denied, that the places `competing_hooks` scans are
-places the pinned release loads `PreToolUse` hooks from, under each matcher
-form, and that a managed policy allowing only managed hooks turns the gate off.
+Under a finite command list the gate rewrites each `Bash` call into a brash
+call. These probes hold that a line reaches brash untouched and only brash
+starts its programs, that brash's refusal reaches the model, that the places
+`competing_hooks` scans are places the pinned release loads `PreToolUse` hooks
+from, under each matcher form, and that a managed policy allowing only managed
+hooks turns the gate off.
 A release that changes any of them fails here instead of taking a session's
 lines around brash unseen.
 """
@@ -15,7 +15,6 @@ import os
 import shlex
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +64,7 @@ class _Session:
   `probe` program on the session's PATH and a shell prefix recording each command
   string Claude's shell is handed."""
 
-  def __init__(self, claude: Path, root: Path, *, telemetry: bool = False) -> None:
+  def __init__(self, claude: Path, root: Path) -> None:
     self.claude = claude
     self.root = root
     self.workspace = root / 'above' / 'workspace'
@@ -80,11 +79,7 @@ class _Session:
         }
       )
     )
-    settings = json.loads(json.dumps(_SESSION_SETTINGS_JSON))
-    if telemetry:
-      # the pinned release serves Monitor only where it may fetch its flags
-      del settings['env']['DISABLE_TELEMETRY']
-    (self.config / 'settings.json').write_text(json.dumps(settings))
+    (self.config / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
     programs = root / 'bin'
     programs.mkdir()
     self.probe_log = root / 'probe.log'
@@ -112,8 +107,6 @@ class _Session:
       PATH=f'{programs}:{os.environ["PATH"]}',
       CLAUDE_CODE_SHELL_PREFIX=str(prefix),
     )
-    if telemetry:
-      self.env.pop('DISABLE_TELEMETRY', None)
 
   def hook(self, tag: str) -> str:
     return shlex.join([str(self.root / 'bin' / 'hook'), tag])
@@ -226,34 +219,6 @@ def test_bash_lines_run_in_brash_untouched_and_a_refusal_reaches_the_model(
   )
   _, refusal = calls[-1]
   assert "brash: refused 'cat'" in refusal
-
-
-def test_monitor_commands_run_in_brash_and_its_websocket_form_is_denied(
-  claude: Path, tmp_path: Path
-) -> None:
-  session = _Session(claude, tmp_path, telemetry=True)
-  policy = brash_policy.write(tmp_path, _REACH)
-  assert policy is not None
-  prompt = (
-    'Load the Monitor tool with ToolSearch, querying "select:Monitor". Then call Monitor '
-    'exactly twice: first with command "probe monitored" and description "probe"; then with '
-    'description "socket" and the ws parameter {"url": "wss://example.invalid/stream"}, and no '
-    'command. Then reply with the single word done.'
-  )
-  events = session.run(prompt, *_gated_arguments(policy))
-
-  (init,) = (event for event in events if event.get('subtype') == 'init')
-  assert 'Monitor' in init['tools'], 'the pinned release served no Monitor'
-  (command_call, _), (socket_call, denial) = _tool_calls(events, 'Monitor')
-  assert command_call['command'] == 'probe monitored'
-  assert 'ws' in socket_call and 'command' not in socket_call
-  assert 'a call carrying no command is refused' in denial
-  deadline = time.monotonic() + 30
-  while len(session.probe_starts()) == 0:
-    assert time.monotonic() < deadline, 'the monitored command never started'
-    time.sleep(0.1)
-  (start,) = session.probe_starts()
-  assert start['argv'] == ['monitored'] and _started_by_brash(start)
 
 
 def _skill(path: Path, *, matcher: str, tag: str, hook: str) -> Path:

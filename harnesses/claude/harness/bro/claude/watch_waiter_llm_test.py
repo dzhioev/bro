@@ -6,9 +6,8 @@ from `StopFailure` as well as `Stop`; the runner rests on the stream's hook
 events and on Claude holding a session's end for a pending async hook.
 None of it is documented, so each route is held here: an idle wake in print
 mode and in the TUI, a wake in a repository whose settings switch every hook
-off, a delivery inside a running turn, a waiter after a turn that ends in an
-API error, a waiter that fails to start, and an end and a stop that a pending
-waiter holds up neither of.
+off, a waiter after a turn that ends in an API error, a waiter that fails to
+start, and an end and a stop that a pending waiter holds up neither of.
 """
 
 import contextlib
@@ -18,12 +17,10 @@ import http.server
 import json
 import os
 import pty
-import shlex
 import signal
 import ssl
 import struct
 import subprocess
-import sys
 import termios
 import threading
 import time
@@ -214,51 +211,6 @@ def test_a_repository_switching_every_hook_off_still_wakes_the_session(
   assert len(run.results) == 2 and _LINE in run.results[1], run
 
 
-def test_a_line_arriving_mid_turn_is_delivered_within_that_turn(
-  tmp_path: Path, claude: Path
-) -> None:
-  # the runner's notice over the background command starts the second turn, so
-  # the waiter the first turn end started still waits through it; a PreToolUse
-  # hook starts the watch that prints the line once that turn's foreground
-  # command runs
-  config = _config(tmp_path)
-  feeder = tmp_path / 'feed.py'
-  watch_run = shlex.join([sys.executable, '-m', 'bro.watch_run', 'echo', _LINE])
-  feeder.write_text(
-    'import json, subprocess, sys\n'
-    'if json.load(sys.stdin)["tool_input"].get("command") == "sleep 8":\n'
-    f'  subprocess.run({watch_run!r}, shell=True, check=True)\n'
-  )
-  hooks = {
-    **watch_waiter_hooks(),
-    'PreToolUse': [
-      {
-        'matcher': 'Bash',
-        'hooks': [{'type': 'command', 'command': shlex.join([sys.executable, str(feeder)])}],
-      }
-    ],
-  }
-  prompt = (
-    'Use the Bash tool with run_in_background set to true to run exactly: sleep 20. '
-    'Do not wait for it. Reply with the single word ARMED and end your turn. '
-    'When a message tells you the turn ended with work still live, use the Bash tool in the '
-    'foreground (not in the background) to run exactly: sleep 8. Then reply with the line that '
-    'contains PROBE-LINE from any watch message you saw, verbatim, or NONE, and end your turn. '
-    'When the background command finishes, reply with the single word FINISHED.'
-  )
-  with watched_session(tmp_path / 'session') as (store, waiters):
-    run = _stream(
-      claude, tmp_path, prompt, store, waiters, hooks=hooks, on_result=lambda reply: None
-    )
-
-  assert run.code == 0 and not run.stopped, run
-  # a turn of its own would have answered the line apart from the turn the
-  # notice started; the three turns are the prompt's, the notice's, and the
-  # finished command's
-  assert len(run.results) == 3 and _LINE in run.results[1], run
-  assert _said(config, 'user', _LINE) == [], 'the line opened a turn of its own'
-
-
 def test_an_end_with_a_waiter_pending_skips_claudes_hook_grace(
   tmp_path: Path, claude: Path
 ) -> None:
@@ -313,11 +265,11 @@ def test_a_stop_with_a_waiter_pending_ends_the_run_as_stopped(tmp_path: Path, cl
 
 
 def test_a_waiter_that_fails_to_start_fails_the_solo_run(tmp_path: Path, claude: Path) -> None:
-  # a package on PYTHONPATH shadows ride for the hook's `python -m`, as a broken
+  # a package on PYTHONPATH shadows bro for the hook's `python -m`, as a broken
   # install would fail the waiter's import; the live feed would otherwise hold
   # the session waiting for a wake that never comes
   config = _config(tmp_path)
-  shadow = tmp_path / 'broken' / 'ride'
+  shadow = tmp_path / 'broken' / 'bro'
   shadow.mkdir(parents=True)
   (shadow / '__init__.py').write_text('raise ImportError("broken install")\n')
   with watched_session(tmp_path / 'session') as (store, waiters):

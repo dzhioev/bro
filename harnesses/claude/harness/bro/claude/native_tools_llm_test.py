@@ -90,11 +90,7 @@ def test_init_holds_the_personas_mapped_natives_and_no_project_server(
   reach = create_bro(persona).reach()
   init = _init_event(claude, reach, tmp_path)
 
-  # the release withholds Monitor while telemetry is off, as the session's
-  # settings keep it
-  expected = {
-    _REPORTED_NAMES.get(name, name) for name in native_tools.allowlist(reach) if name != 'Monitor'
-  }
+  expected = {_REPORTED_NAMES.get(name, name) for name in native_tools.allowlist(reach)}
   assert set(init['tools']) == expected
   assert init['mcp_servers'] == []
 

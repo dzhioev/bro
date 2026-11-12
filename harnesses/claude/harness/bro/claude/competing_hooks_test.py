@@ -57,16 +57,14 @@ class TestSettings:
     assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Bash'"]
 
   @pytest.mark.parametrize(
-    'matcher', [None, '', '*', 'Monitor', 'Edit|Bash', 'Write, Monitor', 'Ba.*', '^Mon']
+    'matcher', [None, '', '*', 'Bash', 'Edit|Bash', 'Write, Bash', 'Ba.*', '^Ba']
   )
-  def test_every_matcher_form_claude_applies_to_bash_or_monitor_counts(
-    self, project, config, matcher
-  ):
+  def test_every_matcher_form_claude_applies_to_bash_counts(self, project, config, matcher):
     _write(project / '.claude' / 'settings.json', json.dumps({'hooks': _hooks(matcher)}))
     assert len(find(project, config, COMMAND_TOOLS)) == 1
 
-  @pytest.mark.parametrize('matcher', ['Edit|Write', 'Bashful', 'mcp__.*', '^Edit$'])
-  def test_a_matcher_reaching_neither_tool_is_left_alone(self, project, config, matcher):
+  @pytest.mark.parametrize('matcher', ['Edit|Write', 'Bashful', 'Monitor', 'mcp__.*', '^Edit$'])
+  def test_a_matcher_not_reaching_bash_is_left_alone(self, project, config, matcher):
     _write(project / '.claude' / 'settings.json', json.dumps({'hooks': _hooks(matcher)}))
     assert find(project, config, COMMAND_TOOLS) == []
 
@@ -104,8 +102,8 @@ class TestComponents:
     assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Bash'"]
 
   def test_a_component_in_the_sessions_claude_folder_is_found(self, project, config):
-    path = _component(config / 'skills' / 'probe' / 'SKILL.md', _hooks('Monitor'))
-    assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Monitor'"]
+    path = _component(config / 'skills' / 'probe' / 'SKILL.md', _hooks())
+    assert find(project, config, COMMAND_TOOLS) == [f"{path}: a PreToolUse hook matching 'Bash'"]
 
   def test_a_skills_supporting_file_is_not_a_skill(self, project, config):
     _component(project / '.claude' / 'skills' / 'probe' / 'reference.md', _hooks())
@@ -137,11 +135,11 @@ class TestPlugins:
   def test_a_manifests_inline_and_listed_hooks_are_found(self, tmp_path, project, config):
     root = _plugin(config, tmp_path / 'plugin')
     manifest = root / '.claude-plugin' / 'plugin.json'
-    listed = _write(root / 'extra-hooks.json', json.dumps({'hooks': _hooks('Monitor')}))
+    listed = _write(root / 'extra-hooks.json', json.dumps({'hooks': _hooks('Edit|Bash')}))
     _write(manifest, json.dumps({'name': 'probe', 'hooks': ['./extra-hooks.json']}))
     _write(config / 'settings.json', json.dumps({'enabledPlugins': {'probe@market': True}}))
     assert find(project, config, COMMAND_TOOLS) == [
-      f"{listed}: a PreToolUse hook matching 'Monitor'"
+      f"{listed}: a PreToolUse hook matching 'Edit|Bash'"
     ]
 
     _write(manifest, json.dumps({'name': 'probe', 'hooks': _hooks()}))

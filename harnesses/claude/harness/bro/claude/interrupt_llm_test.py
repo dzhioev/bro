@@ -56,17 +56,18 @@ def _user_texts(config: Path) -> list[str]:
   return texts
 
 
-def test_a_running_background_task_draws_a_notice_and_its_end_wakes_the_last_turn(
+def test_a_running_background_task_holds_the_session_silently_and_its_end_wakes_the_last_turn(
   tmp_path: Path, claude: Path, monkeypatch
 ) -> None:
   monkeypatch.chdir(tmp_path)
+  # the background command reads this fifo, so it runs until the first reply closes it
+  release = tmp_path / 'release'
+  os.mkfifo(release)
   prompt = (
     'Use the Bash tool with run_in_background set to true to run exactly this command: '
-    'sleep 15 && echo slept-ok. Do not wait for it and do not poll it. Reply with the single '
-    'word started and end your turn. When a message tells you the turn ended with work still '
-    'live, reply with the single word noted and end your turn. Later, when a notification '
-    'tells you that background command finished, reply with the single word finished and end '
-    'your turn.'
+    'cat release && echo released-ok. Do not wait for it and do not poll it. Reply with the '
+    'single word started and end your turn. Later, when a notification tells you that '
+    'background command finished, reply with the single word finished and end your turn.'
   )
   argv = [
     str(claude),
@@ -80,12 +81,25 @@ def test_a_running_background_task_draws_a_notice_and_its_end_wakes_the_last_tur
     *STREAM_JSON_ARGS,
   ]
   env = _session_env(tmp_path)
+  replies: list[str] = []
+
+  def end_the_command_on_the_first_reply(reply: str) -> None:
+    if len(replies) == 0:
+      with release.open('w'):
+        pass
+    replies.append(reply)
 
   with watched_session(tmp_path / 'session') as (store, waiters):
     with bounded(_SESSION_TIMEOUT_SECONDS):
-      run = interrupt.run_streaming(argv, env, prompt, store=store, waiters=waiters)
+      run = interrupt.run_streaming(
+        argv,
+        env,
+        prompt,
+        store=store,
+        waiters=waiters,
+        on_result=end_the_command_on_the_first_reply,
+      )
 
   assert run.code == 0 and not run.stopped, run
-  assert _words(run) == ['started', 'noted', 'finished'], run
-  [notice] = [text for text in _user_texts(tmp_path / 'config') if 'background work: ' in text]
-  assert 'local_bash' in notice
+  assert _words(run) == ['started', 'finished'], run
+  assert [text for text in _user_texts(tmp_path / 'config') if '[notification: ' in text] == []
