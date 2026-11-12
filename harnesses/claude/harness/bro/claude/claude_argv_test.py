@@ -124,7 +124,7 @@ class TestRideSessionLaunch:
     argv = _ride_session_launch(_spec(bro='declaring'), brash_policy=policy).argv
     assert set(native_tools.SHELL) <= set(_tools(argv))
     hooks = _settings(argv)['hooks']['PreToolUse']
-    assert [entry['matcher'] for entry in hooks] == ['Bash', 'Monitor']
+    assert [entry['matcher'] for entry in hooks] == ['Bash']
     for entry in hooks:
       (hook,) = entry['hooks']
       assert hook['type'] == 'command'
@@ -209,7 +209,7 @@ class TestRideSessionLaunch:
     ).argv
 
     hooks = _settings(argv)['hooks']
-    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash', 'Monitor', 'Read']
+    assert [entry['matcher'] for entry in hooks['PreToolUse']] == ['Bash', 'Read']
     assert 'bro.claude.watch_waiter' in shlex.split(hooks['Stop'][0]['hooks'][0]['command'])
 
   def test_fast_mode_lands_in_settings(self):

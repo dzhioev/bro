@@ -13,7 +13,8 @@ from bro.mcp import Reach
 
 READ = ('Read', 'Glob', 'Grep')
 WRITE = ('Write', 'Edit', 'NotebookEdit')
-SHELL = ('Bash', 'TaskStop', 'Monitor')
+# Monitor stays unmapped (`bro/reference/ride.md`, "The claude argv")
+SHELL = ('Bash', 'TaskStop')
 WEB = ('WebFetch', 'WebSearch')
 DELEGATION = ('Agent', 'Workflow', 'TaskStop')
 # served where the reach has no files, held by `bro.claude.read_gate` to the
@@ -24,7 +25,7 @@ GATED_READ = 'Read'
 LOOP = ('Skill', 'ToolSearch')
 # the shell tools that run a command line, which run it in brash under a finite
 # command list
-COMMAND_TOOLS = ('Bash', 'Monitor')
+COMMAND_TOOLS = ('Bash',)
 
 
 def allowlist(reach: Reach) -> tuple[str, ...]:

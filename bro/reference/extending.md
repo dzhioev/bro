@@ -180,7 +180,7 @@ a general-purpose listed program such as `git -c`, `uv run`, `find -exec`, `xarg
 Use a `cli(...)` tool for a command that must be held to one fixed argument shape, and use sandboxing for containment.
 
 Under a finite command list, brash runs the lines the model starts:
-through `Bash` and `Monitor` on Claude, whose calls a gate rewrites into brash calls, and through its jobs and watches on the bro harness (`bro/reference/ride.md`, "The claude argv" and "Bro harness").
+through `Bash` on Claude, whose calls a gate rewrites into brash calls, and through its jobs and watches on the bro harness (`bro/reference/ride.md`, "The claude argv" and "Bro harness").
 `brash(ANY)` runs them in bash instead.
 A `cd` inside a line moves brash for the rest of that line only, so on Claude it no longer carries to the next call.
 What the session's Claude configuration runs is not checked:
@@ -190,8 +190,8 @@ it writes a skill whose `!cmd` runs what it likes, and the skill takes effect fr
 Claude's own guard against that is a permission prompt, which ride skips under every hold but `guided`;
 even Claude's auto mode let a benign-looking skill write through when probed.
 The command list catches a model that goes off-script, not one working to get around it.
-A session with a finite command list refuses to start while its project or local settings, the skills, commands, and agents Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash` or `Monitor`,
-which could rewrite their calls after the gate.
+A session with a finite command list refuses to start while its project or local settings, the skills, commands, and agents Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash`,
+which could rewrite its calls after the gate.
 Managed settings are your organization's policy, which outranks a persona's:
 a managed policy that allows only managed hooks turns the gate off by design, while a managed hook's own rewrite runs before the gate, which runs what it wrote in brash.
 

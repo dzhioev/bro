@@ -48,25 +48,13 @@ class TestGate:
       )
       assert json.loads(started.stdout) == ['--policy', '/state/brash policy.json', '-c', line]
 
-  @pytest.mark.parametrize('tool_name', ['Bash', 'Monitor'])
-  def test_the_rewrite_keeps_the_calls_other_fields_and_decides_nothing(
-    self, monkeypatch, capsys, tool_name
-  ):
+  def test_the_rewrite_keeps_the_calls_other_fields_and_decides_nothing(self, monkeypatch, capsys):
     tool_input = {'command': 'git status', 'description': 'd', 'run_in_background': True}
-    output = _gate(monkeypatch, capsys, {'tool_name': tool_name, 'tool_input': tool_input})
+    output = _gate(monkeypatch, capsys, {'tool_name': 'Bash', 'tool_input': tool_input})
 
     assert output.keys() == {'hookEventName', 'updatedInput'}
     assert output['hookEventName'] == 'PreToolUse'
     assert {**output['updatedInput'], 'command': 'git status'} == tool_input
-
-  def test_a_call_carrying_no_command_is_denied(self, monkeypatch, capsys):
-    # Monitor's WebSocket form
-    payload = {'tool_name': 'Monitor', 'tool_input': {'ws': {'url': 'wss://example.com/stream'}}}
-    decision = _gate(monkeypatch, capsys, payload)
-
-    assert decision['permissionDecision'] == 'deny'
-    assert 'Monitor' in decision['permissionDecisionReason']
-    assert 'updatedInput' not in decision
 
   def test_a_failing_gate_blocks_the_call(self):
     # Claude blocks a call whose PreToolUse hook exits 2, showing the model its stderr
@@ -82,14 +70,14 @@ class TestGate:
 
 def test_the_settings_command_runs_the_runtimes_gate_whatever_its_directory_holds(tmp_path):
   # Claude runs a hook in the session's working directory, an operated checkout
-  # that may carry another version of ride
-  shadow = tmp_path / 'ride' / 'claude'
+  # that may carry another version of bro
+  shadow = tmp_path / 'bro' / 'claude'
   shadow.mkdir(parents=True)
-  for package in (tmp_path / 'ride', shadow):
+  for package in (tmp_path / 'bro', shadow):
     (package / '__init__.py').write_text('')
   (shadow / 'command_gate.py').write_text('raise SystemExit("the checkout gate ran")\n')
   reach = mcp.Reach(files=mcp.Files(), brash=mcp.Brash(commands=('git status',)))
-  (entry, _) = gate_hooks(reach, tmp_path / 'brash-policy.json')['PreToolUse']
+  (entry,) = gate_hooks(reach, tmp_path / 'brash-policy.json')['PreToolUse']
   (hook,) = entry['hooks']
 
   gate = subprocess.run(
