@@ -26,7 +26,7 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   Each tool call has a fresh confined worker; CPU measurements include the parent and reaped children, while wall measurements include snapshot reads and confinement.
   Run timing gates on an otherwise idle host, separately from the parallel pytest suite.
   Token records use compact tool-result JSON and report the difference from separately encoded content strings, averaged over document pages; they impose no gate.
-  The security cell runs the confinement tests at every kernel-supported ABI cap on the current architecture and the hostile PDF corpus (`filetypes/bro/pdf/hostile_corpus_sandbox_test.py`),
+  The security cell runs the confinement tests on the current architecture, those whose outcome Landlock can decide at every kernel-supported ABI cap, and the hostile PDF corpus (`filetypes/bro/pdf/hostile_corpus_sandbox_test.py`),
   one case per hostile family at its pinned first-run outcome; CI's sandbox matrix covers both supported architectures.
   Fixture helpers are imported from the checkout and do not ship in wheels.
 - `bro/local/files_test_helper.py` — generated invoices shared by the assembled native/HTTP serving tests (`files_sandbox_test.py`) and the live-model probe (`files_conformance_test.py`).
