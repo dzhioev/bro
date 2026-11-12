@@ -12,7 +12,7 @@ REF = f'sha256:{"a" * 64}/notes.txt'
 
 
 def _serve(monkeypatch, path: Path) -> None:
-  monkeypatch.setattr(artifact_mcp, 'get_artifact', lambda ref: str(path))
+  monkeypatch.setattr(artifact_mcp, 'locate_artifact', lambda ref: str(path))
 
 
 def test_read_returns_a_numbered_window(tmp_path, monkeypatch):
@@ -135,7 +135,7 @@ def test_unreachable_ref_relays_the_host_refusal(monkeypatch):
   def refuse(ref: str) -> str:
     raise ArtifactError(f'artifact {ref} is not shared with this peer')
 
-  monkeypatch.setattr(artifact_mcp, 'get_artifact', refuse)
+  monkeypatch.setattr(artifact_mcp, 'locate_artifact', refuse)
 
   with pytest.raises(ArtifactError, match='not shared with this peer'):
     artifact_mcp.read(REF)
@@ -145,7 +145,37 @@ def test_manual_peer_relays_the_missing_view_refusal(monkeypatch):
   def refuse(ref: str) -> str:
     raise ArtifactError('no artifact view is mounted for a manually launched worker')
 
-  monkeypatch.setattr(artifact_mcp, 'get_artifact', refuse)
+  monkeypatch.setattr(artifact_mcp, 'locate_artifact', refuse)
 
   with pytest.raises(ArtifactError, match='manually launched worker'):
     artifact_mcp.grep(REF, 'anything')
+
+
+def test_an_unfetched_ref_relays_the_fetch_first_refusal(monkeypatch):
+  def refuse(ref: str) -> str:
+    raise ArtifactError(f'artifact {ref} is not fetched yet; fetch it first')
+
+  monkeypatch.setattr(artifact_mcp, 'locate_artifact', refuse)
+
+  with pytest.raises(ArtifactError, match='fetch it first'):
+    artifact_mcp.read(REF)
+
+
+def test_fetch_materializes_and_returns_the_path(monkeypatch):
+  calls = []
+
+  def fetch(ref: str, *, checked: bool) -> str:
+    calls.append((ref, checked))
+    return f'/var/ride/artifacts/{ref}'
+
+  monkeypatch.setattr(artifact_mcp, 'fetch_artifact', fetch)
+
+  assert artifact_mcp.fetch(REF) == f'/var/ride/artifacts/{REF}'
+  assert artifact_mcp.fetch(REF, checked=True) == f'/var/ride/artifacts/{REF}'
+  assert calls == [(REF, False), (REF, True)]
+
+
+def test_list_returns_the_readable_refs(monkeypatch):
+  monkeypatch.setattr(artifact_mcp, 'list_artifacts', lambda: [REF])
+
+  assert artifact_mcp.list() == [REF]

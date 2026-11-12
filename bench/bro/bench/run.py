@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import bro.base.args as base_args
-from bro.artifact import ArtifactError, get_artifact
+from bro.artifact import ArtifactError, fetch_artifact
 from bro.base import log, spawn
 from bro.base.lulid import lulid
 from bro.bench.job import JobError, run_job
@@ -144,7 +144,7 @@ def report(job: Path) -> list[str]:
 
 def _resolved(ref: str) -> Optional[Path]:
   try:
-    return Path(get_artifact(ref))
+    return Path(fetch_artifact(ref))
   except ArtifactError as error:
     log.warning('the run is artifact %s, which did not resolve: %s', ref, error)
     return None
@@ -170,7 +170,7 @@ def _through_broker(config: str, timeout: Optional[int]) -> tuple[Path, str]:
     if run is not None:
       print(f'results {run / OUTPUT_DIRECTORY}  artifact {error.ref}')
     raise
-  run = Path(get_artifact(ref))
+  run = Path(fetch_artifact(ref))
   # printed before the report is rendered, so a run this cannot summarize is
   # still a run the operator can open
   print(f'results {run / OUTPUT_DIRECTORY}  artifact {ref}')

@@ -25,7 +25,7 @@ where no one can be asked, `bro::raise` with the refusal and the rewording.
 
 Open a webview and act through `webview::command`, one call at a time.
 Understand pages with `browser::look`; never read a whole snapshot into your own context.
-For exact detail use `browser_find`, a targeted snapshot, `artifact::read` or `artifact::grep`, or `browser::look` over the ref of a cut reply.
+For exact detail use `browser_find`, a targeted snapshot, or the ref of a cut reply, fetched with `artifact::fetch` and read with `artifact::read`, `artifact::grep`, or `browser::look`.
 Put the goal, the last action, and the detail you need into every `look` question, because its reader starts blank.
 Produce large results as files with `browser_evaluate`'s `filename`, screenshots, or `browser_network_request`, and report their refs.
 Close the webview before answering.

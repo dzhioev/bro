@@ -10,32 +10,36 @@ and commits it to `objects/<digest>`, deduplicating by digest and refusing a
 mint past the byte cap rather than evicting. Committed content is immutable by
 construction, so the read path re-verifies nothing.
 
-Each boxed peer has a view directory `shared/<workspace>/` holding one
-hardlink (or hardlinked tree) per ref it reached, at the ref's own relative
-path `<digest>/<name>` — the source of its declared read-only artifact-view
-bind mount, so a ref linked while the peer runs appears without a remount.
-A mint links the minter and its owners up to the root.
-An artifact share links the ref into the worker's view either during lowering or after it is live.
-An unboxed peer has no mount
-namespace: its `get` falls back to a private copy under that workspace's own
-`artifacts/` directory. A manually launched child has no host-built launch
-and therefore no view; its `get` is denied with the reason.
+Reach is metadata: each reader — a peer workspace, or the operator — holds
+the refs it may read in the order they reached it, and access is checked by
+digest. A mint reaches the minter and its owners up to the root, a share the
+worker it names; neither materializes anything. Content reaches a peer only
+through its own fetch, which materializes the ref at its relative path
+`<digest>/<name>` by the peer's placement: a boxed peer's view directory
+`shared/<workspace>/`, the source of its declared read-only artifact-view bind
+mount, gets one hardlink (or hardlinked tree) per fetched ref, appearing
+without a remount; an unboxed peer, having no mount namespace, gets a private
+copy under its workspace's own `artifacts/` directory. A checked fetch digests
+the materialization and replaces one that no longer matches, failing when the
+stored object itself does not. A manually launched child has no host-built
+launch and therefore no view; its fetch is denied with the reason.
 
 The operator reads only what a session exported or the operator itself shared in
 (`share_from_host`); an exported ref reaches no other peer.
 
 The store is wiped at construction and removed at `close()` — it dies with
 the ride — while the JSONL audit beside it (`<ride>.jsonl`) survives,
-recording mints, gets, shares, and denials.
+recording mints, fetches, shares, and denials.
 
 `JobArtifacts` collects a broker job's run directory the same way: the run is
 staged under the store's `jobs/`, and the ref that closes the job's mission
 names it `JOB_RUN_NAME` and reaches the peer that requested the job and its owners.
 
-`ArtifactControl` serves the `artifact.mint`, `artifact.get`, `artifact.share`, and
-`artifact.export` kinds (contract: `bro/artifact.py`), the operator's
-`operator.artifact.share` and `operator.artifact.get`, and implements the worker-type resolver
-(`bro.worker_types.ArtifactResolver`).
+`ArtifactControl` serves the `artifact.mint`, `artifact.fetch`, `artifact.locate`,
+`artifact.list`, `artifact.share`, and `artifact.export` kinds (contract:
+`bro/artifact.py`), the operator's `operator.artifact.share`,
+`operator.artifact.fetch`, and `operator.artifact.list`, and implements the
+worker-type resolver (`bro.worker_types.ArtifactResolver`).
 Attribution, authorization, and shape validation run on the broker loop;
 store I/O runs in a thread with the correlated result delivered
 from a done-callback. The request never enters the dispatcher's table, so
@@ -72,7 +76,7 @@ from bro.artifact import (
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer, tree_path
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, artifacts_dir, workspace_dir
+from bro.workspace.paths import artifacts_dir, workspace_dir
 from ride.peer_facts import PeerFacts
 from ride.workspace.model import Workspace
 
@@ -90,7 +94,8 @@ MAX_STORE_BYTES = 32 << 30
 _FICLONE = 0x40049409
 
 _MINT_KEYS = frozenset({'path', 'name'})
-_GET_KEYS = frozenset({'ref'})
+_FETCH_KEYS = frozenset({'ref', 'checked'})
+_LOCATE_KEYS = frozenset({'ref'})
 _SHARE_KEYS = frozenset({'id', 'ref'})
 _EXPORT_KEYS = frozenset({'ref'})
 # an owner's live share is announced to the worker where the owner may start a
@@ -180,15 +185,16 @@ def _publish_without_replacing(staging: Path, destination: Path) -> None:
 
 @contextlib.contextmanager
 def _staged(directory: Path) -> Generator[Path]:
-  """a fresh staging path under `directory`, removed — file or tree — when the
-  block ends; a stage the block renamed away is left alone."""
+  """a fresh staging path under `directory`, removed — file, symlink, or tree,
+  never following a symlink — when the block ends; a stage the block renamed
+  away is left alone."""
   staging = directory / f'.{lulid()}'
   try:
     yield staging
   finally:
-    if staging.is_dir():
+    if staging.is_dir() and not staging.is_symlink():
       shutil.rmtree(staging)
-    elif staging.exists():
+    elif os.path.lexists(staging):
       staging.unlink()
 
 
@@ -206,19 +212,51 @@ def _content_size(source: Path) -> int:
   return total
 
 
+class _Reach:
+  """the refs one reader may read, in the order they reached it, and the
+  digests they name — the access check, since reach is to the content."""
+
+  def __init__(self) -> None:
+    self.refs: dict[str, None] = {}
+    self.digests: set[str] = set()
+
+  def add(self, ref: str) -> None:
+    self.refs.setdefault(ref, None)
+    self.digests.add(split_ref(ref)[0])
+
+
+def _link_tree(source: Path, destination: Path) -> None:
+  """hardlink the file at `source` to `destination`, or rebuild the directory
+  at `source` there with every file hardlinked."""
+  if source.is_dir():
+    shutil.copytree(source, destination, symlinks=True, copy_function=os.link)
+  else:
+    os.link(source, destination)
+
+
+def _matches(entry: Path, digest: str) -> bool:
+  if entry.is_symlink():
+    return False
+  try:
+    return digest_path(entry) == digest
+  except ValueError:
+    return False
+
+
 class ArtifactStore:
   """One ride's content-addressed store (see the module docstring). The
   metadata lock guards the reach map and the byte account; content operations
   run outside it, so a mint hashing for seconds never blocks a loop-side
-  check."""
+  check. Each materialization has a lock of its own, serializing the fetches
+  that place, check, or replace it."""
 
   def __init__(self, workspace: Workspace, *, root_boxed: bool):
     self.ride = workspace.name
-    self._root_boxed = root_boxed
     self._lock = threading.Lock()
     self._audit_lock = threading.Lock()
-    self._reach: dict[str, set[str]] = {}  # digest -> workspace names that may read it
-    self._host_reach: set[str] = set()  # digests the operator may read
+    self._reach: dict[str, _Reach] = {}  # workspace name -> the refs it may read
+    self._host_reach = _Reach()  # the refs the operator may read
+    self._materializing: dict[Path, threading.Lock] = {}
     self._bytes = 0
     root = store_dir(workspace.name)
     if root.exists():
@@ -309,9 +347,8 @@ class ArtifactStore:
     ref = compose_ref(digest, name)
     shared_with = {workspace, *ancestors}
     with self._lock:
-      self._reach.setdefault(digest, set()).update(shared_with)
-    for peer_workspace in shared_with:
-      self._link_into_view(peer_workspace, ref)
+      for reader in shared_with:
+        self._reader(reader).add(ref)
     self.audit(
       event,
       {
@@ -359,39 +396,28 @@ class ArtifactStore:
       return False
     return True
 
-  def _link_into_view(self, peer_workspace: str, ref: str) -> None:
-    """hardlink `ref` into the peer's view when the peer has one — container
-    peers only. A view entry shares inodes with the store object, which
-    nothing writes after commit."""
-    view = self._views / peer_workspace
-    if not view.is_dir():
-      return  # no view: the unboxed root, or a manually launched child
-    digest, _ = split_ref(ref)
-    entry = view / ref
-    if entry.exists():
-      return
-    entry.parent.mkdir(exist_ok=True)
-    source = self._objects / digest
-    if not source.is_dir():
-      try:
-        os.link(source, entry)
-      except FileExistsError:
-        pass
-      return
-    with _staged(self._staging) as staging:
-      shutil.copytree(source, staging, symlinks=True, copy_function=os.link)
-      try:
-        staging.rename(entry)
-      except OSError:
-        if not entry.exists():
-          raise
+  def _reader(self, workspace: str) -> _Reach:
+    """the reach of the peer named `workspace`, created on first use; the
+    caller holds the metadata lock."""
+    reach = self._reach.get(workspace)
+    if reach is None:
+      reach = self._reach[workspace] = _Reach()
+    return reach
 
   def reachable(self, ref: str, workspace: str) -> bool:
     """whether the peer named `workspace` may read `ref`'s content — one
     uniform check, identical whether or not the ref exists."""
     digest, _ = split_ref(ref)
     with self._lock:
-      return workspace in self._reach.get(digest, ())
+      reach = self._reach.get(workspace)
+      return reach is not None and digest in reach.digests
+
+  def readable(self, workspace: str) -> list[str]:
+    """the refs the peer named `workspace` may read, in the order they
+    reached it."""
+    with self._lock:
+      reach = self._reach.get(workspace)
+      return [] if reach is None else list(reach.refs)
 
   def resolve(self, ref: str, requester: str) -> Path:
     """the host path holding `ref`'s content, for the peer named `requester`;
@@ -402,99 +428,124 @@ class ArtifactStore:
     return self._objects / digest
 
   def share(self, refs: Sequence[str], *, to: str, by: str) -> None:
-    """extend each ref's reach to the peer named `to` and link it into that
-    peer's view. The caller checked `by`'s own reach on the loop;
-    the linking is called off-loop."""
+    """extend each ref's reach to the peer named `to`. The caller checked
+    `by`'s own reach on the loop."""
     if len(refs) == 0:
       return
     with self._lock:
+      reach = self._reader(to)
       for ref in refs:
-        digest, _ = split_ref(ref)
-        self._reach.setdefault(digest, set()).add(to)
-    self.view(to)
-    for ref in refs:
-      self._link_into_view(to, ref)
+        reach.add(ref)
     self.audit('share', {'by': by, 'to': to, 'refs': list(refs)})
 
-  def materialize(self, identity: PeerDescription, ref: str) -> str:
-    """the path `ref` appears at for the requesting peer — its view mount for
-    a boxed peer, a private copy under the workspace directory for the
-    unboxed root. Raises `ArtifactDenied` on any refusal; the copy is heavy,
-    called off-loop."""
+  def _materialization(self, identity: PeerDescription, ref: str) -> tuple[Path, str]:
+    """where `ref` materializes for the requesting peer: the host path of the
+    entry, and the path the peer reads it at. Raises `ArtifactDenied` for a
+    peer that may not read it or has no materialization."""
     if not self.reachable(ref, identity.workspace):
       raise ArtifactDenied(_denial(ref))
     if identity.expected:
       raise ArtifactDenied('no artifact view is mounted for a manually launched worker')
-    if identity.workspace == self.ride:
-      artifact_view = PurePosixPath(CONTAINER_ARTIFACTS_ROOT) if self._root_boxed else None
+    if identity.artifact_view is None:
+      entry = workspace_dir(identity.workspace) / 'artifacts' / ref
+      return entry, str(entry)
+    return self._views / identity.workspace / ref, str(identity.artifact_view / ref)
+
+  def fetch(self, identity: PeerDescription, ref: str, *, checked: bool = False) -> str:
+    """materialize `ref` for the requesting peer and return the path it reads
+    it at; an existing materialization is kept, and `checked` digests it first
+    and replaces one that no longer matches. Raises `ArtifactDenied` on any
+    refusal; the materialization is heavy, called off-loop."""
+    entry, path = self._materialization(identity, ref)
+    digest, _ = split_ref(ref)
+    source = self._objects / digest
+    if identity.artifact_view is None:
+      staging_directory = entry.parent  # beside the copy, so publishing it is a rename
+
+      def build(staging: Path) -> None:
+        _private_copy(source, staging)
     else:
-      artifact_view = identity.artifact_view
-    if artifact_view is not None:
-      self._link_into_view(identity.workspace, ref)
-      path = str(artifact_view / ref)
-    else:
-      path = str(self._unboxed_copy(ref, identity.workspace))
-    self.audit('get', {'peer': identity.workspace, 'ref': ref})
+      if not (self._views / identity.workspace).is_dir():
+        raise RuntimeError(f'peer {identity.workspace} has no artifact view directory')
+      staging_directory = self._staging
+
+      def build(staging: Path) -> None:
+        _link_tree(source, staging)
+
+    with self._materialization_lock(entry):
+      entry.parent.mkdir(parents=True, exist_ok=True)
+      if not os.path.lexists(entry):
+        with _staged(staging_directory) as staging:
+          build(staging)
+          staging.rename(entry)
+      if checked and not _matches(entry, digest):
+        with _staged(staging_directory) as staging, _staged(staging_directory) as discarded:
+          build(staging)
+          entry.rename(discarded)
+          staging.rename(entry)
+        if not _matches(entry, digest):
+          raise RuntimeError(f'the stored content of {ref} no longer matches its digest')
+    with self._lock:
+      self._reader(identity.workspace).add(ref)
+    self.audit('fetch', {'peer': identity.workspace, 'ref': ref, 'checked': checked})
     return path
 
-  def _unboxed_copy(self, ref: str, workspace: str) -> Path:
-    digest, _ = split_ref(ref)
-    destination = workspace_dir(workspace) / 'artifacts' / ref
-    if destination.exists():
-      return destination
-    destination_directory = destination.parent
-    destination_directory.mkdir(parents=True, exist_ok=True)
-    with _staged(destination_directory) as staging:
-      _private_copy(self._objects / digest, staging)
-      try:
-        staging.rename(destination)
-      except OSError:
-        if not destination.exists():
-          raise
-    return destination
+  def _materialization_lock(self, entry: Path) -> threading.Lock:
+    with self._lock:
+      return self._materializing.setdefault(entry, threading.Lock())
+
+  def locate(self, identity: PeerDescription, ref: str) -> str:
+    """the path the requesting peer reads `ref` at, which it already fetched;
+    materializes nothing. Raises `ArtifactDenied` on any refusal, including a
+    ref not fetched yet."""
+    entry, path = self._materialization(identity, ref)
+    if not os.path.lexists(entry):
+      raise ArtifactDenied(f'artifact {ref} is not fetched yet; fetch it first')
+    return path
 
   def export(self, ref: str, *, by: str) -> None:
     """extend `ref`'s reach to the operator. The caller checked `by`'s own reach
     and export right on the loop."""
+    with self._lock:
+      self._host_reach.add(ref)
+    self.audit('export', {'by': by, 'ref': ref})
+
+  def host_readable(self) -> list[str]:
+    """the refs the operator may read, in the order they reached it."""
+    with self._lock:
+      return list(self._host_reach.refs)
+
+  def _host_reads(self, ref: str) -> bool:
     digest, _ = split_ref(ref)
     with self._lock:
-      self._host_reach.add(digest)
-    self.audit('export', {'by': by, 'ref': ref})
+      return digest in self._host_reach.digests
 
   def share_from_host(self, source: Path, name: str, *, to: str) -> tuple[str, int]:
     """ingest the host path `source` as `name` and share it with the peer named
     `to`; the operator may read it afterwards. Heavy, called off-loop."""
-    self.view(to)
     ref, size = self.adopt(source, name, to, (), event='operator-share', origin=str(source))
-    digest, _ = split_ref(ref)
     with self._lock:
-      self._host_reach.add(digest)
+      self._host_reach.add(ref)
     return ref, size
 
   def share_to_peer(self, ref: str, *, to: str) -> None:
-    """share a ref the operator may read with the peer named `to`. Called
-    off-loop."""
-    digest, _ = split_ref(ref)
-    with self._lock:
-      readable = digest in self._host_reach
-    if not readable:
+    """share a ref the operator may read with the peer named `to`."""
+    if not self._host_reads(ref):
       raise ArtifactDenied(f'artifact {ref} is not available to the operator')
     self.share((ref,), to=to, by='operator')
 
   def copy_to_host(self, ref: str, directory: Path) -> Path:
     """copy an exported ref's content to `directory/<name>` and return that
     path; refuses to replace an existing path. Heavy, called off-loop."""
-    digest, name = split_ref(ref)
-    with self._lock:
-      readable = digest in self._host_reach
-    if not readable:
+    if not self._host_reads(ref):
       raise ArtifactDenied(f'artifact {ref} is not available to the operator')
+    digest, name = split_ref(ref)
     destination = directory / name
     directory.mkdir(parents=True, exist_ok=True)
     with _staged(directory) as staging:
       _private_copy(self._objects / digest, staging)
       _publish_without_replacing(staging, destination)
-    self.audit('host-get', {'ref': ref, 'path': str(destination)})
+    self.audit('host-fetch', {'ref': ref, 'path': str(destination)})
     return destination
 
   def audit(self, event: str, entry: dict[str, Any]) -> None:
@@ -528,12 +579,23 @@ def _validate_mint(args: dict[str, Any]) -> Optional[str]:
   return None
 
 
-def _validate_get(args: dict[str, Any]) -> Optional[str]:
-  unknown = sorted(set(args) - _GET_KEYS)
+def _validate_fetch(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - _FETCH_KEYS)
   if len(unknown) > 0:
-    return f'unknown artifact.get field(s): {", ".join(unknown)}'
+    return f'unknown artifact.fetch field(s): {", ".join(unknown)}'
   if not is_ref(args.get('ref')):
-    return f"artifact.get needs a well-formed 'ref' ({REF_FORM})"
+    return f"artifact.fetch needs a well-formed 'ref' ({REF_FORM})"
+  if not isinstance(args.get('checked', False), bool):
+    return "artifact.fetch 'checked' must be a boolean"
+  return None
+
+
+def _validate_locate(args: dict[str, Any]) -> Optional[str]:
+  unknown = sorted(set(args) - _LOCATE_KEYS)
+  if len(unknown) > 0:
+    return f'unknown artifact.locate field(s): {", ".join(unknown)}'
+  if not is_ref(args.get('ref')):
+    return f"artifact.locate needs a well-formed 'ref' ({REF_FORM})"
   return None
 
 
@@ -583,14 +645,14 @@ def _validate_host_share(args: dict[str, Any]) -> Optional[str]:
   return None
 
 
-def _validate_host_get(args: dict[str, Any]) -> Optional[str]:
+def _validate_host_fetch(args: dict[str, Any]) -> Optional[str]:
   unknown = sorted(set(args) - {'ref', 'to'})
   if len(unknown) > 0:
-    return f'unknown operator.artifact.get field(s): {", ".join(unknown)}'
+    return f'unknown operator.artifact.fetch field(s): {", ".join(unknown)}'
   if not is_ref(args.get('ref')):
-    return f"operator.artifact.get needs a well-formed 'ref' ({REF_FORM})"
+    return f"operator.artifact.fetch needs a well-formed 'ref' ({REF_FORM})"
   if not isinstance(args.get('to'), str) or not os.path.isabs(args['to']):
-    return "operator.artifact.get needs an absolute string 'to' directory"
+    return "operator.artifact.fetch needs an absolute string 'to' directory"
   return None
 
 
@@ -624,8 +686,8 @@ class JobArtifacts:
 class ArtifactControl:
   """The artifact kinds and worker-type resolver over one store.
 
-  `mint`, `get`, `share`, and `export` register as the broker's artifact request handlers,
-  and `host_share` and `host_get` as the operator channel's.
+  `mint`, `fetch`, `locate`, `listing`, `share`, and `export` register as the broker's artifact request handlers,
+  and `host_share`, `host_fetch`, and `host_listing` as the operator channel's.
   Everything here runs on the broker loop, with store content work threaded.
   """
 
@@ -655,21 +717,71 @@ class ArtifactControl:
     ref, size = self._store.mint(identity, ancestors, path, name)
     return {'ref': ref, 'size': size}
 
-  def get(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+  def fetch(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     args = message.args
     try:
       identity = self._facts.resolve(context, peer)
     except UnattributablePeer as reason:
-      self._deny(context, peer, message, None, f'artifact get denied: {reason}')
+      self._deny(context, peer, message, None, f'artifact fetch denied: {reason}')
       return
-    error = _validate_get(args)
+    error = _validate_fetch(args)
+    if error is not None:
+      self._deny(context, peer, message, identity, error)
+      return
+    ref, checked = args['ref'], args.get('checked', False)
+    self._answer_off_loop(
+      context,
+      peer,
+      message.request_id,
+      lambda: {'path': self._store.fetch(identity, ref, checked=checked)},
+    )
+
+  def locate(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    args = message.args
+    try:
+      identity = self._facts.resolve(context, peer)
+    except UnattributablePeer as reason:
+      self._deny(context, peer, message, None, f'artifact locate denied: {reason}')
+      return
+    error = _validate_locate(args)
     if error is not None:
       self._deny(context, peer, message, identity, error)
       return
     ref = args['ref']
     self._answer_off_loop(
-      context, peer, message.request_id, lambda: {'path': self._store.materialize(identity, ref)}
+      context, peer, message.request_id, lambda: {'path': self._store.locate(identity, ref)}
     )
+
+  def listing(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    try:
+      identity = self._facts.resolve(context, peer)
+    except UnattributablePeer as reason:
+      self._deny(context, peer, message, None, f'artifact list denied: {reason}')
+      return
+    self._page(context, peer, message, identity, self._store.readable(identity.workspace))
+
+  def host_listing(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    self._page(context, peer, message, None, self._store.host_readable())
+
+  def _page(
+    self,
+    context: Dispatcher,
+    peer: Peer,
+    message: Message,
+    identity: Optional[PeerDescription],
+    refs: Sequence[str],
+  ) -> None:
+    from bro.broker import brotocol
+
+    try:
+      cursor = brotocol.index_cursor(message.args, len(refs))
+      value = brotocol.frame_page(
+        message.request_id, 'refs', refs[cursor:], lambda count: cursor + count
+      )
+    except ValueError as error:
+      self._deny(context, peer, message, identity, f'artifact list denied: {error}')
+      return
+    context.reply(peer, {'outcome': 'ok', 'value': value})
 
   def share(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     args = message.args
@@ -829,9 +941,9 @@ class ArtifactControl:
     ref, size = self._store.share_from_host(source, name, to=worker)
     return {'ref': ref, 'size': size}
 
-  def host_get(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+  def host_fetch(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     args = message.args
-    error = _validate_host_get(args)
+    error = _validate_host_fetch(args)
     if error is not None:
       self._deny(context, peer, message, None, error)
       return

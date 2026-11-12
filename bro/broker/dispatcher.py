@@ -648,22 +648,12 @@ class Dispatcher:
     if cursor is not None:
       position = _decode_query_cursor(cursor)
       records = [record for record in records if listing_position(record) > position]
-    selected: list[Record] = []
-    for record in records:
-      candidate_records = [*selected, record]
-      candidate: dict[str, Any] = {'missions': [entry.view() for entry in candidate_records]}
-      if len(candidate_records) < len(records):
-        candidate['cursor'] = _encode_query_cursor(record)
-      message = brotocol.result(request_id, 'ok', value=candidate)
-      if len(message.to_bytes()) > MAX_FRAME_BYTES:
-        break
-      selected.append(record)
-    if len(selected) == 0 and len(records) > 0:
-      raise RuntimeError('one journal record exceeds the query response frame')
-    value: dict[str, Any] = {'missions': [record.view() for record in selected]}
-    if len(selected) < len(records):
-      value['cursor'] = _encode_query_cursor(selected[-1])
-    return value
+    return brotocol.frame_page(
+      request_id,
+      'missions',
+      [record.view() for record in records],
+      lambda count: _encode_query_cursor(records[count - 1]),
+    )
 
   async def _wait_query(
     self,

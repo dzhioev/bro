@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """artifact — pass files between broker peers by content-addressed reference.
 
-The peer side of artifact sharing uses three request kinds on the peer's channel.
+The peer side of artifact sharing uses these request kinds on the peer's channel.
 The ride's host-side store answers them (`ride/ride/artifacts.py`).
 This module owns their kinds, argument keys, and ref grammar for the library clients and CLI/session commands.
 
@@ -9,15 +9,21 @@ This module owns their kinds, argument keys, and ref grammar for the library cli
   relative to the requesting peer's workspace root, and `name` the artifact,
   defaulting to the path's last component.
   The host ingests a private copy into the ride store and answers `ok{ref, size}`.
-- `artifact.get` with args `{ref}` — the host makes the ref visible to the requesting peer
-  and answers `ok{path}` with the path it appears at, which ends in the ref's name:
-  the read-only view mount for a boxed peer, or a copy under the peer's workspace directory
+- `artifact.fetch` with args `{ref, checked?}` — the host materializes the ref for the requesting peer
+  and answers `ok{path}` with the path it appears at, which ends in the ref itself:
+  a link in the read-only view mount for a boxed peer, or a copy under the peer's workspace directory
   for an unboxed one.
+  A repeat fetch answers the existing materialization;
+  `checked` digests it first and replaces a copy that no longer matches the ref.
   The path is not the peer's to write;
   a peer that wants an editable copy makes one itself.
+- `artifact.locate` with args `{ref}` — the path a ref the peer already fetched appears at, materializing nothing;
+  a reachable ref that is not fetched yet is denied with the reason.
+- `artifact.list` with args `{cursor?}` — the refs the peer can read, in the order they reached it,
+  answered as `ok{refs, cursor?}` pages that each fit one frame; a `cursor` names where the next page starts.
 - `artifact.share` with args `{id, ref}` — the owner of a live mission hands one ref it can reach to that mission's worker.
 - `artifact.export` with args `{ref}` — a peer started with `bro.export` publishes one ref it can reach to the host.
-  The operator reads it with `ride artifact get`; no other peer's reach changes.
+  The operator reads it with `ride artifact fetch`; no other peer's reach changes.
 
 A ref is `<digest>/<name>`. The digest is `sha256:` plus 64 hex digits. For a
 file it is the plain content digest, so `sha256sum` checks it. For a directory
@@ -34,11 +40,12 @@ A minted ref is readable by the minting peer and its summoners up to the ride ro
 An owner may hand a ref down when the mission opens or after it is live,
 and the operator may hand a host file or an exported ref to any live mission (`ride artifact share`).
 Nothing else reaches a ref — knowing one is not access.
-Reach is to the digest, so a peer that may read the content gets or shares it under any name.
+Reaching a ref materializes nothing: its content appears to a peer only once the peer fetches it.
+Reach is to the digest, so a peer that may read the content fetches or shares it under any name.
 
 The CLI blocks for the host's answer: `artifact mint <path>` prints the ref,
-`artifact get <ref>` prints the path, `artifact export <ref>` publishes a ref to the host,
-and `artifact digest <path>` computes the
+`artifact fetch <ref>` prints the path, `artifact list` prints the readable refs one per line,
+`artifact export <ref>` publishes a ref to the host, and `artifact digest <path>` computes the
 ref locally, with no channel involved. Like `summon`, an unset
 `BROKER_CHANNEL` is an error rather than inert, and broker imports are
 deferred to call time so importers of the contract constants never pull the
@@ -64,7 +71,9 @@ if TYPE_CHECKING:
 __cli_name__ = 'artifact'
 
 MINT = 'artifact.mint'  # the kind a mint request names; args {path, name?}
-GET = 'artifact.get'  # the kind a get request names; args {ref}
+FETCH = 'artifact.fetch'  # the kind a fetch request names; args {ref, checked?}
+LOCATE = 'artifact.locate'  # the kind a fetched-path lookup names; args {ref}
+LIST = 'artifact.list'  # the kind a reach listing names; args {cursor?}
 SHARE = 'artifact.share'  # the kind a live mission share names; args {id, ref}
 EXPORT = 'artifact.export'  # the kind a publish-to-host names; args {ref}
 # client-side bound on the host's answer — ingest reads and copies the full
@@ -234,15 +243,21 @@ def _interpret_result(message: 'Message') -> dict[str, Any]:
   raise ArtifactError('; '.join(parts))
 
 
+def _request(
+  client: 'Client', kind: str, args: dict[str, Any], timeout: Optional[float]
+) -> dict[str, Any]:
+  try:
+    result = client.call(kind, args, timeout if timeout is not None else DEFAULT_TIMEOUT)
+  except TimeoutError:
+    raise ArtifactError(f'no {kind} result within the timeout') from None
+  except ConnectionError as e:
+    raise ArtifactError(f'broker channel closed awaiting the {kind} result: {e}') from None
+  return _interpret_result(result)
+
+
 def _call(kind: str, args: dict[str, Any], timeout: Optional[float]) -> dict[str, Any]:
   with _open_client() as client:
-    try:
-      result = client.call(kind, args, timeout if timeout is not None else DEFAULT_TIMEOUT)
-    except TimeoutError:
-      raise ArtifactError(f'no {kind} result within the timeout') from None
-    except ConnectionError as e:
-      raise ArtifactError(f'broker channel closed awaiting the {kind} result: {e}') from None
-  return _interpret_result(result)
+    return _request(client, kind, args, timeout)
 
 
 def mint_artifact(
@@ -260,14 +275,45 @@ def mint_artifact(
   return Minted(ref=str(ref), size=size)
 
 
-def get_artifact(ref: str, *, timeout: Optional[float] = None) -> str:
-  """make `ref` visible to this peer and return the path it appears at. Raises
-  `ArtifactError` on any failure."""
-  value = _call(GET, {'ref': ref}, timeout)
+def _path_value(kind: str, value: dict[str, Any]) -> str:
   path = value.get('path')
   if not isinstance(path, str) or len(path) == 0:
-    raise ArtifactError(f'malformed get result value: {value!r}')
+    raise ArtifactError(f'malformed {kind} result value: {value!r}')
   return path
+
+
+def fetch_artifact(ref: str, *, checked: bool = False, timeout: Optional[float] = None) -> str:
+  """materialize `ref` for this peer and return the path it appears at;
+  `checked` verifies the materialized content against the ref first. Raises
+  `ArtifactError` on any failure."""
+  args: dict[str, Any] = {'ref': ref, 'checked': True} if checked else {'ref': ref}
+  return _path_value(FETCH, _call(FETCH, args, timeout))
+
+
+def locate_artifact(ref: str, *, timeout: Optional[float] = None) -> str:
+  """the path `ref`, which this peer already fetched, appears at. Raises
+  `ArtifactError` on any failure, including a ref not fetched yet."""
+  return _path_value(LOCATE, _call(LOCATE, {'ref': ref}, timeout))
+
+
+def list_artifacts(*, timeout: Optional[float] = None) -> list[str]:
+  """every ref this peer can read, in the order they reached it. Raises
+  `ArtifactError` on any failure."""
+  refs: list[str] = []
+  args: dict[str, Any] = {}
+  with _open_client() as client:
+    while True:
+      value = _request(client, LIST, args, timeout)
+      page = value.get('refs')
+      if not isinstance(page, list) or not all(is_ref(ref) for ref in page):
+        raise ArtifactError(f'malformed list result value: {value!r}')
+      refs.extend(page)
+      if 'cursor' not in value:
+        return refs
+      cursor = value['cursor']
+      if type(cursor) is not int or cursor != len(refs):
+        raise ArtifactError(f'malformed list result cursor: {cursor!r}')
+      args = {'cursor': cursor}
 
 
 def export_artifact(ref: str, *, timeout: Optional[float] = None) -> None:
@@ -291,13 +337,24 @@ def _mint(path: str, name: Optional[str], timeout: Optional[float]) -> int:
   return 0
 
 
-def _get(ref: str, timeout: Optional[float]) -> int:
+def _fetch(ref: str, checked: bool, timeout: Optional[float]) -> int:
   try:
-    path = get_artifact(ref, timeout=timeout)
+    path = fetch_artifact(ref, checked=checked, timeout=timeout)
   except ArtifactError as e:
     log.error('%s', e)
     return 1
   print(path)
+  return 0
+
+
+def _list(timeout: Optional[float]) -> int:
+  try:
+    refs = list_artifacts(timeout=timeout)
+  except ArtifactError as e:
+    log.error('%s', e)
+    return 1
+  for ref in refs:
+    print(ref)
   return 0
 
 
@@ -336,20 +393,34 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument('--name', help=_NAME_HELP)
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
     return _mint(**parser.parse(argv[1:]))
-  if len(argv) > 1 and argv[1] == 'get':
+  if len(argv) > 1 and argv[1] == 'fetch':
     parser = base_args.Parser(
-      prog='artifact get',
-      description='make an artifact ref visible to this peer and print the read-only '
-      'path it appears at; copy from there for an editable version',
+      prog='artifact fetch',
+      description='materialize an artifact ref this peer can read and print the read-only '
+      'path it appears at; a repeat fetch answers the same path. Copy from there for an '
+      'editable version',
     )
     parser.add_argument('ref', help=f'artifact ref ({REF_FORM})')
+    parser.add_argument(
+      '--checked',
+      action='store_true',
+      help='verify the materialized content against the ref, replacing a copy that no longer matches',
+    )
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
-    return _get(**parser.parse(argv[1:]))
+    return _fetch(**parser.parse(argv[1:]))
+  if len(argv) > 1 and argv[1] == 'list':
+    parser = base_args.Parser(
+      prog='artifact list',
+      description='print every artifact ref this peer can read, one per line in the order '
+      'they reached it; fetch one to read its content',
+    )
+    parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
+    return _list(**parser.parse(argv[1:]))
   if len(argv) > 1 and argv[1] == 'export':
     parser = base_args.Parser(
       prog='artifact export',
       description='publish an artifact ref this peer can reach to the host, where the '
-      'operator reads it with `ride artifact get`; needs the session to be started with bro.export',
+      'operator reads it with `ride artifact fetch`; needs the session to be started with bro.export',
     )
     parser.add_argument('ref', help=f'artifact ref ({REF_FORM})')
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
@@ -364,5 +435,5 @@ def main(argv: list[str]) -> Optional[int]:
     parser.add_argument('path', help='file or directory to digest')
     parser.add_argument('--name', help=_NAME_HELP)
     return _digest(**parser.parse(argv[1:]))
-  log.error('usage: artifact mint|get|export|digest …; each verb takes --help')
+  log.error('usage: artifact mint|fetch|list|export|digest …; each verb takes --help')
   return 2

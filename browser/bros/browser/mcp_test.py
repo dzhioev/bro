@@ -28,7 +28,7 @@ def _capture_reply(filename: str) -> dict:
 def test_snapshot_capture_asks_the_reader_and_checks_every_element(monkeypatch, tmp_path) -> None:
   snapshot = tmp_path / 'snapshot.yml'
   snapshot.write_text('- heading "Account" [level=1] [ref=e1]\n- button "Save changes" [ref=e2]\n')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(snapshot))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(snapshot))
   commands = []
 
   def command_reply(webview, tool, arguments):
@@ -85,7 +85,7 @@ def test_text_capture_decodes_and_mints_the_reader_input(monkeypatch, tmp_path) 
       }
     )
   )
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(encoded))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(encoded))
   commands = []
 
   def command_reply(webview, tool, arguments):
@@ -141,7 +141,7 @@ def test_text_capture_drops_snapshot_shaped_element_claims(monkeypatch, tmp_path
       }
     )
   )
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(encoded))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(encoded))
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: _capture_reply('browser-look-text.json'),
@@ -167,7 +167,7 @@ def test_text_capture_drops_snapshot_shaped_element_claims(monkeypatch, tmp_path
 def test_existing_artifact_is_read_without_a_webview_capture(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.txt'
   source.write_text('A checked artifact')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(source))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
   monkeypatch.setattr(
     mcp,
     '_read_page',
@@ -190,7 +190,7 @@ def test_existing_artifact_is_read_without_a_webview_capture(monkeypatch, tmp_pa
 def test_empty_capture_names_the_page_modal_state(monkeypatch, tmp_path) -> None:
   empty = tmp_path / 'empty.yml'
   empty.write_text('')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(empty))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(empty))
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: _capture_reply('browser-look-snapshot.yml'),
@@ -203,7 +203,7 @@ def test_empty_capture_names_the_page_modal_state(monkeypatch, tmp_path) -> None
 def test_untitled_page_snapshot_reads_with_an_empty_title(monkeypatch, tmp_path) -> None:
   snapshot = tmp_path / 'snapshot.yml'
   snapshot.write_text('- heading "You are unsubscribed" [level=1] [ref=e1]\n')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(snapshot))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(snapshot))
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: {
@@ -223,7 +223,7 @@ def test_untitled_page_snapshot_reads_with_an_empty_title(monkeypatch, tmp_path)
 def test_snapshot_element_ref_must_match_one_exact_ref_token(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- link "Download report" [ref=e6] [cursor=pointer]\n')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(source))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
   monkeypatch.setattr(
     mcp,
     '_read_page',
@@ -248,7 +248,7 @@ def test_snapshot_element_ref_must_match_one_exact_ref_token(monkeypatch, tmp_pa
 def test_reader_failure_adds_capture_narrowing_guidance(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- heading "Large page" [ref=e1]\n')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(source))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
 
   def fail_reader(prompt, content):
     raise ValueError('maximum context length exceeded')
@@ -264,7 +264,7 @@ def test_reader_failure_adds_capture_narrowing_guidance(monkeypatch, tmp_path) -
 def test_unavailable_reader_failure_omits_capture_narrowing_guidance(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- heading "Small page" [ref=e1]\n')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(source))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
 
   def fail_reader(prompt, content):
     raise LLMUnavailable('LLM provider unavailable for 180 s: Request timed out.')
@@ -280,7 +280,7 @@ def test_unavailable_reader_failure_omits_capture_narrowing_guidance(monkeypatch
 def test_reader_answer_is_cut_to_the_inline_bound(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.txt'
   source.write_text('bounded source')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(source))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
   monkeypatch.setattr(
     mcp,
     '_read_page',

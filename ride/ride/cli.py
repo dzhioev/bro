@@ -87,6 +87,9 @@ def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
   parser.add_argument('prompt', nargs='?', default=None, help='initial prompt')
 
 
+_ARTIFACT_ROOT_HELP = 'root workspace name; needed only when several roots are live'
+
+
 def build_parser() -> Parser:
   parser = Parser(description='run a harness infused with a bro in a managed workspace')
   subparsers = parser.add_subparsers(dest='cmd', required=True)
@@ -136,16 +139,18 @@ def build_parser() -> Parser:
   artifact_share.add_argument('mission', help='mission id from `ride missions`')
   artifact_share.add_argument('subject', help='host file or directory, or an artifact ref')
   artifact_share.add_argument('--name', help="the ref's file name (default: the path's last component)")  # fmt: skip
-  artifact_get = artifact_verbs.add_parser(
-    'get', help='copy an artifact a session exported into a host directory'
+  artifact_fetch = artifact_verbs.add_parser(
+    'fetch', help='copy an artifact a session exported into a host directory'
   )
-  artifact_get.add_argument('ref', help='artifact ref')
-  artifact_get.add_argument(
+  artifact_fetch.add_argument('ref', help='artifact ref')
+  artifact_fetch.add_argument(
     '--to', default='.', metavar='DIRECTORY', help='directory to copy into (default: current)'
   )
-  artifact_get.add_argument(
-    '--root', help='root workspace name; needed only when several roots are live'
+  artifact_fetch.add_argument('--root', help=_ARTIFACT_ROOT_HELP)
+  artifact_list = artifact_verbs.add_parser(
+    'list', help='print the artifact refs sessions exported or the operator shared'
   )
+  artifact_list.add_argument('--root', help=_ARTIFACT_ROOT_HELP)
 
   clean = subparsers.add_parser(
     'clean', help='remove stale workspaces, unreferenced mirrors, and unlocked runtime bundles'
@@ -444,7 +449,9 @@ def main(argv: list[str]) -> Optional[int]:
     try:
       if args['verb'] == 'share':
         return operator.share_artifact(args['root'], args['mission'], args['subject'], args['name'])
-      return operator.get_artifact(args['root'], args['ref'], Path(args['to']))
+      if args['verb'] == 'list':
+        return operator.list_artifacts(args['root'])
+      return operator.fetch_artifact(args['root'], args['ref'], Path(args['to']))
     except (ValueError, RuntimeError) as error:
       parser.error(str(error))
   if command == 'missions':

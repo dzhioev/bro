@@ -607,7 +607,7 @@ def download_files(
 
 
 def resolve_job(value: str) -> Path:
-  path = Path(artifact.get_artifact(value)) if artifact.is_ref(value) else Path(value)
+  path = Path(artifact.locate_artifact(value)) if artifact.is_ref(value) else Path(value)
   if artifact.is_ref(value):
     output = path / 'output'
     jobs = (

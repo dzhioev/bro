@@ -22,7 +22,8 @@ if TYPE_CHECKING:
 
 MISSIONS = 'operator.missions'
 ARTIFACT_SHARE = 'operator.artifact.share'
-ARTIFACT_GET = 'operator.artifact.get'
+ARTIFACT_FETCH = 'operator.artifact.fetch'
+ARTIFACT_LIST = 'operator.artifact.list'
 
 
 class OperatorUnavailable(RuntimeError):
@@ -158,29 +159,15 @@ class OperatorControl:
   def _missions(self, context: Dispatcher, peer: Peer, message: Message) -> None:
     from bro.broker import brotocol
 
-    cursor = message.args.get('cursor', 0)
-    if set(message.args) - {'cursor'} or type(cursor) is not int or cursor < 0:
-      context.reply(peer, {'outcome': 'denied', 'error': 'invalid mission listing cursor'})
-      return
     missions = self._peers.missions()
-    if cursor > len(missions):
-      context.reply(peer, {'outcome': 'denied', 'error': 'mission listing cursor out of range'})
+    try:
+      cursor = brotocol.index_cursor(message.args, len(missions))
+      value = brotocol.frame_page(
+        message.request_id, 'missions', missions[cursor:], lambda count: cursor + count
+      )
+    except ValueError as error:
+      context.reply(peer, {'outcome': 'denied', 'error': f'mission listing denied: {error}'})
       return
-    page = []
-    value: dict[str, Any] = {'missions': page}
-    for position in range(cursor, len(missions)):
-      page.append(missions[position])
-      value['cursor'] = position + 1
-      result = brotocol.result(message.request_id, 'ok', value=value)
-      if len(result.to_bytes()) > brotocol.MAX_FRAME_BYTES:
-        page.pop()
-        value['cursor'] = position
-        if not page:
-          context.reply(peer, {'outcome': 'denied', 'error': 'mission listing row too large'})
-          return
-        break
-    else:
-      value.pop('cursor', None)
     context.reply(peer, {'outcome': 'ok', 'value': value})
 
 
@@ -306,15 +293,30 @@ def share_artifact(root: str, mission: str, subject: str, name: str | None) -> i
   return 0
 
 
-def get_artifact(root: str, ref: str, directory: Path) -> int:
-  """copy an artifact a session exported to `directory` and print where it landed."""
+def fetch_artifact(root: str, ref: str, directory: Path) -> int:
+  """copy an artifact the operator may read to `directory` and print where it landed."""
   from bro.artifact import DEFAULT_TIMEOUT
 
   value = _request(
     root,
-    ARTIFACT_GET,
+    ARTIFACT_FETCH,
     {'ref': ref, 'to': str(directory.expanduser().resolve())},
     timeout=DEFAULT_TIMEOUT,
   )
   print(value['path'])
+  return 0
+
+
+def list_artifacts(root: str) -> int:
+  """print every artifact ref the operator may read, one per line."""
+  refs: list[str] = []
+  args: dict[str, Any] = {}
+  while True:
+    value = _request(root, ARTIFACT_LIST, args)
+    refs.extend(value['refs'])
+    if 'cursor' not in value:
+      break
+    args = {'cursor': value['cursor']}
+  for ref in refs:
+    print(ref)
   return 0

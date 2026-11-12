@@ -12,7 +12,9 @@ from bro.broker.brotocol import (
   Talk,
   decode_talk,
   encode_talk,
+  frame_page,
   frame_safe_result,
+  index_cursor,
   mark,
   message,
   message_allowed,
@@ -97,6 +99,49 @@ def test_frame_safe_result_bounds_an_oversize_error_with_a_visible_marker():
   assert fitted.outcome == 'denied'
   assert fitted.payload['detail']['truncated'] is True
   assert fitted.payload['error'] == message.payload['error'][: len(fitted.payload['error'])]
+
+
+def test_frame_page_lists_every_row_that_fits_without_a_cursor():
+  assert frame_page('list-1', 'rows', ['a', 'b'], lambda count: count) == {'rows': ['a', 'b']}
+  assert frame_page('list-1', 'rows', [], lambda count: count) == {'rows': []}
+
+
+def test_frame_page_pages_at_the_frame_bound_and_names_the_next_row():
+  rows = ['x' * 1000 for _ in range(MAX_FRAME_BYTES // 1000 + 10)]
+
+  value = frame_page('list-1', 'rows', rows, lambda count: count)
+
+  assert len(result('list-1', 'ok', value=value).to_bytes()) <= MAX_FRAME_BYTES
+  count = len(value['rows'])
+  assert 0 < count < len(rows)
+  assert value['cursor'] == count
+  overflowing = {'rows': rows[: count + 1], 'cursor': count + 1}
+  assert len(result('list-1', 'ok', value=overflowing).to_bytes()) > MAX_FRAME_BYTES
+
+
+def test_frame_page_refuses_a_row_too_large_for_one_frame():
+  with pytest.raises(ValueError, match='one listing row exceeds the result frame'):
+    frame_page('list-1', 'rows', ['x' * MAX_FRAME_BYTES, 'y'], lambda count: count)
+
+
+def test_index_cursor_reads_an_optional_cursor_within_the_rows():
+  assert index_cursor({}, 3) == 0
+  assert index_cursor({'cursor': 3}, 3) == 3
+
+
+@pytest.mark.parametrize(
+  ('args', 'error'),
+  [
+    ({'cursor': -1}, 'invalid listing cursor'),
+    ({'cursor': True}, 'invalid listing cursor'),
+    ({'cursor': '1'}, 'invalid listing cursor'),
+    ({'cursor': 4}, 'listing cursor out of range'),
+    ({'extra': 1}, r'unknown listing field\(s\): extra'),
+  ],
+)
+def test_index_cursor_refuses_a_malformed_cursor(args, error):
+  with pytest.raises(ValueError, match=error):
+    index_cursor(args, 3)
 
 
 def test_request_id_minted_and_unique():

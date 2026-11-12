@@ -79,7 +79,7 @@ def main(argv: list[str]) -> Optional[int]:
   retain_parser = subparsers.add_parser(
     'retain', help='copy one raw Harbor job to immutable retention storage'
   )
-  retain_parser.add_argument('source', help='artifact ref or local Harbor job directory')
+  retain_parser.add_argument('source', help='fetched artifact ref or local Harbor job directory')
   retain_parser.set_handler(_retain)
 
   publish_parser = subparsers.add_parser(

@@ -1019,7 +1019,8 @@ The host lowers each broker run off the broker loop into a detached throwaway bo
 It hydrates exactly the credential instances in the admitted descriptor's credential options into the worker's scoped store, selecting each instance as its kind's default there.
 A missing instance fails the launch by name and removes the throwaway workspace.
 No credential install hook runs in a worker container.
-It mounts the frozen runtime volume read-only and the worker's read-only artifact view at the absolute normalized POSIX path the declaration names, linking every accepted `share` ref before start.
+It mounts the frozen runtime volume read-only and the worker's read-only artifact view at the absolute normalized POSIX path the declaration names;
+every accepted `share` ref reaches the worker before start and appears in the view once the worker fetches it.
 The view path defaults to `CONTAINER_ARTIFACTS_ROOT` and is a launch fact, so changing it does not rebuild the image.
 It mounts no session, party, or trails state.
 The declared command runs as `broxy run -- <command…>`, so its clients multiplex through the worker's one upstream attach.
@@ -1277,37 +1278,43 @@ Peers pass files by content-addressed reference through the ride's store the lau
   (`artifact digest <path>` computes the same ref locally, which is how a ref is verified end to end).
   The name is not digested, so passing a ref passes its name, and re-minting unchanged content under any name stores nothing new;
   a mint past the ride's byte cap is refused rather than evicted.
-- `artifact get <ref>` makes a ref visible to the requesting peer and prints the path it appears at, the ref itself under the peer's artifact root, so the content keeps its name and two refs never collide.
+- Reaching a ref materializes nothing, in any placement:
+  `artifact list` prints every ref the requesting peer can read, one per line in the order they reached it,
+  and `artifact fetch <ref>` materializes one and prints the path it appears at, the ref itself under the peer's artifact root, so the content keeps its name and two refs never collide.
   A boxed peer reads it under its declared artifact-view path
   — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path, as webview does with `/workspace/artifacts`;
-  the per-peer view directory is bind-mounted read-only, so a ref shared while the peer runs appears without a remount and writes fail with `EROFS`
+  the fetch hardlinks it into the per-peer view directory, which is bind-mounted read-only, so it appears without a remount and writes fail with `EROFS`
   — while an unboxed party, having no mount namespace, gets a private copy under the workspace’s own `artifacts/` directory, shared by its members.
   Either way the path is not for editing in place;
   a peer that wants an editable copy makes one.
+  A repeat fetch answers the materialization already there;
+  `--checked` digests it first and replaces one that no longer matches the ref, failing when the stored content itself no longer does.
+  The `artifact::` toolset serves the same `fetch` and `list`, and its `read` and `grep` take only refs the session fetched.
 - Reach follows the launch tree, and nothing a peer says widens it:
   a mint is readable by the minting peer and its summoners up to the ride root;
   a launch request's `share` list (`summon --share <ref>`, the service tool's `share` field, or another worker type's corresponding launch argument) hands refs the owner itself can read down as the mission opens;
   and `mission share <id> <ref>` gives one such ref to a live mission owned by the caller,
-  provided the mission's talk can carry a ref to its worker at all
-  — `owner.say`, `owner.question`, or a reply to a `worker.question`.
+  provided the mission's talk carries the owner to its worker at all
+  — `owner.say`, `owner.question`, or a reply to a `worker.question`
+  — since a worker polling `artifact list` would read the share as a message its talk withholds.
   Where the talk lets the owner start a message (`owner.say` or `owner.question`), the share also reaches the worker's session watch as a `summoner shared artifact <ref>` line.
-  A share into a boxed worker appears in its mounted artifact view without a remount.
   There is no other path
   — knowing a ref is not access, and a denial is uniform whether or not the ref exists.
-  Reach is to the digest, so a peer that may read the content gets or shares it under any name.
-  A manual summon refuses launch-time and live `share`, and a manual child's `get` is denied
+  Reach is to the digest, so a peer that may read the content fetches or shares it under any name.
+  A manual summon refuses launch-time and live `share`, and a manual child's `fetch` is denied
   — the launcher builds no launch for it, so no view is mounted
-  — while its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
+  — while it lists what it reaches and its mints flow upward normally, attributed to the workspace its own `--summoned` launch claimed the token with.
 - The store is ride-scoped and dies with the ride
-  — a resumed root starts a new ride with an empty store, so a stale ref fails at its own `artifact get`
-  — while mints, gets, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the launch audit.
+  — a resumed root starts a new ride with an empty store, so a stale ref fails at its own `artifact fetch`
+  — while mints, fetches, shares, and denials outlive it in a JSONL audit under `<runtime-root>/artifacts/<ride>.jsonl`, beside the launch audit.
   Each audit row keys the ride under `ride`.
 
 - The host side is the operator, who reaches the store through the root's operator channel (`ride artifact`, re-executing into the root's runtime like `ride override`):
   `ride artifact share <mission> <path-or-ref> [--name N]` ingests a host file or directory, or takes a ref the operator can already read, and shares it with any live mission, which `<mission>` names by the same mission id `ride override` takes;
   the mission's session watch announces the share as an `operator shared artifact <ref>` line.
   A member of a joined party shares its summoner's view, so the whole party reads what is shared with one of them.
-  `ride artifact get <ref> [--to <directory>] [--root <root>]` copies an exported ref to `<directory>/<name>` (the current directory by default) and prints the path, refusing to replace an existing one;
+  `ride artifact fetch <ref> [--to <directory>] [--root <root>]` copies a ref the operator can read to `<directory>/<name>` (the current directory by default) and prints the path, refusing to replace an existing one;
+  `ride artifact list [--root <root>]` prints those refs one per line;
   `--root` is needed only when several roots are live.
 - The operator reads only what a session exported or the operator itself shared.
   A session exports with `artifact export <ref>`, which needs the session to have started with `bro.export` (`ride along --export`, `summon --export`, or the summon tool's `export`) and the ref to be one it can read.

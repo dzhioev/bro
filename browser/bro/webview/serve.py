@@ -24,7 +24,7 @@ from mcp import ClientSession, types as mcp_types
 from mcp.shared.exceptions import MCPError
 from mcp.shared.message import SessionMessage
 
-from bro.artifact import ArtifactError, mint_artifact
+from bro.artifact import ArtifactError, fetch_artifact, is_ref, mint_artifact
 from bro.base import credentials
 from bro.broker.brotocol import Message, Tag
 from bro.broker.client import Client
@@ -47,6 +47,7 @@ COMMAND_DEADLINE = 120.0
 OUTPUT_LIMIT_BYTES = 256 << 20
 ERROR_HEAD_CHARACTERS = 1024
 WITHHELD_TOOLS = frozenset({'browser_run_code_unsafe'})
+UPLOAD_TOOL = 'browser_file_upload'
 # Playwright MCP names each file it writes in a result section as `- [title](absolute path)`
 # and each download in the Events section as `- Downloaded file name to "absolute path"`.
 LINKED_FILE_SECTIONS = frozenset({'Result', 'Snapshot'})
@@ -748,6 +749,31 @@ def _parse_command(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
   return tool, arguments
 
 
+async def fetch_uploads(arguments: dict[str, Any]) -> None:
+  """Fetch every artifact an upload's paths name under the artifact view, so its content is in place when Playwright reads it.
+
+  Raises `ArtifactError` when a named artifact cannot be fetched.
+  """
+  paths = arguments.get('paths')
+  if not isinstance(paths, list):
+    return
+  for path in paths:
+    if not isinstance(path, str):
+      continue
+    try:
+      relative = Path(path).relative_to(ARTIFACT_VIEW)
+    except ValueError:
+      continue
+    ref = '/'.join(relative.parts[:2])
+    if not is_ref(ref):
+      continue
+    fetched = Path(await asyncio.to_thread(fetch_artifact, ref))
+    if fetched != ARTIFACT_VIEW / ref:
+      raise DaemonError(
+        f'artifact {ref} was fetched to {fetched}, outside the view {ARTIFACT_VIEW}'
+      )
+
+
 async def _tool_reply(
   session: ClientSession,
   supervisor: ProcessSupervisor,
@@ -759,6 +785,11 @@ async def _tool_reply(
     return {'error': str(error)}
   if tool in WITHHELD_TOOLS:
     return {'error': f'webview withholds Playwright MCP tool {tool!r}'}
+  if tool == UPLOAD_TOOL:
+    try:
+      await fetch_uploads(arguments)
+    except ArtifactError as error:
+      return {'error': str(error)}
   before = await asyncio.to_thread(workspace_files)
   try:
     result = await supervisor.run(
