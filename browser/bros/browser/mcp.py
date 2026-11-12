@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from bro.artifact import get_artifact, is_ref, mint_artifact
+from bro.artifact import fetch_artifact, is_ref, locate_artifact, mint_artifact
 from bro.base import credentials
 from bro.llm.llm import LLMUnavailable
 from bro.mcp import Toolset
@@ -24,7 +24,7 @@ _SNAPSHOT_FILE = 'browser-look-snapshot.yml'
 _TEXT_FILE = 'browser-look-text.json'
 _PAGE_URL = re.compile(r'(?m)^- Page URL: (\S.*)$')
 _PAGE_TITLE = re.compile(r'(?m)^- Page Title: (.*)$')
-_REF_FIELD = Field(description='artifact ref containing page text or a snapshot')
+_REF_FIELD = Field(description='fetched artifact ref containing page text or a snapshot')
 
 
 class _ReaderElement(BaseModel):
@@ -63,10 +63,12 @@ def _mint_text(content: str) -> str:
     return mint_artifact(path.name, name='page.txt').ref
 
 
-def _artifact_text(ref: str) -> str:
+def _artifact_text(ref: str, *, fetch: bool) -> str:
+  """the text of `ref`, fetched here when `fetch` holds and otherwise one the
+  agent already fetched."""
   if not is_ref(ref):
     raise ValueError(f'invalid artifact ref: {ref!r}')
-  path = Path(get_artifact(ref))
+  path = Path(fetch_artifact(ref) if fetch else locate_artifact(ref))
   if not path.is_file():
     raise ValueError(f'artifact {ref} is not a text file')
   try:
@@ -85,7 +87,7 @@ def _reply_text(payload: dict[str, Any]) -> str:
     ref = payload.get('ref')
     if not is_ref(ref):
       raise ValueError(f'webview returned an invalid text spill: {payload}')
-    return _artifact_text(str(ref))
+    return _artifact_text(str(ref), fetch=True)
   text = payload.get('text')
   if not isinstance(text, str):
     raise ValueError(f'webview returned no capture reply text: {payload}')
@@ -124,7 +126,7 @@ def _capture(
   payload = command_reply(webview, tool, arguments)
   reply_text = _reply_text(payload)
   capture_ref = _capture_ref(payload, filename)
-  captured = _artifact_text(capture_ref)
+  captured = _artifact_text(capture_ref, fetch=True)
   if source == 'text':
     try:
       decoded = json.loads(captured)
@@ -203,7 +205,7 @@ def _cut_answer(answer: str) -> str:
 
 
 @toolset.tool(
-  'answer a focused question from a fresh page snapshot or page text, or from an existing '
+  'answer a focused question from a fresh page snapshot or page text, or from a fetched '
   'text artifact. Element refs are returned only when they match the snapshot read.'
 )
 def look(
@@ -234,7 +236,7 @@ def look(
   else:
     assert ref is not None
     content_ref = ref
-    content = _artifact_text(ref)
+    content = _artifact_text(ref, fetch=False)
     if len(content.strip()) == 0:
       raise ValueError(f'artifact {ref} is empty')
 

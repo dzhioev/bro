@@ -11,7 +11,7 @@ The channel attach handshake carries `PROTOCOL_REVISION` for incompatible wire c
 """
 
 import json
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Optional, cast
 
@@ -256,6 +256,52 @@ def frame_safe_result(message: Message) -> Message:
   if len(fitted.to_bytes()) > MAX_FRAME_BYTES:
     raise ProtocolError('a result identifier leaves no room for a bounded payload')
   return fitted
+
+
+def index_cursor(args: dict[str, Any], count: int) -> int:
+  """The row a listing request with args `{cursor?}` starts from, as an index into its `count` rows: 0 without a cursor.
+  Raises `ValueError` on another argument, a cursor that is no non-negative integer, or one past `count`."""
+  unknown = sorted(set(args) - {'cursor'})
+  if len(unknown) > 0:
+    raise ValueError(f'unknown listing field(s): {", ".join(unknown)}')
+  cursor = args.get('cursor', 0)
+  if type(cursor) is not int or cursor < 0:
+    raise ValueError('invalid listing cursor')
+  if cursor > count:
+    raise ValueError('listing cursor out of range')
+  return cursor
+
+
+def frame_page(
+  request_id: str,
+  key: str,
+  rows: Sequence[Any],
+  cursor_after: Callable[[int], Any],
+) -> dict[str, Any]:
+  """The value of the longest ok result to `request_id` that fits one frame and lists `rows` from the first: `{key: <page>}`, plus `cursor: cursor_after(<count>)` when rows remain after the page.
+  Raises `ValueError` when the first row alone overflows a frame."""
+
+  def value(count: int) -> dict[str, Any]:
+    page: dict[str, Any] = {key: list(rows[:count])}
+    if count < len(rows):
+      page['cursor'] = cursor_after(count)
+    return page
+
+  def fits(count: int) -> bool:
+    return len(result(request_id, 'ok', value=value(count)).to_bytes()) <= MAX_FRAME_BYTES
+
+  if fits(len(rows)):
+    return value(len(rows))
+  if not fits(1):
+    raise ValueError('one listing row exceeds the result frame')
+  fitting, overflowing = 1, len(rows)
+  while overflowing - fitting > 1:
+    middle = (fitting + overflowing) // 2
+    if fits(middle):
+      fitting = middle
+    else:
+      overflowing = middle
+  return value(fitting)
 
 
 def _validate(type_: Any, id_: Any, request_id: Any, reply_to: Any, payload: Any) -> None:

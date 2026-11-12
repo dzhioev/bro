@@ -257,7 +257,7 @@ It runs use, gift and admission checks, including the summon allowance, before r
 Only a starter authorized to name an item learns that it is missing.
 A cap on configured credentials may refuse starting the bro unless the request drops that kind.
 Artifacts are outside this model except for publishing to the host:
-a mission can share only refs it can already read, and `bro.export` is the one permission a session needs to publish a ref it can read to the operator, who reads it with `ride artifact get`.
+a mission can share only refs it can already read, and `bro.export` is the one permission a session needs to publish a ref it can read to the operator, who reads it with `ride artifact fetch`.
 The operator needs no permission to hand a host file or an exported ref to any live mission.
 
 The [summon allowance](ride.md#summon-allowance) is separate from authority and applies to every worker type.

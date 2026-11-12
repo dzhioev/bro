@@ -29,6 +29,8 @@ Mark origin is structural:
 `accepted` is dispatcher-born, `started` is supervisor-born, and a worker process may send `trail` or `listening`.
 
 `MAX_FRAME_BYTES` is the encoded-frame bound.
+A listing kind answers in pages through `frame_page`, the longest leading run of its rows whose result fits one frame, with a cursor of the kind's own making;
+`index_cursor` reads the index cursor of a listing whose rows only ever grow at the end.
 `MAX_IDENTIFIER_BYTES` bounds the encoded cost of request, kind, trail, and chat identifiers inside a frame.
 The TCP adapter owns NDJSON framing and the attach handshake.
 An accepted attach answers `ok <PROTOCOL_REVISION>`, and both client adapters refuse a missing or differing revision before messages flow.
@@ -136,7 +138,7 @@ Unknown kinds and lineage collisions are wire denials and remain unjournaled.
 
 ## Tests
 
-- `brotocol_test.py` covers envelope validation, builders, chat roles, talk encoding, revision, and the frame cap.
+- `brotocol_test.py` covers envelope validation, builders, chat roles, talk encoding, revision, the frame cap, and listing pages.
 - `transports/tcp_test.py` covers attach authenticity and revision checks, supersession, framing, delivery, disconnect, and shutdown.
 - `runtime_test.py` covers the shape-free transport runtime.
 - `supervisor_test.py` covers each supervision shape, start timing, host-initiated end, timeout, collection, and death reports.

@@ -246,7 +246,7 @@ Recognise a joined session by the banner's `party: joined` line.
 - **Started reviewer, round 1:** the summon's base is already the workspace's `HEAD`, including local-only commits.
   Verify it is the delivered head and that the supplied base commit and any approved predecessor head are available locally.
 - **Started reviewer, later heads:** the author shares a bundle artifact, whose range starts at the last delivered head, or at the base commit after a rewrite.
-  Obtain its path with `artifact get <ref>`, then import the named head:
+  Obtain its path with `artifact fetch <ref>`, then import the named head:
   ```bash
   git fetch <bundle path> <head>
   ```

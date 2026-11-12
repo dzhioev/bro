@@ -120,7 +120,7 @@ import urllib.parse
 from pathlib import Path
 
 from bro import artifact_mcp
-from bro.artifact import mint_artifact
+from bro.artifact import ArtifactError, mint_artifact
 from bro.llm.mcp import Context
 from bro.webview import mcp
 
@@ -154,11 +154,19 @@ try:
   snapshot_match = re.search(r'typed-snapshot\.yml: (sha256:[0-9a-f]{64}/typed-snapshot\.yml)', snapshot)
   assert snapshot_match is not None, snapshot
   snapshot_ref = snapshot_match.group(1)
+  try:
+    artifact_mcp.read(snapshot_ref)
+  except ArtifactError as error:
+    assert 'fetch it first' in str(error), error
+  else:
+    raise AssertionError('an unfetched snapshot ref was read')
+  artifact_mcp.fetch(snapshot_ref)
   read = artifact_mcp.read(snapshot_ref)
   found = artifact_mcp.grep(snapshot_ref, 'typed webview route')
   assert 'typed webview route' in read, read
   assert 'typed webview route' in found, found
 
+  artifact_mcp.fetch(upload_ref)
   shared = mcp.share(context, opened.webview, upload_ref)
   assert shared['entries'] == ['resume.txt'], shared
   mcp.command(
@@ -502,6 +510,7 @@ class ScriptedLLM(LLM):
     if self.phase == 'upload':
       match = re.search(r'sha256:[0-9a-f]{64}/browser-thread-upload', instruction.text)
       assert match is not None, instruction
+      await self.tools.call('artifact__fetch', {'ref': match.group(0)})
       shared = await self.tools.call(
         'webview__share', {'webview': self.webview, 'ref': match.group(0)}
       )
@@ -666,7 +675,8 @@ def one_file(reply):
   assert isinstance(files, list) and len(files) == 1, reply
   file = files[0]
   assert set(file) == {'name', 'ref'}, file
-  path = Path('/var/ride/artifacts') / file['ref']
+  path = Path(run('artifact', 'fetch', file['ref']).stdout.strip())
+  assert path == Path('/var/ride/artifacts') / file['ref'], path
   assert path.is_file(), path
   return file, path.read_bytes()
 
@@ -886,7 +896,7 @@ def collect(mission, name, first_reply):
   files = [file for reply in replies for file in reply.get('files', []) if file['name'] == f'output/{name}']
   assert len(files) == 1, (name, replies)
   assert set(files[0]) == {'name', 'ref'}, files
-  return files[0], (Path('/var/ride/artifacts') / files[0]['ref']).read_bytes()
+  return files[0], Path(run('artifact', 'fetch', files[0]['ref']).stdout.strip()).read_bytes()
 
 
 try:

@@ -16,10 +16,11 @@ from typing import Annotated, Any, Optional
 from pydantic import Field
 
 from bro import mission
-from bro.artifact import get_artifact, is_ref, mint_artifact
+from bro.artifact import fetch_artifact, is_ref, locate_artifact, mint_artifact
 from bro.llm.mcp import Context
 from bro.mcp import Toolset
 from bro.webview.cli import OpenedWebview, close_webview, open_webview
+from bro.webview.worker import ARTIFACT_VIEW
 
 INLINE_REPLY_BYTES = 4 * 1024
 _WEBVIEW_FIELD = Field(description='mission id returned by webview::open or webview::reopen')
@@ -92,7 +93,7 @@ def _launch(record: WebviewRecord) -> OpenedWebview:
   'returned with the first command reply after it finishes; allow limits the page to the listed origins '
   'and block refuses the listed ones, so a refused frame, form submission, script, or API call '
   'fails with net::ERR_BLOCKED_BY_CLIENT while top-level redirects pass, and neither is a '
-  'security boundary; share exposes artifact refs from startup.'
+  'security boundary; share hands artifact refs to the webview from startup.'
 )
 def open(
   context: Context[Webviews],
@@ -107,7 +108,7 @@ def open(
     Optional[list[str]], Field(description='origins the page may not request, as https://host')
   ] = None,
   share: Annotated[
-    Optional[list[str]], Field(description='artifact refs to expose from startup')
+    Optional[list[str]], Field(description='artifact refs to hand to the webview from startup')
   ] = None,
 ) -> OpenResult:
   options = OpenOptions(
@@ -157,8 +158,8 @@ def command_reply(
   return _spilled_reply(_mission_answer(webview, payload))
 
 
-def _artifact_path(ref: str) -> Path:
-  return Path(get_artifact(ref))
+def _spill_path(ref: str) -> Path:
+  return Path(fetch_artifact(ref))
 
 
 def _spilled_reply(payload: dict[str, Any]) -> dict[str, Any]:
@@ -168,7 +169,7 @@ def _spilled_reply(payload: dict[str, Any]) -> dict[str, Any]:
   if not is_ref(ref):
     raise ValueError(f'webview returned an invalid whole-reply spill: {payload}')
   try:
-    value = json.loads(_artifact_path(str(ref)).read_text())
+    value = json.loads(_spill_path(str(ref)).read_text())
   except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
     raise ValueError(f'webview whole-reply spill {ref} is not valid JSON: {error}') from error
   if not isinstance(value, dict):
@@ -237,7 +238,7 @@ def _text(payload: dict[str, Any]) -> tuple[str, Optional[str], int]:
     ref = payload.get('ref')
     if not is_ref(ref):
       raise ValueError(f'webview returned an invalid text spill: {payload}')
-    path = _artifact_path(str(ref))
+    path = _spill_path(str(ref))
     declared_size = payload.get('bytes')
     if not isinstance(declared_size, int) or isinstance(declared_size, bool) or declared_size < 0:
       raise ValueError(f'webview returned an invalid text spill size: {declared_size!r}')
@@ -383,7 +384,7 @@ def tools(context: Context[Webviews], webview: Annotated[str, _WEBVIEW_FIELD]) -
     if not is_ref(ref):
       raise ValueError(f'webview returned an invalid tool-roster spill: {payload}')
     try:
-      text = _artifact_path(str(ref)).read_text()
+      text = _spill_path(str(ref)).read_text()
     except (OSError, UnicodeDecodeError) as read_error:
       raise ValueError(
         f'could not read webview tool-roster spill {ref}: {read_error}'
@@ -396,7 +397,7 @@ def tools(context: Context[Webviews], webview: Annotated[str, _WEBVIEW_FIELD]) -
 
 
 @toolset.tool(
-  'share an artifact with a live webview. Returns the read-only path to pass to '
+  'share a fetched artifact with a live webview. Returns the read-only path to pass to '
   'browser_file_upload and, for a directory artifact, its relative entries.'
 )
 def share(
@@ -405,10 +406,10 @@ def share(
   ref: Annotated[str, _REF_FIELD],
 ) -> dict[str, Any]:
   record = context.state.get(webview)
+  path = Path(locate_artifact(ref))
   mission.share(webview, ref)
   record.shares.append(ref)
-  path = _artifact_path(ref)
-  result: dict[str, Any] = {'path': f'/workspace/artifacts/{ref}'}
+  result: dict[str, Any] = {'path': str(ARTIFACT_VIEW / ref)}
   if path.is_dir():
     entries = []
     for entry in sorted(path.rglob('*')):

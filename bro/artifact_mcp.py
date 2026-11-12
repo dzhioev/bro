@@ -1,3 +1,4 @@
+import builtins
 import codecs
 import re
 from collections import deque
@@ -9,7 +10,7 @@ from typing import Annotated, Optional
 
 from pydantic import Field
 
-from bro.artifact import REF_FORM, get_artifact
+from bro.artifact import REF_FORM, fetch_artifact, list_artifacts, locate_artifact
 from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT, apply_limit
 from bro.mcp import Toolset
 
@@ -40,7 +41,7 @@ class _HeadWindow:
   def __init__(self, limit: int):
     self.limit = limit
     self.effective_limit = min(max(limit, 1), MAX_LIMIT)
-    self.parts: list[str] = []
+    self.parts: builtins.list[str] = []
     self.kept_lines = 0
     self.kept_bytes = 0
     self.total_lines = 0
@@ -77,7 +78,7 @@ class _HeadWindow:
 
 
 def _resolve_file(ref: str, path: Optional[str]) -> Path:
-  artifact_path = Path(get_artifact(ref))
+  artifact_path = Path(locate_artifact(ref))
   if artifact_path.is_file():
     if path is not None:
       raise ValueError(f'artifact {ref} is a file; path must be omitted')
@@ -148,7 +149,7 @@ def _artifact_lines(ref: str, path: Optional[str]) -> Iterator[_Line]:
 
 
 @toolset.tool(
-  'read a text artifact as a numbered line window. For a directory artifact, path '
+  'read a fetched text artifact as a numbered line window. For a directory artifact, path '
   f'names the file to read. Content is capped at {MAX_LIMIT:,} lines, with skipped-content '
   f'markers naming the offset that reads on; a line longer than {MAXIMUM_LINE_LENGTH:,} '
   'characters is refused rather than materialized.'
@@ -199,7 +200,7 @@ def _body(line: _Line) -> str:
 
 
 @toolset.tool(
-  'search a text artifact with a regular expression and return matching lines with their '
+  'search a fetched text artifact with a regular expression and return matching lines with their '
   '1-based numbers and optional surrounding context. For a directory artifact, path names '
   f'the file to search. Output follows the shared line cap; a line longer than '
   f'{MAXIMUM_LINE_LENGTH:,} characters is refused rather than materialized.'
@@ -258,3 +259,25 @@ def grep(
     history.append((line_number, body))
 
   return window.render()
+
+
+@toolset.tool(
+  'materialize an artifact ref this session can read and return the read-only path it appears '
+  'at; read and grep take only fetched refs, and a repeat fetch answers the same path. checked '
+  'verifies the materialized content against the ref first, replacing a copy that no longer matches.'
+)
+def fetch(
+  ref: Annotated[str, _REF_FIELD],
+  checked: Annotated[
+    bool, Field(description='verify the materialized content against the ref')
+  ] = False,
+) -> str:
+  return fetch_artifact(ref, checked=checked)
+
+
+@toolset.tool(
+  'list every artifact ref this session can read, in the order they reached it; fetch a ref '
+  'before reading it.'
+)
+def list() -> builtins.list[str]:
+  return list_artifacts()

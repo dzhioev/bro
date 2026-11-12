@@ -64,7 +64,7 @@ def content(text, error=False):
 
 def tools():
   names = [
-    'browser_navigate', 'echo', 'write', 'facts', 'tool_error',
+    'browser_navigate', 'echo', 'write', 'facts', 'tool_error', 'browser_file_upload',
     'schedule_exit', 'die', 'hang', 'browser_run_code_unsafe',
   ]
   if dynamic:
@@ -136,6 +136,8 @@ for line in sys.stdin:
     }, sort_keys=True)))
   elif name == 'tool_error':
     answer(identifier, content(arguments.get('text', 'tool failed'), True))
+  elif name == 'browser_file_upload':
+    answer(identifier, content('\n'.join(Path(path).read_text() for path in arguments['paths'])))
   elif name == 'schedule_exit':
     answer(identifier, content('scheduled'))
     threading.Thread(target=lambda: (time.sleep(0.1), os._exit(19)), daemon=True).start()
@@ -579,6 +581,99 @@ async def test_command_files_are_minted_listed_and_removed(daemon_files, monkeyp
     await _ask(sink, channel, {'webview': 'close'}, identifier='close')
     await sink.next(lambda message: message.type == Tag.RESULT)
     await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
+async def test_an_upload_fetches_every_artifact_it_names_before_playwright_reads_it(
+  daemon_files, monkeypatch
+):
+  workspace, _ = daemon_files
+  fetched: list[str] = []
+
+  def fetch(ref: str) -> str:
+    fetched.append(ref)
+    entry = workspace / 'artifacts' / ref
+    entry.mkdir(parents=True)
+    (entry / 'resume.txt').write_text('shared upload payload')
+    return str(entry)
+
+  monkeypatch.setattr(serve, 'fetch_artifact', fetch)
+  (workspace / 'local.txt').write_text('local payload')
+  async with running_broker(monkeypatch, workspace) as sink:
+    daemon = asyncio.create_task(serve.serve())
+    channel, _ = await _ready(sink)
+
+    paths = [str(workspace / 'artifacts' / REF / 'resume.txt'), str(workspace / 'local.txt')]
+    reply = await _ask(
+      sink, channel, {'tool': 'browser_file_upload', 'arguments': {'paths': paths}}
+    )
+
+    assert reply == {'text': 'shared upload payload\nlocal payload', 'files': []}
+    assert fetched == [REF]
+
+    await _ask(sink, channel, {'webview': 'close'}, identifier='close')
+    await sink.next(lambda message: message.type == Tag.RESULT)
+    await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
+async def test_an_upload_of_an_artifact_the_webview_cannot_fetch_is_refused(
+  daemon_files, monkeypatch
+):
+  workspace, _ = daemon_files
+
+  def refuse(ref: str) -> str:
+    raise serve.ArtifactError(f'artifact {ref} is not shared with this peer')
+
+  monkeypatch.setattr(serve, 'fetch_artifact', refuse)
+  async with running_broker(monkeypatch, workspace) as sink:
+    daemon = asyncio.create_task(serve.serve())
+    channel, _ = await _ready(sink)
+
+    paths = [str(workspace / 'artifacts' / REF)]
+    reply = await _ask(
+      sink, channel, {'tool': 'browser_file_upload', 'arguments': {'paths': paths}}
+    )
+
+    assert reply == {'error': f'artifact {REF} is not shared with this peer'}
+
+    await _ask(sink, channel, {'webview': 'close'}, identifier='close')
+    _, result = await sink.next(lambda message: message.type == Tag.RESULT)
+    assert result.payload['value'] == {'commands': 0}
+    await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
+async def test_an_upload_fetches_only_well_formed_refs_under_the_view(monkeypatch, tmp_path):
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  fetched: list[str] = []
+  monkeypatch.setattr(
+    serve, 'fetch_artifact', lambda ref: fetched.append(ref) or str(serve.ARTIFACT_VIEW / ref)
+  )
+
+  await serve.fetch_uploads(
+    {
+      'paths': [
+        str(tmp_path / 'artifacts' / REF),
+        str(tmp_path / 'artifacts' / 'not-a-ref' / 'file'),
+        str(tmp_path / 'artifacts' / 'sha256:short'),
+        str(tmp_path / 'elsewhere' / REF),
+        7,
+      ]
+    }
+  )
+  await serve.fetch_uploads({'paths': 'not a list'})
+
+  assert fetched == [REF]
+
+
+@pytest.mark.asyncio
+async def test_an_artifact_fetched_outside_the_view_stops_the_daemon(monkeypatch, tmp_path):
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
+  monkeypatch.setattr(serve, 'fetch_artifact', lambda ref: f'/var/ride/artifacts/{ref}')
+
+  with pytest.raises(serve.DaemonError, match='outside the view'):
+    await serve.fetch_uploads({'paths': [str(tmp_path / 'artifacts' / REF)]})
 
 
 @pytest.mark.asyncio

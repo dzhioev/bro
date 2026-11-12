@@ -415,7 +415,7 @@ def main(argv: list[str]) -> Optional[int]:
     '--share',
     action='append',
     metavar='REF',
-    help='artifact ref to expose read-only under /workspace/artifacts; repeat to add another',
+    help='artifact ref the page may upload from /workspace/artifacts/<ref>; repeat to add another',
   )
   open_parser.add_argument(
     '--timeout',

@@ -43,13 +43,13 @@ a clarification is a counter-question in that thread, and "done" closes the webv
 `browser::look` captures a snapshot or the page's decoded `innerText`, or reads an existing artifact ref, and sends that representation plus one focused question to a disposable reader.
 It returns a bounded answer and only element refs whose role and accessible name match the snapshot it read.
 The optional `mu` credential enables the reader through its `reader` role and is the boundary across which page content travels;
-without it the browser uses `browser_find`, targeted snapshots, and `artifact::read` or `artifact::grep`.
+without it the browser uses `browser_find`, targeted snapshots, and `artifact::read` or `artifact::grep` over refs it fetched with `artifact::fetch`.
 
 ## Owner toolset
 
 The `webview` toolset is the typed owner surface over the mission wire.
 `open` retains the launch options and initial shares, `command` bounds reply text while preserving the whole text by artifact ref, and `tools` condenses the live Playwright roster.
-`share` returns the worker-side upload path, `reopen` repeats every retained option and share before restoring the last reported page URL, and `close` returns the terminal outcome.
+`share` hands the webview a ref the owner fetched and returns the worker-side upload path, `reopen` repeats every retained option and share before restoring the last reported page URL, and `close` returns the terminal outcome.
 
 ## Owner command
 
@@ -64,7 +64,8 @@ a denial, failed launch, or startup silence exits non-zero, with startup expiry 
 It seeds an existing profile unless `--fresh`, keeps IndexedDB when the seed contains it or `--indexed-db` requests it, and accepts `--url` and a fixed `--port`.
 It holds the stored name's lock for the run, writes only while the starting material is unchanged, and reports counts and bytes without values.
 Commands between `open` and `close` use `mission ask <id> '<json>' --wait`, with `mission history <id>` retaining their full payloads.
-`mission share <id> <ref>` makes a later-minted upload available under `/workspace/artifacts/<ref>` without reopening the webview.
+`mission share <id> <ref>` makes a later-minted upload available under `/workspace/artifacts/<ref>` without reopening the webview;
+the daemon fetches each artifact a `browser_file_upload` names there, shared at launch or since, before Playwright reads it.
 
 ## Browser profile
 

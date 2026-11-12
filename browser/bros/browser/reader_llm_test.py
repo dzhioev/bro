@@ -8,7 +8,7 @@ SNAPSHOT = Path(__file__).parents[2] / 'testdata' / 'browser-reader-snapshot.yml
 
 
 def test_reader_answers_over_a_real_snapshot_with_only_matching_elements(monkeypatch) -> None:
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(SNAPSHOT))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(SNAPSHOT))
 
   with host_credential_store():
     result = mcp.look(

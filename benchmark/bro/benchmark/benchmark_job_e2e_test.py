@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast, override
 
-from bro.artifact import GET
+from bro.artifact import FETCH
 from bro.bench.job import BENCHMARK, BenchmarkType
 from bro.benchmark.bundle import build, default_root, workspace_root
 from bro.benchmark.e2e_test_helper import LIVE_TRIAL, assert_graded_run, one_task_config
@@ -159,9 +159,9 @@ class _RunDirectories:
     self.runs.append(collected)
     return {'ref': str(collected)}
 
-  def get(self, context: Dispatcher, peer: Peer, message: Message) -> None:
-    """`artifact.get` over the same stand-in: a run's ref is its directory here,
-    so making one visible is answering with it."""
+  def fetch(self, context: Dispatcher, peer: Peer, message: Message) -> None:
+    """`artifact.fetch` over the same stand-in: a run's ref is its directory here,
+    so materializing one is answering with it."""
     context.reply(peer, {'outcome': 'ok', 'value': {'path': message.args['ref']}})
 
 
@@ -217,7 +217,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
     worker_container_spawner=cast(Spawner, object()),
     reading=reading,
   )
-  broker.on(GET, runs.get)
+  broker.on(FETCH, runs.fetch)
   broker.on(LAUNCH, control.handle)
   broker.subscribe(facts.observe_journal)
   broker.subscribe(control.audit_event)

@@ -147,8 +147,8 @@ class TestDigest:
 
 
 class _FakeClient:
-  def __init__(self, result: brotocol.Message):
-    self._result = result
+  def __init__(self, results: list[brotocol.Message]):
+    self._results = results
     self.calls: list = []
 
   def __enter__(self):
@@ -159,11 +159,16 @@ class _FakeClient:
 
   def call(self, kind, args, timeout, **kwargs):
     self.calls.append((kind, args, timeout))
-    return self._result
+    return self._results[len(self.calls) - 1]
 
 
-def _serve(monkeypatch, payload: dict) -> _FakeClient:
-  client = _FakeClient(brotocol.Message(type=brotocol.Tag.RESULT, payload=payload, request='R'))
+def _serve(monkeypatch, *payloads: dict) -> _FakeClient:
+  client = _FakeClient(
+    [
+      brotocol.Message(type=brotocol.Tag.RESULT, payload=payload, request='R')
+      for payload in payloads
+    ]
+  )
   monkeypatch.setattr(artifact, '_open_client', lambda: client)
   return client
 
@@ -185,10 +190,39 @@ class TestClient:
       (artifact.MINT, {'path': '.', 'name': 'bundle'}, artifact.DEFAULT_TIMEOUT)
     ]
 
-  def test_get_sends_the_kind_and_returns_the_path(self, monkeypatch):
+  def test_fetch_sends_the_kind_and_returns_the_path(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': f'/var/ride/artifacts/{REF}'}})  # fmt: skip
-    assert artifact.get_artifact(REF, timeout=5) == f'/var/ride/artifacts/{REF}'
-    assert client.calls == [(artifact.GET, {'ref': REF}, 5)]
+    assert artifact.fetch_artifact(REF, timeout=5) == f'/var/ride/artifacts/{REF}'
+    assert client.calls == [(artifact.FETCH, {'ref': REF}, 5)]
+
+  def test_a_checked_fetch_asks_for_the_check(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': f'/var/ride/artifacts/{REF}'}})  # fmt: skip
+    artifact.fetch_artifact(REF, checked=True)
+    assert client.calls == [(artifact.FETCH, {'ref': REF, 'checked': True}, artifact.DEFAULT_TIMEOUT)]  # fmt: skip
+
+  def test_locate_sends_the_kind_and_returns_the_path(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': f'/var/ride/artifacts/{REF}'}})  # fmt: skip
+    assert artifact.locate_artifact(REF) == f'/var/ride/artifacts/{REF}'
+    assert client.calls == [(artifact.LOCATE, {'ref': REF}, artifact.DEFAULT_TIMEOUT)]
+
+  def test_list_collects_every_page_over_one_channel(self, monkeypatch):
+    other = f'sha256:{"b" * 64}/other'
+    client = _serve(
+      monkeypatch,
+      {'outcome': 'ok', 'value': {'refs': [REF], 'cursor': 1}},
+      {'outcome': 'ok', 'value': {'refs': [other]}},
+    )
+    assert artifact.list_artifacts() == [REF, other]
+    assert [args for _, args, _ in client.calls] == [{}, {'cursor': 1}]
+
+  @pytest.mark.parametrize(
+    'value',
+    [{}, {'refs': ['nope']}, {'refs': [REF], 'cursor': 5}, {'refs': [REF], 'cursor': '1'}],
+  )
+  def test_malformed_list_value_raises(self, monkeypatch, value):
+    _serve(monkeypatch, {'outcome': 'ok', 'value': value})
+    with pytest.raises(artifact.ArtifactError, match='malformed list result'):
+      artifact.list_artifacts()
 
   def test_export_sends_the_kind(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {}})
@@ -203,7 +237,7 @@ class TestClient:
   def test_denied_raises_with_the_host_reason(self, monkeypatch):
     _serve(monkeypatch, {'outcome': 'denied', 'error': f'artifact {REF} is not shared with this peer'})  # fmt: skip
     with pytest.raises(artifact.ArtifactError, match='is not shared with this peer'):
-      artifact.get_artifact(REF)
+      artifact.fetch_artifact(REF)
 
   def test_failed_raises_with_reason_and_diagnostic(self, monkeypatch):
     _serve(monkeypatch, {'outcome': 'failed', 'error': 'disk full', 'detail': {'reason': 'error'}})
@@ -226,10 +260,10 @@ class TestClient:
     with pytest.raises(artifact.ArtifactError, match='malformed'):
       artifact.mint_artifact('x')
 
-  def test_malformed_get_value_raises(self, monkeypatch):
+  def test_malformed_fetch_value_raises(self, monkeypatch):
     _serve(monkeypatch, {'outcome': 'ok', 'value': {}})
-    with pytest.raises(artifact.ArtifactError, match='malformed get result'):
-      artifact.get_artifact(REF)
+    with pytest.raises(artifact.ArtifactError, match='malformed artifact.fetch result'):
+      artifact.fetch_artifact(REF)
 
   def test_no_channel_is_an_error(self, monkeypatch):
     monkeypatch.delenv('BROKER_CHANNEL', raising=False)
@@ -248,16 +282,32 @@ class TestCli:
     assert artifact.main(['artifact', 'mint', '.', '--name', 'bundle']) == 0
     assert client.calls[0][1] == {'path': '.', 'name': 'bundle'}
 
-  def test_get_prints_the_path(self, monkeypatch, capsys):
+  def test_fetch_prints_the_path(self, monkeypatch, capsys):
     _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': '/var/ride/artifacts/x'}})
-    assert artifact.main(['artifact', 'get', REF]) == 0
+    assert artifact.main(['artifact', 'fetch', REF]) == 0
     assert capsys.readouterr().out == '/var/ride/artifacts/x\n'
 
-  def test_denied_get_relays_the_reason(self, monkeypatch, capsys, caplog):
+  def test_fetch_forwards_the_check(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': '/var/ride/artifacts/x'}})
+    assert artifact.main(['artifact', 'fetch', '--checked', REF]) == 0
+    assert client.calls[0][1] == {'ref': REF, 'checked': True}
+
+  def test_denied_fetch_relays_the_reason(self, monkeypatch, capsys, caplog):
     _serve(monkeypatch, {'outcome': 'denied', 'error': 'nope'})
-    assert artifact.main(['artifact', 'get', REF]) == 1
+    assert artifact.main(['artifact', 'fetch', REF]) == 1
     assert capsys.readouterr().out == ''
     assert 'nope' in caplog.text
+
+  def test_list_prints_one_ref_per_line(self, monkeypatch, capsys):
+    other = f'sha256:{"b" * 64}/other'
+    _serve(monkeypatch, {'outcome': 'ok', 'value': {'refs': [REF, other]}})
+    assert artifact.main(['artifact', 'list']) == 0
+    assert capsys.readouterr().out == f'{REF}\n{other}\n'
+
+  def test_list_without_a_channel_fails(self, monkeypatch, caplog):
+    monkeypatch.delenv('BROKER_CHANNEL', raising=False)
+    assert artifact.main(['artifact', 'list']) == 1
+    assert 'no broker channel' in caplog.text
 
   def test_digest_runs_locally(self, tmp_path, capsys, monkeypatch):
     monkeypatch.delenv('BROKER_CHANNEL', raising=False)

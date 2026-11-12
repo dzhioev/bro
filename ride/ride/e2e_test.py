@@ -251,11 +251,11 @@ assert reply.type == 'result', reply.type
 assert reply.payload == {'outcome': 'ok', 'value': {'n': 1}}, reply.payload
 print('RIDE_E2E_PING_OK', flush=True)
 
-from bro.artifact import ArtifactError, get_artifact, mint_artifact
+from bro.artifact import ArtifactError, fetch_artifact, mint_artifact
 Path('/workspace/out.bin').write_bytes(b'artifact-payload')
 try:
   minted = mint_artifact('out.bin', timeout=30)
-  path = get_artifact(minted.ref, timeout=30)
+  path = fetch_artifact(minted.ref, timeout=30)
 except ArtifactError as error:
   print(f'RIDE_E2E_ARTIFACT_FAILED: {error}', flush=True)
   sys.exit(9)
@@ -299,7 +299,7 @@ except Exception:
 _BENCHMARK_TYPE_CHILD = """
 from pathlib import Path
 
-from bro.artifact import get_artifact
+from bro.artifact import fetch_artifact
 from bro.bench.job import JobError, run_job
 from bro.run_lifecycle import RunLifecycle
 
@@ -311,7 +311,7 @@ try:
 except JobError as error:
   channel.completed('denied:' + str(error), 'ok')
 else:
-  run = Path(get_artifact(ref, timeout=30))
+  run = Path(fetch_artifact(ref, timeout=30))
   marker = run / 'output' / 'marker'
   assert marker.read_text() == 'benchmark-e2e', marker
   channel.completed('accepted:' + ref, 'ok')

@@ -475,7 +475,7 @@ def test_an_artifact_ref_resolves_the_one_job_under_output(monkeypatch, tmp_path
   job_directory.mkdir(parents=True)
   (job_directory / 'result.json').write_text('{}')
   ref = 'sha256:' + 'a' * 64 + '/run'
-  monkeypatch.setattr(retention.artifact, 'get_artifact', lambda value: str(artifact_root))
+  monkeypatch.setattr(retention.artifact, 'locate_artifact', lambda value: str(artifact_root))
 
   assert retention.resolve_job(ref) == job_directory
 
@@ -486,7 +486,7 @@ def test_a_local_job_path_never_uses_the_artifact_channel(monkeypatch, tmp_path)
   (job_directory / 'result.json').write_text('{}')
   monkeypatch.setattr(
     retention.artifact,
-    'get_artifact',
+    'locate_artifact',
     lambda value: pytest.fail('a local path must not resolve as an artifact'),
   )
 

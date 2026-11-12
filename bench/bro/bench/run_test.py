@@ -172,7 +172,7 @@ def test_a_session_run_starts_the_composed_config_over_the_broker(tree, monkeypa
     return ARTIFACT_REF
 
   monkeypatch.setattr('bro.bench.run.run_job', run_job)
-  monkeypatch.setattr('bro.bench.run.get_artifact', lambda artifact_ref: str(artifact))
+  monkeypatch.setattr('bro.bench.run.fetch_artifact', lambda artifact_ref: str(artifact))
 
   assert main([*RUN, '--tasks', 'few', '--timeout', '60']) == 0
   composed = _composed(tree)
@@ -196,7 +196,7 @@ def test_a_session_run_names_the_run_a_failed_job_left(tree, monkeypatch, capsys
     raise JobError('benchmark job failed (exit)', ref=ARTIFACT_REF)
 
   monkeypatch.setattr('bro.bench.run.run_job', run_job)
-  monkeypatch.setattr('bro.bench.run.get_artifact', lambda artifact_ref: str(artifact))
+  monkeypatch.setattr('bro.bench.run.fetch_artifact', lambda artifact_ref: str(artifact))
 
   assert main([*RUN, '--tasks', 'few']) == 1
   assert f'results {artifact / "output"}  artifact {ARTIFACT_REF}' in capsys.readouterr().out

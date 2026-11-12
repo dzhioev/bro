@@ -98,7 +98,7 @@ A managed session carries no docker socket and needs the `benchmark` start permi
 the host runs `bro.benchmark.job` with its own Docker access through the registered `benchmark` worker type from `bro-bench`, pointed at the composed config,
 and the finished run comes back as an artifact whose `output/` holds the job directory beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` prints `results <path>  artifact <ref>`;
-`artifact get <ref>` makes the run readable again, and the artifact store dies with the ride, so retain the ref before the ride ends when the run must become durable.
+`artifact fetch <ref>` makes the run readable wherever the ref reaches, and the artifact store dies with the ride, so retain the ref before the ride ends when the run must become durable.
 `benchmark-job start -c <config> --detach` and `benchmark-job check <request-id>` drive the same worker type through `launch`, for a composed config already in the tree.
 Outside a session, Harbor runs right here into `jobs/<id>` (`--jobs-dir` moves it), the same command from the benchmark project's own environment:
 
@@ -147,7 +147,8 @@ On a host that configures no `trails` credential of its own, `XDG_DATA_HOME` alo
 
 ## Retaining a run
 
-`benchmark retain` takes either the artifact ref or the local job directory `benchmark-run` printed:
+`benchmark retain` takes either the artifact ref or the local job directory `benchmark-run` printed;
+a ref must be fetched in the session that retains it, which the session that ran `benchmark-run` already did:
 
 ```
 uv run --project benchmark benchmark retain sha256:<artifact-digest>/run

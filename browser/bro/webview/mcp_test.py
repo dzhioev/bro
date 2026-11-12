@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from bro import mission
+from bro.artifact import ArtifactError
 from bro.llm.mcp import Context
 from bro.webview import mcp
 from bro.webview.cli import OpenedWebview, WebviewError
@@ -103,7 +104,7 @@ def test_command_reads_a_spilled_reply_head_without_minting(monkeypatch, tmp_pat
   _open(monkeypatch, context)
   spilled = tmp_path / 'spilled.txt'
   spilled.write_text('first line\n' + 'z' * 8000)
-  monkeypatch.setattr(mcp, 'get_artifact', lambda ref: str(spilled))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(spilled))
   monkeypatch.setattr(
     mcp.mission,
     'ask',
@@ -187,7 +188,7 @@ def test_tools_renders_the_spilled_live_roster_compactly(monkeypatch, tmp_path) 
   ]
   artifact = tmp_path / 'tools.json'
   artifact.write_text(json.dumps(roster))
-  monkeypatch.setattr(mcp, 'get_artifact', lambda _ref: str(artifact))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda _ref: str(artifact))
   monkeypatch.setattr(
     mcp.mission,
     'ask',
@@ -212,7 +213,7 @@ def test_share_returns_upload_path_and_directory_entries(monkeypatch, tmp_path) 
   (directory / 'nested' / 'notes.txt').write_text('notes')
   shared: list[tuple[str, str]] = []
   monkeypatch.setattr(mcp.mission, 'share', lambda webview, ref: shared.append((webview, ref)))
-  monkeypatch.setattr(mcp, 'get_artifact', lambda _ref: str(directory))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda _ref: str(directory))
 
   result = mcp.share(context, 'webview-1', REF)
 
@@ -222,6 +223,23 @@ def test_share_returns_upload_path_and_directory_entries(monkeypatch, tmp_path) 
     'entries': ['nested/', 'nested/notes.txt', 'resume.txt'],
   }
   assert context.state.get('webview-1').shares == [REF]
+
+
+def test_share_refuses_an_unfetched_ref_before_sharing_it(monkeypatch) -> None:
+  context = _context()
+  _open(monkeypatch, context)
+  shared: list[tuple[str, str]] = []
+  monkeypatch.setattr(mcp.mission, 'share', lambda webview, ref: shared.append((webview, ref)))
+
+  def refuse(ref: str) -> str:
+    raise ArtifactError(f'artifact {ref} is not fetched yet; fetch it first')
+
+  monkeypatch.setattr(mcp, 'locate_artifact', refuse)
+
+  with pytest.raises(ArtifactError, match='fetch it first'):
+    mcp.share(context, 'webview-1', REF)
+  assert shared == []
+  assert context.state.get('webview-1').shares == []
 
 
 def test_reopen_repeats_options_shares_and_last_url(monkeypatch, tmp_path) -> None:
@@ -248,7 +266,7 @@ def test_reopen_repeats_options_shares_and_last_url(monkeypatch, tmp_path) -> No
   assert first.webview == 'webview-1'
   artifact = tmp_path / 'later.txt'
   artifact.write_text('later')
-  monkeypatch.setattr(mcp, 'get_artifact', lambda _ref: str(artifact))
+  monkeypatch.setattr(mcp, 'locate_artifact', lambda _ref: str(artifact))
   monkeypatch.setattr(mcp.mission, 'share', lambda *_arguments: None)
   mcp.share(context, 'webview-1', OTHER_REF)
   context.state.get('webview-1').last_url = 'https://example.test/last'
