@@ -13,7 +13,7 @@ from bro.mcp import Reach
 
 READ = ('Read', 'Glob', 'Grep')
 WRITE = ('Write', 'Edit', 'NotebookEdit')
-# Monitor stays unmapped (`bro/reference/ride.md`, "The claude argv")
+# no group serves Monitor (`bro/reference/ride.md`, "The claude argv")
 SHELL = ('Bash', 'TaskStop')
 WEB = ('WebFetch', 'WebSearch')
 DELEGATION = ('Agent', 'Workflow', 'TaskStop')
@@ -25,7 +25,7 @@ GATED_READ = 'Read'
 LOOP = ('Skill', 'ToolSearch')
 # the shell tools that run a command line, which run it in brash under a finite
 # command list
-COMMAND_TOOLS = ('Bash',)
+COMMAND_TOOLS = ('Bash', 'Monitor')
 
 
 def allowlist(reach: Reach) -> tuple[str, ...]:
@@ -51,7 +51,8 @@ def gated(reach: Reach) -> tuple[str, ...]:
   """the natives a session with `reach` is served behind a `PreToolUse` gate."""
   names: list[str] = []
   if finite(reach):
-    names.extend(COMMAND_TOOLS)
+    served = allowlist(reach)
+    names.extend(name for name in COMMAND_TOOLS if name in served)
   if reach.files is None:
     names.append(GATED_READ)
   return tuple(names)
