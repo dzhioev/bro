@@ -6,7 +6,7 @@ Do not produce any visible output
 
 Call the `bro::banner` tool once.
 It returns the structured session facts as `key: value` lines:
-`isolation`, `repo`, `name`, `bro`, `llm`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `talk`, `permits`, and `trail_id`.
+`isolation`, `repo`, `name`, `mission_id`, `bro`, `llm`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `talk`, `permits`, and `trail_id`.
 The `llm` row names the admitted recipe in canonical text and its source.
 Interpret them as follows:
 
@@ -30,6 +30,8 @@ Interpret them as follows:
 3. Treat `repo` as the attachment fact;
    never probe cwd git to decide whether the managed session is attached.
    Use the session `name` as a hint about the work scope.
+   `mission_id` is the id of the mission this session undertakes;
+   the line is absent when the launch gave the session no broker channel.
 
 4. `summoned` says whether this session owes another one a result.
    `summoned: yes` means a summoner is blocked on it, and the run delivers through the `bro::answer` tool

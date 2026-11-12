@@ -69,7 +69,7 @@ the launcher's own `--log` never reaches the session.
 - `ride override <mission> --grant N` / `--revoke N` changes a running session's bro targets (`@<bro>`) or credential kinds;
   `--cred kind+instance` changes a held instance and holds its kind.
   Requests go through the root's operator channel.
-  Mission ids come from `ride missions <root>`;
+  `<mission>` is a mission id, as `ride missions <root>` lists it and a session's banner reports its own as `mission_id`;
   repeated flags are applied in order, with the last flag per name winning.
   The banner reads the updated authority, and the next summon uses it.
   An override affects no already-running child and a resume retains it.
@@ -1298,8 +1298,8 @@ Peers pass files by content-addressed reference through the ride's store the lau
   Each audit row keys the ride under `ride`.
 
 - The host side is the operator, who reaches the store through the root's operator channel (`ride artifact`, re-executing into the root's runtime like `ride override`):
-  `ride artifact share <mission> <path-or-ref> [--name N]` ingests a host file or directory, or takes a ref the operator can already read, and shares it with any live mission by its id from `ride missions <root>`,
-  whose session watch announces it as an `operator shared artifact <ref>` line.
+  `ride artifact share <mission> <path-or-ref> [--name N]` ingests a host file or directory, or takes a ref the operator can already read, and shares it with any live mission, which `<mission>` names by the same mission id `ride override` takes;
+  the mission's session watch announces the share as an `operator shared artifact <ref>` line.
   A member of a joined party shares its summoner's view, so the whole party reads what is shared with one of them.
   `ride artifact get <ref> [--to <directory>] [--root <root>]` copies an exported ref to `<directory>/<name>` (the current directory by default) and prints the path, refusing to replace an existing one;
   `--root` is needed only when several roots are live.

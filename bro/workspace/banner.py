@@ -2,7 +2,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from bro import summon
+from bro import mission, summon
+from bro.broker.environment import channel_intended
 from bro.llm.resolved import ResolvedRecipe
 from bro.monitor import health, trail_pointer
 from bro.workspace.paths import ISOLATION_ENV
@@ -47,6 +48,7 @@ class SessionFacts:
   may_summon: Optional[tuple[str, ...]]
   summoned: bool
   trail_id: Optional[str]
+  mission_id: Optional[str] = None
   repo: Optional[str] = None
   permits: Optional[tuple[str, ...]] = None
   may_give: Optional[tuple[str, ...]] = None
@@ -106,6 +108,7 @@ class SessionFacts:
       party_member=summon.party_member(),
       summoned=summon.summoned(),
       trail_id=trail_id,
+      mission_id=mission.own_mission() if channel_intended() else None,
     )
 
   @property
@@ -138,14 +141,18 @@ class SessionFacts:
     # the padded label so width math runs on the raw text, not on ANSI bytes
     rows: list[tuple[str, str, str]] = [
       ('ride session:', '', f'{bold}{self.display_name}{reset}'),
+    ]
+    if self.mission_id is not None:
+      rows.append(('mission:', '', f'{dim}{self.mission_id}{reset}'))
+    rows.append(
       (
         'repository:',
         '',
         f'{dim}(no repository attached){reset}'
         if self.repo is None
         else f'{dim}{self.repo}{reset}',
-      ),
-    ]
+      )
+    )
 
     if self.isolation == 'boxed':
       # /workspace inside, host bind-mount path below — both are useful and
@@ -227,6 +234,7 @@ class SessionFacts:
     lines.append(f'repo: {self.repo if self.repo is not None else "none (detached)"}')
     pairs: list[tuple[str, str]] = [
       ('name', 'name'),
+      ('mission_id', 'mission_id'),
       ('bro', 'bro'),
       ('host_workspace', 'workspace_host_path'),
       ('container_workspace', 'workspace_container_path'),

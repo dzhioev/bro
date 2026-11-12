@@ -3,7 +3,8 @@ import pytest
 import bro.workspace.banner as workspace_banner
 from bro import registry, summon
 from bro.authority_view_test_helper import publish
-from bro.broker.environment import BROKER_TALK
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK, BROKER_UPSTREAM
+from bro.mission import MissionError
 from bro.monitor import trail_pointer
 from bro.workspace.banner import SessionFacts
 
@@ -24,6 +25,9 @@ class TestSessionFacts:
       'RIDE_REPO',
       summon.PARTY_MEMBER_ENV,
       summon.SUMMONED_ENV,
+      BROKER_CHANNEL,
+      BROKER_UPSTREAM,
+      BROKER_MISSION,
       BROKER_TALK,
     ):
       monkeypatch.delenv(v, raising=False)
@@ -87,6 +91,7 @@ class TestSessionFacts:
     assert facts.talk is None
     assert facts.summoned is False
     assert facts.trail_id is None
+    assert facts.mission_id is None
 
   def test_may_summon_reads_the_launch_published_list(self, monkeypatch):
     publish(monkeypatch, targets=('dev', 'reviewer'))
@@ -111,6 +116,27 @@ class TestSessionFacts:
   def test_party_member_reads_the_joined_session_mark(self, monkeypatch):
     monkeypatch.setenv(summon.PARTY_MEMBER_ENV, 'broker-CH')
     assert SessionFacts.collect().party_member == 'broker-CH'
+
+  def test_mission_id_reads_the_mission_the_channel_serves(self, monkeypatch):
+    publish(monkeypatch)
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://127.0.0.1:1')
+    monkeypatch.setenv(BROKER_MISSION, '01mission')
+    assert SessionFacts.collect().mission_id == '01mission'
+
+  def test_mission_id_survives_a_failed_proxy_launch(self, monkeypatch):
+    monkeypatch.setenv(BROKER_UPSTREAM, 'tcp://host.docker.internal:1')
+    monkeypatch.setenv(BROKER_MISSION, '01mission')
+    assert SessionFacts.collect().mission_id == '01mission'
+
+  def test_a_channel_without_a_mission_raises(self, monkeypatch):
+    publish(monkeypatch)
+    monkeypatch.setenv(BROKER_CHANNEL, 'tcp://127.0.0.1:1')
+    with pytest.raises(MissionError, match=BROKER_MISSION):
+      SessionFacts.collect()
+
+  def test_a_process_without_a_channel_is_no_mission(self, monkeypatch):
+    monkeypatch.setenv(BROKER_MISSION, '01mission')
+    assert SessionFacts.collect().mission_id is None
 
   def test_trail_id_reads_the_session_pointer(self):
     trail_pointer.publish('01trail')
@@ -239,6 +265,11 @@ class TestRenderBanner:
     assert 'summoned: yes' in _facts(summoned=True).render_plain()
     assert 'summoned: no' in _facts(summoned=False).render_plain()
 
+  def test_llm_and_visual_render_the_mission_id(self):
+    facts = _facts(mission_id='01mission')
+    assert 'mission_id: 01mission' in facts.render_plain()
+    assert 'mission:      \033[2m01mission\033[0m' in facts.render_visual()
+
   def test_llm_emits_the_trail_id(self):
     assert 'trail_id: 01trail' in _facts(trail_id='01trail').render_plain()
 
@@ -257,6 +288,7 @@ class TestRenderBanner:
   def test_visual_omits_the_unpublished_facts(self):
     out = _facts().render_visual()
     assert 'may summon:' not in out
+    assert 'mission:' not in out
     assert 'talk:' not in out
     assert 'trail:' not in out
 
