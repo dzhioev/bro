@@ -11,6 +11,7 @@ from bro.datasources.references import (
   permissions_cheatsheet,
   ride,
 )
+from bro.dev import references
 from bro.mcp import cli, man, mount
 from bros.bro import Bro
 
@@ -81,6 +82,7 @@ class Lead(Bro):
     man(environment),
     man(dive_in),
     man(ride),
+    man(references.delivery),
     man(llm_providers),
     man(mu),
     man(permission_model),
