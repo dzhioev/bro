@@ -46,7 +46,7 @@ A subpackage with a map of its own is pointed at, not described here.
   common admission lives in `ride/ride/launch_control.py`, and bro lowering in `ride/ride/bro_worker.py`
 - `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and the ordered journal stream for every worker mission.
   `mission watch` renders it for the session watch:
-  the missions the session launched, its own mission's owner chat, and quiet lines for a child's service marks and says.
+  the missions the session launched, its own mission's owner chat, overrides and artifact shares, and quiet lines for a child's service marks and says.
   The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
   A timed-out read reconnects from the stream's cursor, and a restarted producer resumes from the journal head its predecessor published.
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools

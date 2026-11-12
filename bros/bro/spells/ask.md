@@ -95,6 +95,9 @@ Its reply arrives through the session watch and remains readable with `bro::ques
 If the reply is itself a question, answer that question with `bro::quest_say` and its id.
 Use `bro::quest_say` without `reply_to` to steer a child whose talk permits `owner.say`.
 Use `bro::quest_share` to hand a live child an artifact created after launch.
+The child's session watch announces the share where the quest's talk carries `owner.say` or `owner.question`;
+under `worker.question` alone the ref reaches it only in a reply, and a quest with none of the three refuses the share
+— a summon that will share later needs one of them.
 
 On a terminal watch line, call `bro::quest_check` for the retained answer or failure.
 The check is non-blocking and repeatable;

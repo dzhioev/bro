@@ -13,6 +13,7 @@ import ride.artifacts
 from bro.artifact import EXPORT, GET, MINT, SHARE, compose_ref, digest_path, split_ref
 from bro.broker import brotocol
 from bro.broker.dispatcher import Dispatcher
+from bro.broker.environment import Talk
 from bro.broker.journal import Journal, Record
 from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
@@ -485,6 +486,7 @@ def _live_mission(
   owner: str = ROOT,
   expected: bool = False,
   mission_id: str = 'WEB-1',
+  talk: Talk = frozenset({'owner.question', 'worker.say'}),
 ) -> Record:
   context = _context(control)
   record = context.journal.open(
@@ -494,6 +496,7 @@ def _live_mission(
     owner,
     {'type': 'webview'},
     type='webview',
+    talk=talk,
   )
   control.test_facts.add(
     mission_id,
@@ -574,9 +577,19 @@ class TestArtifactControl:
     }
 
   @pytest.mark.asyncio
-  async def test_share_links_an_owner_reachable_ref_into_the_live_worker_view(self, control, store):
+  @pytest.mark.parametrize(
+    ('talk', 'announced'),
+    [
+      (frozenset({'owner.say'}), True),
+      (frozenset({'owner.question', 'worker.say'}), True),
+      (frozenset({'worker.question'}), False),
+    ],
+  )
+  async def test_share_links_an_owner_reachable_ref_into_the_live_worker_view(
+    self, control, store, talk, announced
+  ):
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
-    _live_mission(control)
+    record = _live_mission(control, talk=talk)
     context = _context(control)
     message = brotocol.request(SHARE, {'id': 'WEB-1', 'ref': ref})
 
@@ -589,6 +602,21 @@ class TestArtifactControl:
     assert result.payload == {'outcome': 'ok', 'value': {}}
     assert store.reachable(ref, 'webview-CH')
     assert (ride.artifacts.view_dir('ws', 'webview-CH') / ref).read_bytes() == b'payload'
+    shares = [(entry['ref'], entry['by']) for entry in record.shares]
+    assert shares == ([(ref, 'owner')] if announced else [])
+
+  def test_share_refuses_a_mission_whose_talk_carries_no_ref_to_its_worker(self, control, store):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    record = _live_mission(control, talk=frozenset({'worker.say'}))
+    context = _context(control)
+
+    control.share(cast(Dispatcher, context), ROOT, brotocol.request(SHARE, {'id': 'WEB-1', 'ref': ref}))  # fmt: skip
+
+    [(_, payload)] = context.replies
+    assert payload['outcome'] == 'denied'
+    assert 'carries no ref to its worker' in payload['error']
+    assert not store.reachable(ref, 'webview-CH')
+    assert record.shares == []
 
   @pytest.mark.parametrize('terminal', [False, True])
   def test_share_refuses_a_mission_the_caller_does_not_live_own(self, control, terminal):
@@ -739,7 +767,7 @@ class TestExportAndOperatorKinds:
   async def test_the_operator_shares_a_host_path_into_any_live_mission(
     self, control, store, tmp_path
   ):
-    _live_mission(control, owner='someone-else')
+    record = _live_mission(control, owner='someone-else', talk=frozenset({'worker.say'}))
     source = tmp_path / 'notes.txt'
     source.write_bytes(b'from the host')
     context = _context(control)
@@ -749,6 +777,39 @@ class TestExportAndOperatorKinds:
     ref = result.payload['value']['ref']
     assert split_ref(ref)[1] == 'notes.txt'
     assert store.reachable(ref, 'webview-CH')
+    assert [(entry['ref'], entry['by']) for entry in record.shares] == [(ref, 'operator')]
+
+  @pytest.mark.asyncio
+  async def test_the_operator_share_into_a_mission_that_ends_meanwhile_announces_nothing(
+    self, control, store, tmp_path
+  ):
+    record = _live_mission(control)
+    source = tmp_path / 'notes.txt'
+    source.write_bytes(b'from the host')
+    context = _context(control)
+    message = brotocol.request('operator.artifact.share', {'id': 'WEB-1', 'path': str(source)})
+    control.host_share(cast(Dispatcher, context), 'operator', message)
+    context.journal.end(record, {'outcome': 'ok'})
+
+    _, result = await _delivered(context)
+    assert result.payload['outcome'] == 'ok'
+    assert record.shares == []
+
+  @pytest.mark.asyncio
+  async def test_a_failed_announcement_fails_the_request(self, control, store, monkeypatch):
+    ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
+    _live_mission(control)
+    context = _context(control)
+
+    def broken_share(record, ref, sharer):
+      raise RuntimeError('journal unavailable')
+
+    monkeypatch.setattr(context.journal, 'share', broken_share)
+    control.share(cast(Dispatcher, context), ROOT, brotocol.request(SHARE, {'id': 'WEB-1', 'ref': ref}))  # fmt: skip
+
+    _, result = await _delivered(context)
+    assert result.payload['outcome'] == 'failed'
+    assert result.payload['error'] == 'journal unavailable'
 
   @pytest.mark.asyncio
   async def test_the_operator_reads_an_exported_ref_into_a_directory(

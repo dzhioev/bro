@@ -859,6 +859,15 @@ def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
   return _bounded_chat_line(_single_line(rendered), event)
 
 
+def _share_line(event: dict[str, Any]) -> str:
+  sharer = event.get('by')
+  ref = event.get('ref')
+  if sharer not in ('owner', 'operator') or not isinstance(ref, str):
+    raise MissionError('share event carried no sharer or ref')
+  subject = 'summoner' if sharer == 'owner' else sharer
+  return _single_line(f'{subject} shared artifact {ref}')
+
+
 def _event_line(event: dict[str, Any], own: str) -> str:
   transition = event.get('transition')
   if not isinstance(transition, str):
@@ -935,10 +944,10 @@ def visible_event_head() -> int:
 def _stream_event_relevant(event: dict[str, Any], own: str, worker_type: Optional[str]) -> bool:
   if event.get('mission') == own:
     transition = event.get('transition')
-    return transition in ('override', 'refused') or (
+    return transition in ('override', 'share', 'refused') or (
       transition == 'message' and event.get('from') == 'owner'
     )
-  if event.get('transition') == 'override' or event.get('kind') != LAUNCH:
+  if event.get('transition') in ('override', 'share') or event.get('kind') != LAUNCH:
     return False
   if worker_type is not None and _worker_type(event) != worker_type:
     return False
@@ -956,7 +965,7 @@ def _replay_events(
   after: int,
 ) -> list[WatchEvent]:
   record = query_mission(client, own)
-  events: list[dict[str, Any]] = list(record.get('overrides', []))
+  events: list[dict[str, Any]] = [*record.get('overrides', []), *record.get('shares', [])]
   events.extend(
     _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
   )
@@ -1135,8 +1144,9 @@ def watch(
         if contract:
           yield contract
       continue
-    chat_line = _chat_event_line(event, own)
-    if chat_line is not None:
+    if event.get('transition') == 'share':
+      line = _share_line(event)
+    elif (chat_line := _chat_event_line(event, own)) is not None:
       line = chat_line
     elif event.get('transition') in ('message', 'refused') or event.get('mission') == own:
       continue

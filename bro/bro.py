@@ -256,8 +256,10 @@ _QUEST_ASK_DESCRIPTION = (
 
 
 _QUEST_SHARE_DESCRIPTION = (
-  'hand an artifact ref this session can reach to a live child quest by `quest_id`. the host '
-  'refuses an unknown, ended, non-bro, or unowned quest and a ref outside this session’s view.'
+  'hand an artifact ref this session can reach to a live child quest by `quest_id`; the child’s '
+  'session watch announces it where the quest’s talk carries owner.say or owner.question. the '
+  'host refuses an unknown, ended, non-bro, or unowned quest, one whose talk carries no ref to '
+  'the child, and a ref outside this session’s view.'
 )
 
 
