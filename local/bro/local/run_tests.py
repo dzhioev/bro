@@ -873,6 +873,7 @@ class Stage:
   run: Callable[[], None]
   scope: str
   host_only: bool = False
+  ci_only: bool = False
   opt_in: bool = False
   work: str = WHOLE
 
@@ -895,18 +896,21 @@ STAGES = [
     docker_stage,
     'the container entrypoint smoke, pytest against the host docker daemon',
     host_only=True,
+    ci_only=True,
   ),
   Stage(
     'broker_e2e',
     broker_e2e_stage,
     'pytest over the broker-supervised container launch seam',
     host_only=True,
+    ci_only=True,
   ),
   Stage(
     'webview_e2e',
     webview_e2e_stage,
     'pytest over the browser worker route',
     host_only=True,
+    ci_only=True,
   ),
   Stage('llm', llm_stage, 'pytest over the live-LLM behavior probes', opt_in=True),
   Stage(
@@ -940,6 +944,7 @@ def narrow(stage: Stage, selected: Selection) -> Stage:
 
 def main(argv: list[str]) -> Optional[int]:
   names = [stage.name for stage in STAGES]
+  ci_only = [stage.name for stage in STAGES if stage.ci_only]
   parser = Parser(description='run the repository test gate')
   parser.add_argument(
     '--only',
@@ -958,7 +963,7 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument(
     '--changed',
     action='store_true',
-    help='narrow the gate to the work the diff can reach',
+    help=f'narrow the gate to the work the diff can reach, leaving {", ".join(ci_only)} to CI',
   )
   parser.add_argument('--base', help=f'the ref --changed diffs against (default: {DEFAULT_BASE})')
   parser.add_argument(
@@ -983,6 +988,10 @@ def main(argv: list[str]) -> Optional[int]:
   skip = args['skip'] if args['skip'] is not None else []
   if args['base'] is not None and not args['changed']:
     parser.error('--base names the ref --changed diffs against; pass --changed too')
+  if args['changed']:
+    for name in only or []:
+      if name in ci_only:
+        parser.error(f'--changed leaves the {name} stage to CI; run it without --changed')
   problems = roster_problems()
   if len(problems) > 0:
     raise SystemExit(
@@ -999,11 +1008,14 @@ def main(argv: list[str]) -> Optional[int]:
     except ValueError as error:
       parser.error(str(error))
   stages = STAGES
-  dropped: frozenset[str] = frozenset()
+  dropped: dict[str, str] = {}
   if args['changed']:
     selected = select(args['base'] or DEFAULT_BASE)
     stages = [narrow(stage, selected) for stage in STAGES]
-    dropped = selected.dropped
+    dropped = {
+      **dict.fromkeys(selected.dropped, '--changed: the diff reaches nothing it runs'),
+      **dict.fromkeys(ci_only, '--changed leaves it to CI'),
+    }
   if shard is not None:
     stages = [
       replace(stage, run=functools.partial(broker_e2e_stage, shard), work=f'shard {shard}')
@@ -1033,7 +1045,7 @@ def main(argv: list[str]) -> Optional[int]:
       # unlike --skip, this narrowing is the gate's own deduction, so it owes a
       # verdict rather than going missing from the closing line
       if stage.name in dropped:
-        display.skipped(stage.name, '--changed: the diff reaches nothing it runs')
+        display.skipped(stage.name, dropped[stage.name])
         verdicts.append((stage.name, 'skipped'))
         continue
       if stage.host_only and in_container:

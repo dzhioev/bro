@@ -413,6 +413,45 @@ def test_a_dropped_stage_reads_skipped_in_the_verdict(monkeypatch, capsys):
   assert 'gate: types ok | benchmark skipped' in capsys.readouterr().err
 
 
+@pytest.mark.parametrize('path', ['README.md', 'ride/ride/workspace/docker.py'])
+def test_changed_leaves_a_ci_only_stage_to_ci_whatever_the_diff(monkeypatch, capsys, path):
+  ran = []
+  monkeypatch.setattr(run_tests, 'changed_paths', lambda root, base: [path])
+  monkeypatch.setattr(
+    run_tests,
+    'STAGES',
+    [run_tests.Stage('docker', lambda: ran.append('docker'), 'a probe', ci_only=True)],
+  )
+
+  assert run_tests.main(['run-tests', '--changed']) is None
+  assert ran == []
+  written = capsys.readouterr().err
+  assert 'skipping the docker stage (--changed leaves it to CI)' in written
+  assert written.endswith('gate: docker skipped\n')
+
+  assert run_tests.main([]) is None
+  assert ran == ['docker']
+
+
+def test_changed_refuses_to_run_a_ci_only_stage_by_name(monkeypatch, capsys):
+  ran = []
+  monkeypatch.setattr(
+    run_tests,
+    'STAGES',
+    [run_tests.Stage('docker', lambda: ran.append('docker'), 'a probe', ci_only=True)],
+  )
+
+  with pytest.raises(SystemExit) as raised:
+    run_tests.main(['run-tests', '--changed', '--only', 'docker'])
+  assert raised.value.code == 2
+  assert '--changed leaves the docker stage to CI; run it without --changed' in (
+    capsys.readouterr().err
+  )
+
+  assert run_tests.main(['run-tests', '--only', 'docker']) is None
+  assert ran == ['docker']
+
+
 def test_every_selected_stage_runs_and_each_failed_command_is_replayed_whole(monkeypatch, capsys):
   def fail() -> None:
     run_tests.step('probe')

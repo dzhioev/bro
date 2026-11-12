@@ -67,6 +67,8 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
   a project's stage is skipped whole unless the change reaches something that project imports or edits any project's metadata;
   `sandbox` runs when a change reaches a test in its roster through the import graph, as well as for changes under `bro/files/` or `filetypes/` and changes to the gate or its workflow, because providers and workers are loaded by name;
   and `types` is never narrowed, since pyright loads the dependency closure whatever file list it is given, so a shorter list hides errors instead of skipping work.
+  It leaves the host-only stages to CI whatever the diff, since they launch real containers and whole `ride` sessions, which the import graph cannot narrow;
+  `--only` naming one of them beside `--changed` is a usage error.
   Each stage names the scope it ran, and a stage the narrowing drops reads `skipped` in the closing verdict rather than going missing from it.
   A stage that passes over a clean worktree is noted on the tree `HEAD` names,
   and a later run on that tree skips it where the note covers its work, the whole stage or the same narrowed share, and reads `ok` for it;
