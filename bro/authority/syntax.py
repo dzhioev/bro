@@ -524,6 +524,12 @@ class Syntax:
             raise ValueError('credential kinds take plain grant or revoke only')
           (hold if action == 'grant' else drop).add(permission.type)
           continue
+        if (
+          permission.option is None
+          and not entry.qualified
+          and permission.type not in self.declarations
+        ):
+          raise ValueError(f'unknown mission type or credential kind {permission.type!r}')
         resolved = self.entry(entry)
         if action == 'grant':
           grants.append(resolved)

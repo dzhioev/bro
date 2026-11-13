@@ -1,3 +1,4 @@
+import re
 from itertools import combinations_with_replacement, product
 
 import pytest
@@ -232,20 +233,23 @@ def test_plain_summon_gifts_forward_recipients_per_region(syntax):
     )
 
 
-def test_unknown_installation_names_fail_only_on_resolution(syntax):
-  layers = [
-    parse_layer(grant=(text,))
-    for text in (
-      'absent',
-      'bro.absent=*',
-      'bro.cred=absent+*',
-      'webview to absent{}',
-    )
-  ]
-  syntax.layer(parse_layer(grant=('@browser',)))
-  for layer in layers:
-    with pytest.raises(ValueError, match='unknown'):
-      syntax.layer(layer)
+@pytest.mark.parametrize(
+  ('text', 'message'),
+  [
+    ('absent', "unknown mission type or credential kind 'absent'"),
+    ('absent for *', "unknown mission type 'absent'"),
+    ('bro.absent=*', 'unknown option bro.absent'),
+    ('bro.cred=absent+*', "unknown credential kind 'absent'"),
+    ('webview to absent{}', "unknown mission type 'absent'"),
+  ],
+)
+def test_unknown_installation_names_fail_only_on_resolution(syntax, text, message):
+  layer = parse_layer(grant=(text,))
+  with pytest.raises(ValueError, match=re.escape(message)):
+    syntax.layer(layer)
+
+
+def test_a_name_cannot_be_both_credential_kind_and_mission_type():
   with pytest.raises(ValueError, match='both credential kind and mission type'):
     Syntax({'github': Declaration({})}, ('github',))
 

@@ -220,7 +220,7 @@ class TestAuthorityLayers:
   def test_unknown_names_fail_only_when_their_layer_applies(self, scoped_installation):
     reading = _reading(scoped_installation, {'homes': {'other': {'grant': ['unknown']}}})
     assert not _pair(reading, Atom('bro')).use.is_empty
-    with pytest.raises(ValueError, match='unknown mission type'):
+    with pytest.raises(ValueError, match="unknown mission type or credential kind 'unknown'"):
       _reading(scoped_installation, {'defaults': {'grant': ['unknown']}})
 
   def test_overlapping_grant_and_revoke_are_refused_on_reading(self, scoped_installation):
