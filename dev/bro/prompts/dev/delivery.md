@@ -154,7 +154,7 @@ GitHub's aggregate review decision proves platform standing, never a verdict or 
 
 ### Approval
 
-- Approver `human`, where questions reach the user: their go-ahead to land this change, their own request to land it included, clears approval.
-  Elsewhere it takes a trusted approving GitHub review of this head from an account marked `User`, never a `Bot`.
+- Approver `human`: a trusted approving GitHub review of this head from an account marked `User`, never a `Bot`, clears approval;
+  where questions reach the user, so does their go-ahead to land this change, their own request to land it included.
   A summoner's prompt is **never** a human's go-ahead.
 - Approver `summoner`: its `approved <head>` reply to the author's landing-approval question, not the bare fact that a session was summoned.
