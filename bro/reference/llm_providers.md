@@ -253,7 +253,7 @@ Models outside both tables can run under `+passthrough` but remain unpriced.
 ## Operator adoption
 
 Before re-syncing an installation, move configured unlisted models to listed ones in host home layers and `mu` materials.
-A kept workspace whose recorded selection names an unlisted model cannot resume after the re-sync; see [ride](ride.md#bro-harness) for continuation.
+A kept workspace whose recorded selection names an unlisted model cannot resume after the re-sync; see [ride](ride.md#lifecycle-verbs) for continuation.
 End or cancel running Harbor jobs before re-syncing, and start none until the benchmark bundle is rebuilt.
 Re-sync every installation reading the shared configuration, rebuild the benchmark bundle, and start fresh roots; move consumer repositories’ framework pins when they adopt the content routes.
 Only after every such installation has moved and every root from before its re-sync has ended may `+passthrough` appear in shared configuration or benchmark presets.

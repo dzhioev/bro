@@ -7,7 +7,7 @@ line). Both session modes name the dir to claude through
 `CLAUDE_CONFIG_DIR`; a container additionally bind-mounts it, since the dir
 lives host-side and the container is `--rm`'d at exit. Why sessions are
 isolated from the host `~/.claude` — and what the dir deliberately excludes —
-is reference/ride.md, "Host claude-state isolation".
+is `reference.md`, "Claude state".
 """
 
 import json

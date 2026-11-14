@@ -17,7 +17,7 @@ def apply_claude_auth(
   store: credentials.Store | None = None,
   warn_when_missing: bool = False,
 ) -> None:
-  """align a claude session env with the session auth model (reference/ride.md).
+  """align a claude session env with the session auth model (`reference.md`, "Claude state").
 
   scrubs the inherited vars that outrank the session's designated auth, then
   overlays the long-lived `claude setup-token` credential (`claude_code`). the

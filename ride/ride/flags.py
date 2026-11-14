@@ -118,8 +118,8 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     dest='session_log',
     default=None,
     choices=log.LEVEL_NAMES,
-    help="log level of the session's own processes (do-ride, the session MCP server, the "
-    'recorder, hook scripts), carried to every party member as the BRO_LOG_LEVEL environment '
+    help="log level of the session's own processes (do-ride and the framework processes its "
+    'harness starts), carried to every party member as the BRO_LOG_LEVEL environment '
     'addition; default: info',
   )
   if include_bro:

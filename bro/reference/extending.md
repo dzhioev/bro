@@ -70,7 +70,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
 
   `files`, `brash`, `web`, and `delegation` are the tool groups.
   They are harness-neutral:
-  each harness serves a group with its own tools, and `bro show` marks a group a harness leaves unserved (`bro/reference/ride.md`, "Bro harness" and "The claude argv").
+  each harness serves a group with its own tools, and `bro show` marks a group a harness leaves unserved (`harnesses/native/harness/bro/native/reference.md`, "Tool groups", and `harnesses/claude/harness/bro/claude/reference.md`, "The claude argv").
   Without `files`, Claude still serves a `Read` held to the session's own output, and a session refuses to start where the repository's Claude configuration could take that `Read` around its gate, as a finite command list does for its shell (below).
 - `brash('git log ...', 'gh pr view *')` declares a finite command list.
   An entry is written like a command and split with shell quoting:
@@ -180,7 +180,8 @@ a general-purpose listed program such as `git -c`, `uv run`, `find -exec`, `xarg
 Use a `cli(...)` tool for a command that must be held to one fixed argument shape, and use sandboxing for containment.
 
 Under a finite command list, brash runs the lines the model starts:
-through `Bash` on Claude, whose calls a gate rewrites into brash calls, and through its jobs and watches on the bro harness (`bro/reference/ride.md`, "The claude argv" and "Bro harness").
+through `Bash` on Claude, whose calls a gate rewrites into brash calls (`harnesses/claude/harness/bro/claude/reference.md`, "The claude argv"),
+and through its jobs and watches on the bro harness (`harnesses/native/harness/bro/native/reference.md`, "Tool groups").
 `brash(ANY)` runs them in bash instead.
 A `cd` inside a line moves brash for the rest of that line only, so on Claude it no longer carries to the next call.
 What the session's Claude configuration runs is not checked:

@@ -13,7 +13,7 @@ from bro.mcp import Reach
 
 READ = ('Read', 'Glob', 'Grep')
 WRITE = ('Write', 'Edit', 'NotebookEdit')
-# no group serves Monitor (`bro/reference/ride.md`, "The claude argv")
+# no group serves Monitor (`reference.md`, "The claude argv")
 SHELL = ('Bash', 'TaskStop')
 WEB = ('WebFetch', 'WebSearch')
 DELEGATION = ('Agent', 'Workflow', 'TaskStop')

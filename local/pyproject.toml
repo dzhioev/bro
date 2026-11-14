@@ -8,10 +8,12 @@ version = "0.1.0"
 description = "the bro framework checkout's own persona and scripts"
 requires-python = ">=3.12"
 dependencies = [
+  "bro-claude",
   "bro-deepseek",
   "bro",
   "bro-dev",
   "bro-filetypes",
+  "bro-native",
   "requests>=2.34.2",
   "rich",
   "tiktoken>=0.14.0",
@@ -27,10 +29,12 @@ dependencies = [
 "syscall-tables" = "bro.local._entrypoints:bro_local_syscall_tables"
 
 [tool.uv.sources]
+bro-claude = { workspace = true }
 bro-deepseek = { workspace = true }
 bro = { workspace = true }
 bro-dev = { workspace = true }
 bro-filetypes = { workspace = true }
+bro-native = { workspace = true }
 
 [project.entry-points."bro.bros.bro"]
 bro-dev = "bros.bro_dev:BroDev"
@@ -38,10 +42,12 @@ bro-watch-probe = "bros.bro_watch_probe:BroWatchProbe"
 bro-file-probe = "bros.bro_file_probe:BroFileProbe"
 
 [tool.deptry.package_module_name_map]
+bro-claude = ["bro"]
 bro-deepseek = ["bro"]
 bro = ["bro", "bros"]
 bro-dev = ["bro", "bros"]
 bro-filetypes = ["bro"]
+bro-native = ["bro"]
 
 [tool.uv.build-backend]
 module-root = ""
