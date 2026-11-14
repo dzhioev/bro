@@ -168,24 +168,40 @@ def test_open_propagates_launch_failure_without_retaining_the_webview(monkeypatc
     context.state.get('unopened')
 
 
-def test_tools_renders_the_spilled_live_roster_compactly(monkeypatch, tmp_path) -> None:
-  context = _context()
-  _open(monkeypatch, context)
-  roster = [
-    {
-      'name': 'browser_click',
-      'description': 'Click an element. The page changes afterward.',
-      'inputSchema': {
-        'type': 'object',
-        'properties': {
-          'element': {'type': 'string', 'description': 'Human-readable element description.'},
-          'target': {'type': 'string', 'description': 'Exact element reference. Or a selector.'},
-          'button': {'enum': ['left', 'right']},
-        },
-        'required': ['target'],
+ROSTER = [
+  {
+    'name': 'browser_click',
+    'description': 'Click an element. The page changes afterward.',
+    'inputSchema': {
+      'type': 'object',
+      'properties': {'target': {'type': 'string'}},
+      'required': ['target'],
+    },
+  },
+  {
+    'name': 'browser_fill_form',
+    'description': 'Fill multiple form fields',
+    'inputSchema': {
+      'type': 'object',
+      'properties': {
+        'fields': {
+          'type': 'array',
+          'items': {
+            'type': 'object',
+            'properties': {'target': {'type': 'string'}, 'value': {'type': 'string'}},
+            'required': ['target', 'value'],
+            'additionalProperties': False,
+          },
+        }
       },
-    }
-  ]
+      'required': ['fields'],
+    },
+  },
+  {'name': 'browser_close', 'inputSchema': {'type': 'object', 'properties': {}}},
+]
+
+
+def _spilled_roster(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, roster: list) -> None:
   artifact = tmp_path / 'tools.json'
   artifact.write_text(json.dumps(roster))
   monkeypatch.setattr(mcp, 'fetch_artifact', lambda _ref: str(artifact))
@@ -197,11 +213,43 @@ def test_tools_renders_the_spilled_live_roster_compactly(monkeypatch, tmp_path) 
     ),
   )
 
+
+def test_tools_lists_the_spilled_live_roster_by_first_sentence(monkeypatch, tmp_path) -> None:
+  context = _context()
+  _open(monkeypatch, context)
+  _spilled_roster(monkeypatch, tmp_path, ROSTER)
+
   assert mcp.tools(context, 'webview-1') == (
-    'browser_click(element?: string, target: string, button?: "left"|"right") — Click an element.\n'
-    '  element — Human-readable element description.\n'
-    '  target — Exact element reference.'
+    'browser_click — Click an element.\n'
+    'browser_fill_form — Fill multiple form fields\n'
+    'browser_close'
   )
+
+
+def test_tools_returns_the_named_tool_entry_whole(monkeypatch, tmp_path) -> None:
+  context = _context()
+  _open(monkeypatch, context)
+  _spilled_roster(monkeypatch, tmp_path, ROSTER)
+
+  assert json.loads(mcp.tools(context, 'webview-1', 'browser_fill_form')) == ROSTER[1]
+
+
+def test_tools_refuses_a_tool_outside_the_roster(monkeypatch, tmp_path) -> None:
+  context = _context()
+  _open(monkeypatch, context)
+  _spilled_roster(monkeypatch, tmp_path, ROSTER)
+
+  with pytest.raises(ValueError, match="webview webview-1 has no tool 'browser_unknown'"):
+    mcp.tools(context, 'webview-1', 'browser_unknown')
+
+
+def test_tools_refuses_a_roster_naming_a_tool_twice(monkeypatch, tmp_path) -> None:
+  context = _context()
+  _open(monkeypatch, context)
+  _spilled_roster(monkeypatch, tmp_path, [ROSTER[0], ROSTER[0]])
+
+  with pytest.raises(ValueError, match="names 'browser_click' twice"):
+    mcp.tools(context, 'webview-1')
 
 
 def test_share_returns_upload_path_and_directory_entries(monkeypatch, tmp_path) -> None:
