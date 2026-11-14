@@ -181,12 +181,13 @@ Every managed harness keeps its command watches in one store under the session s
 `do-ride` clears that store when a session starts, owns its producers for the session lifetime, and stops them in teardown.
 An in-process `bro run|chat` outside ride uses a temporary store owned by its `Runner` instead.
 
-A producer runs its shell command under the same process-group supervisor as a job.
+A producer runs its shell command under the same supervisor as a job.
 It is detached from the process that requested it, but exits when its session owner's liveness handle closes;
-stopping it terminates the whole process group.
+stopping it terminates the command and its descendants,
+and waits for any it may not kill to exit on their own, naming each in the watch's lines.
 It copies the command's output into the watch's log as it arrives, recording when each line's first byte arrived,
 and publishes each journal head the command sends once the output the command wrote before it is in the log.
-If the copy fails, the producer ends the command's whole process group.
+If the copy fails, the producer ends the command and its descendants.
 A job carries the same backstop from the process that started it.
 
 `take()` is the store's single reader.

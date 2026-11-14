@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Optional
 
-from bro import brash_policy
+from bro import brash_policy, job_supervisor
 from bro.base import spawn
 from bro.base.credential_environment import overlay
 from bro.base.text_window import BYTE_LIMIT, DEFAULT_LIMIT, apply_limit, format_size, take_head
@@ -152,6 +152,7 @@ class Job:
       self._returncode = returncode
       owner_write_fd = self._owner_write_fd
       self._owner_write_fd = -1
+      self._condition.notify_all()
     if owner_write_fd >= 0:
       os.close(owner_write_fd)
     self._signal_exit_if_finished()
@@ -318,10 +319,10 @@ class Job:
       )
 
   def kill(self, *, grace_seconds: float = TERM_GRACE_SECONDS) -> str:
-    """Terminate the process group and consume the exit record exactly once."""
+    """Terminate the job's processes and consume the exit record exactly once."""
     already_exited = self.process.poll() is not None
     if not already_exited:
-      spawn.terminate_group(self.process)
+      self.process.terminate()
       deadline = time.monotonic() + max(grace_seconds, 0.0)
       with self._condition:
         while self._returncode is None:
@@ -331,7 +332,7 @@ class Job:
           self._condition.wait(remaining)
         needs_kill = self._returncode is None
       if needs_kill:
-        spawn.kill_group(self.process)
+        self.process.send_signal(job_supervisor.KILL_SIGNAL)
     with self._condition:
       while self._returncode is None:
         self._condition.wait()
@@ -343,7 +344,7 @@ class Job:
 
   def close(self) -> None:
     if self.process.poll() is None:
-      spawn.kill_group(self.process)
+      self.process.send_signal(job_supervisor.KILL_SIGNAL)
     with self._condition:
       while self._returncode is None:
         self._condition.wait()

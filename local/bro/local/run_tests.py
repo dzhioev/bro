@@ -256,6 +256,7 @@ PYTEST_FILES = [
   'bro/procedures_test.py',
   'bro/watches_test.py',
   'bro/watch_delivery_test.py',
+  'bro/job_supervisor_test.py',
   'bro/datasources/current_time_test.py',
   'bro/datasources/file_test.py',
   'bro/datasources/man_test.py',

@@ -545,8 +545,9 @@ _WATCH_DESCRIPTION = (
 )
 
 _UNWATCH_DESCRIPTION = (
-  'stop the watch of the command line it names and its whole process group. the runtime-owned '
-  'session watch cannot be stopped through this tool.'
+  'stop the watch of the command line it names, ending the command and its descendants; one it may '
+  'not kill is named in the watch’s lines and waited for. the runtime-owned session watch cannot be '
+  'stopped through this tool.'
 )
 
 
