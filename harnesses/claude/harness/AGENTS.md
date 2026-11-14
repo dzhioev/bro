@@ -32,8 +32,10 @@ The package `bro.claude` imports nothing from its `__init__.py`.
   the `--tools` allowlist, the command gate on a finite command list, and the read gate without files;
   and model/effort/fast delivery, prompt, and the resumed session.
 - `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, the gated `Read` of a persona without files, and the command tools a finite command list gates;
-  `native_tools_llm_test.py` holds them against that release (`bro/reference/ride.md`, "The claude argv").
+  `native_tools_llm_test.py` holds them against that release (`reference.md`, "The claude argv").
 - `claude_auth.py` — the setup-token environment.
+- `reference.md` — the harness's reference, served as the `claude-harness` man page that `references.py` declares:
+  the harness's side of a managed session, beside the runtime's `bro/reference/ride.md`.
 - `provisioning.py` and `image/` — the Claude Code pin, Docker instructions for the binary, and standalone binary/checksum installation into a relocatable runtime.
   Moving the pin includes `run-tests --only llm`, which probes the model-input channels Claude Code records.
   `image/bump-claude-code.sh` updates the pin and remains checkout-only.
@@ -61,7 +63,7 @@ The package `bro.claude` imports nothing from its `__init__.py`.
   the command gate rewrites each Bash and Monitor call of a finite command list into a brash call,
   the read gate holds the `Read` of a persona without files to the session's own Claude folders,
   the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch, each watch's lines kept in the session's results store,
-  and the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`bro/reference/ride.md`, "Claude harness").
+  and the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`reference.md`, "Turn ends and watch delivery").
 - `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
   the current waiter's registration, the record of the rewakes waiters began with the latest one's delivery, the stand-down mark, the stdout mark that attributes a waiter's hook events,
   and the lock a waiter registers and takes a batch under and the runner settles a turn end under.

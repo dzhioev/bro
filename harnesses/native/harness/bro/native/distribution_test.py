@@ -44,6 +44,7 @@ _NATIVE_DOMAIN = {
   'bro/native/echo.py',
   'bro/native/echo_declaration.py',
   'bro/native/loop.py',
+  'bro/native/references.py',
   'bro/native/runner.py',
   'bro/run.py',
   'bro/trails/record/bro.py',

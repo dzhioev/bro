@@ -30,7 +30,9 @@ def test_repository_packaging_policy():
     siblings=[project.directory for project in PROJECTS],
     required_modules=(
       _REBUILD_MODULE_PATH,
+      'bro/claude/reference.md',
       'bro/local/bro-settings.toml',
+      'bro/native/reference.md',
       'bro/pdf/manual.md',
       'bro/reference/llm_providers.md',
       'bro/reference/mu.md',

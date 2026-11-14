@@ -22,7 +22,7 @@ A subpackage with a map of its own is pointed at, not described here.
 - `spells.py` — the spell store:
   the `SpellFile` value a `spells` declaration is made of, the selection of the spells a bro offers (conditions and `requires`),
   choice parameter declarations, schemas and call binding (validation and defaults),
-  and the reserved `spell` MCP namespace they are served under, with `bro::cast` and the native `bro::skill` loader (`bro/reference/ride.md`, "Bro spells and skills").
+  and the reserved `spell` MCP namespace they are served under, with `bro::cast` (`bro/reference/ride.md`, "Bro spells and skills") and the native `bro::skill` loader (`harnesses/native/harness/bro/native/reference.md`, "Tool groups").
 - `results.py` — the session's kept tool results:
   the store, one file per result under `<tag>-<n>` ids, whose numbers processes sharing its directory claim by exclusive link;
   the wrapper an assembly puts around every tool it serves;
@@ -170,7 +170,7 @@ It adds a `## Data sources` block describing each declared `DataSource`, the `##
 The composition renders with the registered harness object's own facts, the session's hold, the environment's credentials and the mission's initial usable bro targets, and the `#features` vocabulary.
 Construction loads no harness and renders no composed prompt.
 A managed Claude session runs under a prompt of its own;
-its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`bro/reference/ride.md`, "Auto-injected system prompt").
+its append prompt injects `persona` beside the shared prompts with the registered Claude harness (`harnesses/claude/harness/bro/claude/reference.md`, "The append prompt").
 `system_prompt_for(hold=…, harness=…)` adds the hold and session fragments to the selected harness's composed prompt:
 the fragments and hold text are described in `bro/prompts/AGENTS.md`, "Session fragments".
 

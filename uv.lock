@@ -503,9 +503,11 @@ version = "0.1.0"
 source = { editable = "local" }
 dependencies = [
     { name = "bro" },
+    { name = "bro-claude" },
     { name = "bro-deepseek" },
     { name = "bro-dev" },
     { name = "bro-filetypes" },
+    { name = "bro-native" },
     { name = "requests" },
     { name = "rich" },
     { name = "tiktoken" },
@@ -514,9 +516,11 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "bro", editable = "." },
+    { name = "bro-claude", editable = "harnesses/claude/harness" },
     { name = "bro-deepseek", editable = "llms/deepseek" },
     { name = "bro-dev", editable = "dev" },
     { name = "bro-filetypes", editable = "filetypes" },
+    { name = "bro-native", editable = "harnesses/native/harness" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "rich" },
     { name = "tiktoken", specifier = ">=0.14.0" },

@@ -40,7 +40,7 @@ The public verbs deliberately accept no runtime shaping flags (`--summon`, `--cr
 `bro run` uses the ask preset:
 live activity on stderr and one undecorated reply on stdout.
 Its omitted hold is `unattended`.
-Its one-shot process follows the ordered verdict in `bro.turn_end.settle` (`bro/reference/ride.md`, "Bro harness").
+Its one-shot process follows the ordered verdict in `bro.turn_end.settle` (`harnesses/native/harness/bro/native/reference.md`, "Watches and turn ends").
 
 `bro chat` defaults to `guided`.
 Its Textual mode uses the chat preset;

@@ -32,7 +32,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   A pump hands the inbox each watch batch as `watch_delivery` renders it.
   At each one-shot turn end, `Runner` applies the shared `bro.turn_end` rule:
   it reports running jobs as harness background work, posts notices through the inbox, ends by returning the last reply, and otherwise idles on the inbox until job or watch news, or a job's silence notice, wakes the next turn.
-  `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/reference/ride.md`, "Bro harness").
+  `bro chat` uses the same inbox to wake on watch lines while accepting a human's next message between turns (`bro/native/reference.md`, "Watches and turn ends").
   `llm.py` owns the live `LLM` ABC and diagnostic CLI, which requires complete recipe text in `--llm`.
   `loop.py` opens the recipe's wire through core's roster and owns the provider-neutral loop:
   tool execution, inbox drains, observer events, recorded steps, interrupted inputs and cumulative usage.
@@ -43,6 +43,8 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   Its `restore` and `seed_chain` delegate to the wire;
   the Responses client chains on the server and Chat rebuilds history locally.
   Wire clients encode tool results; recording keeps the original object or string.
+- `bro/native/reference.md` — the harness's reference, served as the `bro-harness` man page that `bro/native/references.py` declares:
+  the harness's side of a managed session and the in-process surfaces, beside the runtime's `bro/reference/ride.md`.
 - `bro/run.py` (`bro`) — lightweight CLI dispatcher shipped by `bro-native`:
   `bro run` and `bro chat` import the native launcher implementations only when selected;
   `bro list` and `bro show <name> [--system-prompt HOLD]` remain metadata paths (card renderer in core `show.py`);

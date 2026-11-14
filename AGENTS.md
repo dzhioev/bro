@@ -44,6 +44,7 @@ and `README.md` (the front page: the framework's features and limits, shown on o
 Reference docs for framework users live in `bro/reference/` and ship in the wheel:
 `extending.md` (declaring and registering a bro, adding a data source or a toolset, the entry-point groups), `conditions.md` and `template.md` (conditioning in code and in text), `ride.md` (the runtime), `dive_in.md`,
 `llm_providers.md` (adopting providers and models), `mu.md` (structured one-shot calls), and the permission pages (`permission_model.md`, `permissions.md`, `permissions_cheatsheet.md`).
+A harness's own reference ships in its distribution, as `reference.md` beside its code (`harnesses/native/harness/bro/native/`, `harnesses/claude/harness/bro/claude/`).
 `BOOTSTRAP.md` is the executable checklist for adopting the framework in another repository.
 
 ## Development

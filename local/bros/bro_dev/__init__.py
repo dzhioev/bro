@@ -1,6 +1,8 @@
+from bro.claude import references as claude_references
 from bro.datasources.references import conditions, dive_in, environment, ride, template
 from bro.local.prompts import FRAMEWORK_PROJECT
 from bro.mcp import man
+from bro.native import references as native_references
 from bros.dev import Dev
 
 AUTHORING = """\
@@ -21,6 +23,8 @@ class BroDev(Dev):
     man(template),
     man(conditions),
     man(ride),
+    man(native_references.harness),
+    man(claude_references.harness),
     man(dive_in),
   ]
   system_prompt = f'{FRAMEWORK_PROJECT}\n{AUTHORING}'
