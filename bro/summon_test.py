@@ -43,6 +43,7 @@ def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
   monkeypatch.setenv(BROKER_CHANNEL, 'tcp://token@127.0.0.1:1')
   for flags in (
     ['--timeout', '60'],
+    ['--timeout', 'none'],
     ['--hold', 'attended'],
     ['--harness', 'claude'],
     ['--llm', ':fable5'],
@@ -52,18 +53,20 @@ def test_manual_summon_refuses_launch_owned_flags(monkeypatch, caplog):
     ['--export'],
   ):
     assert summon.main(['summon', '--manual', *flags, 'dev', 'work']) == 1
-  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 8
+  assert sum('launch owns' in record.getMessage() for record in caplog.records) == 9
 
 
 @pytest.mark.asyncio
-async def test_detached_summon_waits_for_acceptance(monkeypatch, capsys):
+# the host's bro option mapping reads a null timeout as the unbounded `none`
+@pytest.mark.parametrize(('flag', 'wire'), [('42', 42), ('none', None)])
+async def test_detached_summon_waits_for_acceptance(monkeypatch, capsys, flag, wire):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(summon.main, ['summon', '--detach', '--timeout', '42', 'dev', 'work'])
+      asyncio.to_thread(summon.main, ['summon', '--detach', '--timeout', flag, 'dev', 'work'])
     )
     channel, request = await next_message(server)
     assert request.kind == 'launch'
-    assert request.args == {'type': 'bro', 'target': 'dev', 'prompt': 'work', 'timeout': 42.0}
+    assert request.args == {'type': 'bro', 'target': 'dev', 'prompt': 'work', 'timeout': wire}
     await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
 
     assert await task == 0
@@ -173,6 +176,20 @@ async def test_blocking_summon_relays_the_answer(monkeypatch, capsys, caplog):
     assert capsys.readouterr().out == 'answer\n'
     assert request.id in caplog.text
     assert 'T1' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unbounded_blocking_summon_relays_the_answer(monkeypatch, capsys):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(summon.main, ['summon', '--timeout', 'none', 'dev', 'work'])
+    )
+    channel, request = await next_message(server)
+    await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
+    await reply(server, channel, request, outcome='ok', value='answer')
+
+    assert await task == 0
+    assert capsys.readouterr().out == 'answer\n'
 
 
 @pytest.mark.asyncio

@@ -45,9 +45,11 @@ From the user's wording extract:
 
 Optional knobs normally follow only from the request:
 
-- `timeout` bounds the run in seconds and defaults to 1800.
-  Set it unprompted for an open-ended child, such as a full development cycle through review;
-  size that in hours, not minutes.
+- `timeout` bounds the run in seconds and defaults to 1800;
+  `none` runs the child without a bound.
+  Set it unprompted for an open-ended child:
+  hours, not minutes, for a long-running review or deployment,
+  and `none` for a child that waits on a person, such as a full development cycle through a human's approval.
 - `into` bases a started child on a git ref rather than this workspace's current `HEAD`.
   Uncommitted changes never transfer.
 - `hold` sets the child's user-involvement level and defaults to unattended.

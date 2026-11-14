@@ -10,6 +10,7 @@ from typing import ClassVar, Optional
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 import bro.bro as bro_module
 import bro.mcp as mcp
@@ -1635,6 +1636,27 @@ class TestSummonTool:
     assert calls[0][2]['step_id'] == 9
     assert calls[0][2]['index'] == 2
     assert calls[0][2]['passes'] == ['github+work']
+
+  @pytest.mark.asyncio
+  @pytest.mark.parametrize('harness', ['bro', 'claude'])
+  async def test_summon_takes_a_run_without_a_time_limit_on_either_harness(
+    self, monkeypatch, harness
+  ):
+    from bro import summon as summon_module
+
+    monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
+    timeouts = []
+    monkeypatch.setattr(
+      summon_module,
+      'summon_detached',
+      lambda target, prompt, **kwargs: timeouts.append(kwargs['timeout']) or 'REQ-1',
+    )
+    tool = await _find_tool(EchoBro(), 'summon', harness=harness)
+
+    await tool.call({'target': 'dev', 'prompt': 'work', 'timeout': 'none'})
+    with pytest.raises(ValidationError, match='timeout'):
+      await tool.call({'target': 'dev', 'prompt': 'work', 'timeout': 'forever'})
+    assert timeouts == ['none']
 
   @pytest.mark.asyncio
   @pytest.mark.parametrize('harness', ['bro', 'claude'])
