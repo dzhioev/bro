@@ -1078,7 +1078,7 @@ underneath it are two client surfaces over the same request, each split into the
 - `summon <target> <prompt>` and `quest <verb> <quest-id>`, for Bash-capable sessions.
   `summon` is blocking by default (quest id + started trail id on stderr, answer on stdout, non-zero exit with the reason on failure);
   `--start` / `--join` / `--boxed` / `--unboxed` select placement.
-  The forwarded fields are `--timeout <s>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--limit <entry>` / `--pass <kind>+<instance>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
+  The forwarded fields are `--timeout <s|none>` / `--into <ref>` / `--hold <level>` / `--grant <name>` / `--revoke <name>` / `--limit <entry>` / `--pass <kind>+<instance>` / `--share <ref>` / `--talk <right>` / `--harness <name>` plus the LLM flags;
   an omitted hold leaves the child's unattended default.
   `--share` hands the child read access to an artifact ref — see "Sharing artifacts between peers";
   `--export` starts it with `bro.export`, which lets it publish refs to the host.

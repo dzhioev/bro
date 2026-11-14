@@ -261,10 +261,9 @@ Before starting stage 1, take to the user the material objections, the open ques
 
 ### 3 — stages
 
-**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` 28800 · grants per delivery plan
+**Summon:** `into` the landing's integration branch, or the commit the previous landing landed for the stage that creates that branch · `timeout` `none` · grants per delivery plan
 
-The long timeout covers the PR review a phase ends on:
-it idles on human latency, and the summon default kills it mid-watch.
+A phase ends on a PR review that idles on human latency, so it runs without a bound.
 
 Run the landing's stages **in order, one at a time**:
 each stage builds on the branch state the previous one left.
@@ -320,7 +319,7 @@ Route failure to a fresh author with the plan, earlier head/base/verdict and fai
 
 ### 4 — integrate
 
-**Summon:** `into` the landing's integration branch · `timeout` 28800 · grants per delivery plan
+**Summon:** `into` the landing's integration branch · `timeout` `none` · grants per delivery plan
 
 Once every stage task of the landing is done, tell the user what the last step needs from them:
 where the default branch is protected, the approving review that lands the integration PR is theirs to give, and nobody in the run can supply it.
@@ -331,7 +330,7 @@ Then summon:
 
 Outcome:
 the landing on the default branch as a single commit.
-A phase whose time runs out waiting for that approval leaves the pull request open:
+A phase that fails after opening its pull request leaves it open:
 re-fire it on that PR through [[resume pr]] rather than opening a second one.
 
 ### 5 — roll out

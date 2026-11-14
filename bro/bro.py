@@ -192,8 +192,9 @@ _SUMMON_DESCRIPTION = (
   'summon another bro with a self-contained `prompt`, returning its quest id after host '
   'acceptance. `target` names the bro; the host checks the use rule for the start and '
   'every option, the gift rule, and the summon allowance. The banner reports your live authority. '
-  f'`timeout` bounds the run in whole seconds (default {summon.DEFAULT_TIMEOUT}); size it '
-  'in hours for a long-running review or deployment. `into` bases a new workspace on '
+  f'`timeout` bounds the run in whole seconds (default {summon.DEFAULT_TIMEOUT}), or `none` '
+  'for no limit; size it in hours for a long-running review or deployment, and `none` for a '
+  'run that waits on a person. `into` bases a new workspace on '
   'a git ref instead of your current HEAD; uncommitted changes never transfer. `hold` '
   'sets the child’s user-involvement level. `harness` selects its installed driving loop, '
   'defaulting to the child’s configured `summon-harness`, else its `harness`. `llm` accepts complete '
@@ -315,7 +316,7 @@ async def _run_summon_request(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[int],
+  timeout: Optional[summon.Timeout],
   into: Optional[str],
   hold: Optional[str],
   grant: Optional[list[str]],
@@ -396,7 +397,7 @@ def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.T
   async def _summon(
     target: str,
     prompt: str,
-    timeout: Optional[int] = None,
+    timeout: Optional[summon.Timeout] = None,
     into: Optional[str] = None,
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,

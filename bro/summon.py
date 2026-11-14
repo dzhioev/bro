@@ -10,8 +10,8 @@ correlated message is the host's ``accepted`` mark; an immediate result is
 interpreted as the refusal or launch failure it carries.
 A blocking wait bounds silence rather than the run: after silence it reads the
 quest's journal record, returning a retained answer or an open child question,
-and otherwise resumes waiting while the host-owned supervisor deadline keeps the
-quest live.
+and otherwise resumes waiting; the run's own bound, when it has one, is the
+host-owned supervisor's to enforce.
 
 Unlike the substrate CLI, an unset ``BROKER_CHANNEL`` is an error.
 Broker imports stay deferred so importing summon constants does not pull in the
@@ -22,7 +22,7 @@ import json
 import os
 import shlex
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional
 
 import bro.base.args as base_args
 from bro import mission, quest
@@ -48,6 +48,7 @@ RUNTIME_ENV = 'RIDE_RUNTIME'
 # request-lifecycle bound for a summoned child — sized so the flagship deploy
 # workload survives the default; the substrate's generic 600s default is untouched
 DEFAULT_TIMEOUT = 1800
+Timeout = int | Literal['none']
 DEFAULT_TALK = frozenset({'worker.say'})
 HOLD_HELP = "the child's user-involvement level; omitted lets the child use its unattended default"
 MANUAL_HELP = (
@@ -193,7 +194,7 @@ def _payload(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[int] = None,
+  timeout: Optional[Timeout] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   step_id: Optional[int] = None,
@@ -212,7 +213,7 @@ def _payload(
 ) -> dict[str, Any]:
   payload: dict[str, Any] = {'target': target, 'prompt': prompt}
   if timeout is not None:
-    payload['timeout'] = timeout
+    payload['timeout'] = None if timeout == 'none' else timeout
   if into is not None:
     payload['into'] = into
   if hold is not None:
@@ -253,6 +254,11 @@ def _send_summon(client: 'Client', payload: dict[str, Any]) -> 'Message':
     return client.send(LAUNCH, {'type': BRO, **payload})
   except ProtocolError:
     raise QuestError('prompt too large; share an artifact instead') from None
+
+
+def _silence_bound(timeout: Optional[Timeout]) -> int:
+  """the wire silence a blocking wait rides out before it reads the quest's journal record"""
+  return timeout if isinstance(timeout, int) else DEFAULT_TIMEOUT
 
 
 def _await_answer(
@@ -317,7 +323,7 @@ def summon_and_wait(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[int] = None,
+  timeout: Optional[Timeout] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
@@ -363,7 +369,7 @@ def summon_and_wait(
     return _await_answer(
       connection,
       request,
-      timeout=timeout if timeout is not None else DEFAULT_TIMEOUT,
+      timeout=_silence_bound(timeout),
       silence_timeout=silence_timeout,
     )
 
@@ -391,7 +397,7 @@ def summon_detached(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[int] = None,
+  timeout: Optional[Timeout] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
@@ -470,7 +476,7 @@ def relay_summon(
   target: str,
   prompt: str,
   *,
-  timeout: Optional[int] = None,
+  timeout: Optional[Timeout] = None,
   into: Optional[str] = None,
   hold: Optional[str] = None,
   grant: Optional[list[str]] = None,
@@ -528,12 +534,11 @@ def relay_summon(
         log.error('%s', e)
         return 1
       log.info('have the user run: %s', manual_launch_command(request.request_id, target))
-    effective = timeout if timeout is not None else DEFAULT_TIMEOUT
     return _relay(
       lambda: _await_answer(
         client,
         request,
-        timeout=effective,
+        timeout=_silence_bound(timeout),
         on_started=lambda trail_id: log.info('summon started: trail %s', trail_id),
       )
     )
@@ -559,6 +564,10 @@ def _relay(await_answer: Callable[[], str | quest.Question]) -> int:
     return quest.QUESTION_EXIT_CODE
   print(result)
   return 0
+
+
+def _timeout(value: str) -> Timeout:
+  return 'none' if value == 'none' else int(value)
 
 
 def main(argv: list[str]) -> Optional[int]:
@@ -591,9 +600,10 @@ def main(argv: list[str]) -> Optional[int]:
   parser.add_argument('--harness', default=None, help=HARNESS_HELP)
   parser.add_argument(
     '--timeout',
-    type=int,
-    metavar='SECONDS',
-    help=f'seconds before the host kills the child (default: {DEFAULT_TIMEOUT:.0f})',
+    type=_timeout,
+    metavar='SECONDS|none',
+    help='seconds before the host kills the child, or `none` for no limit '
+    f'(default: {DEFAULT_TIMEOUT:.0f})',
   )
   placement = parser.add_mutually_exclusive_group()
   placement.add_argument(
