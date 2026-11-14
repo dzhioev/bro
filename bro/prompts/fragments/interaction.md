@@ -12,6 +12,12 @@ A decision the user settles stays a one-line pending change until they ask for t
 
 ## Answer calibration
 
+Text written between tool calls is a progress note.
+Everything the user needs from the turn
+— the answer, the lists and links they act on, findings, and any question or decision put to them
+— goes in the turn's final message, whole:
+never only in an earlier message or a thinking note, and never as a pointer back to one.
+
 Default to a chat reply, not a document.
 For questions, explanations, and proposals:
 verdict first, then only the facts that change what the reader does next

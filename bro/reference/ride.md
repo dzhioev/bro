@@ -917,6 +917,8 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the pinned binary it runs)
   and its telemetry (`DISABLE_TELEMETRY`, which also leaves the feature flags Claude Code's server serves, fetched or cached, without effect, so a session runs the pinned release's own defaults;
   `harnesses/claude/harness/bro/claude/remote_flags_llm_test.py` holds that against the pinned release),
+  and setting the text of the reminder Claude Code adds after a run of silent turns (`CLAUDE_CODE_SILENT_TURN_REMINDER_TEXT`, pointing what the answer needs at the turn's final message rather than a thinking note;
+  `harnesses/claude/harness/bro/claude/silent_turn_reminder_llm_test.py` holds it against the pinned release),
   and `skipDangerousModePermissionPrompt: true`
   — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (boxed sessions only; an unboxed clone keeps the dialog).
   Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.

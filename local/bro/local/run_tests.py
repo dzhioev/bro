@@ -526,6 +526,7 @@ LLM_PYTEST_FILES = [
   'harnesses/claude/harness/bro/claude/command_gate_llm_test.py',
   'harnesses/claude/harness/bro/claude/read_gate_llm_test.py',
   'harnesses/claude/harness/bro/claude/remote_flags_llm_test.py',
+  'harnesses/claude/harness/bro/claude/silent_turn_reminder_llm_test.py',
 ]
 # conformance probes: each launches real sessions on every installed harness under
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like
