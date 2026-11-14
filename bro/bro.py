@@ -76,7 +76,8 @@ def _render_spells(*, include_cast: bool) -> str:
   run_instruction = (
     'call `bro::cast` with the enclosed text and follow the returned instructions. An error '
     'result is relayed as it came back — the spell is not carried here, the command is '
-    'ambiguous, or an argument is missing — and no other spell stands in for it'
+    'ambiguous, or an argument is missing — and nothing stands in for it: no other spell, and '
+    'no doing the work without one'
     if include_cast
     else "call the named spell's own tool"
   )
