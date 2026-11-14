@@ -146,8 +146,9 @@ def read_subject(workspace: Workspace) -> Optional[str]:
   return None
 
 
-# the session ~/.claude/settings.json, written fresh each launch: UX prefs and
-# the session-behavior opt-outs, nothing machine-specific.
+# the session ~/.claude/settings.json, written fresh each launch: UX prefs, the
+# session-behavior opt-outs and the silent-turn reminder's text, nothing
+# machine-specific.
 _SESSION_SETTINGS_JSON: dict = {
   'spinnerVerbs': {'mode': 'replace', 'verbs': ['Thinking']},
   'spinnerTipsEnabled': False,
@@ -160,7 +161,15 @@ _SESSION_SETTINGS_JSON: dict = {
   'cleanupPeriodDays': 36500,
   # claude's own default is on
   'autoMemoryEnabled': False,
-  'env': {'DISABLE_AUTOUPDATER': '1', 'DISABLE_TELEMETRY': '1'},
+  'env': {
+    'DISABLE_AUTOUPDATER': '1',
+    'DISABLE_TELEMETRY': '1',
+    'CLAUDE_CODE_SILENT_TURN_REMINDER_TEXT': (
+      "The user hasn't heard from you in a while. If something changed, say it in one line of"
+      ' text and carry on; what the answer needs — lists, links, findings, questions for them —'
+      ' goes in your final message.'
+    ),
+  },
 }
 
 # the explicit per-session ~/.claude.json base: no onboarding prompts, no
