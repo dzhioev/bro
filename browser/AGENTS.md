@@ -48,7 +48,8 @@ without it the browser uses `browser_find`, targeted snapshots, and `artifact::r
 ## Owner toolset
 
 The `webview` toolset is the typed owner surface over the mission wire.
-`open` retains the launch options and initial shares, `command` bounds reply text while preserving the whole text by artifact ref, and `tools` condenses the live Playwright roster.
+`open` retains the launch options and initial shares, `command` bounds reply text while preserving the whole text by artifact ref,
+and `tools` lists the live Playwright roster by name and first sentence, or returns one tool's roster entry with its input schema.
 `share` hands the webview a ref the owner fetched and returns the worker-side upload path, `reopen` repeats every retained option and share before restoring the last reported page URL, and `close` returns the terminal outcome.
 
 ## Owner command

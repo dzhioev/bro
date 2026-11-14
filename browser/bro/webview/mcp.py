@@ -292,7 +292,10 @@ def command(
   webview: Annotated[str, _WEBVIEW_FIELD],
   tool: Annotated[str, Field(description='Playwright tool name')],
   arguments: Annotated[
-    Optional[dict[str, Any]], Field(description='Playwright tool arguments')
+    Optional[dict[str, Any]],
+    Field(
+      description="Playwright tool arguments, matching the tool's input schema from webview::tools"
+    ),
   ] = None,
 ) -> str:
   record = context.state.get(webview)
@@ -303,24 +306,6 @@ def command(
   return rendered
 
 
-def _schema_type(schema: object) -> str:
-  if not isinstance(schema, dict):
-    return 'any'
-  enum = schema.get('enum')
-  if isinstance(enum, list) and len(enum) > 0:
-    return '|'.join(json.dumps(value, ensure_ascii=False) for value in enum)
-  alternatives = schema.get('anyOf')
-  if isinstance(alternatives, list):
-    values = [_schema_type(value) for value in alternatives]
-    return '|'.join(dict.fromkeys(values))
-  kind = schema.get('type')
-  if kind == 'array':
-    return f'{_schema_type(schema.get("items"))}[]'
-  if isinstance(kind, str):
-    return kind
-  return 'any'
-
-
 def _first_sentence(description: object) -> str:
   if not isinstance(description, str):
     return ''
@@ -328,50 +313,43 @@ def _first_sentence(description: object) -> str:
   return sentence
 
 
-def _render_tools(text: str) -> str:
+def _roster(text: str) -> dict[str, dict[str, Any]]:
   try:
     roster = json.loads(text)
   except json.JSONDecodeError as error:
     raise ValueError(f'webview tool roster is not valid JSON: {error}') from error
   if not isinstance(roster, list) or not all(isinstance(entry, dict) for entry in roster):
     raise ValueError('webview tool roster is not a list of objects')
-  lines: list[str] = []
+  entries: dict[str, dict[str, Any]] = {}
   for entry in roster:
     name = entry.get('name')
-    schema = entry.get('inputSchema')
-    if not isinstance(name, str) or not isinstance(schema, dict):
+    if not isinstance(name, str) or not isinstance(entry.get('inputSchema'), dict):
       raise ValueError(f'webview tool roster entry is malformed: {entry!r}')
-    properties = schema.get('properties', {})
-    required = schema.get('required', [])
-    if (
-      not isinstance(properties, dict)
-      or not isinstance(required, list)
-      or not all(isinstance(value, str) for value in required)
-    ):
-      raise ValueError(f'webview tool parameters are malformed for {name!r}')
-    parameters = ', '.join(
-      f'{parameter}{"" if parameter in required else "?"}: {_schema_type(parameter_schema)}'
-      for parameter, parameter_schema in properties.items()
-    )
+    if name in entries:
+      raise ValueError(f'webview tool roster names {name!r} twice')
+    entries[name] = entry
+  return entries
+
+
+def _render_roster(roster: dict[str, dict[str, Any]]) -> str:
+  lines: list[str] = []
+  for name, entry in roster.items():
     sentence = _first_sentence(entry.get('description'))
-    suffix = '' if len(sentence) == 0 else f' — {sentence}'
-    lines.append(f'{name}({parameters}){suffix}')
-    for parameter, parameter_schema in properties.items():
-      described = (
-        _first_sentence(parameter_schema.get('description'))
-        if isinstance(parameter_schema, dict)
-        else ''
-      )
-      if len(described) > 0:
-        lines.append(f'  {parameter} — {described}')
+    lines.append(name if len(sentence) == 0 else f'{name} — {sentence}')
   return '\n'.join(lines)
 
 
 @toolset.tool(
-  'list the live Playwright tools compactly as each tool name, its parameters, and the first '
-  'sentence of its description, followed by the first sentence of each described parameter.'
+  'list the live Playwright tools, each as its name and the first sentence of its description; '
+  'with tool, return that tool as JSON with its full description and input schema.'
 )
-def tools(context: Context[Webviews], webview: Annotated[str, _WEBVIEW_FIELD]) -> str:
+def tools(
+  context: Context[Webviews],
+  webview: Annotated[str, _WEBVIEW_FIELD],
+  tool: Annotated[
+    Optional[str], Field(description='Playwright tool to describe in full; omit to list them all')
+  ] = None,
+) -> str:
   context.state.get(webview)
   payload = _spilled_reply(_mission_answer(webview, {'webview': 'tools'}))
   error = payload.get('error')
@@ -393,7 +371,13 @@ def tools(context: Context[Webviews], webview: Annotated[str, _WEBVIEW_FIELD]) -
     text = payload.get('text')
     if not isinstance(text, str):
       raise ValueError(f'webview returned no tool roster: {payload}')
-  return _render_tools(text)
+  roster = _roster(text)
+  if tool is None:
+    return _render_roster(roster)
+  entry = roster.get(tool)
+  if entry is None:
+    raise ValueError(f'webview {webview} has no tool {tool!r}')
+  return json.dumps(entry, ensure_ascii=False, separators=(',', ':'))
 
 
 @toolset.tool(

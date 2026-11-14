@@ -24,6 +24,7 @@ where no one can be asked, `bro::raise` with the refusal and the rewording.
 ## Method
 
 Open a webview and act through `webview::command`, one call at a time.
+Before a Playwright tool's first call, read its input schema with `webview::tools` naming the tool.
 Understand pages with `browser::look`; never read a whole snapshot into your own context.
 For exact detail use `browser_find`, a targeted snapshot, or the ref of a cut reply, fetched with `artifact::fetch` and read with `artifact::read`, `artifact::grep`, or `browser::look`.
 Put the goal, the last action, and the detail you need into every `look` question, because its reader starts blank.
