@@ -36,8 +36,8 @@ from bro.trails.display import (
 
 FORK_HELP = (
   'fork a recorded conversation into a new trail: pass any trail id, or omit the value to fork '
-  "the bro's newest recorded call. prior exchanges are rendered as history and the fork uses "
-  "the installation's configured LLM recipe"
+  "the bro's newest recorded call. prior exchanges are rendered as history and the fork runs "
+  "the trail's recorded LLM recipe unless --llm replaces it"
 )
 
 INTERRUPTED_NOTICE = '⨯ interrupted'
