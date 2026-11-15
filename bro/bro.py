@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal, Optional, Protocol, cast
+from typing import Annotated, Any, ClassVar, Literal, Optional, Protocol, cast
+
+from pydantic import WithJsonSchema
 
 import bro.llm.mcp as llm_mcp
 import bro.mcp as mcp
@@ -394,11 +396,17 @@ async def _run_summon_request(
   return {'state': 'accepted', 'quest_id': quest_id}
 
 
+# Claude Code on its own defaults, which a managed session keeps, delivers an argument
+# as text where its schema admits a string and can deliver `none` as null where it
+# admits null, so the advertised timeout admits neither and an omitted one is the default
+_SUMMON_TIMEOUT_SCHEMA = WithJsonSchema({'anyOf': [{'type': 'integer'}, {'const': 'none'}]})
+
+
 def _summon_tool(variables: Variables, live_run: Optional[LiveRun]) -> llm_mcp.Tool:
   async def _summon(
     target: str,
     prompt: str,
-    timeout: Optional[summon.Timeout] = None,
+    timeout: Annotated[Optional[summon.Timeout], _SUMMON_TIMEOUT_SCHEMA] = None,
     into: Optional[str] = None,
     hold: Optional[str] = None,
     grant: Optional[list[str]] = None,
