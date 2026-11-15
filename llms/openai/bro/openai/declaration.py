@@ -11,7 +11,7 @@ from typing import Any, ClassVar, Literal, Optional, get_args
 import bro.llm.llm as llm_llm
 from bro.llm import pricing
 
-ServiceTier = Literal['auto', 'default', 'flex', 'priority']
+ServiceTier = Literal['auto', 'default', 'flex', 'priority', 'fast', 'ultrafast']
 _VALID_SERVICE_TIERS: frozenset[str] = frozenset(get_args(ServiceTier))
 # local mirror of the Literal inside openai's `ReasoningEffort` (which the SDK
 # wraps in Optional); spelled out so spec validation needs no openai import. a
@@ -217,12 +217,12 @@ def _rates(
 
 # Rates are copied from the vendor page and updated by hand in a PR together
 # with this date. Pricing never fetches vendor data at run time. The page's Fast
-# tier is the one a response reports as `priority`. The cache-write rate is the
-# page's 30m write: the client requests no longer cache retention, and usage
-# does not split cache writes by retention.
+# tier is the one a response reports as `priority` or `fast`. The cache-write
+# rate is the page's 30m write: the client requests no longer cache retention,
+# and usage does not split cache writes by retention.
 PRICE_TABLE = PriceTable(
   source='https://developers.openai.com/api/docs/pricing',
-  as_of=date(2026, 11, 12),
+  as_of=date(2026, 11, 15),
   models=MappingProxyType(
     {
       'gpt-6-astra': ModelRates(
@@ -240,6 +240,10 @@ PRICE_TABLE = PriceTable(
             'priority': ContextRates(
               short=_rates('20.00', '2.00', '25.00', '100.00'),
               long=_rates('40.00', '4.00', '50.00', '150.00'),
+            ),
+            'ultrafast': ContextRates(
+              short=_rates('60.00', '6.00', '75.00', '300.00'),
+              long=_rates('120.00', '12.00', '150.00', '450.00'),
             ),
           }
         ),
@@ -259,6 +263,29 @@ PRICE_TABLE = PriceTable(
             'priority': ContextRates(
               short=_rates('4.00', '0.20', '5.00', '20.00'),
               long=_rates('8.00', '0.40', '10.00', '30.00'),
+            ),
+            'ultrafast': ContextRates(
+              short=_rates('12.00', '0.60', '15.00', '60.00'),
+              long=_rates('24.00', '1.20', '30.00', '90.00'),
+            ),
+          }
+        ),
+      ),
+      'gpt-6.1-terra': ModelRates(
+        long_context_threshold=_LONG_CONTEXT_THRESHOLD,
+        service_tiers=MappingProxyType(
+          {
+            'standard': ContextRates(
+              short=_rates('1.00', '0.05', '1.25', '5.00'),
+              long=_rates('2.00', '0.10', '2.50', '7.50'),
+            ),
+            'flex': ContextRates(
+              short=_rates('0.50', '0.025', '0.625', '2.50'),
+              long=_rates('1.00', '0.05', '1.25', '3.75'),
+            ),
+            'priority': ContextRates(
+              short=_rates('2.00', '0.10', '2.50', '10.00'),
+              long=_rates('4.00', '0.20', '5.00', '15.00'),
             ),
           }
         ),
@@ -671,7 +698,7 @@ PRICE_TABLE = PriceTable(
           }
         ),
       ),
-      'gpt-5.5-cyber': ModelRates(
+      'gpt-5.5-cyber-preview': ModelRates(
         service_tiers=MappingProxyType(
           {
             'standard': ContextRates(_rates('12.50', '1.25', None, '75.00')),
@@ -711,6 +738,7 @@ _PRICED_SERVICE_TIERS: dict[Optional[str], str] = {
   'flex': 'flex',
   'fast': 'priority',
   'priority': 'priority',
+  'ultrafast': 'ultrafast',
 }
 
 
@@ -771,8 +799,10 @@ def price(
 class Recipe(llm_llm.Recipe):
   """spec for the OpenAI Responses API.
 
-  service_tier='priority' is the analog of Claude Code's /fast — same model
-  and quality, higher per-token price, faster and more consistent generation.
+  service_tier='fast' (or its older spelling 'priority') is the analog of
+  Claude Code's /fast — same model and quality, higher per-token price, faster
+  and more consistent generation. 'ultrafast' is faster and pricier still, on
+  the models that offer it.
 
   compact_threshold (opt-in) bounds context growth in long runs: the native
   client passes it as server-side context-management policy. None (the default)
@@ -786,10 +816,10 @@ class Recipe(llm_llm.Recipe):
 
   TYPE: ClassVar[str] = 'openai'
   WIRE: ClassVar[str] = 'responses'
-  # OpenAI model pages, images guide and file-inputs guide, read 2026-10-31.
+  # OpenAI model pages, images guide and file-inputs guide, read 2026-11-15.
   # https://developers.openai.com/api/docs/guides/file-inputs
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = dict.fromkeys(
-    ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-astra', 'gpt-5.6-terra', 'gpt-5.6-luna'],
     frozenset(
       [
         'application/csv',
@@ -956,7 +986,7 @@ class Recipe(llm_llm.Recipe):
       'gpt-5.4-nano',
       'gpt-5.4-pro',
       'gpt-5.5',
-      'gpt-5.5-cyber',
+      'gpt-5.5-cyber-preview',
       'gpt-5.5-pro',
       'gpt-5.6-cyber',
       'gpt-5.6-sol',

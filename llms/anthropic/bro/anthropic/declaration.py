@@ -175,9 +175,25 @@ def price_table_from_content(source: str, as_of: str, models: Mapping[str, Any])
 # speed and bills it at standard rates.
 PRICE_TABLE = PriceTable(
   source='https://platform.claude.com/docs/en/about-claude/pricing',
-  as_of=date(2026, 11, 12),
+  as_of=date(2026, 11, 15),
   models=MappingProxyType(
     {
+      'claude-fable-5-2': ModelRates(
+        TokenRates(
+          input=Decimal('8.00'),
+          cache_write_5m=Decimal('10.00'),
+          cache_write_1h=Decimal('16.00'),
+          cache_read=Decimal('0.20'),
+          output=Decimal('40.00'),
+        ),
+        fast=TokenRates(
+          input=Decimal('16.00'),
+          cache_write_5m=Decimal('20.00'),
+          cache_write_1h=Decimal('32.00'),
+          cache_read=Decimal('0.40'),
+          output=Decimal('80.00'),
+        ),
+      ),
       'claude-fable-5-1': ModelRates(
         TokenRates(
           input=Decimal('10.00'),
@@ -471,7 +487,7 @@ class Recipe(llm_llm.Recipe):
 
   TYPE: ClassVar[str] = 'anthropic'
   WIRE: ClassVar[str] = 'messages'
-  # Anthropic vision and PDF-support guides, read 2026-10-31.
+  # Anthropic vision and PDF-support guides, read 2026-11-15.
   MODEL_INPUTS: ClassVar[Mapping[str, frozenset[str]]] = dict.fromkeys(
     [
       'claude-opus-5',
@@ -480,6 +496,7 @@ class Recipe(llm_llm.Recipe):
       'claude-sonnet-5-5',
       'claude-fable-5',
       'claude-fable-5-1',
+      'claude-fable-5-2',
       'claude-haiku-4-5-20251001',
       'claude-haiku-5-5',
     ],

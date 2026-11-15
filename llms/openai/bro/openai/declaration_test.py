@@ -85,6 +85,12 @@ class TestRecipe:
     openai_values = get_args(get_args(openai.types.shared.ReasoningEffort)[0])
     assert frozenset(get_args(openai_llm.ReasoningEffort)) == frozenset(openai_values)
 
+  def test_service_tier_values_are_ones_openai_accepts(self):
+    import openai.types.responses
+
+    openai_values = get_args(get_args(openai.types.responses.ServiceTier)[0])
+    assert frozenset(get_args(openai_llm.ServiceTier)) <= frozenset(openai_values)
+
   def test_resolving_recipe_does_not_import_native_engine_or_sdk(self):
     script = (
       'import sys; '
@@ -235,6 +241,7 @@ class TestPricingVocabulary:
         standard={'short': _rates('1', cached_input='1', cache_write='1'), 'long': None},
         flex={'short': _rates('2'), 'long': None},
         priority={'short': _rates('3'), 'long': None},
+        ultrafast={'short': _rates('4'), 'long': None},
       ),
       'model-2024-05-13': _tiers(standard={'short': _rates('4'), 'long': None}),
       'tiered': {
@@ -249,7 +256,15 @@ class TestPricingVocabulary:
 
   @pytest.mark.parametrize(
     'service_tier,rate',
-    [(None, 1), ('auto', 1), ('default', 1), ('flex', 2), ('fast', 3), ('priority', 3)],
+    [
+      (None, 1),
+      ('auto', 1),
+      ('default', 1),
+      ('flex', 2),
+      ('fast', 3),
+      ('priority', 3),
+      ('ultrafast', 4),
+    ],
   )
   def test_each_reported_service_tier_pays_its_tier_rates(self, service_tier, rate):
     usage = {'input_tokens': 1, 'output_tokens': 1}
