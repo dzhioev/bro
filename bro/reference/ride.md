@@ -339,9 +339,9 @@ A directory under the store that records no workspace is ignored by enumeration,
   workspace.json      what the workspace is (below)
   tree/                empty when detached; otherwise an independent clone
   lock                the session lock ("One session per workspace")
-  exit                how the last session ended (above)
+  exit                how the last session ended (below)
   resume.json         the spec `ride resume` relaunches ("Lifecycle verbs")
-  session.log         the launching process's mid-session output ("The session host log")
+  session.log         the launching process's mid-session output ("The broker channel")
   session/            what the running session records about itself:
     current-trail.json            the trail the session records into ("Summoning another bro")
     session-recorder-health.json  the recording health signal ("Session recording")
@@ -401,8 +401,13 @@ The one deliberate exception to all of this is the launch audit, under `<runtime
   workspace removal deletes only the records and never this directory.
 
 A detached record is `{"isolation": "boxed", "throwaway": false, "tree": null}`.
+
+`exit` records how the workspace's last session ended.
+The session's supervisor clears it when the session starts and, once the session ends, writes the exit code there, or `killed` for a child the host killed;
+a session that dies before its supervisor writes, such as one under a crashed launcher, leaves no record.
 A managed detached tree is clean exactly when it is empty;
-an attached or external-tree workspace uses the recorded-session-end clean rule.
+an attached or external-tree workspace is clean only when `exit` records `0`,
+so a failed, killed, or unrecorded session keeps it for inspection and recovery.
 Removing an attached workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
 
 ## The launch stack
