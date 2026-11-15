@@ -519,6 +519,7 @@ LLM_PYTEST_FILES = [
   'harnesses/claude/harness/bro/claude/interrupt_llm_test.py',
   'harnesses/claude/harness/bro/claude/session_end_llm_test.py',
   'harnesses/claude/harness/bro/claude/mcp_timeout_llm_test.py',
+  'harnesses/claude/harness/bro/claude/summon_timeout_llm_test.py',
   'harnesses/claude/harness/bro/claude/project_dir_llm_test.py',
   'harnesses/claude/harness/bro/claude/shell_prefix_llm_test.py',
   'harnesses/claude/harness/bro/claude/watch_waiter_llm_test.py',
