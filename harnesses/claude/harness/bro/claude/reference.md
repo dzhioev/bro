@@ -245,6 +245,7 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   — left to guess, it reports fast mode as disabled by an organization.
 - `claude/settings.json` — constructed fresh each launch (not mounted from the host), holding only UX prefs (spinner verbs, reduced motion, feedback-survey opt-out),
   a `cleanupPeriodDays` pin keeping transcripts forever (they back the session recording), an `autoMemoryEnabled: false` opt-out of claude's default-on auto-memory,
+  an `idleCompaction: false` opt-out of claude's default-on compaction of a long conversation left idle, which would summarize a session's context away while it waits on a watch or a summon,
   an `env` block turning claude's auto-updater off (`DISABLE_AUTOUPDATER`, so no session replaces the pinned binary it runs)
   and its telemetry (`DISABLE_TELEMETRY`, which also leaves the feature flags Claude Code's server serves, fetched or cached, without effect, so a session runs the pinned release's own defaults;
   `harnesses/claude/harness/bro/claude/remote_flags_llm_test.py` holds that against the pinned release),
