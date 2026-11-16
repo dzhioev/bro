@@ -7,6 +7,8 @@ from bro.broker.brotocol import Message
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION
 from bro.broker.transport import ClientTransport
+from bro.llm.tracker import EndReason
+from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.run_lifecycle import MAX_ANSWER_BYTES, RunLifecycle
 
 
@@ -65,13 +67,45 @@ class TestRunLifecycle:
     assert message.request == 'X'
     assert message.payload == {'transition': 'trail', 'trail_id': 'trail-1'}
 
-  def test_completed_truncates_an_oversize_answer_with_its_trail(self):
+  @pytest.mark.parametrize('end_reason', ['ok', 'raised', 'error'])
+  @pytest.mark.parametrize('session', [False, True])
+  @pytest.mark.parametrize('published', [False, True])
+  @pytest.mark.parametrize('character', ['a', '€', '😀'])
+  def test_completed_bounds_results_with_the_current_pointer(
+    self, monkeypatch, tmp_path, end_reason: EndReason, session, published, character
+  ):
+    if session:
+      monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
     channel, transport = _make_channel()
-    channel.trail('trail-1')
-    channel.completed('a' * (MAX_ANSWER_BYTES + 1), 'ok')
-    answer = transport.sent[-1].payload['value']
+    trail_pointer.write(tmp_path / trail_pointer.FILENAME, 'before')
+    channel.trail('announced')
+    if published:
+      trail_pointer.write(tmp_path / trail_pointer.FILENAME, 'current')
+    else:
+      trail_pointer.clear(tmp_path / trail_pointer.FILENAME)
+
+    original = character * (MAX_ANSWER_BYTES + 1)
+    channel.completed(original, end_reason)
+
+    payload = transport.sent[-1].payload
+    answer = payload['value' if end_reason == 'ok' else 'error']
+    location = 'current' if session and published else 'unavailable'
+    marker = f'\n\n[answer truncated; full response in trail {location}]'
+    head = answer.removesuffix(marker)
+    assert answer.endswith(marker)
+    assert original.startswith(head)
     assert len(answer.encode()) <= MAX_ANSWER_BYTES
-    assert answer.endswith('[answer truncated; full response in trail trail-1]')
+    assert len((answer + character).encode()) > MAX_ANSWER_BYTES
+    if end_reason == 'ok':
+      assert payload == {'outcome': 'ok', 'value': answer}
+    else:
+      assert payload == {'outcome': 'failed', 'error': answer, 'detail': {'reason': end_reason}}
+
+  def test_completed_preserves_a_result_at_the_byte_bound(self):
+    channel, transport = _make_channel()
+    answer = 'é' * (MAX_ANSWER_BYTES // 2)
+    channel.completed(answer, 'ok')
+    assert transport.sent[-1].payload == {'outcome': 'ok', 'value': answer}
 
   def test_completed_ok_emits_the_ok_result(self):
     channel, transport = _make_channel()

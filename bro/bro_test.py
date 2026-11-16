@@ -32,6 +32,7 @@ from bro.llm.resolved import ResolvedRecipe
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
 from bro.monitor import SESSION_DIR_ENV
+from bro.run_lifecycle import MAX_ANSWER_BYTES
 from bro.summon import SUMMONED_ENV
 
 
@@ -1449,9 +1450,24 @@ class TestAnswer:
     harness = EndingHarness()
     tool = await self._tool(harness, monkeypatch)
 
-    with pytest.raises(ValueError, match='answer too large; mint an artifact'):
-      await tool.call({'answer': 'x' * ((64 << 10) + 1)})
+    answer = 'é' * (MAX_ANSWER_BYTES // 2) + 'x'
+    with pytest.raises(ValueError) as caught:
+      await tool.call({'answer': answer})
+    assert str(caught.value) == (
+      f'answer too large: {MAX_ANSWER_BYTES + 1} bytes, '
+      f'over the {MAX_ANSWER_BYTES}-byte answer bound; shorten it to fit'
+    )
     assert harness.calls == []
+
+    shorter = answer[:-1]
+    assert await tool.call({'answer': shorter}) == 'session ended'
+    assert harness.calls == [(shorter, 'ok')]
+
+  @pytest.mark.asyncio
+  async def test_answer_description_states_the_byte_bound(self, monkeypatch):
+    tool = await self._tool(EndingHarness(), monkeypatch)
+    assert f'{MAX_ANSWER_BYTES} UTF-8 bytes' in tool.description
+    assert 'longer answer is refused' in tool.description
 
 
 class TestSessionModePrompts:
