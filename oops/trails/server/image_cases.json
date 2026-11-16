@@ -143,5 +143,39 @@
       "assistant"
     ],
     "reply": "chat reply"
+  },
+  {
+    "name": "native-line-rows",
+    "blaze": {
+      "bro": "image-probe",
+      "version": "image-probe",
+      "interactive": false,
+      "surface": "ask",
+      "hold": "unattended",
+      "harness": "bro",
+      "native": {
+        "llm": {}
+      },
+      "body": {
+        "records": [
+          {
+            "run_log": 1,
+            "body": "{\"at\":\"2026-11-14T21:00:00.000000Z\",\"kind\":\"user_input\",\"body\":\"fixture input\"}"
+          }
+        ]
+      }
+    },
+    "records": [
+      {
+        "run_log": 1,
+        "body": "{\"at\":\"2026-11-14T21:00:00.000000Z\",\"kind\":\"llm_call\",\"body\":{\"request\":{},\"response\":{\"model\":\"fixture-model\",\"usage\":{\"input_tokens\":10,\"output_tokens\":3},\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"native reply\"}]}]}},\"tools_sha256\":\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\",\"wire\":\"responses\"}"
+      }
+    ],
+    "expected_types": [
+      "user_input",
+      "llm_call",
+      "assistant"
+    ],
+    "reply": "native reply"
   }
 ]

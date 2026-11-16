@@ -79,7 +79,8 @@ bro · claude recorders                     readers
   reads do not add `raw` or `record`.
   Dynamo's `body_s3` fields are resolved back to inline `body` values before a row leaves the store, and every spilled row must carry `body_encoding`.
 - `backends.py` owns the `TrailFormat` contract and the `bro.trail_formats` entry-point registry.
-  A format supplies `parse`, `classify`, `project`, `open`, `validate_create`, ownership and native-header display fields, whether its trails require a bro, and optionally `resolve_lineage`, plus its declared emitted message types.
+  A format supplies `parse`, `classify`, `project`, `open`, `validate_create`, ownership and native-header display fields, whether its trails require a bro, and its declared emitted message types.
+  Optional members are `native_record` (identity by default) and `resolve_lineage`.
   `bro-native-trails` and `bro-claude-trails` supply the native and Claude formats respectively.
   Each is a sibling distribution of its harness under `harnesses/`.
   Reads are format-neutral:
