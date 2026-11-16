@@ -10,14 +10,17 @@ import pytest
 
 import bro.mcp as mcp
 import bro.native.runner as native_runner
-from bro import results, turn_end, watches
+from bro import quest, results, summon, turn_end, watches
+from bro.authority_view_test_helper import publish
 from bro.base import credentials
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
-from bro.broker.brotocol import Message
+from bro.broker.brotocol import Message, encode_talk
 from bro.broker.client import Client
-from bro.broker.environment import BROKER_CHANNEL, BROKER_TALK
+from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK, BROKER_UPSTREAM
 from bro.broker.transport import ClientTransport
+from bro.broker.transports.tcp import LOCAL_HOST
 from bro.inbox import Inbox
+from bro.launch.broxy import session_broxy
 from bro.llm.llm import Recipe
 from bro.llm.mcp import InProcessMCPServer, MCPServer
 from bro.llm.observer import (
@@ -30,15 +33,18 @@ from bro.llm.observer import (
   TurnRefusedEvent,
   TurnStartedEvent,
 )
+from bro.llm.records import Call, DecodedCall, Message as Reply
 from bro.llm.tracker import NullTracker, Tracker
-from bro.llm.wire import SystemPrompt, Text, UserMessage
+from bro.llm.wire import Leg, SystemPrompt, Text, ToolOutput, UserMessage
 from bro.mcp import MCPServerSpec
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
+from bro.native.echo import Echo
 from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.llm import LLM
 from bro.native.runner import Runner, set_default_tracker_factory
 from bro.openai.declaration import Recipe as OpenAISpec
-from bro.run_lifecycle import RunLifecycle
+from bro.quest_test_helper import TIMEOUT, running_live_broker
+from bro.run_lifecycle import MAX_ANSWER_BYTES, RunLifecycle
 
 
 class MockLLM(LLM):
@@ -1232,3 +1238,70 @@ class TestAgentIdentity:
       Runner(PlainBro(name='plain'), EchoSpec(model='echo'))._create_llm(hold='unattended').agent
       == 'bro//plain'
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('explicit_answer', [False, True])
+async def test_summoner_receives_bounded_results_from_the_run(
+  monkeypatch, tmp_path, explicit_answer
+):
+  oversized = 'é' * (MAX_ANSWER_BYTES // 2) + 'x'
+  shorter = 'condensed findings: ' + 'é' * (MAX_ANSWER_BYTES // 4)
+  exchanges = 0
+
+  async def exchange(self, inputs, tools, request_timeout):
+    nonlocal exchanges
+    exchanges += 1
+    trail_pointer.publish('session-trail')
+    if not explicit_answer:
+      part = Reply(0, oversized)
+    else:
+      assert any(tool.name == 'bro__answer' for tool in tools)
+      if exchanges == 1:
+        part = Call.parse(0, 'large', 'bro__answer', {'answer': oversized})
+      else:
+        assert exchanges == 2
+        [refusal] = inputs
+        assert isinstance(refusal, ToolOutput)
+        assert refusal.call_id == 'large'
+        assert 'shorten it to fit' in str(refusal.output)
+        part = Call.parse(0, 'short', 'bro__answer', {'answer': shorter})
+    decoded = DecodedCall(self.recipe.model, {}, None, (part,), 'completed')
+    return Leg.from_decoded({'request': {}, 'response': {}}, {}, 'echo', decoded, None)
+
+  publish(monkeypatch)
+  monkeypatch.setattr(Echo, 'exchange', exchange)
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path / 'session'))
+  monkeypatch.setenv(summon.RUNTIME_ENV, '/runtime')
+  async with running_live_broker() as (spawner, summoner):
+    summoner_address = summoner.channel.host_endpoint.address(LOCAL_HOST)
+    monkeypatch.setenv(BROKER_CHANNEL, summoner_address)
+    monkeypatch.setenv(BROKER_MISSION, summoner.quest)
+    child_id = await asyncio.to_thread(summon.summon_detached, 'bro', 'findings', talk=[])
+    child = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
+    assert child.quest == child_id
+    monkeypatch.delenv(BROKER_CHANNEL)
+    monkeypatch.setenv(BROKER_UPSTREAM, child.channel.host_endpoint.address(LOCAL_HOST))
+    monkeypatch.setenv(BROKER_MISSION, child.quest)
+    monkeypatch.setenv(BROKER_TALK, encode_talk(child.talk))
+    monkeypatch.setenv(summon.SUMMONED_ENV, '1')
+
+    runner = Runner(Declared(), EchoSpec(model='echo'))
+    with session_broxy():
+      result = await runner.run('findings', surface='test', tracker=NullTracker())
+    assert result == (shorter if explicit_answer else oversized)
+
+    monkeypatch.setenv(BROKER_CHANNEL, summoner_address)
+    monkeypatch.setenv(BROKER_MISSION, summoner.quest)
+    answer = await asyncio.to_thread(quest.check, child_id, wait=True, timeout=TIMEOUT)
+    child.handle.finish(0)
+    assert answer.state == 'completed'
+    if explicit_answer:
+      assert exchanges == 2
+      assert answer.answer == shorter
+    else:
+      assert answer.answer is not None
+      marker = '\n\n[answer truncated; full response in trail session-trail]'
+      assert answer.answer.endswith(marker)
+      assert oversized.startswith(answer.answer.removesuffix(marker))
+      assert len(answer.answer.encode()) <= MAX_ANSWER_BYTES

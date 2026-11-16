@@ -91,7 +91,7 @@ A subpackage with a map of its own is pointed at, not described here.
   `Runner.run()` builds one through `_make_channel()`;
   a summoned interactive native run emits its trail on the first `send`, while an un-summoned conversation emits nothing.
   The shared answer bound is enforced at the `answer` tool while the run can react;
-  terminal fallback output is truncated with a marker and its trail id.
+  terminal fallback output is truncated with a marker naming the session pointer's trail at completion, or `unavailable` without one.
   `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
 - `authority_view.py` — live and session-initial authority views over a mission’s own broker channel.
 - `authority/` — the pure symbolic use/give algebra and authorization transitions;
