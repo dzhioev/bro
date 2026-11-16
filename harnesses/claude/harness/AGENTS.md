@@ -37,8 +37,8 @@ The package `bro.claude` imports nothing from its `__init__.py`.
 - `reference.md` — the harness's reference, served as the `claude-harness` man page that `references.py` declares:
   the harness's side of a managed session, beside the runtime's `bro/reference/ride.md`.
 - `provisioning.py` and `image/` — the Claude Code pin, Docker instructions for the binary, and standalone binary/checksum installation into a relocatable runtime.
-  Moving the pin includes `run-tests --only llm`, which probes the model-input channels Claude Code records.
-  `image/bump-claude-code.sh` updates the pin and remains checkout-only.
+  `image/bump-claude-code.sh` updates the pin and remains checkout-only;
+  the procedure around it is the `bump-claude-code` playbook (`local/bro/local/bump_claude_code.md`).
 - `claude_release.py` — the host-wide standalone-release cache:
   a pinned version and platform's binary, its recorded manifest checksum, lifetime/download/removal locks, offline verification, seeding from another checksum-recorded copy, and cleanup.
 - `shell_prefix.py` — the shell claude's Bash commands run in, pinned, and the prefix script through which each of them gets the session's PATH.

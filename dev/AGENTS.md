@@ -25,7 +25,7 @@ build the wheel with `uv build --package bro-dev`.
     `markdown_policy.py` also backs `check-markdown`, which holds a bulk prose reflow to whitespace and nothing else
   - `affected_tests.py` reads a diff and the import graph over a repository's source roots, answering which of its modules a change can reach
   - `sharding.py` is the `--shard K/N` pytest plugin, dealing a collection into shards by test class or standalone function
-  - `references.py` declares the `dev-style` and `rebase-conflicts` sources, the `guides` pages and the `delivery` page, all over files in `bro/prompts/dev/`
+  - `references.py` declares the `dev-style` and `rebase-conflicts` sources, the `guides` pages, the `delivery` page and the `bump-bro` playbook, all over files in `bro/prompts/dev/`
 - `bro/workflow/` — development delivery mechanics:
   co-author and token-accounting commit metadata,
   the read of origin's default branch,
@@ -48,8 +48,9 @@ build the wheel with `uv build --package bro-dev`.
 - `bro/prompts/dev/{concurrency,testing,markdown}.md` — the guide pages the style policy points to, declared by the same personas into their `man` manual
 - `bro/prompts/dev/delivery.md` — the delivery plan and the gates that clear its landing, declared by the Dev, Eyebro and Lead personas into their `man` manual
 - `bro/prompts/dev/rebase_conflicts.md` — resolving a rebase that stops on a conflict, tool-served by the Dev persona through `rebase-conflicts-source::read`
+- `bro/prompts/dev/bump_bro.md` — the `bump` spell's playbook for the framework pin, declared by the Dev persona into its `man` manual
 - `bro/dev/spells/` — the spells more than one development persona offers, as `SpellFile` values in the `bro.dev.spells` package:
-  audit, framework bump, commit, design, task, task creation (`open-task`), reflection (`reflect`), delivery (`run-pr`), PR resume (`resume-pr`), PR following (`follow-pr`), landing,
+  audit, dependency bump (`bump`), commit, design, task, task creation (`open-task`), reflection (`reflect`), delivery (`run-pr`), PR resume (`resume-pr`), PR following (`follow-pr`), landing,
   and the review-and-plan (`plan`) and integration (`integrate`) phases a coordinator hands over
 - `bros/dev/` — generic developer with the `files`, unrestricted `brash`, `web`, and `delegation` tool groups, and those spells (the task ones gated on its `brog` feature).
   Its optional `brog` feature mounts tracker tooling;

@@ -244,6 +244,24 @@ async def test_delivery_reference_reaches_every_delivery_persona(persona, monkey
     assert await read.call({'topic': references.delivery.name}) == references.delivery.read()
 
 
+@pytest.mark.asyncio
+async def test_manual_serves_the_framework_bump_playbook(monkeypatch, tmp_path):
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+  with closing(Dev()) as bro:
+    servers = bro.assemble(harness='claude', hold='attended')
+    manual = next(server for server in servers if server.namespace == 'man-source')
+    [read] = await manual.list_tools()
+    assert await read.call({'topic': references.bump_bro.name}) == references.bump_bro.read()
+
+
+@pytest.mark.parametrize('tracker', [False, True])
+def test_bump_renders_with_and_without_the_tracker(tracker, monkeypatch):
+  monkeypatch.setattr('bro.base.credentials.available', lambda name: tracker and name == 'brog')
+  body = Dev().get_spell_body('bump', harness='claude', hold='attended')
+  assert ('brog::create_task' in body) == tracker
+  assert len(body) <= BYTE_LIMIT
+
+
 def _section(text, heading):
   level = len(heading.split()[0])
   match = re.search(rf'(?ms)^{re.escape(heading)}\n(.*?)(?=^#{{1,{level}}} |\Z)', text)

@@ -64,6 +64,7 @@ class Dev(Bro):
     man(extending),
     *(man(guide) for guide in references.guides),
     man(references.delivery),
+    man(references.bump_bro),
     man(llm_providers),
     man(mu),
     man(permission_model),
@@ -72,7 +73,7 @@ class Dev(Bro):
   ]
   spells = (
     dev.spells.audit,
-    dev.spells.bump_bro,
+    dev.spells.bump,
     dev.spells.commit,
     dev.spells.design,
     when(feature('brog'), dev.spells.fix),
