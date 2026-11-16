@@ -20,12 +20,14 @@ dependencies = [
   "trafilatura==2.3.1",
   "tree-sitter==0.26.0",
   "tree-sitter-bash==0.25.1",
+  "watchfiles==1.3.0",
 ]
 
 [project.scripts]
 # bro
 "bro" = "bro.native._entrypoints:bro_run"
 "bro.native.llm" = "bro.native._entrypoints:bro_native_llm"
+"bro.native.trail-recorder" = "bro.native._entrypoints:bro_native_trail_recorder"
 "bro.run" = "bro.native._entrypoints:bro_run"
 
 [project.entry-points."bro.llm.providers"]

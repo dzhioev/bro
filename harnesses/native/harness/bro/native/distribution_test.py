@@ -46,6 +46,9 @@ _NATIVE_DOMAIN = {
   'bro/native/loop.py',
   'bro/native/references.py',
   'bro/native/runner.py',
+  'bro/native/run_log.py',
+  'bro/native/trail_recorder.py',
+  'bro/native/recorder.py',
   'bro/run.py',
   'bro/trails/record/bro.py',
 }
@@ -166,7 +169,11 @@ def test_native_distribution_owns_its_console_scripts(wheels):
   assert native_scripts['bro'] == 'bro.native._entrypoints:bro_run'
   assert native_scripts['bro.run'] == 'bro.native._entrypoints:bro_run'
   assert native_scripts['bro.native.llm'] == 'bro.native._entrypoints:bro_native_llm'
-  assert {'bro', 'bro.run', 'bro.native.llm'}.isdisjoint(core_scripts)
+  assert (
+    native_scripts['bro.native.trail-recorder']
+    == 'bro.native._entrypoints:bro_native_trail_recorder'
+  )
+  assert {'bro', 'bro.run', 'bro.native.llm', 'bro.native.trail-recorder'}.isdisjoint(core_scripts)
 
 
 def test_harnesses_register_from_their_own_distributions(wheels):
@@ -216,6 +223,7 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     'trafilatura',
     'tree-sitter',
     'tree-sitter-bash',
+    'watchfiles',
   }
   assert {
     _requirement_name(requirement)

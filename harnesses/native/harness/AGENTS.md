@@ -61,6 +61,9 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   every other case asks the wire to restore the prefix from the steps' own records.
   A step marked `stopped` cannot seed a chain and is omitted by restore; unmarked records, including accepted incomplete responses, replay whole.
   Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
+- `bro/native/run_log.py` — the append-only native run log, its tracker and bounded validating reader.
+- `bro/native/trail_recorder.py` (`bro.native.trail-recorder`) — session run-log recording in bounded line-row batches, recording health and trail publication.
+- `bro/native/recorder.py` — recorder readiness and lifetime, and the session pointer's removal and restoration.
 - `bro/trails/record/bro.py` — native tracker-to-trails recorder
 
 ## The run
