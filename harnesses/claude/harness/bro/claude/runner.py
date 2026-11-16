@@ -156,9 +156,7 @@ def _complete_run(emitted: threading.Event, result: str | None) -> None:
   _announce_trail(emitted)
   channel = RunLifecycle.from_env()
   if channel is not None:
-    pointer = trail_pointer.path()
-    trail_id = trail_pointer.read(pointer) if pointer is not None else None
-    channel.completed(result, 'ok', trail_id=trail_id)
+    channel.completed(result, 'ok')
     channel.close()
 
 

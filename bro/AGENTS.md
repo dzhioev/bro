@@ -87,11 +87,11 @@ A subpackage with a map of its own is pointed at, not described here.
   `authority_declaration` and `option_values` declare governed options and map wire fields to option values and ungoverned content.
   Installed types register through `bro.worker_types`, with ride contributing `bro`, bench contributing `benchmark`, and webview contributing `webview`.
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
-  it undertakes the broker mission named in `BROKER_MISSION`, emits the run's set-once `trail` mark after recording opens, and sends the closing result.
-  `Runner.run()` builds one through `_make_channel()`;
-  a summoned interactive native run emits its trail on the first `send`, while an un-summoned conversation emits nothing.
+  it undertakes the broker mission named in `BROKER_MISSION`, carries the session's set-once `trail` mark and sends the closing result.
+  `Runner.run()` uses it for result delivery;
+  the native session recorder emits the trail mark.
   The shared answer bound is enforced at the `answer` tool while the run can react;
-  terminal fallback output is truncated with a marker and its trail id.
+  terminal fallback output is truncated with a marker naming the session pointer's trail at completion, or `unavailable` without one.
   `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
 - `authority_view.py` — live and session-initial authority views over a mission’s own broker channel.
 - `authority/` — the pure symbolic use/give algebra and authorization transitions;
@@ -191,7 +191,7 @@ the spell tools and `cast` render spell bodies under that hold and the call's ch
 `_build_service_server` decides core's roster from the surface and the process environment, then appends `Harness.own_tools` and renders the combined roster as the `#tools` universe:
 
 - `banner`, always:
-  the session facts of `ride banner --plain` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name, resolved recipe and trail id passed explicitly since an in-process run's environment carries the launcher's;
+  the session facts of `ride banner --plain` rendered in-process by `bro.workspace.banner.render_banner`, with the bro's name and resolved recipe passed explicitly since an in-process run's environment carries the launcher's;
   the playbook is `bro/prompts/environment.md`.
 - `page` and `results`, always:
   `page` returns `char_limit` characters of a kept result from `char_offset`, and `results` lists the kept results newest first, those kept before `before` when given.

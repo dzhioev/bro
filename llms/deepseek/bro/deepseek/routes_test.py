@@ -22,12 +22,12 @@ from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
 from bro.llm.mu import mu
 from bro.llm.observer import Observer, ReasoningEvent, ToolCallEvent
 from bro.llm.wire import Text
-from bro.native import loop as native_loop, runner as native_runner
+from bro.native import loop as native_loop
+from bro.native.recording_test_helper import record_run
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
 from bro.registry import create_bro
 from bro.trails.local import LocalStore
-from bro.trails.record.bro import Recorder
 from bro.trails.store import fetch_recorded_trail
 from bro.wire_chat.fixtures_test_helper import call, response
 from bro.workspace.settings import HomeSettings
@@ -111,7 +111,6 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
 
   monkeypatch.setattr(native_loop, 'create', with_tools)
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro', reasoning_effort='high'))
   assert await runner.run('start', surface='test') == 'answer'
   assert called == [True]
@@ -126,12 +125,12 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
     'tool_call_id': 'call_1',
     'content': '{"value":42}',
   }
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   calls = [step for step in recorded.steps if step.kind == 'llm_call']
   assert all(step.extras['wire'] == 'chat' for step in calls)
   assert calls[1].body['request']['messages'] == [requests[1]['messages'][3]]
-  projected = list(store.iter_messages(runner.trail_id))
+  projected = list(store.iter_messages(runner_trail_id))
   assert [
     (event['type'], event['content'])
     for event in projected
@@ -148,7 +147,7 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   resumed = resume(
     store,
     'bro',
-    runner.trail_id,
+    runner_trail_id,
     recipe=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
@@ -163,10 +162,10 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   with restored:
     assert await restored.send('continue', surface='test') == 'reply'
   assert requests[-1]['messages'] == expected
-  assert restored.trail_id is not None
-  child = fetch_recorded_trail(store, restored.trail_id)
+  restored_trail_id = record_run(store, restored)
+  child = fetch_recorded_trail(store, restored_trail_id)
   assert child.header.forked_from is not None
-  assert child.header.forked_from.trail_id == runner.trail_id
+  assert child.header.forked_from.trail_id == runner_trail_id
   assert not any('previous_response_id' in request for request in requests)
 
 
@@ -211,20 +210,19 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
 
   monkeypatch.setattr('bro.llm.retry.asyncio_sleep', wait)
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro'))
   assert await runner.run('go', surface='test') == 'reply'
   assert waits == [10]
   assert requests[0] == requests[1]
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   calls = [step for step in recorded.steps if step.kind == 'llm_call']
   assert [step.extras.get('stopped') for step in calls] == ['capacity', None]
   assert [step.extras['call_index'] for step in calls] == [1, 1]
   resumed = resume(
     store,
     'bro',
-    runner.trail_id,
+    runner_trail_id,
     recipe=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
@@ -365,7 +363,9 @@ def summoned_stage(
   )
   spawned: list[list[str]] = []
   monkeypatch.setattr(native_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
-  monkeypatch.setattr('ride.do_ride.run_agent', lambda argv: spawned.append(argv) or 0)
+  monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'records'))
+  monkeypatch.setenv('TRAILS_DISABLED', '1')
+  monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env: spawned.append(argv) or 0)
   assert native_harness.BRO.run_session(run) == 0
   session = credentials.Store(credentials.default_registry(), directory, {})
   return Stage(recipe, files, session, spawned[0])
@@ -379,9 +379,6 @@ def test_a_stage_summoned_onto_deepseek_starts_without_the_openai_key(
   requests, _, authorizations = endpoint
   stage = summoned_stage(tmp_path, monkeypatch, backing)
   assert stage.session.available('deepseek') and not stage.session.available('openai')
-  monkeypatch.setattr(
-    native_runner, '_default_tracker_factory', lambda: Recorder(LocalStore(tmp_path / 'trails'))
-  )
   monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
   with credentials.as_default_store(stage.session):
     assert bro_run.main(stage.argv) is None
@@ -414,7 +411,6 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     (200, response(None, reasoning='discard', calls=[call(call_id='')], stop='tool_calls'))
   )
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(create_bro('bro'), Recipe(model='deepseek-v4-pro'))
   runner.inbox.post('notice')
   events = []
@@ -427,8 +423,8 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     with pytest.raises(RuntimeError):
       await runner.send('original', observer=Observed(), surface='test', hold='unattended')
     assert not any(isinstance(event, (ReasoningEvent, ToolCallEvent)) for event in events)
-    assert runner.trail_id is not None
-    recorded = fetch_recorded_trail(store, runner.trail_id)
+    runner_trail_id = record_run(store, runner)
+    recorded = fetch_recorded_trail(store, runner_trail_id)
     rejected = [step for step in recorded.steps if step.kind == 'llm_call']
     assert len(rejected) == 1
     assert rejected[0].extras['stopped'] == 'failed'
@@ -439,7 +435,7 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     )
     assert latest_fork_point(recorded) < rejected[0].step_id
     resumed = resume(
-      store, 'bro', runner.trail_id, recipe=Recipe(model='deepseek-v4-pro'), hold='unattended'
+      store, 'bro', runner_trail_id, recipe=Recipe(model='deepseek-v4-pro'), hold='unattended'
     )
     with resumed.runner:
       assert await resumed.runner.send('continue', surface='test') == 'reply'
@@ -451,8 +447,8 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
     'notice',
     'original',
   ]
-  assert runner.trail_id is not None
-  continued = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  continued = fetch_recorded_trail(store, runner_trail_id)
   assert (
     continued.header.native['usage'][Recipe(model='deepseek-v4-pro').model]['completion_tokens']
     == 6
@@ -521,7 +517,6 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
     ]
   )
   store = LocalStore(tmp_path / 'trails')
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(ShellBro(), Recipe(model='deepseek-v4-pro'))
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
@@ -529,8 +524,8 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   assert history == requests[1]['messages'] + [replayed]
   assert notification['role'] == 'user'
   assert 'job-1' in notification['content'] and 'exited (code 0)' in notification['content']
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   assert not any('stopped' in step.extras for step in recorded.steps if step.kind == 'llm_call')
   assert store.get_trail(recorded.header.id)['end']['reason'] == 'ok'
 
@@ -656,9 +651,6 @@ def test_unlisted_openai_summon_carries_passthrough_through_worker_and_session(
   requests, _, authorizations = endpoint
   stage = summoned_stage(tmp_path, monkeypatch, 'deepseek', 'openai:gpt-7+passthrough')
   assert stage.recipe.passthrough
-  monkeypatch.setattr(
-    native_runner, '_default_tracker_factory', lambda: Recorder(LocalStore(tmp_path / 'trails'))
-  )
   monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
   with credentials.as_default_store(stage.session):
     assert bro_run.main(stage.argv) is None

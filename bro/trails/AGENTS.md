@@ -56,8 +56,8 @@ bro · claude recorders                     readers
   `stored_trail_ids`, `stored_header`, and `stored_rows` read the layout as written, formats untouched, for a copy that must not upgrade what it carries.
   An import builds its initial trail atomically under `<root>/staging/` and renames it into place with an import mark, so two begins of the same id settle on the rename and transfers refuse the live partial state.
 - The local root is the global `bro.workspace.paths.trails_dir` under the runtime state root.
-- `TRAILS_DISABLED` (presence-checked) turns a process's recording off, since a backend resolves for every run.
-  It is the recovery path for deploying or repairing `trails-server` through a bro whose own recording would otherwise go through it.
+- `TRAILS_DISABLED` (presence-checked) disables a managed session's recorder on either harness.
+  It leaves the harness's local run log or transcript intact.
 - `server/server.py` is an aiohttp proxy over any configured `TrailsStore`;
   every synchronous store call runs through `asyncio.to_thread`.
   The process resolves its hosted store with `configured_store()`, whose credential is required
@@ -121,9 +121,9 @@ bro · claude recorders                     readers
 - **Recorder placement:**
   core `record/spine.py` owns the shared write spine, and `record/session.py` the managed session a recorder runs in
   — the header `location` and `git`, plus the launch line under `native.ride_command`, read off the environment the session's launcher published (`bro/reference/ride.md`, "Forwarded env vars"),
-  so a trail carries them whichever harness records it and a run outside a managed session carries none.
+  so a trail carries them whichever harness records it.
   Each engine distribution owns its recorder:
-  `bro-native` contributes `bro.trails.record.bro`, while `bro-claude` contributes `bro.claude.trail_recorder`.
+  `bro-native` contributes `bro.native.trail_recorder`, while `bro-claude` contributes `bro.claude.trail_recorder`.
   They may import the core store contract, schema, formats, and write spine, never the reverse.
 - Trail formats mint lineage only when blazing a trail, and a trail's step ids are its rows' line ordinals in local storage.
   Writers cannot mutate an edge;
@@ -141,7 +141,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   harness-native validation and body opening remain in each store.
   A step id is an ordinal in rows and lineage pointers.
 - Core `record/spine.py` owns blaze, ordinal extent validation, batched appends, liveness, and ending;
-  `bro-native`'s `record/bro.py` adapts `bro.llm.tracker.Tracker`.
+  `bro.native.trail_recorder` records the session run's log as line rows.
   `bro.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the format's lineage verdict it gets back.
 - `POST /v1/trails` blazes from `body.records`, resolving `lineage` evidence when the request carries it.
   The response names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.

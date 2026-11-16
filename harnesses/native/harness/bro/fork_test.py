@@ -548,7 +548,7 @@ class _RecordingTracker(Tracker):
     self.steps: list[tuple[str, Any, dict]] = []
     self.ended: list[str] = []
 
-  def start_trail(
+  def start(
     self,
     bro,
     recipe,
@@ -557,8 +557,7 @@ class _RecordingTracker(Tracker):
     interactive,
     surface,
     hold='unattended',
-    summoned_by=None,
-  ) -> str:
+  ) -> None:
     self.headers.append(
       {
         'bro': bro,
@@ -570,12 +569,12 @@ class _RecordingTracker(Tracker):
         'hold': hold,
       }
     )
-    return 'forked-trail-id'
+    return None
 
   def step(self, kind, body, **extras) -> None:
     self.steps.append((kind, body, extras))
 
-  def end_trail(self, reason, detail=None) -> None:
+  def end(self, reason, detail=None) -> None:
     self.ended.append(reason)
 
 
@@ -725,7 +724,7 @@ class TestForkHarnessGuard:
 
 
 class TestForkLinkage:
-  def test_start_trail_records_forked_from_pointer(self):
+  def test_start_records_forked_from_pointer(self):
     forked_from_trail = _simple_trail()
     tracker = _RecordingTracker()
     context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
@@ -750,7 +749,7 @@ class TestForkLinkage:
     with context:
       runner = fork(forked_from_trail, 2, tracker=tracker, surface='call')
     assert tracker.headers[0]['surface'] == 'call'
-    assert runner.trail_id == 'forked-trail-id'
+    assert runner.run_log is None
 
   def test_records_resolved_system_prompt(self):
     forked_from_trail = _simple_trail()

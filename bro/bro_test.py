@@ -15,7 +15,6 @@ from pydantic import ValidationError
 import bro.bro as bro_module
 import bro.mcp as mcp
 import bro.native.echo_declaration as llm_llms_echo
-import bro.workspace.banner as workspace_banner
 from bro import brash_policy, results, watches
 from bro.authority_view_test_helper import publish
 from bro.base import credentials
@@ -31,7 +30,8 @@ from bro.llm.mcp import FunctionTool, InProcessMCPServer, MCPServer
 from bro.llm.resolved import ResolvedRecipe
 from bro.llm.tracker import ToolStepSource
 from bro.mcp import MCPServerSpec, describe
-from bro.monitor import SESSION_DIR_ENV
+from bro.monitor import SESSION_DIR_ENV, trail_pointer
+from bro.run_lifecycle import MAX_ANSWER_BYTES
 from bro.summon import SUMMONED_ENV
 
 
@@ -46,9 +46,8 @@ class EchoBro(BaseBro):
 class StubRun:
   """the `LiveRun` an assembly test binds the service tools to."""
 
-  def __init__(self, trail_id: Optional[str] = None, tool_step: Optional[ToolStepSource] = None):
+  def __init__(self, tool_step: Optional[ToolStepSource] = None):
     self.resolved_recipe: ResolvedRecipe | None = None
-    self.trail_id = trail_id
     self.current_tool_step_id = tool_step
     self.watch_store: watches.Store = MagicMock(spec=watches.Store)
     self.result_store: results.Store = MagicMock(spec=results.Store)
@@ -1449,9 +1448,24 @@ class TestAnswer:
     harness = EndingHarness()
     tool = await self._tool(harness, monkeypatch)
 
-    with pytest.raises(ValueError, match='answer too large; mint an artifact'):
-      await tool.call({'answer': 'x' * ((64 << 10) + 1)})
+    answer = 'é' * (MAX_ANSWER_BYTES // 2) + 'x'
+    with pytest.raises(ValueError) as caught:
+      await tool.call({'answer': answer})
+    assert str(caught.value) == (
+      f'answer too large: {MAX_ANSWER_BYTES + 1} bytes, '
+      f'over the {MAX_ANSWER_BYTES}-byte answer bound; shorten it to fit'
+    )
     assert harness.calls == []
+
+    shorter = answer[:-1]
+    assert await tool.call({'answer': shorter}) == 'session ended'
+    assert harness.calls == [(shorter, 'ok')]
+
+  @pytest.mark.asyncio
+  async def test_answer_description_states_the_byte_bound(self, monkeypatch):
+    tool = await self._tool(EndingHarness(), monkeypatch)
+    assert f'{MAX_ANSWER_BYTES} UTF-8 bytes' in tool.description
+    assert 'longer answer is refused' in tool.description
 
 
 class TestSessionModePrompts:
@@ -1512,25 +1526,14 @@ class TestBannerTool:
     assert 'banner' in interactive
 
   @pytest.mark.asyncio
-  async def test_renders_the_llm_banner_with_the_bro_name_and_live_trail(self, monkeypatch):
-
-    captured: dict = {}
-
-    def fake_render_banner(plain=False, bro=None, trail_id=None, resolved_recipe=None):
-      captured['plain'] = plain
-      captured['bro'] = bro
-      captured['trail_id'] = trail_id
-      return 'isolation: boxed'
-
-    monkeypatch.setattr(workspace_banner, 'render_banner', fake_render_banner)
-    run = StubRun()
-    tool = await _find_tool(EchoBro(), 'banner', run=run)
-    assert await tool.call({}) == 'isolation: boxed'
-    assert captured == {'plain': True, 'bro': 'echo', 'trail_id': None}
-    # the run's trail opens after the tool is built, so it is read per call
-    run.trail_id = '01trail'
-    await tool.call({})
-    assert captured['trail_id'] == '01trail'
+  async def test_banner_reads_the_session_pointer_on_each_call(self, monkeypatch, tmp_path):
+    monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path))
+    tool = await _find_tool(EchoBro(), 'banner', run=StubRun())
+    assert 'trail_id: none (not published)' in await tool.call({})
+    trail_pointer.publish('session-trail')
+    assert 'trail_id: session-trail' in await tool.call({})
+    trail_pointer.publish('resumed-trail')
+    assert 'trail_id: resumed-trail' in await tool.call({})
 
   @pytest.mark.asyncio
   async def test_banner_uses_the_in_process_recipe_not_the_outer_sessions(self, monkeypatch):

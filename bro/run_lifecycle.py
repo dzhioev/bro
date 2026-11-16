@@ -4,12 +4,12 @@ import os
 from typing import TYPE_CHECKING, Any, Optional
 
 from bro.llm.tracker import EndReason
+from bro.monitor import trail_pointer
 
 if TYPE_CHECKING:
   from bro.broker.client import Client
 
 MAX_ANSWER_BYTES = 64 << 10
-ANSWER_TOO_LARGE = 'answer too large; mint an artifact and return the ref'
 
 
 class RunLifecycle:
@@ -47,12 +47,11 @@ class RunLifecycle:
     self,
     result: Optional[str],
     end_reason: EndReason,
-    *,
-    trail_id: Optional[str] = None,
   ) -> None:
     payload: dict[str, Any]
-    effective_trail = self._trail_id if self._trail_id is not None else trail_id
-    bounded = truncate_answer(result, effective_trail) if result is not None else None
+    pointer = trail_pointer.path()
+    trail_id = trail_pointer.read(pointer) if pointer is not None else None
+    bounded = truncate_answer(result, trail_id) if result is not None else None
     if end_reason == 'ok':
       payload = {'outcome': 'ok'}
       if bounded is not None:
@@ -68,8 +67,12 @@ class RunLifecycle:
 
 
 def validate_answer(answer: str) -> None:
-  if len(answer.encode()) > MAX_ANSWER_BYTES:
-    raise ValueError(ANSWER_TOO_LARGE)
+  size = len(answer.encode())
+  if size > MAX_ANSWER_BYTES:
+    raise ValueError(
+      f'answer too large: {size} bytes, over the {MAX_ANSWER_BYTES}-byte answer bound; '
+      'shorten it to fit'
+    )
 
 
 def truncate_answer(answer: str, trail_id: Optional[str]) -> str:

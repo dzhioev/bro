@@ -15,15 +15,15 @@ from bro.llm import retry as llm_retry
 from bro.llm.llm import LLMStopped
 from bro.llm.mcp import FunctionTool, InProcessMCPServer, ToolRegistry
 from bro.llm.wire import Leg, SystemPrompt, Text, UserMessage, Wire
-from bro.native import loop as native_loop, runner as native_runner
+from bro.native import loop as native_loop
 from bro.native.echo_declaration import Recipe as EchoSpec
+from bro.native.recording_test_helper import record_run
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
 from bro.native.wire_fixtures_test_helper import call, message, response
 from bro.openai.declaration import Recipe as ResponsesSpec
 from bro.registry import create_bro
 from bro.trails.local import LocalStore
-from bro.trails.record.bro import Recorder
 from bro.trails.store import fetch_recorded_trail
 from bro.wire_chat.decode import counts, decode
 
@@ -72,21 +72,24 @@ def server(monkeypatch, replies):
 )
 async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path):
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(create_bro('bro'), recipe)
   assert await runner.run('reply', surface='test') == 'reply'
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   point = latest_fork_point(recorded)
   calls = [step for step in recorded.steps if step.kind == 'llm_call']
   assert [step.extras['wire'] for step in calls] == [recipe.WIRE]
   assert any(event['type'] == 'assistant' for event in store.iter_messages(recorded.header.id))
 
-  resumed = resume(store, 'bro', recorded.header.id, recipe=recipe, hold='unattended')
+  resumed_log = tmp_path / 'resumed.jsonl'
+  resumed = resume(
+    store, 'bro', recorded.header.id, recipe=recipe, hold='unattended', run_log=resumed_log
+  )
+  assert resumed.runner.run_log == resumed_log
   with resumed.runner:
     assert await resumed.runner.send('reply', surface='test') == 'reply'
-  assert resumed.runner.trail_id is not None
-  child = fetch_recorded_trail(store, resumed.runner.trail_id)
+  resumed_runner_trail_id = record_run(store, resumed.runner)
+  child = fetch_recorded_trail(store, resumed_runner_trail_id)
   assert child.header.forked_from is not None
   assert child.header.forked_from.trail_id == recorded.header.id
   if server:
@@ -94,8 +97,14 @@ async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path)
     assert server[-1]['input'] == [{'role': 'user', 'content': 'reply'}]
 
   restored = fork(
-    recorded, point, system_prompt='different prompt', hold='unattended', surface='test'
+    recorded,
+    point,
+    system_prompt='different prompt',
+    hold='unattended',
+    surface='test',
+    run_log=tmp_path / 'forked.jsonl',
   )
+  assert restored.run_log == tmp_path / 'forked.jsonl'
   with restored:
     assert await restored.send('reply', surface='test') == 'reply'
   if server:
@@ -135,12 +144,11 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
   )
   replies.append(stopped)
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(create_bro('bro'), ResponsesSpec(model='gpt-6.1-sol'))
   with pytest.raises(LLMStopped, match='max_output_tokens'):
     await runner.run('original', surface='test')
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   header = store.get_trail(recorded.header.id)
   assert header['end']['reason'] == 'error'
   assert 'max_output_tokens' in header['end']['detail']
@@ -217,7 +225,6 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
   wire.exchange = exchange
   monkeypatch.setattr(llm_retry, 'asyncio_sleep', pause)
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   monkeypatch.setattr(
     native_loop, 'create', lambda spec, inbox, **kwargs: native_loop.Loop(wire, inbox, **kwargs)
   )
@@ -227,8 +234,8 @@ async def test_run_capacity_attempts_are_all_recorded_and_counted(
   else:
     with pytest.raises(LLMStopped, match='insufficient_system_resource'):
       await runner.run('original', surface='test')
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   calls = [step for step in recorded.steps if step.kind == 'llm_call']
   assert [step.extras.get('stopped') for step in calls] == (
     ['capacity'] * 3 + [None] if refusals == 3 else ['capacity'] * 7
@@ -266,7 +273,6 @@ async def test_interrupt_received_calls_records_answers_and_continues_the_same_c
   monkeypatch.setattr(native_loop, 'create', create)
   replies.append(response(call('{}'), id='with-calls'))
   store = LocalStore(tmp_path)
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(create_bro('bro'), ResponsesSpec(model='gpt-6.1-sol'))
   with runner:
     turn = asyncio.create_task(runner.send('original', surface='test'))
@@ -275,8 +281,8 @@ async def test_interrupt_received_calls_records_answers_and_continues_the_same_c
     with pytest.raises(asyncio.CancelledError):
       await turn
     assert await runner.send('continue', surface='test') == 'reply'
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   result = next(step for step in recorded.steps if step.kind == 'tool_result')
   assert result.body == native_loop.INTERRUPTED_TOOL_OUTPUT
   assert result.extras['is_error'] is True
@@ -304,7 +310,6 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
     ]
   )
   store = LocalStore(tmp_path / 'trails')
-  monkeypatch.setattr(native_runner, '_default_tracker_factory', lambda: Recorder(store))
   runner = Runner(ShellBro(), ResponsesSpec(model='gpt-6.1-sol'))
   async with asyncio.timeout(60):
     assert await runner.run('go', observer=ReleaseWhenIdle(release), surface='test') == 'done'
@@ -312,7 +317,54 @@ async def test_silent_turn_end_waits_on_the_background_job_and_wakes_on_its_exit
   [notification] = server[2]['input']
   assert notification['role'] == 'user'
   assert 'job-1' in notification['content'] and 'exited (code 0)' in notification['content']
-  assert runner.trail_id is not None
-  recorded = fetch_recorded_trail(store, runner.trail_id)
+  runner_trail_id = record_run(store, runner)
+  recorded = fetch_recorded_trail(store, runner_trail_id)
   assert not any('stopped' in step.extras for step in recorded.steps if step.kind == 'llm_call')
   assert store.get_trail(recorded.header.id)['end']['reason'] == 'ok'
+
+
+@pytest.mark.asyncio
+async def test_summon_position_names_its_run_log_step_and_recorded_call(
+  server, replies, monkeypatch, tmp_path
+):
+  from bro.authority_view_test_helper import publish
+  from bro.llm import wires
+  from bro.native.run_log import Reader
+
+  publish(monkeypatch, ['bro'])
+  monkeypatch.setattr('bro.bro.channel_intended', lambda: True)
+  observed = []
+
+  def summon(target, prompt, **options):
+    observed.append((target, prompt, options, runner.current_tool_step_id))
+    return 'child'
+
+  monkeypatch.setattr('bro.summon.summon_detached', summon)
+  replies.append(
+    response(
+      message('delegating'),
+      call('{"target":"bro","prompt":"inspect"}', name='bro__summon'),
+      id='summoning',
+    )
+  )
+  runner = Runner(create_bro('bro'), ResponsesSpec(model='gpt-6.1-sol'))
+  assert await runner.run('delegate', surface='test') == 'reply'
+  [(target, prompt, options, source)] = observed
+  assert (target, prompt) == ('bro', 'inspect')
+  assert source is not None
+  assert options['step_id'] == source['step_id'] and options['index'] == source['index']
+  assert runner.current_tool_step_id is None
+  assert runner.run_log is not None
+  entries = Reader(runner.run_log).read(max_entries=100, max_bytes=1000000)
+  step = next(entry for entry in entries if entry.step_number == source['step_id'])
+  assert step.value['kind'] == 'llm_call'
+  store = LocalStore(tmp_path / 'store')
+  identifier = record_run(store, runner)
+  row = next(row for row in store.iter_steps(identifier) if row['step_id'] == source['step_id'])
+  assert row['body'] == step.line
+  recorded = fetch_recorded_trail(store, identifier)
+  exchange = recorded.steps[source['step_id']]
+  decoded = wires.decode(exchange.extras['wire'], exchange.body['response'])
+  summoned = next(part for part in decoded.calls if part.index == source['index'])
+  assert summoned.name == 'bro__summon'
+  assert summoned.arguments == {'target': 'bro', 'prompt': 'inspect'}

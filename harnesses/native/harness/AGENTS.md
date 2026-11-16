@@ -19,9 +19,9 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   the seam owns file opens and authorizes search roots.
   It also owns the `bro run|chat …` spawn on the session's admitted recipe, its continuation, and ride's launch hooks.
   It imports `bro`, never the reverse, so declaring and inspecting a persona costs nothing of the loop that runs one.
-  `runner.py`'s `Runner(bro, recipe)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel and trail;
+  `runner.py`'s `Runner(bro, recipe)` drives one declaration and owns the per-run LLM, observer, tracker, inbox, job registry, broker channel and run log;
   it also owns an in-process run's temporary watch store and, outside a managed session, its temporary result store;
-  it satisfies core's trail-and-tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and `BaseBro.system_prompt_for`.
+  it satisfies core's tool-position `bro.bro.LiveRun` and the bro harness's run contract, and injects the registered `BRO` object into `BaseBro.assemble` and `BaseBro.system_prompt_for`.
   `bro/jobs.py` and `bro/inbox.py` are native-owned modules under their public namespace paths:
   jobs run their commands under core's `bro.job_supervisor`, spool bounded output, and live in a lifetime-scoped registry, while the inbox wakes the model on job news and framework notices and drains their bounded notification slices.
   A job or watch line runs in brash under the policy `Runner` writes from the bro's reach into a directory its lifetime owns, where the command list is finite, and in bash otherwise.
@@ -53,7 +53,7 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
 - `bro/fork.py` — fork of a recorded trail.
   `replay_prefix` gathers the steps through the selected fork point and follows `forked_from` ancestors when needed;
   `latest_fork_point` chooses the newest consistent point using the recorded wire’s decoded calls, skipping steps marked `stopped`.
-  `fork(..., surface=<caller>)` requires the driving program's surface, returns a `Runner` preseeded with the replayed prefix, and opens the child trail with `ForkedFrom(trail_id, step_id)`;
+  `fork(..., surface=<caller>)` requires the driving program's surface, returns a `Runner` preseeded with the replayed prefix, and opens the child run log with `ForkedFrom(trail_id, step_id)`;
   it replays bro-native records, so a trail from another harness is refused up front rather than partway into a header that never carried what replay needs.
   A fork runs under the hold it is given, guided when omitted, and recomposes the prompt under it when the recorded hold differs.
   Every replayed call must use the target recipe's wire, checked before building the runner.
@@ -61,7 +61,9 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   every other case asks the wire to restore the prefix from the steps' own records.
   A step marked `stopped` cannot seed a chain and is omitted by restore; unmarked records, including accepted incomplete responses, replay whole.
   Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
-- `bro/trails/record/bro.py` — native tracker-to-trails recorder
+- `bro/native/run_log.py` — the append-only native run log, its tracker and bounded validating reader.
+- `bro/native/trail_recorder.py` (`bro.native.trail-recorder`) — session run-log recording in bounded line-row batches, recording health and trail publication.
+- `bro/native/recorder.py` — recorder readiness and lifetime, and the session pointer's removal and restoration.
 
 ## The run
 
@@ -84,15 +86,12 @@ the file carries the agent identity itself because an in-process run's `RIDE_BRO
 
 ### Recording
 
-Each `Runner.run()` or first `.send()` opens a trail through a `bro.llm.tracker.Tracker` and emits the opening `system_prompt` step;
-the same tracker is plumbed into the LLM so provider implementations record the replayable native stream,
-with each `llm_call` tagged by its wire,
-each step through the base `LLM._track_step`, which also touches the activity file a managed session hands the `bro` command (`--activity-file`).
-The runner's context-managed lifetime ends that trail once with clean → `ok`, `BroRaised` → `raised`, and other exceptions → `error`;
+Each `Runner.run()` or first `.send()` opens a run through `bro.llm.tracker.Tracker`, whose default is `bro.native.run_log.RunLog`;
+a per-run `tracker=` replaces it.
+The runner's context-managed lifetime ends the run once, while the loop records its steps and touches the activity file (`--activity-file`).
 `run()` supplies its own lifetime, while interactive owners keep one around the conversation.
 `run()`, `send()`, and `bro.fork.fork()` require the caller to name the driving `surface`.
-The default factory builds a `bro.trails.record.bro.Recorder`;
-a per-run `tracker=` argument or `set_default_tracker_factory` replaces it, and `TRAILS_DISABLED` makes the default a `NullTracker` (`bro/trails/AGENTS.md`, which owns the recording subsystem).
+Run-log locations, session recording and resume behavior are in `bro/native/reference.md`, "Recording and usage".
 
-`bro`, `bro.launch`, `bro.trails`, and `bro.trails.record` are shared namespace package trees.
+`bro` and `bro.launch` are shared namespace package trees.
 This member's source root contains only native-owned leaves, so its build can publish that `bro` portion whole without reaching another member's source tree.

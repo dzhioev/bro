@@ -1,12 +1,15 @@
 import asyncio
 import contextlib
 import json
+import os
 import shlex
+import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import ClassVar, Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, Mock
 
 import pytest
 
@@ -20,9 +23,17 @@ from bro.inbox import Inbox
 from bro.jobs import Job, Registry
 from bro.jobs_test_helper import StalledSupervisor
 from bro.llm.mcp import MCPServer, Tool
-from bro.monitor import SESSION_DIR_ENV, trail_pointer, workspace_party_dir, workspace_session_dir
-from bro.native import dev_mcp
+from bro.monitor import (
+  SESSION_DIR_ENV,
+  health,
+  trail_pointer,
+  workspace_party_dir,
+  workspace_session_dir,
+)
+from bro.native import dev_mcp, recorder
+from bro.native.run_log_test_helper import open_log, session_environment
 from bro.openai.declaration import Recipe
+from bro.trails.store import default_store
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
 from ride.do_ride import SessionRun, encode_resolved_recipe
@@ -148,18 +159,26 @@ def test_check_runtime_starts_the_sibling_native_command_without_path(monkeypatc
 
 
 class TestNativeArgv:
-  """The argv the bro harness runner spawns."""
+  @pytest.fixture(autouse=True)
+  def session(self, monkeypatch, tmp_path):
+    self._session_dir(monkeypatch, tmp_path)
+    monkeypatch.setattr(bro_harness, 'session_recorder', lambda *args: contextlib.nullcontext())
 
   def _argv(self, spec, monkeypatch) -> list[str]:
     spawned: list[list[str]] = []
     monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
-    monkeypatch.setattr('ride.do_ride.run_agent', lambda argv: spawned.append(argv) or 0)
+    monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env=None: spawned.append(argv) or 0)
     assert bro_harness.BRO.run_session(spec) == 0
-    return spawned[0]
+    argv = spawned[0]
+    index = argv.index('--run-log')
+    log_path = Path(argv[index + 1])
+    assert log_path.parent == Path(os.environ[SESSION_DIR_ENV]) / 'bro' / 'runs'
+    del argv[index : index + 2]
+    return argv
 
   def _session_dir(self, monkeypatch, tmp_path) -> Path:
-    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
-    session = workspace_session_dir(workspace.path)
+    session = tmp_path / 'session'
+    session.mkdir(exist_ok=True)
     monkeypatch.setenv(SESSION_DIR_ENV, str(session))
     return session
 
@@ -193,8 +212,8 @@ class TestNativeArgv:
     runs: list[tuple[str, str]] = []
 
     class _Runner:
-      def __init__(self, bro, recipe, *, activity_file) -> None:
-        del bro, recipe, activity_file
+      def __init__(self, bro, recipe, *, activity_file, run_log) -> None:
+        del bro, recipe, activity_file, run_log
 
       async def run(self, text: str, **options) -> None:
         runs.append((text, options['hold']))
@@ -747,3 +766,168 @@ def test_provider_diagnostic_runs_complete_recipe_text(capsys):
 
   main(['bro.native.llm', '--llm', 'echo:echo', 'diagnostic request'])
   assert capsys.readouterr().out == 'diagnostic request\n'
+
+
+@pytest.fixture
+def session(tmp_path, monkeypatch):
+  for key, value in session_environment(tmp_path).items():
+    monkeypatch.setenv(key, value)
+  return Path(os.environ['RIDE_SESSION_DIR'])
+
+
+@pytest.mark.parametrize('opened', [False, True])
+def test_resume_records_the_named_log_and_settles_the_pointer(
+  session, tmp_path, monkeypatch, opened
+):
+  pointer = trail_pointer.path()
+  assert pointer is not None
+  trail_pointer.write(pointer, 'previous')
+  monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"parent","step_id":7,"index":2}')
+  paths = []
+
+  def run(argv, env):
+    assert trail_pointer.read(pointer) is None
+    assert argv[argv.index('--continue-trail') + 1] == 'previous'
+    assert 'RIDE_SUMMONER' not in env
+    path = Path(argv[argv.index('--run-log') + 1])
+    assert path.parent == session / 'bro' / 'runs'
+    paths.append(path)
+    if opened:
+      writer = open_log(path)
+      writer.step('user_input', 'last steps')
+      writer.end('ok')
+    return 23
+
+  monkeypatch.setattr('ride.do_ride.run_agent', run)
+  assert bro_harness.BRO.run_session(_run(resume=True, prompt=None)) == 23
+  identifier = trail_pointer.read(pointer)
+  if not opened:
+    assert identifier == 'previous'
+    assert not paths[0].exists()
+    return
+  assert identifier is not None and identifier != 'previous'
+  with default_store() as store:
+    header = store.get_trail(identifier)
+    assert header['summoned_by'] == {'trail_id': 'parent', 'step_id': 7, 'index': 2}
+    assert header['end']['reason'] == 'ok'
+    rows = list(store.iter_steps(identifier))
+    assert len(rows) == 2
+    assert json.loads(rows[-1]['body'])['body'] == 'last steps'
+  state = health.health_path()
+  assert state is not None
+  assert json.loads(state.read_text())['stale_after'] is None
+
+
+@pytest.mark.parametrize('value', ['', '0', '1'])
+def test_disabled_recording_still_names_the_run_log(session, monkeypatch, value):
+  monkeypatch.setenv('TRAILS_DISABLED', value)
+  monkeypatch.setenv('RIDE_SUMMONER', 'must not reach the run')
+  start = Mock(side_effect=AssertionError('recorder started'))
+  monkeypatch.setattr(bro_harness, 'session_recorder', start)
+
+  def run(argv, env):
+    assert 'RIDE_SUMMONER' not in env
+    path = Path(argv[argv.index('--run-log') + 1])
+    open_log(path).end('ok')
+    return 0
+
+  monkeypatch.setattr('ride.do_ride.run_agent', run)
+  assert bro_harness.BRO.run_session(_run()) == 0
+  start.assert_not_called()
+  pointer = trail_pointer.path()
+  assert pointer is not None and not pointer.exists()
+  assert len(list((session / 'bro' / 'runs').glob('*.jsonl'))) == 1
+
+
+@pytest.mark.parametrize('problem', ['error', 'stopped', None])
+def test_resume_warns_from_previous_health_before_starting_the_recorder(
+  session, monkeypatch, caplog, problem
+):
+  pointer = trail_pointer.path()
+  assert pointer is not None
+  trail_pointer.write(pointer, 'previous')
+  runs = session / 'bro' / 'runs'
+  runs.mkdir(parents=True)
+  (runs / '01-old.jsonl').touch()
+  newest = runs / '02-new.jsonl'
+  newest.touch()
+  health.write(
+    'error' if problem == 'error' else 'ok',
+    interval=-100 if problem == 'stopped' else None,
+    diagnostics='previous-recorder.log',
+  )
+
+  @contextlib.contextmanager
+  def recording(*args):
+    health.write('ok', interval=None, diagnostics='current-recorder.log')
+    yield
+
+  monkeypatch.setattr(bro_harness, 'session_recorder', recording)
+  monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env: 0)
+  assert bro_harness.BRO.run_session(_run(resume=True, prompt=None)) == 0
+  if problem is None:
+    assert 'last steps' not in caplog.text
+  else:
+    assert 'last steps' in caplog.text
+    assert str(newest) in caplog.text
+    assert ('FAILING' if problem == 'error' else 'STOPPED') in caplog.text
+
+
+def test_recorder_exit_before_readiness_prevents_the_session_run(session, tmp_path, monkeypatch):
+  executable = tmp_path / 'early-exit'
+  executable.write_text(f'#!{sys.executable}\n')
+  executable.chmod(0o700)
+  original = recorder.spawn.console_script
+  monkeypatch.setattr(
+    recorder.spawn,
+    'console_script',
+    lambda name: str(executable) if name == recorder.RECORDER_COMMAND else original(name),
+  )
+  run = Mock(side_effect=AssertionError('run started before readiness'))
+  monkeypatch.setattr('ride.do_ride.run_agent', run)
+  with pytest.raises(RuntimeError, match='before readiness.*session-recorder.log'):
+    bro_harness.BRO.run_session(_run())
+  run.assert_not_called()
+
+
+def test_session_run_waits_for_the_readiness_byte(session, tmp_path, monkeypatch):
+  started = tmp_path / 'started'
+  release = tmp_path / 'release'
+  os.mkfifo(started)
+  os.mkfifo(release)
+  stopped = tmp_path / 'stopped'
+  executable = tmp_path / 'recorder'
+  executable.write_text(
+    f'#!{sys.executable}\n'
+    'import os, signal, sys\n'
+    'from pathlib import Path\n'
+    f'signal.signal(signal.SIGTERM, lambda *_: (Path({str(stopped)!r}).touch(), sys.exit(0)))\n'
+    f'with open({str(started)!r}, "wb", buffering=0) as stream: stream.write(b"1")\n'
+    f'with open({str(release)!r}, "rb", buffering=0) as stream: assert stream.read(1) == b"1"\n'
+    'os.write(int(sys.argv[sys.argv.index("--ready-fd") + 1]), b"1")\n'
+    'while True: signal.pause()\n'
+  )
+  executable.chmod(0o700)
+  original = recorder.spawn.console_script
+  monkeypatch.setattr(
+    recorder.spawn,
+    'console_script',
+    lambda name: str(executable) if name == recorder.RECORDER_COMMAND else original(name),
+  )
+  ran = threading.Event()
+
+  def run(argv, env):
+    ran.set()
+    assert not stopped.exists()
+    return 0
+
+  monkeypatch.setattr('ride.do_ride.run_agent', run)
+  with ThreadPoolExecutor() as executor:
+    launch = executor.submit(bro_harness.BRO.run_session, _run())
+    with started.open('rb', buffering=0) as stream:
+      assert stream.read(1) == b'1'
+    assert not ran.is_set()
+    with release.open('wb', buffering=0) as stream:
+      stream.write(b'1')
+    assert launch.result(timeout=10) == 0
+  assert ran.is_set() and stopped.exists()

@@ -2059,7 +2059,9 @@ def test_configured_record_reaches_harness_argv_and_banner(
   if harness == 'bro':
     spawned = []
     monkeypatch.setattr('bro.native.harness.spawn.console_script', lambda name: '/venv/bin/bro')
-    monkeypatch.setattr(do_ride, 'run_agent', lambda argv: spawned.append(argv) or 0)
+    monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
+    monkeypatch.setenv('TRAILS_DISABLED', '1')
+    monkeypatch.setattr(do_ride, 'run_agent', lambda argv, env: spawned.append(argv) or 0)
     assert BRO.run_session(run) == 0
     [argv] = spawned
     assert json.loads(argv[argv.index('--resolved-recipe') + 1]) == run.resolved_recipe

@@ -35,7 +35,8 @@ from bro.trails.display import (
 )
 
 FORK_HELP = (
-  'fork a recorded conversation into a new trail: pass any trail id, or omit the value to fork '
+  'fork a recorded conversation, saving it as a run log that only a managed session records as '
+  'a trail: pass any trail id, or omit the value to fork '
   "the bro's newest recorded call. prior exchanges are rendered as history and the fork runs "
   "the trail's recorded LLM recipe unless --llm replaces it"
 )
@@ -299,6 +300,9 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   add_llm_flags(parser)
   add_resolved_recipe_flag(parser)
   parser.add_argument('--hold', choices=HOLDS, default=None, help=HOLD_HELP.format('guided'))
+  parser.add_argument(
+    '--run-log', type=Path, default=None, env=False, help='save the run log at this path'
+  )
   args = parser.parse(argv)
 
   continuing = args['continue_trail'] is not None
@@ -341,6 +345,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
             'recipe': resolved_recipe,
             'at': args['at'],
             'activity_file': args['activity_file'],
+            'run_log': args['run_log'],
           }
           if continuing:
             fork_arguments['hold'] = hold
@@ -356,7 +361,12 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
       log.verbose('creating bro %s', args['bro'])
       assert resolved_recipe is not None
-      runner = Runner(create_bro(args['bro']), resolved_recipe, activity_file=args['activity_file'])
+      runner = Runner(
+        create_bro(args['bro']),
+        resolved_recipe,
+        activity_file=args['activity_file'],
+        run_log=args['run_log'],
+      )
     initial: Optional[str] = args['what']
     use_tui = _tui_supported()
 
@@ -392,14 +402,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     except KeyboardInterrupt:
       return 130
     finally:
-      if runner.trail_id is not None:
-        log.info(
-          'conversation recorded as trail %s; fork it with: %s %s --fork %s',
-          runner.trail_id,
-          ' '.join(program),
-          args['bro'],
-          runner.trail_id,
-        )
+      if runner.run_log is not None:
+        log.info('conversation saved to %s', runner.run_log)
     if delivered is not None:
       return _relay_summoned_answer(delivered.answer)
     return None

@@ -21,7 +21,7 @@ class Tracker(ABC):
   current_tool_step_id: Optional[ToolStepSource] = None
 
   @abstractmethod
-  def start_trail(
+  def start(
     self,
     bro: str,
     recipe: dict,
@@ -30,26 +30,25 @@ class Tracker(ABC):
     interactive: bool,
     surface: str,
     hold: str = 'unattended',
-    summoned_by: Optional[dict[str, Any]] = None,
-  ) -> str:
-    """Open a trail and return its id."""
+  ) -> None:
+    """Open a run."""
     ...
 
   @abstractmethod
   def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[int]:
-    """Append one event and return its sink-assigned id when available."""
+    """Append one event and return its step number when counted."""
     ...
 
   @abstractmethod
-  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
-    """Close the current trail; repeated calls are ignored."""
+  def end(self, reason: EndReason, detail: Optional[str] = None) -> None:
+    """Close the current run; repeated calls are ignored."""
     ...
 
 
 class NullTracker(Tracker):
   """No-op tracker for explicit recording opt-out and tests."""
 
-  def start_trail(
+  def start(
     self,
     bro: str,
     recipe: dict,
@@ -58,12 +57,11 @@ class NullTracker(Tracker):
     interactive: bool,
     surface: str,
     hold: str = 'unattended',
-    summoned_by: Optional[dict[str, Any]] = None,
-  ) -> str:
-    return ''
+  ) -> None:
+    pass
 
   def step(self, kind: StepKind, body: Any, **extras: Any) -> Optional[int]:
     return None
 
-  def end_trail(self, reason: EndReason, detail: Optional[str] = None) -> None:
+  def end(self, reason: EndReason, detail: Optional[str] = None) -> None:
     pass

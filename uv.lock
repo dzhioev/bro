@@ -542,6 +542,7 @@ dependencies = [
     { name = "trafilatura" },
     { name = "tree-sitter" },
     { name = "tree-sitter-bash" },
+    { name = "watchfiles" },
 ]
 
 [package.metadata]
@@ -557,6 +558,7 @@ requires-dist = [
     { name = "trafilatura", specifier = "==2.3.1" },
     { name = "tree-sitter", specifier = "==0.26.0" },
     { name = "tree-sitter-bash", specifier = "==0.25.1" },
+    { name = "watchfiles", specifier = "==1.3.0" },
 ]
 
 [[package]]

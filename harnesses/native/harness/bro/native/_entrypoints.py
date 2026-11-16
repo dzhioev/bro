@@ -10,5 +10,9 @@ def bro_native_llm():
   return run_cli('bro.native.llm', sys.argv)
 
 
+def bro_native_trail_recorder():
+  return run_cli('bro.native.trail_recorder', sys.argv)
+
+
 def bro_run():
   return run_cli('bro.run', sys.argv)
