@@ -2,7 +2,10 @@
 
 This file is the specification of [#1302](https://github.com/dzhioev/bro/issues/1302).
 It lives on the branch `design/1302-native-run-logs`, which is never merged:
-the pull request that carries it is a design review only.
+the pull request that carried it, [#1309](https://github.com/dzhioev/bro/pull/1309), was its design review only,
+and closed without merging once the reviewer and the user had approved it.
+The design is final;
+a decision changed while building it is recorded in the root task's `## Design changelog`.
 
 ## 1. Goal, scope and constraints
 
