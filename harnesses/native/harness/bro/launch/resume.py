@@ -46,6 +46,7 @@ def resume(
   at: Optional[int] = None,
   hold: Optional[str] = None,
   activity_file: Optional[Path] = None,
+  run_log: Optional[Path] = None,
 ) -> ResumedCall:
   """Continue a recorded call at an explicit or latest consistent fork point."""
   if trail_ref == RESUME_LATEST:
@@ -70,5 +71,6 @@ def resume(
     hold=hold,
     fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
     activity_file=activity_file,
+    run_log=run_log,
   )
   return ResumedCall(runner=runner, history=history, trail_id=trail_id)

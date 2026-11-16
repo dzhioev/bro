@@ -403,7 +403,6 @@ PYTEST_FILES = [
   'bro/broker/broxy_test.py',
   'bro/broker/transports/tcp_test.py',
   'bro/summon_test.py',
-  'harnesses/native/harness/bro/trails/record/bro_test.py',
   'harnesses/claude/harness/bro/claude/trail_recorder_test.py',
   'harnesses/claude/harness/bro/claude/transcripts_test.py',
   'harnesses/claude/harness/bro/claude/usage_publisher_test.py',

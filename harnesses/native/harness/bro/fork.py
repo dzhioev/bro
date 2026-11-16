@@ -11,13 +11,12 @@ from bro.llm.resolved import IN_PROCESS_SOURCE, ResolvedRecipe
 from bro.llm.tracker import NullTracker, Tracker
 from bro.llm.wire import Prefix
 from bro.native.harness import BRO
+from bro.native.run_log import RunLog
 from bro.native.runner import Runner
 from bro.registry import create_bro
 from bro.trails.lineage import walk_chain
 from bro.trails.model import ForkedFrom, RecordedTrail, Step
 
-# the harness whose records this module replays; `bro/trails/record/bro.py`
-# stamps it on every trail it opens
 _BRO_HARNESS = 'bro'
 
 
@@ -123,6 +122,7 @@ def fork(
   hold: Optional[str] = None,
   fetch_forked_from: Optional[Callable[[str], RecordedTrail]] = None,
   activity_file: Optional[Path] = None,
+  run_log: Optional[Path] = None,
 ) -> Runner:
   """Build a continuation with a server chain or a restored same-wire prefix."""
   if forked_from_trail.header.harness != _BRO_HARNESS:
@@ -181,7 +181,7 @@ def fork(
   # pre-assigning it bypasses the runner's fresh-run fragment append.
   bro._system_prompt_override = effective_system_prompt
 
-  runner = Runner(bro, resolved, activity_file=activity_file)
+  runner = Runner(bro, resolved, activity_file=activity_file, run_log=run_log)
   runner._tracker = (
     NullTracker() if not record else (tracker if tracker is not None else runner._make_tracker())
   )
@@ -196,7 +196,7 @@ def fork(
     trail_id=forked_from_trail.header.id,
     step_id=up_to_step_id,
   )
-  trail_id = runner._tracker.start_trail(
+  runner._tracker.start(
     bro=bro.name,
     recipe=selected_recipe.dump(),
     system_prompt=effective_system_prompt,
@@ -205,7 +205,7 @@ def fork(
     surface=surface,
     hold=effective_hold,
   )
-  runner.trail_id = trail_id if len(trail_id) > 0 else None
+  runner.run_log = runner._tracker.path if isinstance(runner._tracker, RunLog) else None
   return runner
 
 

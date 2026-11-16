@@ -78,7 +78,8 @@ The bro-native loop lives in `bro.native`; wire clients implement the core port.
 - `usage.py` — shared per-model usage accounting, the env-pointed usage file every harness publishes its cumulative usage through, footer formatting/parsing, and the `usage` CLI.
   `from_wire_counts(wire, raw)` normalizes raw usage through the wire roster.
 - `tracker.py` — the dependency-free `Tracker` ABC, durable sibling of `Observer`, plus `NullTracker`.
-  Trail records and harness recorders are owned by `bro/trails/`.
+  `start` opens a run, `step` returns its step number where counted, and `end` closes it once.
+  Each harness owns its recording implementation.
 - `pricing.py` — canonical table digests and the once-per-process warning for a table read more than 30 days after its as-of date.
 
 ## Conventions

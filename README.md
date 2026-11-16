@@ -393,7 +393,7 @@ The operator can change bro targets or credentials in a live tree with `ride ove
 The [permission cheat sheet](bro/reference/permissions_cheatsheet.md) covers the usual setups without requiring the model.
 The host authorizes every request and journals it, and the child's trail records who summoned it.
 
-Afterwards, every run on every harness is a recorded trail:
+Afterwards, every session on every harness is a recorded trail:
 
 ```console
 rewind show <trail-id>

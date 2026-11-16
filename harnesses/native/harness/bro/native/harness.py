@@ -1,7 +1,9 @@
 import asyncio
 import math
+import os
 import subprocess
 import time
+from contextlib import nullcontext
 from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Literal, Optional, Protocol, cast
 
@@ -14,8 +16,10 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.monitor import trail_pointer
+from bro.monitor import health, session_dir, trail_pointer
 from bro.native import dev_mcp, loop
+from bro.native.recorder import cleared_pointer, session_recorder
+from bro.native.run_log import new_path, private_directory
 from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -248,7 +252,7 @@ class BroHarness(Harness):
   def missing_session_error(self, workspace: Workspace) -> str:
     return (
       f'cannot resume bro harness workspace {workspace.name!r}: no trail pointer was published; '
-      'the session may have run without a broker or with --no-trails'
+      'the session ran with --no-trails or its recorder never opened a trail'
     )
 
   def read_subject(self, workspace: Workspace) -> str | None:
@@ -284,6 +288,9 @@ class BroHarness(Harness):
     except FileNotFoundError as error:
       log.error('%s', error)
       return 1
+    directory = session_dir()
+    if directory is None:
+      raise RuntimeError('native session requires a session directory')
     resume_trail: Optional[str] = None
     if spec.resume:
       pointer = trail_pointer.path()
@@ -291,16 +298,37 @@ class BroHarness(Harness):
       if resume_trail is None:
         log.error('no bro harness trail recorded for workspace %s', spec.name)
         return 1
+      problem = health.problem()
+      if problem is not None:
+        newest = max((directory / 'bro' / 'runs').glob('*.jsonl'))
+        log.warning(
+          "session recording %s; the trail may lack the previous run's last steps; run log: %s",
+          problem,
+          newest,
+        )
+    run_log = new_path(directory / 'bro' / 'runs')
+    private_directory(run_log.parent)
     verb = 'run' if spec.solo else 'chat'
     argv = [
       executable,
       verb,
       *_session_options(spec, resume_trail),
+      '--run-log',
+      str(run_log),
       '--',
       spec.bro,
       *([] if spec.prompt is None else [spec.prompt]),
     ]
-    return run_agent(argv)
+    with cleared_pointer(run_log):
+      recording = (
+        nullcontext()
+        if 'TRAILS_DISABLED' in os.environ
+        else session_recorder(run_log, directory / 'bro' / 'session-recorder.log', os.environ)
+      )
+      with recording:
+        env = dict(os.environ)
+        env.pop('RIDE_SUMMONER', None)
+        return run_agent(argv, env=env)
 
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets

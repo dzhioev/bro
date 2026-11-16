@@ -568,7 +568,6 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
     captured['history'] = history
 
   forked_runner = _MockRunner()
-  forked_runner.trail_id = 'new-trail'
   history: list[DisplayRecord] = [
     UserInput(
       key='recorded:old-trail:message:1:0:0',
@@ -579,7 +578,9 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
     )
   ]
 
-  def fake_resume(client, bro_name, trail_ref, *, recipe, at=None, activity_file=None):
+  def fake_resume(
+    client, bro_name, trail_ref, *, recipe, at=None, activity_file=None, run_log=None
+  ):
     captured['trail_ref'] = trail_ref
     captured['recipe'] = recipe
     captured['at'] = at
@@ -598,7 +599,7 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
   assert captured['runner'] is forked_runner
   assert captured['initial'] is None
   assert captured['history'] is history
-  assert 'bro chat record --fork new-trail' in capsys.readouterr().err
+  assert 'conversation saved' not in capsys.readouterr().err
 
 
 def test_bare_fork_selects_the_newest_call(monkeypatch):
@@ -606,7 +607,9 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
 
   captured: dict = {}
 
-  def fake_resume(client, bro_name, trail_ref, *, recipe, at=None, activity_file=None):
+  def fake_resume(
+    client, bro_name, trail_ref, *, recipe, at=None, activity_file=None, run_log=None
+  ):
     captured['trail_ref'] = trail_ref
     return ResumedCall(runner=_MockRunner(), history=[], trail_id='old-trail')
 
@@ -623,16 +626,16 @@ def test_bare_fork_selects_the_newest_call(monkeypatch):
   assert captured['trail_ref'] == 'latest'
 
 
-def test_prints_fork_hint_when_a_trail_was_recorded(monkeypatch, capsys):
+def test_prints_run_log_path_when_a_conversation_was_saved(monkeypatch, capsys):
   async def fake_call_text(runner, initial, history=None, hold='guided'):
-    runner.trail_id = 'trail-xyz'
+    await runner.send('hello', surface='test')
 
-  monkeypatch.setattr('bro.registry.get_class', lambda name: RecordBro)
+  monkeypatch.setattr('bro.launch.call.Runner', lambda *args, **kwargs: _MockRunner())
   monkeypatch.setattr('bro.launch.call.call_text', fake_call_text)
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
 
   assert _chat(['bro', 'record', 'hi']) is None
-  assert 'bro chat record --fork trail-xyz' in capsys.readouterr().err
+  assert 'conversation saved to ' in capsys.readouterr().err
 
 
 def test_initial_slash_invocation_passes_through_verbatim(monkeypatch):
@@ -1282,7 +1285,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   recorded_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='low')
 
   def fake_resume(
-    client, bro_name, trail_ref, *, recipe, at=None, hold='guided', activity_file=None
+    client, bro_name, trail_ref, *, recipe, at=None, hold='guided', activity_file=None, run_log=None
   ):
     captured.update(
       trail_ref=trail_ref, recipe=recipe, at=at, hold=hold, activity_file=activity_file

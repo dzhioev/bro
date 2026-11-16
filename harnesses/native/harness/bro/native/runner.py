@@ -5,11 +5,11 @@ import tempfile
 import threading
 import time
 import traceback
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import AbstractContextManager, ExitStack, contextmanager, nullcontext
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Optional, Self
+from typing import Optional, Self
 
 from bro import brash_policy, results, turn_end, watch_delivery, watches
 from bro.base import log
@@ -30,15 +30,13 @@ from bro.llm.observer import (
 from bro.llm.resolved import IN_PROCESS_SOURCE, ResolvedRecipe
 from bro.llm.tracker import EndReason, NullTracker, ToolStepSource, Tracker
 from bro.llm.wire import SystemPrompt, Text, UserMessage
-from bro.monitor import session_dir, trail_pointer
+from bro.monitor import session_dir
 from bro.native import loop
 from bro.native.harness import BRO
 from bro.native.llm import LLM
+from bro.native.run_log import RunLog
 from bro.run_lifecycle import RunLifecycle
-from bro.summon import summoned, summoned_by_from_env
-from bro.trails.record.bro import Recorder
 
-_TRAILS_DISABLED_ENV = 'TRAILS_DISABLED'
 _WATCH_POLL_SECONDS = 0.1
 
 
@@ -48,39 +46,9 @@ def _observer_scope(observer: Observer) -> AbstractContextManager[Observer]:
   return nullcontext(observer)
 
 
-def _default_factory() -> Tracker:
-  # explicit kill switch wins over everything: define `TRAILS_DISABLED` (to any
-  # value, presence is what counts — same convention as `NO_COLOR` /
-  # `RIDE_IN_CONTAINER`) to skip recording for a process — local dev, ad-hoc runs,
-  # or repairing trails-server itself (recording is otherwise mandatory and
-  # crash-on-failure, so a broken server blocks every bro). this only governs the default
-  # factory: a per-run `tracker=` and a custom `set_default_tracker_factory(...)`
-  # still take precedence.
-  if os.environ.get(_TRAILS_DISABLED_ENV) is not None:
-    return NullTracker()
-  # recording is otherwise on, and `NullTracker` opt-in:
-  # - kill switch: `TRAILS_DISABLED` set in the environment.
-  # - tests: `conftest.py`'s `set_default_tracker_factory(NullTracker)`.
-  # - one-shot exploration: `Runner(bro).run(..., surface='experiment', tracker=NullTracker())`.
-  from bro.trails.store import default_store
-
-  return Recorder(default_store())
-
-
-# default factory for the per-run `Tracker` an unconfigured runner uses. swap with
-# `set_default_tracker_factory(...)` — `conftest.py` pins it to `NullTracker`
-# so tests never try to record.
-_default_tracker_factory: Callable[[], Tracker] = _default_factory
-
-
-def set_default_tracker_factory(factory: Callable[[], Tracker]) -> None:
-  global _default_tracker_factory
-  _default_tracker_factory = factory
-
-
 class Runner:
-  """one bro-native conversation: the LLM it is sent through, the trail it
-  records to, and the observer and broker channel it reports through.
+  """one bro-native conversation: the LLM it is sent through, the run log it
+  writes, and the observer and broker channel it reports through.
 
   `run()` is the one-shot path and owns its own lifetime; an interactive owner
   keeps the runner's lifetime around the whole conversation and calls `send()`
@@ -89,7 +57,12 @@ class Runner:
   """
 
   def __init__(
-    self, bro: BaseBro, recipe: Recipe | ResolvedRecipe, *, activity_file: Optional[Path] = None
+    self,
+    bro: BaseBro,
+    recipe: Recipe | ResolvedRecipe,
+    *,
+    activity_file: Optional[Path] = None,
+    run_log: Optional[Path] = None,
   ):
     self.bro = bro
     self.resolved_recipe = (
@@ -113,15 +86,9 @@ class Runner:
     # application must not get terminal output, or a display session, it never
     # asked for.
     self._observer: Observer = NullObserver()
-    # sibling of _observer — the tracker records the run for offline analysis
-    # rather than rendering it to stderr. swapped in run() / send() the same way
-    # _observer is.
     self._tracker: Tracker = NullTracker()
-    # the id of the trail this run records to — set when the trail opens (first
-    # send / run start, or by bro.fork on a preseeded runner); None until then
-    # and when recording is off. surfaces read it to point the user at the
-    # recorded conversation (e.g. `call`'s resume hint).
-    self.trail_id: Optional[str] = None
+    self._run_log_path = run_log
+    self.run_log: Optional[Path] = None
     self._lifetime_active = False
     self._last_end_reason: Optional[EndReason] = None
     self._last_end_detail: Optional[str] = None
@@ -245,21 +212,16 @@ class Runner:
     observer: Observer,
     tracker: Optional[Tracker],
     surface: str,
-    summoned_by: Optional[dict[str, Any]],
-  ) -> tuple[LLM, list[SystemPrompt | UserMessage], str]:
-    # the shared start sequence of run() and send(): pin the resolved observer
-    # and the tracker — a caller-supplied one wins (tests inject recording
-    # fakes) — on self before _create_llm, so the LLM construction path picks
-    # them up, then build the LLM, compose the hold prompt, open the trail, and
-    # seed the message list.
+  ) -> tuple[LLM, list[SystemPrompt | UserMessage]]:
     if self.registry.closed:
       self.inbox = Inbox()
       self.registry = Registry(self.inbox)
     self._observer = observer
+    self.run_log = None
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
     system_prompt = self.bro.system_prompt_for(hold=hold, harness=BRO)
-    trail_id = self._tracker.start_trail(
+    self._tracker.start(
       bro=self.bro.name,
       recipe=self.recipe.dump(),
       system_prompt=system_prompt,
@@ -267,16 +229,13 @@ class Runner:
       interactive=interactive,
       surface=surface,
       hold=hold,
-      summoned_by=summoned_by,
     )
-    self.trail_id = trail_id if len(trail_id) > 0 else None
-    if self.trail_id is not None:
-      trail_pointer.publish(self.trail_id)
+    self.run_log = self._tracker.path if isinstance(self._tracker, RunLog) else None
     messages = [
       SystemPrompt(system_prompt),
       UserMessage((Text(input),)),
     ]
-    return llm, messages, trail_id
+    return llm, messages
 
   def __enter__(self) -> Self:
     if self._lifetime_active:
@@ -317,7 +276,7 @@ class Runner:
       pass  # a summoned run's clean end: the surface delivers the answer
     elif isinstance(exception, Exception):
       reason = 'error'
-      detail = str(exception)
+      detail = f'{type(exception).__name__}: {exception}'
       self._record_error_step(exception)
 
     resources = self._lifetime_resources
@@ -333,7 +292,7 @@ class Runner:
     self._last_end_reason = reason
     self._last_end_detail = detail
     log.verbose('run lifetime ended: %s', reason)
-    self._tracker.end_trail(reason, detail=detail)
+    self._tracker.end(reason, detail=detail)
     return False
 
   async def run(
@@ -354,22 +313,19 @@ class Runner:
         effective_observer.on_event(TurnFailedEvent(refusal))
         raise BroRaised(refusal)
       try:
-        llm, messages, trail_id = self._start(
+        llm, messages = self._start(
           input,
           interactive=False,
           hold=hold,
           observer=effective_observer,
           tracker=tracker,
           surface=surface,
-          summoned_by=summoned_by_from_env(),
         )
       except Exception as error:
         effective_observer.on_event(TurnFailedEvent(str(error)))
         raise
-      log.info('run started%s', f' (trail {trail_id})' if len(trail_id) > 0 else '')
+      log.info('run started%s', f' (run log {self.run_log})' if self.run_log is not None else '')
       channel = self._make_channel()
-      if channel is not None and len(trail_id) > 0:
-        channel.trail(trail_id)
       result: Optional[str] = None
       try:
         with self:
@@ -409,31 +365,18 @@ class Runner:
         # in-reply report; the LLM stays unbuilt, so a later send re-checks
         effective_observer.on_event(TurnRefusedEvent(refusal))
         return refusal
-      # the tracker is locked in on first send (the LLM is constructed once and
-      # records one trail); later calls can't swap it. surface (the trail
-      # header's surface label) and hold are locked in the same way.
       try:
-        self._llm, messages, trail_id = self._start(
+        self._llm, messages = self._start(
           message,
           interactive=True,
           hold=hold,
           observer=effective_observer,
           tracker=tracker,
           surface=surface,
-          summoned_by=summoned_by_from_env(),
         )
       except Exception as error:
         effective_observer.on_event(TurnFailedEvent(str(error)))
         raise
-      if summoned():
-        # a summoned interactive run announces its trail like a summoned run()
-        # would — the summoner's wait re-arms on it; an un-summoned conversation
-        # announces nothing (its channel is the enclosing session's, not its own)
-        channel = self._make_channel()
-        if channel is not None:
-          if len(trail_id) > 0:
-            channel.trail(trail_id)
-          channel.close()
     else:
       if observer is not None:
         # unlike the tracker, the observer is rebindable mid-conversation: a
@@ -534,7 +477,7 @@ class Runner:
       log.warning('failed to record the error step: %s', step_error)
 
   def _make_tracker(self) -> Tracker:
-    return _default_tracker_factory()
+    return RunLog(self._run_log_path)
 
   def _make_channel(self) -> Optional[RunLifecycle]:
     return RunLifecycle.from_env()

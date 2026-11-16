@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 import threading
 from collections.abc import Sequence
@@ -9,7 +8,6 @@ from typing import ClassVar, Optional
 import pytest
 
 import bro.mcp as mcp
-import bro.native.runner as native_runner
 from bro import quest, results, summon, turn_end, watches
 from bro.authority_view_test_helper import publish
 from bro.base import credentials
@@ -41,7 +39,7 @@ from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.native.echo import Echo
 from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.llm import LLM
-from bro.native.runner import Runner, set_default_tracker_factory
+from bro.native.runner import Runner
 from bro.openai.declaration import Recipe as OpenAISpec
 from bro.quest_test_helper import TIMEOUT, running_live_broker
 from bro.run_lifecycle import MAX_ANSWER_BYTES, RunLifecycle
@@ -202,11 +200,11 @@ class TestRun:
     assert captured[0] is explicit
 
   @pytest.mark.asyncio
-  async def test_run_calls_start_and_end_trail(self):
+  async def test_run_calls_start_and_end(self):
     calls: list[tuple[str, dict]] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(
+      def start(
         self,
         bro,
         recipe,
@@ -215,8 +213,7 @@ class TestRun:
         interactive,
         surface,
         hold='unattended',
-        summoned_by=None,
-      ) -> str:
+      ) -> None:
         calls.append(
           (
             'start',
@@ -227,13 +224,12 @@ class TestRun:
               'interactive': interactive,
               'surface': surface,
               'forked_from': forked_from,
-              'summoned_by': summoned_by,
             },
           )
         )
-        return 'tid'
+        return None
 
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         calls.append(('end', {'reason': reason}))
 
     runner = StubRunner(MockLLM(response='ok'), name='trace-bro', system_prompt='base prompt')
@@ -244,50 +240,15 @@ class TestRun:
     assert start_kwargs['interactive'] is False
     assert start_kwargs['surface'] == 'test'
     assert start_kwargs['forked_from'] is None
-    assert start_kwargs['summoned_by'] is None
     assert 'base prompt' in start_kwargs['system_prompt']
     assert calls[1][1]['reason'] == 'ok'
-
-  @pytest.mark.asyncio
-  async def test_run_passes_summoned_by_from_the_launch_env(self, monkeypatch):
-    captured: list[Optional[dict]] = []
-
-    class RecordingTracker(NullTracker):
-      def start_trail(
-        self,
-        bro,
-        recipe,
-        system_prompt,
-        forked_from,
-        interactive,
-        surface,
-        hold='unattended',
-        summoned_by=None,
-      ) -> str:
-        captured.append(summoned_by)
-        return 'tid'
-
-    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-parent"}')
-    await StubRunner().run('hello', tracker=RecordingTracker(), surface='test')
-    assert captured == [{'trail_id': 'T-parent'}]
-    # consumed on read: a nested in-process run spawned by this process's tools
-    # must not inherit the marker and re-stamp the parent's summoned_by
-    assert 'RIDE_SUMMONER' not in os.environ
-    await StubRunner().run('again', tracker=RecordingTracker(), surface='test')
-    monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"T-universal","step_id":7,"index":2}')
-    await StubRunner().run('universal pointer', tracker=RecordingTracker(), surface='test')
-    assert captured == [
-      {'trail_id': 'T-parent'},
-      None,
-      {'trail_id': 'T-universal', 'step_id': 7, 'index': 2},
-    ]
 
   @pytest.mark.asyncio
   async def test_run_end_reason_is_raised_on_bro_raised(self):
     calls: list[str] = []
 
     class RecordingTracker(NullTracker):
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         calls.append(reason)
 
     class Boom(MockLLM):
@@ -306,7 +267,7 @@ class TestRun:
       def step(self, kind, body, **extras) -> None:
         calls.append(('step', kind, body))
 
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         calls.append(('end', reason))
 
     class Boom(MockLLM):
@@ -331,7 +292,7 @@ class TestRun:
       def step(self, kind, body, **extras) -> None:
         raise ConnectionError('tracker down')
 
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         calls.append(reason)
 
     class Boom(MockLLM):
@@ -341,39 +302,6 @@ class TestRun:
     with pytest.raises(RuntimeError, match='kaboom'):
       await StubRunner(Boom()).run('x', tracker=BrokenTracker(), surface='test')
     assert calls == ['error']
-
-  def test_default_tracker_factory_can_be_swapped(self):
-    sentinel = NullTracker()
-
-    set_default_tracker_factory(lambda: sentinel)
-    try:
-      assert StubRunner()._make_tracker() is sentinel
-    finally:
-      set_default_tracker_factory(NullTracker)
-
-  def test_default_factory_records_without_a_trails_config(self, monkeypatch, tmp_path):
-    # `_default_factory` refuses to silently fall back to `NullTracker`: with no
-    # credential to select a backend, the run records to local storage.
-    from bro.trails.local import LocalStore
-    from bro.trails.record.bro import Recorder
-
-    monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
-    monkeypatch.setattr(credentials, '_default_store', None)
-    monkeypatch.setattr('bro.trails.store.paths.project_root', lambda: tmp_path)
-    monkeypatch.delenv(native_runner._TRAILS_DISABLED_ENV, raising=False)
-
-    tracker = native_runner._default_factory()
-
-    assert isinstance(tracker, Recorder)
-    assert isinstance(tracker._store, LocalStore)
-
-  # presence is what counts (same convention as NO_COLOR / RIDE_IN_CONTAINER):
-  # any value, including '' and '0', enables the switch. unset it to record.
-  @pytest.mark.parametrize('value', ['1', '', '0', 'whatever'])
-  def test_default_factory_disabled_by_env_var(self, monkeypatch, value):
-    # the kill switch wins before any backend resolution.
-    monkeypatch.setenv(native_runner._TRAILS_DISABLED_ENV, value)
-    assert isinstance(native_runner._default_factory(), NullTracker)
 
   @pytest.mark.asyncio
   async def test_run_passes_system_and_user_messages(self):
@@ -449,21 +377,21 @@ class TestLifetime:
     runner = StubRunner()
     with runner:
       pass
-    assert runner.trail_id is None
+    assert runner.run_log is None
 
   @pytest.mark.parametrize(
     'exception,reason,detail',
     [
       (BroRaised('blocked'), 'raised', 'blocked'),
       (AnswerDelivered('done'), 'ok', None),
-      (RuntimeError('broken'), 'error', 'broken'),
+      (RuntimeError('broken'), 'error', 'RuntimeError: broken'),
     ],
   )
   def test_exit_maps_the_lifetime_outcome(self, exception, reason, detail):
     ends: list[tuple[str, Optional[str]]] = []
 
     class RecordingTracker(NullTracker):
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         ends.append((reason, detail))
 
     runner = StubRunner()
@@ -477,7 +405,7 @@ class TestLifetime:
     ends: list[str] = []
 
     class RecordingTracker(NullTracker):
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         ends.append(reason)
 
     runner = StubRunner()
@@ -557,11 +485,11 @@ class TestLifetime:
     calls: list[str] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(self, *args, **kwargs) -> str:
+      def start(self, *args, **kwargs) -> None:
         calls.append('start')
-        return 'tid'
+        return None
 
-      def end_trail(self, reason, detail=None) -> None:
+      def end(self, reason, detail=None) -> None:
         calls.append(f'end:{reason}')
 
     runner = StubRunner()
@@ -628,11 +556,11 @@ class TestSend:
     assert isinstance(runner._observer, NullObserver)
 
   @pytest.mark.asyncio
-  async def test_send_first_call_starts_interactive_trail(self):
+  async def test_send_first_call_starts_interactive_run(self):
     calls: list[tuple[str, dict]] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(
+      def start(
         self,
         bro,
         recipe,
@@ -641,32 +569,30 @@ class TestSend:
         interactive,
         surface,
         hold='unattended',
-        summoned_by=None,
-      ) -> str:
+      ) -> None:
         calls.append(
           (
             'start',
             {'interactive': interactive, 'surface': surface, 'hold': hold, 'bro': bro},
           )
         )
-        return 'tid'
+        return None
 
     runner = StubRunner(name='send-bro')
     await runner.send('first', tracker=RecordingTracker(), surface='test')
     await runner.send('second', surface='test')
-    # start_trail fires once — interactive trails span the whole conversation.
     assert [c[0] for c in calls] == ['start']
     assert calls[0][1]['interactive'] is True
     assert calls[0][1]['surface'] == 'test'
     assert calls[0][1]['bro'] == 'send-bro'
-    assert runner.trail_id == 'tid'
+    assert runner.run_log is None
 
   @pytest.mark.asyncio
-  async def test_send_labels_trail_with_callers_surface(self):
+  async def test_send_labels_run_with_callers_surface(self):
     calls: list[str] = []
 
     class RecordingTracker(NullTracker):
-      def start_trail(
+      def start(
         self,
         bro,
         recipe,
@@ -675,14 +601,12 @@ class TestSend:
         interactive,
         surface,
         hold='unattended',
-        summoned_by=None,
-      ) -> str:
+      ) -> None:
         calls.append(surface)
-        return 'tid'
+        return None
 
     runner = StubRunner()
     await runner.send('first', tracker=RecordingTracker(), surface='call')
-    # surface labels the trail header, so only the opening send matters
     await runner.send('second', surface='ignored')
     assert calls == ['call']
 
@@ -1085,33 +1009,17 @@ def _make_channel() -> tuple[RunLifecycle, _RecordingTransport]:
   return RunLifecycle(Client(transport), 'X'), transport
 
 
-class _TrailIDTracker(NullTracker):
-  def start_trail(
-    self,
-    bro,
-    recipe,
-    system_prompt,
-    forked_from,
-    interactive,
-    surface,
-    hold='unattended',
-    summoned_by=None,
-  ) -> str:
-    return 'trail-42'
-
-
 class TestRunLifecycle:
-  """what `run()` emits over the broker channel, and when relative to the trail."""
+  """what `run()` emits over the broker channel."""
 
   @pytest.mark.asyncio
-  async def test_terminal_run_emits_started_and_completed(self):
+  async def test_terminal_run_emits_only_completed(self):
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='the result'))
-    result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
+    result = await runner.run('input', tracker=NullTracker(), surface='test')
     assert result == 'the result'
-    assert [m.type for m in transport.sent] == ['mark', 'result']
-    assert transport.sent[0].payload == {'transition': 'trail', 'trail_id': 'trail-42'}
-    assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the result'}
+    assert [m.type for m in transport.sent] == ['result']
+    assert transport.sent[0].payload == {'outcome': 'ok', 'value': 'the result'}
     assert transport.closed is True
 
   @pytest.mark.asyncio
@@ -1137,17 +1045,17 @@ class TestRunLifecycle:
     assert [m.type for m in transport.sent] == ['result']
     assert transport.sent[0].payload == {
       'outcome': 'failed',
-      'error': 'kaboom',
+      'error': 'RuntimeError: kaboom',
       'detail': {'reason': 'error'},
     }
     assert transport.closed is True
 
   @pytest.mark.asyncio
-  async def test_started_follows_start_trail_and_completed_follows_end_trail(self):
+  async def test_completed_follows_tracker_end(self):
     events: list[str] = []
 
     class OrderTracker(NullTracker):
-      def start_trail(
+      def start(
         self,
         bro,
         recipe,
@@ -1156,13 +1064,12 @@ class TestRunLifecycle:
         interactive,
         surface,
         hold='unattended',
-        summoned_by=None,
-      ) -> str:
-        events.append('start_trail')
-        return 'tid'
+      ) -> None:
+        events.append('start')
+        return None
 
-      def end_trail(self, reason, detail=None) -> None:
-        events.append('end_trail')
+      def end(self, reason, detail=None) -> None:
+        events.append('end')
 
     class OrderTransport(_RecordingTransport):
       def send(self, message: Message) -> None:
@@ -1172,14 +1079,15 @@ class TestRunLifecycle:
     transport = OrderTransport()
     runner = _ChannelRunner(RunLifecycle(Client(transport), 'X'), _StubLLM())
     await runner.run('input', tracker=OrderTracker(), surface='test')
-    assert events == ['start_trail', 'mark', 'end_trail', 'result']
+    assert events == ['start', 'end', 'result']
 
   @pytest.mark.asyncio
-  async def test_native_run_publishes_its_current_trail_pointer(self, monkeypatch, tmp_path):
+  async def test_nested_run_leaves_the_session_pointer_unchanged(self, monkeypatch, tmp_path):
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path))
+    trail_pointer.write(tmp_path / trail_pointer.FILENAME, 'session-trail')
     runner = _ChannelRunner(None, _StubLLM())
-    await runner.run('input', tracker=_TrailIDTracker(), surface='test')
-    assert trail_pointer.read(tmp_path / trail_pointer.FILENAME) == 'trail-42'
+    await runner.run('input', surface='test')
+    assert trail_pointer.read(tmp_path / trail_pointer.FILENAME) == 'session-trail'
 
   @pytest.mark.asyncio
   async def test_run_without_channel_emits_nothing(self, monkeypatch):
@@ -1197,24 +1105,22 @@ class TestRunLifecycle:
   async def test_answer_delivered_completes_the_run_with_the_answer(self):
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(error=AnswerDelivered('the answer')))
-    result = await runner.run('input', tracker=_TrailIDTracker(), surface='test')
+    result = await runner.run('input', tracker=NullTracker(), surface='test')
     assert result == 'the answer'
-    assert [m.type for m in transport.sent] == ['mark', 'result']
-    assert transport.sent[1].payload == {'outcome': 'ok', 'value': 'the answer'}
+    assert [m.type for m in transport.sent] == ['result']
+    assert transport.sent[0].payload == {'outcome': 'ok', 'value': 'the answer'}
 
   @pytest.mark.asyncio
-  async def test_summoned_send_announces_started(self, monkeypatch):
+  async def test_summoned_send_emits_no_trail_mark(self, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
     channel, transport = _make_channel()
     runner = _ChannelRunner(channel, _StubLLM(response='chat'))
-    assert await runner.send('hi', tracker=_TrailIDTracker(), surface='test') == 'chat'
-    assert [m.type for m in transport.sent] == ['mark']
-    assert transport.sent[0].payload == {'transition': 'trail', 'trail_id': 'trail-42'}
-    assert transport.closed is True
-    # only the conversation's first send announces
+    assert await runner.send('hi', tracker=NullTracker(), surface='test') == 'chat'
+    assert transport.sent == []
+    assert transport.closed is False
     assert await runner.send('more', surface='test') == 'chat'
-    assert [m.type for m in transport.sent] == ['mark']
+    assert transport.sent == []
 
   @pytest.mark.asyncio
   async def test_send_propagates_answer_delivered_to_the_surface(self):
@@ -1305,3 +1211,60 @@ async def test_summoner_receives_bounded_results_from_the_run(
       assert answer.answer.endswith(marker)
       assert oversized.startswith(answer.answer.removesuffix(marker))
       assert len(answer.answer.encode()) <= MAX_ANSWER_BYTES
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('explicit', [False, True])
+async def test_runs_write_only_the_run_log_at_the_selected_location(
+  monkeypatch, tmp_path, explicit
+):
+  from bro.native.run_log import STEP_KINDS, Reader
+  from bro.workspace.paths import runtime_base
+
+  monkeypatch.setattr('bro.trails.store.default_store', lambda: pytest.fail('store consulted'))
+  monkeypatch.setattr('bro.summon.summoned_by_from_env', lambda: pytest.fail('attribution read'))
+  monkeypatch.setenv('TRAILS_DISABLED', '')
+  path = tmp_path / 'chosen.jsonl' if explicit else None
+  runner = Runner(Declared(), EchoSpec(model='echo'), run_log=path)
+  assert runner.run_log is None
+  assert await runner.run('record me', surface='test') == 'record me'
+  assert runner.run_log is not None
+  assert (
+    runner.run_log == path if explicit else runner.run_log.parent == runtime_base() / 'bro' / 'runs'
+  )
+  entries = Reader(runner.run_log).read(max_entries=100, max_bytes=100000)
+  assert (entries[-1].value['kind'], entries[-1].value['reason']) == ('end', 'ok')
+  assert [entry.value['kind'] for entry in entries if entry.value['kind'] in STEP_KINDS] == [
+    'system_prompt',
+    'user_input',
+    'llm_call',
+  ]
+  assert not (runtime_base() / 'trails').exists()
+  first = runner.run_log
+  if explicit:
+    with pytest.raises(FileExistsError):
+      await runner.run('another', surface='test')
+    assert runner.run_log is None
+  else:
+    await runner.run('another', surface='test')
+    assert runner.run_log != first
+
+
+@pytest.mark.asyncio
+async def test_error_end_includes_the_exception_type_even_for_an_empty_message(tmp_path):
+  from bro.native.run_log import Reader
+
+  class Failed(StubRunner):
+    def _create_llm(self, *, hold):
+      class Failure(MockLLM):
+        async def send(self, inputs, *, request_timeout=None):
+          raise ValueError()
+
+      return Failure()
+
+  runner = Failed()
+  with pytest.raises(ValueError):
+    await runner.run('fail', surface='test')
+  assert runner.run_log is not None
+  end = Reader(runner.run_log).read(max_entries=100, max_bytes=100000)[-1].value
+  assert end['reason'] == 'error' and end['detail'] == 'ValueError: '

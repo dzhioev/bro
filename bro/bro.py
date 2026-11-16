@@ -111,9 +111,6 @@ class LiveRun(Protocol):
   def resolved_recipe(self) -> ResolvedRecipe | None: ...
 
   @property
-  def trail_id(self) -> Optional[str]: ...
-
-  @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
 
   @property
@@ -303,11 +300,9 @@ def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variabl
   def _banner() -> str:
     from bro.workspace.banner import render_banner
 
-    trail_id = None if live_run is None else live_run.trail_id
     return render_banner(
       plain=True,
       bro=bro.name,
-      trail_id=trail_id,
       resolved_recipe=None if live_run is None else live_run.resolved_recipe,
     )
 
