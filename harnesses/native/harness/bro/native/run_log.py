@@ -12,7 +12,7 @@ from typing import Any, Optional, get_args
 
 from bro.base import configs, log
 from bro.base.lulid import lulid
-from bro.llm.tracker import EndReason, StepKind, ToolStepSource
+from bro.llm.tracker import EndReason, StepKind, Tracker
 from bro.trails.model import ForkedFrom, tools_sha256, validate_end
 from bro.workspace.paths import runtime_base
 
@@ -115,10 +115,8 @@ class _State:
     return step
 
 
-class RunLog:
+class RunLog(Tracker):
   """A single-run tracker; a failed write makes its remaining tail unwritable."""
-
-  current_tool_step_id: Optional[ToolStepSource] = None
 
   def __init__(self, path: Optional[Path] = None):
     self.path = new_path() if path is None else path

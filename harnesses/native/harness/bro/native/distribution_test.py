@@ -50,7 +50,6 @@ _NATIVE_DOMAIN = {
   'bro/native/trail_recorder.py',
   'bro/native/recorder.py',
   'bro/run.py',
-  'bro/trails/record/bro.py',
 }
 _NATIVE_SUPPORT = {
   'bro/native/__init__.py',
@@ -74,7 +73,6 @@ _NAMESPACE_MODULES = {
   'bro.claude.harness': 'bro/claude/harness.py',
   'bro.claude_trails.format': 'bro/claude_trails/format.py',
   'bro.native_trails.format': 'bro/native_trails/format.py',
-  'bro.trails.record.bro': 'bro/trails/record/bro.py',
   'bro.trails.record.spine': 'bro/trails/record/spine.py',
 }
 

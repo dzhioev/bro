@@ -81,7 +81,7 @@ Interpret them as follows:
    — never cache it, read it off the banner when you need it.
 
 9. If a `session_recording:` line appears (always first in the output), session recording is broken
-   — the transcript isn't reaching trails and this session could be lost on `--drop`.
+   — the session's recording isn't reaching trails and this session could be lost on `--drop`.
    `FAILING` is a recorder that is erroring;
    `STOPPED` is one that is no longer running at all, so nothing will resume on its own.
    Don't swallow either:

@@ -13,7 +13,7 @@ import pytest
 from bro.trails import backends, local
 from bro.trails.local import LocalStore
 from bro.trails.model import BlazeRequest, canonical_json_bytes, payload_sha256
-from bro.trails.record.bro import Recorder
+from bro.trails.record.spine import Recording
 from bro.trails.store import AppendConflict, TrailCollision, TrailNotFound, fetch_recorded_trail
 
 
@@ -63,17 +63,10 @@ def _read_only_tree(root: Path) -> Iterator[None]:
 
 def test_records_and_replays_bro_trails(tmp_path):
   store = LocalStore(tmp_path)
-  recorder = Recorder(store)
-  trail_id = recorder.start_trail(
-    bro='dev',
-    recipe={'type': 'echo', 'model': 'echo'},
-    system_prompt='prompt',
-    forked_from=None,
-    interactive=False,
-    surface='ask',
-  )
-  assert recorder.step('user_input', 'hello', turn_index=0) == 1
-  recorder.end_trail('ok')
+  recording = Recording.create(store, _bro_request())
+  trail_id = recording.trail_id
+  assert recording.append([{'kind': 'user_input', 'body': 'hello', 'turn_index': 0}]) == 1
+  recording.end('ok')
 
   trail = fetch_recorded_trail(LocalStore(tmp_path), trail_id)
   assert [step.kind for step in trail.steps] == ['system_prompt', 'user_input']

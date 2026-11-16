@@ -44,15 +44,31 @@ Ending the run still closes every job and orphans every in-flight mission, while
 
 ## Recording and usage
 
-The native runner records the session's trail in-process (`harnesses/native/harness/AGENTS.md`, "Recording") and publishes the session's trail pointer when its trail opens.
+Every native run writes its own append-only JSON Lines run log, without consulting a trail store.
+By default it creates a fresh file under `<runtime-root>/bro/runs/`;
+`bro run` and `bro chat` accept `--run-log PATH` to name it explicitly.
+A named path is created exclusively and holds one run.
+`Runner.run_log` exposes the opened log's path, or None when a replacement `tracker=` records the run.
+
+A managed session names its run log under `<session dir>/bro/runs/` and starts `bro.native.trail-recorder` before launching the run, waiting for its readiness byte.
+The recorder follows only that log, stores its step lines as trail rows, publishes the session's trail pointer, reports recording health and emits the trail mark for one-shot or summoned sessions.
+It stops after the run, making a final recording pass.
+Nested native runs write their own logs under the runtime root and neither record trails nor change the pointer.
+`--no-trails` disables the session recorder, not the run log.
+A trail-store outage does not fail the run;
+its log keeps the steps the recorder has not confirmed.
+
 The native LLM loop writes its process's cumulative LLM usage to the session's usage file (`BRO_USAGE_FILE`, `bro.llm.usage`) after every API call.
-A summoned one-shot child emits its run lifecycle from `bro.native.runner.Runner.run`;
-a summoned interactive one, a manual child among them, emits its `trail` mark from `Runner.send`'s first turn.
+`Runner.run` delivers a one-shot run's result through its broker channel;
+the interactive surface delivers a summoned conversation's answer.
 
 ## Resume
 
 `ride resume` continues the session's trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`.
-A session with trail recording disabled publishes no pointer and cannot be resumed.
+Before the run starts, the session runner removes the old pointer;
+the recorder publishes the continued run's trail, or the runner restores the old pointer if the run never creates its log.
+A resume warns when the previous recording failed or stopped, naming the newest session run log whose last steps may not have reached the trail.
+A session with no pointer cannot be resumed, whether recording was disabled or its recorder never opened a trail.
 A `--llm` replacement on another wire than the recorded one is refused before the session starts.
 A kept summoned child's `broker-<channel>` workspace resumes as an interactive `bro chat` continuing the child's trail.
 A native trail whose session record predates the resolved-recipe record continues with `bro chat <bro> --fork <trail>`.
@@ -62,6 +78,9 @@ A native trail whose session record predates the resolved-recipe record continue
 `bro run <bro> <input>` and `bro chat <bro> [what]` run in the calling process:
 they use ambient credentials and create no workspace or scope.
 They read the live installation's home-layer stack (`bro/reference/ride.md`, "Recipe selection") on the bro harness, and only its recipe.
-`bro chat --fork [TRAIL_ID] [--at N]` forks recorded history into a new trail, an omitted trail id selecting the bro's newest recorded call.
+`bro chat --fork [TRAIL_ID] [--at N]` forks recorded history into a new run log, an omitted trail id selecting the bro's newest recorded call.
 The fork runs the trail's recorded recipe unless `--llm` replaces it, with source `trail <id>` when using the record;
 it checks admission and requires a compatible recorded wire.
+
+`bro chat` exits with `conversation saved to <path>` when the conversation opened a run log.
+Only a managed session's recorder turns that log into a trail.

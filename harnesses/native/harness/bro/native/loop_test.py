@@ -1,7 +1,7 @@
 import asyncio
 import os
 import threading
-from contextlib import ExitStack, closing
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
@@ -37,8 +37,7 @@ from bro.llm.observer import (
 from bro.llm.tracker import Tracker
 from bro.llm.wire import File, SystemPrompt, Text, ToolOutput, UserMessage
 from bro.native.loop_test_helper import ResponsesLoop, make_loop
-from bro.trails.local import LocalStore
-from bro.trails.record.bro import Recorder
+from bro.native.run_log import RunLog
 from bro.wire_responses.client import parse_response
 
 # the registry advertises namespaced wire names, so a tool whose local name is
@@ -104,7 +103,7 @@ class _RecordingTracker(Tracker):
     self.steps: list[tuple[str, Any, dict]] = []
     self.ended: list[str] = []
 
-  def start_trail(
+  def start(
     self,
     bro,
     recipe,
@@ -113,8 +112,7 @@ class _RecordingTracker(Tracker):
     interactive,
     surface,
     hold='unattended',
-    summoned_by=None,
-  ) -> str:
+  ) -> None:
     self.headers.append(
       {
         'bro': bro,
@@ -125,13 +123,13 @@ class _RecordingTracker(Tracker):
         'surface': surface,
       }
     )
-    return 'tid'
+    return None
 
   def step(self, kind, body, **extras) -> int:
     self.steps.append((kind, body, extras))
     return len(self.steps) - 1
 
-  def end_trail(self, reason, detail=None) -> None:
+  def end(self, reason, detail=None) -> None:
     self.ended.append(reason)
 
 
@@ -353,51 +351,32 @@ class TestToolResultTrackerEmission:
     assert extras['call_id'] == 'call_1'
 
 
-class _LoopBlockingStore(LocalStore):
-  def __init__(self, root: Path):
-    super().__init__(root)
-    self.append_started = threading.Event()
+class _BlockingRunLog(RunLog):
+  def __init__(self, path: Path):
+    super().__init__(path)
+    self.write_started = threading.Event()
     self.loop_responsive = threading.Event()
-    self.loop_was_responsive: Optional[bool] = None
 
-  def append_records(
-    self,
-    trail_id: str,
-    offset: int,
-    records: list[Any],
-    *,
-    tools: Optional[dict[str, Any]] = None,
-  ) -> dict:
-    if self.loop_was_responsive is None:
-      self.append_started.set()
-      self.loop_was_responsive = self.loop_responsive.wait(timeout=1.0)
-    return super().append_records(trail_id, offset, records, tools=tools)
+  def step(self, kind, body, **extras) -> int:
+    self.write_started.set()
+    assert self.loop_responsive.wait(timeout=5)
+    return super().step(kind, body, **extras)
 
 
 class TestSendTrackerEmission:
   @pytest.mark.asyncio
-  async def test_slow_store_does_not_block_the_event_loop(self, tmp_path):
-    store = _LoopBlockingStore(tmp_path)
-    with closing(Recorder(store)) as tracker:
-      tracker.start_trail(
-        bro='dev',
-        recipe={'type': 'openai', 'model': 'gpt-5'},
-        system_prompt='test',
-        forked_from=None,
-        interactive=False,
-        surface='test',
-      )
-      gpt, _, captured = _make_responses_loop_with_tracker()
-      gpt.tracker = tracker
-      _install_responses(gpt, [_fake_response(output=[_message_item('done')])], captured)
+  async def test_slow_run_log_does_not_block_the_event_loop(self, tmp_path):
+    tracker = _BlockingRunLog(tmp_path / 'run.jsonl')
+    tracker.start('dev', {'type': 'echo', 'model': 'echo'}, 'test', None, False, 'test')
+    gpt, _, captured = _make_responses_loop_with_tracker()
+    gpt.tracker = tracker
+    _install_responses(gpt, [_fake_response(output=[_message_item('done')])], captured)
 
-      turn = asyncio.create_task(gpt.send([UserMessage((Text('go'),))]))
-      while not store.append_started.is_set():
-        await asyncio.sleep(0)
-      store.loop_responsive.set()
-      assert await turn == 'done'
-
-    assert store.loop_was_responsive is True
+    turn = asyncio.create_task(gpt.send([UserMessage((Text('go'),))]))
+    assert await asyncio.to_thread(tracker.write_started.wait, 5)
+    tracker.loop_responsive.set()
+    assert await turn == 'done'
+    tracker.end('ok')
 
   @pytest.mark.asyncio
   async def test_user_input_emitted_at_turn_zero_skipping_system(self):

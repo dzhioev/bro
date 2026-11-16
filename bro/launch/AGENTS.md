@@ -14,7 +14,7 @@ The following modules ship from `bro-native`:
 
 - `run.py` — parser and execution for `bro run <bro> <input>`.
   It accepts the `--llm` recipe text and `--hold`.
-  It creates the bro under the resolved native recipe, runs it under the ask display preset, and records with surface `ask`.
+  It creates the bro under the resolved native recipe, runs it under the ask display preset, and writes a run log with surface `ask`.
 - `call.py` — parser and UI for `bro chat <bro> [what]`.
   An omitted message opens an empty REPL.
   The stream UI owns stdin through one daemon reader and races its line queue against the run inbox without abandoning a read.
@@ -49,7 +49,7 @@ Between user turns, both text and Textual modes wait on the run inbox and call `
 Both modes can interrupt a running turn and render `call.INTERRUPTED_NOTICE`;
 the TUI prevents concurrent sends.
 The opening banner is a trusted surface notice rendered by `bro.workspace.banner.render_banner`, not conversation input.
-A recorded conversation's exit hint names `bro chat <bro> --fork <trail-id>`.
+The exit notice names the conversation's saved run log.
 
 The human aliases are not part of this distribution:
 `bro-ride` declares `ask` as `ride solo` and `call` as `ride along`.
