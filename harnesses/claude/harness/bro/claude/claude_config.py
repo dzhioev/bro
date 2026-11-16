@@ -159,8 +159,9 @@ _SESSION_SETTINGS_JSON: dict = {
   # keep transcripts forever (no disable value exists); they back the
   # session recording
   'cleanupPeriodDays': 36500,
-  # claude's own default is on
+  # claude's own defaults are on
   'autoMemoryEnabled': False,
+  'idleCompaction': False,
   'env': {
     'DISABLE_AUTOUPDATER': '1',
     'DISABLE_TELEMETRY': '1',
