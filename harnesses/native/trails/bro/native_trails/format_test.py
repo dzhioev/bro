@@ -1,10 +1,13 @@
 import importlib.metadata
+import json
 
 import pytest
 
 from bro.llm import wires
+from bro.native_trails.format import BRO_FORMAT
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import BlazeRequest, named_tool_digests, tools_sha256
+from bro.trails.store import fetch_recorded_trail
 
 
 def native_request(records):
@@ -139,3 +142,170 @@ def test_broken_installed_wire_fails_loudly(tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match='failed to load wire'):
       list(store.iter_messages(trail['id']))
+
+
+@pytest.fixture
+def step_records():
+  return [
+    {'kind': 'system_prompt', 'body': 'system', 'turn_index': 0},
+    {'kind': 'user_input', 'body': 'hello', 'turn_index': 0},
+    {
+      'kind': 'notification',
+      'body': 'news',
+      'turn_index': 0,
+      'call_index': 1,
+      'job_ids': ['job'],
+    },
+    {
+      'kind': 'llm_call',
+      'body': {
+        'request': {'model': 'model'},
+        'response': {
+          'model': 'model',
+          'status': 'completed',
+          'usage': {'input_tokens': 10, 'output_tokens': 2},
+          'output': [
+            {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'think'}]},
+            {'type': 'message', 'content': [{'type': 'output_text', 'text': 'checking'}]},
+            {'type': 'function_call', 'name': 'read', 'call_id': 'c1', 'arguments': '{}'},
+          ],
+        },
+      },
+      'wire': 'responses',
+      'tools_sha256': tools_sha256([]),
+      'turn_index': 0,
+      'call_index': 1,
+      'response_id': 'response-1',
+      'stopped': 'truncated',
+    },
+    {
+      'kind': 'tool_result',
+      'body': {'value': 'result'},
+      'turn_index': 0,
+      'call_index': 1,
+      'tool_name': 'read',
+      'call_id': 'c1',
+      'is_error': False,
+    },
+    {'kind': 'error', 'body': {'message': 'failed', 'traceback': 'trace'}},
+  ]
+
+
+def line_record(record):
+  return {
+    'run_log': 1,
+    'body': json.dumps({'at': '2026-11-14T21:00:00.000000Z', **record}, ensure_ascii=False),
+  }
+
+
+def test_line_rows_store_verbatim_and_read_like_spread_rows(tmp_path, step_records):
+  line_records = [line_record(record) for record in step_records]
+  with LocalStore(tmp_path) as store:
+    trails = []
+    for records in (
+      [
+        {**record, 'ts': json.loads(line['body'])['at']}
+        for record, line in zip(step_records, line_records, strict=True)
+      ],
+      line_records,
+    ):
+      trail_id = store.blaze(native_request([]))['id']
+      store.append_records(trail_id, 0, records, tools={tools_sha256([]): []})
+      trails.append(trail_id)
+    spread_rows, line_rows = [list(store.iter_steps(trail_id)) for trail_id in trails]
+    for spread, row, record in zip(spread_rows, line_rows, line_records, strict=True):
+      assert row['body'] == record['body']
+      assert row['run_log'] == record['run_log']
+      assert row['kind'] == json.loads(record['body'])['kind']
+      assert row['ts'] == json.loads(record['body'])['at']
+      assert set(row) == {
+        'trail_id',
+        'format',
+        'step_id',
+        'ts',
+        'kind',
+        'payload_sha256',
+        'body',
+        'run_log',
+        *({'tools_sha256', 'usage'} if row['kind'] == 'llm_call' else set()),
+      }
+      normalized = BRO_FORMAT.native_record(row)
+      expected = {**spread, 'trail_id': row['trail_id'], 'payload_sha256': row['payload_sha256']}
+      assert normalized == expected
+      assert BRO_FORMAT.native_record(spread) is spread
+      assert BRO_FORMAT.classify(BRO_FORMAT.parse(row)) == BRO_FORMAT.classify(
+        BRO_FORMAT.parse(spread)
+      )
+      assert BRO_FORMAT.project(row) == BRO_FORMAT.project(spread)
+    headers = [store.get_trail(trail_id) for trail_id in trails]
+    assert headers[0]['native'] == headers[1]['native']
+    assert headers[0]['turn_count'] == headers[1]['turn_count'] == 1
+    assert headers[1]['native']['usage'] == {'model': {'input_tokens': 10, 'output_tokens': 2}}
+    assert named_tool_digests(line_rows) == {tools_sha256([])}
+    recorded = fetch_recorded_trail(store, trails[1])
+    assert [step.body for step in recorded.steps] == [record['body'] for record in step_records]
+    assert recorded.steps[3].extras['response_id'] == 'response-1'
+    assert recorded.steps[3].extras['stopped'] == 'truncated'
+
+
+@pytest.mark.parametrize('run_log', [None, True, 1.0, '1', 0, 2])
+def test_line_rows_refuse_an_unknown_run_log(run_log):
+  with pytest.raises(ValueError, match='unsupported bro run_log format'):
+    BRO_FORMAT.parse({**line_record({'kind': 'user_input', 'body': 'hello'}), 'run_log': run_log})
+
+
+@pytest.mark.parametrize('body', [None, {}, [], 1, '', '{', '[]', 'null', '1', '"text"', '{} {}'])
+def test_line_rows_refuse_a_body_other_than_one_json_object_string(body):
+  with pytest.raises(ValueError, match='body must be a JSON object string'):
+    BRO_FORMAT.parse({'run_log': 1, 'body': body})
+
+
+@pytest.mark.parametrize('kind', [None, [], '', 'open', 'tools', 'end', 'assistant'])
+def test_line_rows_refuse_non_step_kinds(kind):
+  with pytest.raises(ValueError, match='line kind must be one of'):
+    BRO_FORMAT.parse(line_record({'kind': kind}))
+
+
+@pytest.mark.parametrize('at', [None, 1, {}])
+def test_line_rows_require_a_string_timestamp(at):
+  with pytest.raises(ValueError, match='line at must be a string'):
+    BRO_FORMAT.parse(line_record({'kind': 'user_input', 'body': 'hello', 'at': at}))
+
+
+@pytest.mark.parametrize('kind', ['system_prompt', 'user_input', 'notification'])
+@pytest.mark.parametrize('body', [None, {}, 1])
+def test_line_rows_require_text_bodies(kind, body):
+  with pytest.raises(ValueError, match=f'{kind} body must be a string'):
+    BRO_FORMAT.parse(line_record({'kind': kind, 'body': body}))
+
+
+@pytest.mark.parametrize('digest', [None, 1, '', 'bad', 'g' * 64, '0' * 63])
+def test_line_rows_require_a_tool_digest_on_llm_calls(digest):
+  with pytest.raises(ValueError, match='llm_call tools_sha256 must be a SHA-256 digest'):
+    BRO_FORMAT.parse(line_record({'kind': 'llm_call', 'body': {}, 'tools_sha256': digest}))
+
+
+def test_line_rows_require_kind_at_and_tool_digest_fields():
+  for step, error in (
+    ({'body': 'hello'}, 'line kind'),
+    ({'kind': 'user_input', 'body': 'hello'}, 'line at'),
+    ({'kind': 'llm_call', 'at': 'time', 'body': {}}, 'tools_sha256'),
+  ):
+    with pytest.raises(ValueError, match=error):
+      BRO_FORMAT.parse({'run_log': 1, 'body': json.dumps(step)})
+
+
+def test_import_seal_refolds_line_rows_and_preserves_stored_lines(tmp_path, step_records):
+  with LocalStore(tmp_path / 'source') as source, LocalStore(tmp_path / 'target') as target:
+    trail_id = source.blaze(native_request([]))['id']
+    source.append_records(
+      trail_id, 0, [line_record(record) for record in step_records], tools={tools_sha256([]): []}
+    )
+    source.end_trail(trail_id, 'ok')
+    header = source.get_trail(trail_id)
+    rows = list(source.iter_steps(trail_id))
+    target.import_trail(header, rows, tools={tools_sha256([]): []})
+    assert target.get_trail(trail_id) == header
+    assert list(target.iter_steps(trail_id)) == rows
+    assert list(target.iter_messages(trail_id)) == list(source.iter_messages(trail_id))
+    assert target.get_tool(tools_sha256([])) == []

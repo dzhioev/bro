@@ -9,9 +9,11 @@ from bro.trails.backends import (
   ParsedRecord,
   TrailFormat,
   decoded_part_events,
+  parse_json_object,
   projected_event,
   validate_server_derived,
 )
+from bro.trails.model import is_sha256
 
 BRO_STEP_KINDS = frozenset(
   {
@@ -24,15 +26,54 @@ BRO_STEP_KINDS = frozenset(
   }
 )
 
-# the kinds whose body a reader is entitled to read as text: they project into a
-# message whose content carries no other shape, so a body that is not a string
-# leaves the trail unrenderable rather than merely odd
 BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input', 'notification'})
+
+
+def _step_line(record: dict) -> dict:
+  if type(record['run_log']) is not int or record['run_log'] != 1:
+    raise ValueError(f'unsupported bro run_log format {record["run_log"]!r}')
+  body = record.get('body')
+  line = parse_json_object(body) if isinstance(body, str) else None
+  if line is None:
+    raise ValueError('bro line row body must be a JSON object string')
+  kind = line.get('kind')
+  if not isinstance(kind, str) or kind not in BRO_STEP_KINDS:
+    raise ValueError(f'bro line kind must be one of {sorted(BRO_STEP_KINDS)}')
+  if not isinstance(line.get('at'), str):
+    raise ValueError('bro line at must be a string')
+  if kind in BRO_TEXT_BODY_KINDS and not isinstance(line.get('body'), str):
+    raise ValueError(f'bro {kind} body must be a string')
+  if kind == 'llm_call' and not is_sha256(line.get('tools_sha256')):
+    raise ValueError('bro llm_call tools_sha256 must be a SHA-256 digest')
+  return line
+
+
+def native_record(row: dict) -> dict:
+  if 'run_log' not in row:
+    return row
+  line = _step_line(row)
+  metadata = ('trail_id', 'format', 'step_id', 'ts', 'payload_sha256', 'usage')
+  return {
+    **{key: value for key, value in line.items() if key != 'at'},
+    **{key: row[key] for key in metadata if key in row},
+  }
 
 
 def _bro_parse(payload: Any) -> ParsedRecord:
   if not isinstance(payload, dict):
     raise ValueError('bro record must be an object')
+  if 'run_log' in payload:
+    line = _step_line(payload)
+    attributes = {'run_log': payload['run_log']}
+    if line['kind'] == 'llm_call':
+      attributes['tools_sha256'] = line['tools_sha256']
+    return ParsedRecord(
+      kind=line['kind'],
+      body=payload['body'],
+      timestamp=line['at'],
+      attributes=attributes,
+      native=dict(payload),
+    )
   kind = payload.get('kind')
   if not isinstance(kind, str) or kind not in BRO_STEP_KINDS:
     raise ValueError(f'bro record kind must be one of {sorted(BRO_STEP_KINDS)}')
@@ -66,11 +107,13 @@ def _bro_parse(payload: Any) -> ParsedRecord:
 
 
 def _bro_classify(record: ParsedRecord) -> Classification:
-  if record.kind == 'user_input':
+  native = native_record(record.native)
+  if native['kind'] == 'user_input':
     return Classification(turn_delta=1)
-  if record.kind != 'llm_call' or not isinstance(record.body, dict):
+  body = native.get('body')
+  if native['kind'] != 'llm_call' or not isinstance(body, dict):
     return Classification()
-  response = record.body.get('response')
+  response = body.get('response')
   if not isinstance(response, dict):
     return Classification()
   usage = response.get('usage')
@@ -119,6 +162,7 @@ def _bro_llm_call_messages(record: dict) -> list[dict]:
 
 
 def _bro_project(record: dict) -> list[dict]:
+  record = native_record(record)
   kind = record.get('kind')
   if kind == 'llm_call':
     return _bro_llm_call_messages(record)
@@ -151,6 +195,7 @@ def _native_header_fields(header: dict) -> list[tuple[str, Any]]:
 
 BRO_FORMAT = TrailFormat(
   name='bro',
+  native_record=native_record,
   parse=_bro_parse,
   classify=_bro_classify,
   project=_bro_project,

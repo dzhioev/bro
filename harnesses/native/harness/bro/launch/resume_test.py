@@ -1,3 +1,5 @@
+import dataclasses
+import json
 from datetime import UTC, datetime
 from typing import Any, Optional, cast
 from unittest.mock import patch
@@ -339,3 +341,84 @@ class TestResume:
     client = FakeTrailsStore(headers=[], steps={})
     with pytest.raises(ValueError, match='no call conversation found'):
       resume(cast(Any, client), 'record', RESUME_LATEST, recipe=Recipe(model='gpt-5'))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('forked', [False, True])
+async def test_resume_continues_stored_line_rows_through_wire_restore(
+  tmp_path, monkeypatch, forked
+):
+  from bro.native.echo import Echo
+  from bro.native.echo_declaration import Recipe as EchoRecipe
+  from bro.trails.local import LocalStore
+  from bro.trails.model import BlazeRequest, tools_sha256
+
+  recipe = EchoRecipe(model='echo')
+  steps = [
+    {'kind': 'system_prompt', 'body': 'recorded system', 'turn_index': 0},
+    {'kind': 'user_input', 'body': 'original question', 'turn_index': 0},
+    {
+      'kind': 'llm_call',
+      'body': {
+        'request': {'model': 'echo'},
+        'response': {'model': 'echo', 'text': 'original reply'},
+      },
+      'wire': 'echo',
+      'tools_sha256': tools_sha256([]),
+      'turn_index': 0,
+      'call_index': 1,
+    },
+  ]
+
+  def records(steps):
+    return [
+      {'run_log': 1, 'body': json.dumps({'at': '2026-11-14T21:00:00.000000Z', **step})}
+      for step in steps
+    ]
+
+  requests = []
+  original_respond = Echo._respond
+
+  def respond(wire, request):
+    requests.append(request)
+    return original_respond(wire, request)
+
+  monkeypatch.setattr(Echo, '_respond', respond)
+  with LocalStore(tmp_path) as store:
+    request = BlazeRequest(
+      harness='bro',
+      bro='bro',
+      version='test',
+      interactive=True,
+      surface='call',
+      hold='guided',
+      native={'llm': recipe.dump()},
+      body={'records': []},
+    )
+    parent_id = store.blaze(request)['id']
+    store.append_records(parent_id, 0, records(steps), tools={tools_sha256([]): []})
+    trail_id = parent_id
+    if forked:
+      trail_id = store.blaze(
+        dataclasses.replace(
+          request,
+          forked_from={'trail_id': parent_id, 'step_id': 2},
+        )
+      )['id']
+      store.append_records(trail_id, 0, records(steps[:1]))
+    resumed = resume(store, 'bro', trail_id)
+    with resumed.runner as runner:
+      assert await runner.send('next question', surface='call') == 'next question'
+    assert _conversation_text(resumed.history) == [
+      (UserInput, 'original question'),
+      (AssistantText, 'original reply'),
+    ]
+    assert requests[0]['input'] == [
+      {'role': 'system', 'text': 'recorded system'},
+      {'role': 'user', 'text': 'original question'},
+      {'role': 'assistant', 'text': 'original reply'},
+      {'role': 'user', 'text': 'next question'},
+    ]
+    assert all(
+      isinstance(row['body'], str) and row['run_log'] == 1 for row in store.iter_steps(trail_id)
+    )
