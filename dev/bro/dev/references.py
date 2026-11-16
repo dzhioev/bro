@@ -65,3 +65,13 @@ delivery = FileSource(
   ),
   path=_PROMPTS / 'delivery.md',
 )
+
+bump_bro = FileSource(
+  'bump-bro',
+  summary=(
+    'the [[bump]] playbook for the bro framework a repository pins from git: '
+    'its pin and lock move, its commit range, the surfaces a consumer reaches it '
+    'through, its persona smoke, and its commit form.'
+  ),
+  path=_PROMPTS / 'bump_bro.md',
+)

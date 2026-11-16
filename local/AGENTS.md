@@ -15,6 +15,8 @@ Run `sync-scripts --project local` after adding or removing a CLI, and build the
 - `bro/local/bro-settings.toml` — the `bro` home's packaged launch settings
 - `bros/` — this checkout's developer persona, `bro-watch-probe` for shell conformance, and `bro-file-probe` for file-reading conformance.
 - `bro/local/prompts.py` — framework-project context for the developer persona.
+- `bro/local/references.py` — the developer persona's checkout-only `man` pages:
+  `bump_claude_code.md`, the `bump` spell's playbook for the Claude Code pin.
 - `bro/local/run_tests.py` (`run-tests`) — the checkout-wide staged test gate and explicit test rosters.
 - `bro/local/syscall_tables.py` (`syscall-tables`) — generate `bro.files.confinement`'s syscall tables from the pinned Linux tag, recording source hashes and refusing unclassified names.
   `syscall-tables --check` fetches the sources again and compares without writing; run it by hand when bumping the pin and review every classification decision.
