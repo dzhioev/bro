@@ -8,7 +8,7 @@ the pull request that carries it is a design review only.
 
 Goal: the native harness records the way the Claude harness does.
 A native run writes its own local record, the *run log* (§3), in a format the harness owns, and never writes to a trail store.
-In a managed session, a *session recorder* (§5), started and stopped around the session's run the way the Claude runner starts and stops its recorder, turns that log into the session's trail:
+In a managed session, a *session recorder* (§5), started before the session's run and stopped after it, turns that log into the session's trail:
 each row of a native trail holds one of the log's step lines verbatim (§6), and the bro trail format reads it, as the Claude trail format reads Claude Code's transcript lines.
 Trails become purely a ride extension:
 a native run outside a managed session
@@ -195,7 +195,8 @@ the tracker does not fsync, so a host crash can lose the tail.
 
 ### 3.5 Reading
 
-The reader takes a run log's complete lines past a byte offset, checks them against §3.3 given what it read before, and returns each entry, both parsed and as its line without the newline, with the offset after them.
+The reader takes a run log's complete lines past a byte offset, no more than its caller's bound on their count and size admits, though always at least one,
+checks them against §3.3 given what it read before, and returns each entry, both parsed and as its line without the newline, with the offset after them.
 The session recorder is its one reader in this design;
 #1303's continuation and #1288's host recorder are the readers it is shaped for.
 
@@ -256,26 +257,41 @@ the host takes the trail id off the summoning session's pointer (`ride/ride/peer
 1. When resuming, it reads the trail to continue off the session's pointer, as today.
    When the recording health file reports a problem (`bro.monitor.health.problem()`: the previous recorder's last beat was an error, or it stopped beating),
    it logs a warning that the trail may lack the previous session run's last steps, naming the newest run log under `<session dir>/bro/runs/`, which holds them.
-2. It names the session run's log, `<session dir>/bro/runs/<run id>.jsonl`, and creates its directory.
-3. Unless `TRAILS_DISABLED` is set (`--no-trails`), it starts `bro.native.trail-recorder --run-log <path> --log-path <session dir>/bro/session-recorder.log`,
-   by its path in the runtime it runs from (`bro.base.spawn.console_script`), detached into a session of its own (`spawn.popen`), with the session's environment and its output appended to that log.
-   A recorder that cannot be started ends the launch with the error, as the Claude runner's does:
+2. It removes the session's pointer (§5.4).
+   A pointer it cannot remove ends the launch, since the session run's summons would be attributed to it.
+3. It names the session run's log, `<session dir>/bro/runs/<run id>.jsonl`, and creates its directory.
+4. Unless `TRAILS_DISABLED` is set (`--no-trails`), it starts `bro.native.trail-recorder --run-log <path> --log-path <session dir>/bro/session-recorder.log --ready-fd <fd>`,
+   by its path in the runtime it runs from (`bro.base.spawn.console_script`), detached into a session of its own (`spawn.popen`), with the session's environment and its output appended to that log,
+   and waits for the recorder's readiness:
+   one byte on the pipe `--ready-fd` names, which the recorder writes once its stop handling is in place and before it touches the store (§5.2),
+   so a short run's stop always reaches a recorder that answers it with the final pass, and a store outage does not hold the launch.
+   A recorder that cannot be started, or that closes the pipe without the byte because it exited first, ends the launch with the error, naming its log:
    a session that believes it is recording and is not is worse than one that refuses to start.
-4. It removes `RIDE_SUMMONER` from its environment, so neither the session run nor anything it starts sees the attribution the recorder took.
-5. It runs `bro run|chat … --run-log <path> …` and waits for it, forwarding SIGTERM, as today.
-6. It stops the recorder:
+5. It removes `RIDE_SUMMONER` from its environment, so neither the session run nor anything it starts sees the attribution the recorder took.
+6. It runs `bro run|chat … --run-log <path> …` and waits for it, forwarding SIGTERM, as today.
+7. It stops the recorder:
    SIGTERM, which the recorder answers with its final pass (§5.2), then a wait of up to 60 seconds, after which it kills the recorder with a warning naming its log.
+8. When the session run's log does not exist, the run never opened, and it puts back the pointer step 2 removed (§5.4).
 
-Step 1 reads the health file before step 3's recorder beats it.
-Steps 3 and 6 are one context manager around step 5, in `harnesses/native/harness/bro/native/recorder.py`.
+Step 1 reads the health file before step 4's recorder beats it.
+Steps 4 and 7 are one context manager around steps 5 and 6, in `harnesses/native/harness/bro/native/recorder.py`,
+and steps 2 and 8 another around it, so the pointer is put back only once the recorder has stopped.
+The readiness pipe is the handshake a job's supervisor and a watch's producer start with (`bro.jobs.Job`, `bro/watches.py`).
 A joined member runs a session runner of its own, so it has its own recorder over its own session records.
 
 ### 5.2 Following
 
-The recorder runs a pass after every write to the run log's directory and every 3 seconds without one (`--interval`), until SIGTERM, SIGINT or its parent's exit, and then one final pass.
+The recorder first puts its stop handling in place:
+SIGTERM and SIGINT handlers that only mark the final pass due.
+It then writes its readiness byte and closes the pipe (§5.1), and only after that loads the `trails` credential and opens the store,
+so a stop that arrives after the byte, even before the first pass, is answered with the final pass, and a store that does not answer cannot delay the launch.
+
+The recorder runs a pass after every write to the run log's directory and every 3 seconds without one (`--interval`), until a stop or its parent's exit, and then one final pass.
 The interval is the Claude recorder's;
 while the log is quiet, it bounds how soon a pass retries a failed write, keeps the trail alive and beats the health file (§5.6).
-A pass reads the complete entries past what it has read (§3.5) and does, in order, what they owe the trail (§5.3).
+A pass does, in order, what the entries past the confirmed steps owe the trail (§5.3), one batch at a time:
+it reads (§3.5) only the entries that fill the next batch, and reads past them only once the store has confirmed it,
+so a backlog the store has not taken stays in the run log, of which the recorder holds at most one batch.
 A run log that does not exist yet owes nothing:
 its run has not opened, and may never, as when the run's credential gate refuses it.
 
@@ -284,7 +300,7 @@ The passes are methods of one in-process recording class over a store and a run 
 ### 5.3 Writing the trail
 
 - **Open.**
-  Once the `open` entry is read, the recorder clears the trail pointer (§5.4) and blazes the trail with
+  Once the `open` entry is read, the recorder blazes the trail with
   `harness` `bro`;
   `bro`, `version`, `interactive`, `surface`, `hold` and `forked_from` from the `open` entry;
   `native` `{"llm": <the open's recipe>, "ride_command": <the session's>}`;
@@ -294,9 +310,11 @@ The passes are methods of one in-process recording class over a store and a run 
 - **Steps.**
   Every step is appended as its step line's record (§6.1), so step n of the log is step n of the trail.
   A step is *confirmed* once the store has acknowledged the append holding it.
-  The steps read and not yet confirmed go in batches bounded as an import chunk is (`bro.trails.store.import_chunks`, 100 records or 8 MiB), a larger step travelling alone.
+  Steps go in batches bounded as an import chunk is (`bro.trails.store.import_chunks`, 100 records or 8 MiB), a larger step travelling alone,
+  and the next batch is read from the run log only once the one before it is confirmed (§5.2).
   A batch carries, as tool blobs, the lists of the `tools` entries its steps name that no confirmed append has carried to this trail.
-  A batch whose append fails is sent again unchanged before any later step, so an append whose reply was lost is answered by the store's duplicate check rather than refused as a conflict.
+  A batch whose append fails is kept, and sent again unchanged before anything past it is read,
+  so an append whose reply was lost is answered by the store's duplicate check rather than refused as a conflict.
 - **A batch kept in part.**
   The hosted store commits an append in transactions of 50 rows, so a failed append can leave it holding the batch's leading steps.
   An append refused as a conflict at an extent inside its batch is answered by sending the batch's leading steps up to that extent again,
@@ -318,15 +336,19 @@ the header's `started_at`, `end.at` and `last_alive_at` are the recorder's write
 
 ### 5.4 Trail pointer
 
-The recorder clears the session's pointer when it reads the session run's `open` entry, and publishes the trail's id once the blaze returns.
-It leaves the pointer in place when it stops:
+The session runner removes the session's pointer before it starts the session run (§5.1), and the recorder publishes the trail's id once the blaze returns.
+Nothing removes the pointer when the session ends:
 the native resume and the host's `session_exists` read it after the session ends.
 
-- Before the open, a resumed session's pointer still names the trail it continues, so a resume whose run never opens, because its fork was refused for one, can be tried again.
-- Between the open and the blaze there is no pointer, and a summon carries no `summoned_by`.
+- From the session run's start to the blaze there is no pointer, and a summon carries no `summoned_by`.
+  So a resumed session's summon never pairs the trail it continues with a step number of the run that continues it:
+  that run starts only once the pointer naming the trail is gone.
 - After the blaze, the pointer names the session run's trail, a resumed session's fork trail included:
   its summons are attributed to that trail, and the next `ride resume` continues it.
-- A session that ends with no pointer, because it ran with `--no-trails` or its recorder cleared the pointer at the open and never blazed, is refused by `ride resume`, which names both causes (`BroHarness.missing_session_error`).
+- A session run that exits without its run log never opened, as when its credential gate or its fork refused it.
+  The session runner then puts back the pointer it removed, once the recorder has stopped, so a refused resume can be tried again;
+  without a run log the recorder never blazed, so nothing publishes over it.
+- A session that ends with no pointer, because it ran with `--no-trails` or because its run opened and its recorder never blazed, is refused by `ride resume`, which names both causes (`BroHarness.missing_session_error`).
 
 ### 5.5 Trail mark
 
@@ -351,7 +373,8 @@ Judging recording health from the store alone, on the host, is #1288's.
 - A refusal no later attempt can change ends the recording:
   `InvalidRequest`, `PermissionDenied` or `TrailNotFound` from the store, a conflict §5.3 cannot answer, or a run log that breaks §3.3.
   The recorder then writes nothing more to the trail, and beats `error` naming the refusal, or the file and the line, until it stops.
-- A selected `trails` credential that does not load ends the recorder at its start, after an `error` beat (`config not found: trails`), as the Claude recorder does.
+- A selected `trails` credential that does not load ends the recorder at its start, after an `error` beat (`config not found: trails`), as the Claude recorder does;
+  its readiness byte is already written, so the session runs on unrecorded, its banner reading `FAILING`.
 - What the final pass cannot write stays unrecorded, and the trail stays unended;
   catching it up later is #1189's.
 
@@ -359,15 +382,15 @@ Judging recording health from the store alone, on the host, is #1288's.
 
 A summoned one-shot child whose store fails mid-run:
 
-1. The session runner names `runs/01m7e….jsonl`, starts the recorder on it, and spawns `bro run` with `--run-log` naming it.
+1. The session runner removes the pointer, names `runs/01m7e….jsonl`, starts the recorder on it, waits for its readiness byte, and spawns `bro run` with `--run-log` naming it.
 2. The run writes its `open`, step 0 and step 1, its prompt.
-   The recorder's pass clears the pointer, blazes trail `T` at extent 0, publishes `T`, emits the trail mark, and appends steps 0 and 1.
+   The recorder's pass blazes trail `T` at extent 0, publishes `T`, emits the trail mark, and appends steps 0 and 1.
 3. Step 2 is an `llm_call` whose response calls `summon`;
    the run writes the `tools` entry for its tool list just before it, and the recorder appends the step with that list as a blob.
    `current_tool_step_id` is `{step_id: 2, index: 0}`, and the host, reading `T` off the pointer, stamps the child with `summoned_by` `{T, 2, 0}`.
 4. The store goes down.
    The run goes on writing steps 3 to 6;
-   the first failing pass tried steps 3 and 4, and every pass after it resends that batch, beating `error`.
+   the first failing pass tried steps 3 and 4, and every pass after it resends that batch, reading nothing past it and beating `error`.
 5. The store comes back:
    the batch is confirmed, and steps 5 and 6 go in the next one.
 6. The run writes `end` `ok`, sends its result and exits.
@@ -448,7 +471,7 @@ the reply's head, then `[answer truncated; full response in trail T]`.
 | a native trail's rows | each record's fields beside the store's own | each step's run log line, verbatim in `body`, which `rewind steps` prints; trails recorded before keep their rows |
 | `bro chat`'s exit line | `conversation recorded as trail T; fork it with: …` | `conversation saved to <path>` |
 | `bro chat <bro> --fork` with no id | the bro's newest `call` trail, host conversations included | the bro's newest `call` trail, which only managed sessions record now |
-| a resumed native session | the pointer keeps naming the original trail: summons are attributed to it, and the next resume forks it again | the pointer names the resumed trail once it opens |
+| a resumed native session | the pointer keeps naming the original trail: summons are attributed to it, and the next resume forks it again | no pointer from the run's start, then the resumed trail once it opens, or the original again if the run never opens |
 | `ride resume` after a session whose recording failed or stopped | cannot arise: a failed write fails the turn | the resume warns that the trail may lack the session's last steps, naming the run log that holds them |
 | a native run nested in a session of either harness | records a trail and repoints the session's pointer at it | keeps its run log under the runtime root and records no trail |
 | a summon before the native session's trail opens | cannot happen: the trail opens before the first model call | the child carries no `summoned_by`, like one summoned before a Claude session's recorder adopts its transcript |
@@ -458,30 +481,56 @@ the reply's head, then `[answer truncated; full response in trail T]`.
 
 ## 9. Rollout and mixed versions
 
-One contract here is shared with a separately deployed process:
-the trails-server parses every row it is sent through the bro trail format its image installs (`oops/trails/server/entries.json`).
-An image from before §6 refuses a line row as a malformed record and reads spread rows;
-one from after reads both.
+The rows a native trail stores are read across deployment boundaries, by code that may predate line rows:
+
+- the trails-server parses every record it is sent, and folds and projects the rows it stores, through the bro trail format its image installs (`oops/trails/server/entries.json`);
+- a runtime reads a trail's stored rows back to fork or continue it (`fetch_recorded_trail`, §6.3).
+  Every root runs the runtime it froze at its start, its descendants the same one, and `ride resume` runs the one its workspace recorded
+  (`bro/reference/ride.md`, "Runtime bundles" and "Lifecycle verbs"), so a workspace resumes on the runtime that recorded its trail.
+
+Code that predates §6 reads spread rows only.
+Such a server refuses a line row's record as malformed, since the record carries no step `kind`;
+it projects a stored line row's `llm_call` as a harness event, since the row's body is the line rather than the exchange, and a recompute through it drops that call's usage from the trail's totals.
+Such a runtime cannot fork or continue a trail holding line rows:
+its fork point refuses the first such `llm_call`, `llm_call step … has no response object` (`bro.fork.latest_fork_point`).
 Nothing else crosses a deployment boundary:
 the run log is written and read within one session's runtime, by the run and its recorder,
 and the trail pointer, the recording health file, the trail mark and the result message keep their formats, so a host and sessions on different runtimes work together as today.
 
-The rollout follows the change's one landing on the default branch:
+The change therefore lands on the default branch in two landings, readers before writers:
 
-1. Redeploy the trails-server from the landed commit.
-   While its service rolls, tasks of both images serve, and both read the spread rows every running session sends.
-2. Re-sync the host installation, which makes the new recording live:
+1. **Line-row readers** — the bro trail format reads line rows (§6), with `TrailFormat.native_record` and `fetch_recorded_trail`, while nothing writes one yet.
+   Its rollout redeploys the trails-server and re-syncs the host installation, in either order.
+2. **Run log recording** — the run log, the recorder and the switch to them (§3 to §5), and the long results (§7).
+   It leaves the bro trail format and the store as landing 1 left them, so its rollout is a re-sync of the host installation alone, made only once both of landing 1's steps are done:
    every root started after it records through its recorder, in line rows,
-   while roots already running keep their runtime, and their children the same one, recording spread rows in-process until they end.
+   while a resume runs the runtime its workspace recorded, and a root already running keeps its own, its children the same one,
+   so each of those records spread rows in-process if its runtime predates landing 2.
 
-The server reads both shapes from then on.
-A rollback goes in reverse order, the installation before the server:
-a server from before §6 refuses the line rows of every session the new installation started, whose recording then fails (`FAILING`) without failing a turn.
+| Rows | Written by runtimes | Accepted and projected by servers | Forked and continued by runtimes |
+|---|---|---|---|
+| spread | before landing 2 | any | any |
+| line | from landing 2 | from landing 1 | from landing 1 |
+
+A root on a runtime from before landing 1
+— one started before landing 1's re-sync, or the resume of a workspace that was —
+reads line rows as code that predates §6 does:
+a fork or continuation of a line-row trail inside it fails as above.
+
+Rollback:
+
+- Landing 2 rolls back by re-syncing the installation to a commit before it.
+  Roots started after that record spread rows in-process again, but for the resumes of workspaces landing 2 started, which keep its recorder,
+  and the line-row trails recorded meanwhile stay readable, since the server and the installation stay at landing 1 or later.
+- Landing 1 rolls back only while no line row is stored, that is, before landing 2's rollout.
+  Once one is, neither the server nor the installation goes back past landing 1, and problems are fixed forward:
+  a server from before it would refuse every line-row append, mis-project the stored line rows and drop their usage at a recompute,
+  and an installation from before it would start roots that cannot fork or continue them.
 
 ## 10. Known approximations
 
-- Summons between the session run's open and its blaze carry no `summoned_by`, and a run that ends before its blaze sends no trail mark (§5.4, §5.5).
-  While the store is up, both windows last one store round trip after the open;
+- Summons between the session run's start and its blaze carry no `summoned_by`, and a run that ends before its blaze sends no trail mark (§5.4, §5.5).
+  While the store is up, both windows end one pass and one store round trip after the open;
   during an outage they last the outage.
   #1288's host, which records every trail, is to write the summon link itself once both trails exist.
 - The header's times are the recorder's write times (§5.3).
@@ -496,7 +545,7 @@ a server from before §6 refuses the line rows of every session the new installa
 - A resume after a recording that failed or stopped continues the trail as stored:
   the steps it could not record are missing from the conversation the resume continues, which the resume warns about (§5.1);
   continuing from the run log is #1303's.
-- A resumed session whose trail never opens ends with no pointer, so the next `ride resume` is refused;
+- A session whose run opens but whose trail never does ends with no pointer, so the next `ride resume` is refused;
   its run log holds the conversation, which #1303's continuation from run logs can reach.
 - Run logs under the runtime root accumulate, and a nested run's log in a box goes with the container.
 - Inside a box, `bro chat`'s exit line names the path the box sees, `/var/ride/session/bro/runs/<id>.jsonl`,
@@ -506,12 +555,15 @@ a server from before §6 refuses the line rows of every session the new installa
 
 ## 11. Implementation mapping
 
+Landing 1 (§9) is the change in `bro-native-trails`, core's `TrailFormat.native_record` and `fetch_recorded_trail`, the image check's line-row case, and the docs that describe them;
+landing 2 is everything else below.
+
 Added in `bro-native` (`harnesses/native/harness/`):
 
 - `bro/native/run_log.py` — the location (§3.1), the run log tracker (§3.4) and the reader (§3.5).
 - `bro/native/trail_recorder.py` — the session recorder:
   the in-process recording class whose passes write the trail (§5.2 to §5.7), and the `bro.native.trail-recorder` console script that loops them (`sync-scripts --project harnesses/native/harness`).
-- `bro/native/recorder.py` — the recorder's lifetime the session runner enters (§5.1).
+- `bro/native/recorder.py` — the recorder's lifetime the session runner enters, its readiness wait included, and the pointer's removal and restoration around it (§5.1).
 - The `watchfiles` dependency, for the recorder's wake on writes, as `bro-claude` has it.
 
 Changed in `bro-native`, under `harnesses/native/harness/`:
@@ -578,16 +630,22 @@ Documentation:
   a run without `run_log` logs under the runtime root, and one given `run_log` logs there.
 - The recording class over a real `LocalStore`:
   the trail's rows are line rows holding the log's step lines verbatim, each with its `at` as `ts`, and each tool list sent once;
-  the pointer cleared at the open, published at the blaze and kept at the stop;
+  the pointer published at the blaze and kept at the stop;
   the mark for a one-shot run and for a summoned session, and none for an interactive root;
   the health beats;
-  a store failing then recovering, with the failed batch resent unchanged;
+  a backlog longer than a batch read one batch at a time;
+  a store failing then recovering, with the failed batch resent unchanged and no entry past it read until it is confirmed;
   a store that keeps a failed batch's leading steps, answered by sending them again and then the rest;
   and each refusal of §5.7 ending the recording.
 - The daemon:
-  SIGTERM's final pass recording the end, and the parent's exit.
+  its readiness byte written before it opens the store, so a store that never answers does not delay it;
+  a SIGTERM right after the byte answered with a final pass that records the whole log and its end;
+  and the parent's exit.
 - The session runner:
-  the recorder started before and stopped after the run on the same path, none under `TRAILS_DISABLED`, `RIDE_SUMMONER` absent from the run's environment, the resume pointer read before the run,
+  the run started only after the recorder's readiness byte, and a recorder that exits without writing it ending the launch;
+  the recorder stopped after the run, over the run's log, and none under `TRAILS_DISABLED`;
+  `RIDE_SUMMONER` absent from the run's environment;
+  the pointer read before the run when resuming, removed before the run starts, put back when the run never created its log, and left as the recorder published it when it did;
   and the resume warning when the health file reports a problem, and none when it does not.
 - Long results:
   the `answer` tool refusing an answer one byte past the bound and taking one at it, and its description stating the bound;
@@ -599,18 +657,20 @@ Documentation:
   a stored line row folded again by a recompute;
   and spread rows read as today.
 - Routes, end to end in-process over a `LocalStore`:
+  a trail of line rows, appended as §6.1's records, that `bro.launch.resume.resume` continues, which landing 1 completes;
   a run's log recorded into a trail that `bro.launch.resume.resume` continues, the fork's own log recorded as the trail forked from it;
   and a summon's `current_tool_step_id` naming the row whose `llm_call` holds the summon call at that index.
 - The trails image check (`oops/trails/server/verify_image.sh`) recording and projecting line rows.
 - A test waiting on the recorder waits on a signal that establishes the state it needs
-  — a health beat with a given outcome, the pointer's publication, the process's exit —
+  — its readiness byte, a health beat with a given outcome, the pointer's publication, the process's exit —
   never on a sleep.
 
 ## 13. Follow-ups proposed, not part of this design
 
 - The Claude runner emits its session's trail mark from a pointer watch (`harnesses/claude/harness/bro/claude/runner.py`);
   its recorder could emit it as the native one does, so #1288 moves one owner of the mark.
-- The two recorders' lifetimes (`recorder.py` in each harness) are the same daemon start and bounded stop, which one shared helper could hold.
+- The Claude recorder's lifetime waits for no readiness, so a stop that comes before its handlers are installed ends it without a final pass (§15);
+  §5.1's handshake applies to it too, and one shared helper could then hold both recorders' lifetimes (`recorder.py` in each harness).
 - The Claude recorder sends its whole grown tail again after a failed append,
   so a lost reply, or a batch the hosted store kept in part, conflicts on every later pass over its segment;
   §5.3's recovery applies to it too.
@@ -623,7 +683,8 @@ the section that applies it is in parentheses.
 - The run log is the harness's own format, with flat entries, `at` on every entry, a `tools` entry per tool list and `recipe` in `open` (§3.2).
 - A. The recorder records the session run only; a nested run keeps its run log and records no trail (§2, §3.1, §5).
 - B. The run log carries what the run knows; the recorder adds the session facts (§3.2, §5.3).
-- C. The pointer names the session run's trail whatever its origin, a resumed session's included, and is cleared when the run opens (§5.4).
+- C. The pointer names the session run's trail whatever its origin, a resumed session's included;
+  the session runner removes it before the session run starts, and puts it back when the run never opens (§5.4).
 - D. A summon before the trail opens carries no `summoned_by`, and a late trail mark is lost; the host is to write the summon link itself under #1288 (§5.5, §10).
 - E. `bro chat` ends by naming its run log, whoever named it (§4.4).
 - F. A run log's default directory is under the runtime root wherever the run runs, and a launcher names another place (§3.1).
@@ -636,6 +697,10 @@ the section that applies it is in parentheses.
   the `answer` tool refuses an answer past the bound while the run can shorten it, its description states the bound, and any other result is cut with a marker naming the pointer's trail;
   the bound's value is #1307's (§7).
 - M. A resume warns when the session's recording failed or stopped (§5.1).
+- N. The session run starts only once the recorder has said, through a readiness pipe, that its stop handling is in place, which it does before it touches the store (§5.1, §5.2).
+- O. A pass reads the run log one batch at a time, so a backlog stays on disk (§5.2, §5.3).
+- P. Readers land before writers:
+  line-row reading is a landing of its own, rolled out before the landing that writes line rows, and once a line row is stored nothing rolls back past it (§9).
 - The recording health file stays, beaten by the recorder as by Claude's, and #1288 moves recording liveness to the store (§5.6).
 
 ## 15. Assumptions and evidence
@@ -667,4 +732,13 @@ the section that applies it is in parentheses.
   the Claude runner passes the trail its session's pointer names (`_complete_run`).
 - `bro.monitor.health.problem()` reports `FAILING` after an `error` beat and `STOPPED` after a missed one, and nothing after a final `ok` beat (`bro/monitor/health.py`).
 - `ride`'s launcher prints the `ride resume <workspace>` hint after a session whose harness reports it resumable (`_print_resume_hint` in `ride/ride/session.py`).
-- The trails-server image parses rows through the formats `oops/trails/server/entries.json` declares, and CI runs on every pull request, the image check among its stages (`.github/workflows/tests.yml`).
+- The trails-server image parses rows through the formats `oops/trails/server/entries.json` declares, and CI runs on every pull request, the image check among its stages (`.github/workflows/tests.yml`);
+  the image check's cases are fixed blazes and records (`oops/trails/server/image_cases.json`), so a line-row case needs no writer.
+- Today's bro trail format refuses a record without a step `kind` (`_bro_parse`),
+  finds usage only in an `llm_call` whose body is an object (`_bro_classify`), and projects any other `llm_call` as a harness event (`_bro_llm_call_messages`);
+  `step_from_row` keeps a row's body as stored, and `latest_fork_point` refuses an `llm_call` whose body holds no response object (`bro/trails/store.py`, `bro/fork.py`).
+- `ride resume` re-executes the runtime its workspace's record names before it reads the rest of the record (`ride/ride/cli.py`, `recorded_runtime_reference` in `ride/ride/session.py`).
+- The Claude recorder installs its SIGTERM handler only in `_watch`, after it has built its store and recorder (`harnesses/claude/harness/bro/claude/trail_recorder.py`),
+  and its lifetime waits for no readiness, so a stop that comes first ends it without a final pass.
+- A job's supervisor and a watch's producer write one byte to an inherited pipe once ready, and their starters read a pipe that closes without it as a failed start (`bro.jobs.Job`, `bro/job_supervisor.py`, `bro/watches.py`).
+- `trail_pointer.clear` ignores a failure to remove the pointer (`bro/monitor/trail_pointer.py`), so the session runner's removal, which must not fail silently, goes through a call that raises.
