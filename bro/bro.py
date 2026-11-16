@@ -36,7 +36,7 @@ from bro.llm.llm import Recipe
 from bro.llm.resolved import ResolvedRecipe
 from bro.llm.tracker import ToolStepSource
 from bro.prompts import get_prompt, session_fragment
-from bro.run_lifecycle import validate_answer
+from bro.run_lifecycle import MAX_ANSWER_BYTES, validate_answer
 from bro.worker_types import type_name as worker_type_name
 
 ProvisionStep = Callable[[Path], None]
@@ -111,9 +111,6 @@ class LiveRun(Protocol):
   def resolved_recipe(self) -> ResolvedRecipe | None: ...
 
   @property
-  def trail_id(self) -> Optional[str]: ...
-
-  @property
   def current_tool_step_id(self) -> Optional[ToolStepSource]: ...
 
   @property
@@ -172,9 +169,11 @@ def _raise_tool(harness: Harness, variables: Variables) -> llm_mcp.Tool:
 _ANSWER_DESCRIPTION = (
   'deliver the final answer of this summoned session to the summoner waiting on '
   'it, and end the session. This session runs on behalf of another session; call '
-  'this exactly once, when the work is done, with a self-contained answer: the summoner '
+  'this when the work is done, with a self-contained answer: the summoner '
   'sees nothing else of this session. A session that ends without this call '
   'reports no answer and surfaces to the summoner as a failure.'
+  f' The answer must fit within {MAX_ANSWER_BYTES} UTF-8 bytes; a longer answer is refused '
+  'without ending the session, so shorten it and call again.'
   '{{when #tools contains raise}} An answer means the request was met; a request this run '
   'cannot fulfill, or declines, ends through `raise` with the reason instead.{{end}}'
   ' The call ends the session; nothing after it will run.'
@@ -301,11 +300,9 @@ def _banner_tool(bro: 'BaseBro', live_run: Optional[LiveRun], variables: Variabl
   def _banner() -> str:
     from bro.workspace.banner import render_banner
 
-    trail_id = None if live_run is None else live_run.trail_id
     return render_banner(
       plain=True,
       bro=bro.name,
-      trail_id=trail_id,
       resolved_recipe=None if live_run is None else live_run.resolved_recipe,
     )
 

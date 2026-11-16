@@ -142,12 +142,6 @@ class TestSessionFacts:
     trail_pointer.publish('01trail')
     assert SessionFacts.collect().trail_id == '01trail'
 
-  def test_trail_id_override_wins_over_the_pointer(self):
-    # an in-process run records its own trail; the pointer names the claude
-    # session it was started from
-    trail_pointer.publish('01session')
-    assert SessionFacts.collect(trail_id_override='01run').trail_id == '01run'
-
   def test_bro_override_takes_precedence_over_env(self, monkeypatch):
     # an in-process caller passes its bro explicitly — its environment carries
     # the launcher's RIDE_BRO (or none); the override wins either way

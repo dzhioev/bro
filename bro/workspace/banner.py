@@ -61,7 +61,6 @@ class SessionFacts:
   def collect(
     cls,
     bro_override: Optional[str] = None,
-    trail_id_override: Optional[str] = None,
     resolved_recipe: ResolvedRecipe | None = None,
   ) -> 'SessionFacts':
     """Collect session facts, with explicit run facts overriding the environment."""
@@ -79,10 +78,8 @@ class SessionFacts:
 
     exec_command = f'ride exec {name}' if isolation == 'boxed' and name is not None else None
 
-    trail_id = trail_id_override
-    if trail_id is None:
-      pointer = trail_pointer.path()
-      trail_id = trail_pointer.read(pointer) if pointer is not None else None
+    pointer = trail_pointer.path()
+    trail_id = trail_pointer.read(pointer) if pointer is not None else None
 
     from bro.authority_view import read
 
@@ -275,13 +272,10 @@ class SessionFacts:
 def render_banner(
   plain: bool = False,
   bro: Optional[str] = None,
-  trail_id: Optional[str] = None,
   resolved_recipe: ResolvedRecipe | None = None,
 ) -> str:
   """Render session facts, with in-process facts overriding the environment."""
-  facts = SessionFacts.collect(
-    bro_override=bro, trail_id_override=trail_id, resolved_recipe=resolved_recipe
-  )
+  facts = SessionFacts.collect(bro_override=bro, resolved_recipe=resolved_recipe)
   return facts.render_plain() if plain else facts.render_visual()
 
 

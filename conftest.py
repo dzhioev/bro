@@ -1,10 +1,6 @@
 """project-wide pytest config.
 
-pinned to a no-op `Tracker` so tests never try to ship trail data to a
-configured sink — even on a workstation where the production recorder is the
-default via `set_default_tracker_factory`.
-
-The run-start credential gate is pinned open for the same hermeticity (the
+The run-start credential gate is pinned open for test isolation (the
 autouse fixture below): test personas may declare provider recipes, but no
 suite resolves real provider keys — `rebuild_environment` pins the credential
 search path away from every store. Gate tests opt out with
@@ -37,10 +33,7 @@ import pytest
 import bro.llm.usage as usage
 from bro.base import log
 from bro.base.suite_environment import rebuild_environment
-from bro.llm.tracker import NullTracker
-from bro.native.runner import set_default_tracker_factory
 
-set_default_tracker_factory(NullTracker)
 rebuild_environment()
 
 collect_ignore_glob = ['*_llm_test.py', '*_conformance_test.py']

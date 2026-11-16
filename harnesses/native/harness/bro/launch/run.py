@@ -72,6 +72,9 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
   )
 
+  parser.add_argument(
+    '--run-log', type=Path, default=None, env=False, help='save the run log at this path'
+  )
   args = parser.parse(argv)
   from bro.registry import create_bro
 
@@ -89,7 +92,7 @@ def run_main(argv: list[str], *, program: list[str]) -> Optional[int]:
     observer = _ask_observer(bro.name)
     hold = args['hold'] if args['hold'] is not None else 'unattended'
     try:
-      runner = Runner(bro, recipe, activity_file=args['activity_file'])
+      runner = Runner(bro, recipe, activity_file=args['activity_file'], run_log=args['run_log'])
       asyncio.run(runner.run(args['input'], observer=observer, surface='ask', hold=hold))
     except BroRaised:
       return RAISE_EXIT_STATUS

@@ -14,7 +14,9 @@ def in_process_run(monkeypatch):
   runner.run = AsyncMock(return_value='done')
   monkeypatch.setattr('bro.launch.run.launch_recipe', lambda name, args: None)
   monkeypatch.setattr('bro.registry.create_bro', lambda name: bro)
-  monkeypatch.setattr('bro.launch.run.Runner', lambda declared, recipe, activity_file: runner)
+  monkeypatch.setattr(
+    'bro.launch.run.Runner', lambda declared, recipe, activity_file, run_log: runner
+  )
   monkeypatch.setattr('bro.launch.run._ask_observer', lambda name: MagicMock())
   monkeypatch.setattr('bro.launch.broxy.session_broxy', contextlib.nullcontext)
   return runner

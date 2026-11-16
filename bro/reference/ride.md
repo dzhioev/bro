@@ -1316,7 +1316,8 @@ Whichever harness records it, the trail carries the launch recipe and the manage
 — the session's location, its launch line, and the attached tree's state in the header's `git`, read off the session env by `bro.trails.record.session`
 — and the session publishes its current trail id to its trail pointer (`bro/monitor/trail_pointer.py`),
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
-A recorder that runs apart from the harness's own process beats the recording health file (`bro/monitor/health.py`) on every attempt, naming the log where a failure's cause is read, and `ride banner` surfaces it.
+Each harness writes a local record of its run, a native run log or Claude transcript, and a separate session recorder turns it into a trail.
+The recorder beats the recording health file (`bro/monitor/health.py`) on every attempt, naming the log where a failure's cause is read, and `ride banner` surfaces it.
 The beat carries the outcome and the age at which the reader must give the recorder up, so both a recorder that fails loudly and one that is simply gone
 — killed by a signal, OOM, a crashed container process
 — are reported while the session runs.
