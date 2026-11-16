@@ -58,6 +58,10 @@ class HeaderRestamp:
   removed: frozenset[str]
 
 
+def _identity_record(row: dict) -> dict:
+  return row
+
+
 @dataclass(frozen=True)
 class TrailFormat:
   name: str
@@ -70,6 +74,7 @@ class TrailFormat:
   requires_bro: bool
   owner: Callable[[dict], Optional[str]]
   native_header_fields: Callable[[dict], list[tuple[str, Any]]]
+  native_record: Callable[[dict], dict] = _identity_record
   resolve_lineage: Optional[Callable[[dict, Any], LineageDecision]] = None
 
   def __post_init__(self) -> None:

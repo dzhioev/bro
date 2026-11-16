@@ -1303,3 +1303,53 @@ def test_sweep_marks_stale_trails_as_inferred_unreported(components):
     'inference': UNREPORTED_END_INFERENCE,
   }
   assert dynamo.headers[live]['end'] is None
+
+
+def test_recompute_refolds_native_line_rows_without_changing_the_lines(components):
+  store, dynamo, _ = components
+  digest = tools_sha256([])
+  records = [
+    {'kind': 'user_input', 'at': '2026-11-14T21:00:00.000000Z', 'body': 'hello'},
+    {
+      'kind': 'llm_call',
+      'at': '2026-11-14T21:00:01.000000Z',
+      'body': {
+        'request': {},
+        'response': {
+          'model': 'model',
+          'usage': {'input_tokens': 10, 'output_tokens': 2},
+          'status': 'completed',
+          'output': [],
+        },
+      },
+      'wire': 'responses',
+      'tools_sha256': digest,
+    },
+  ]
+  trail_id = _blaze_bro(store, body={'records': []})
+  store.append_records(
+    trail_id,
+    0,
+    [{'run_log': 1, 'body': json.dumps(record)} for record in records],
+    tools={digest: []},
+  )
+  rows = list(store.iter_steps(trail_id))
+  messages = list(store.iter_messages(trail_id))
+  with dynamo.editing_header(trail_id) as header:
+    header['turn_count'] = 99
+    header['native']['usage'] = {}
+    header['native']['step_counts_by_kind'] = {}
+  with dynamo.editing_step(trail_id, 1) as row:
+    row.pop('usage')
+    row.pop('tools_sha256')
+    row['kind'] = 'error'
+  assert store.check(trail_id)['ok'] is False
+
+  store.recompute(trail_id)
+
+  assert store.check(trail_id)['ok'] is True
+  assert list(store.iter_steps(trail_id)) == rows
+  assert list(store.iter_messages(trail_id)) == messages
+  header = store.get_trail(trail_id)
+  assert header['turn_count'] == 1
+  assert header['native']['usage'] == {'model': {'input_tokens': 10, 'output_tokens': 2}}

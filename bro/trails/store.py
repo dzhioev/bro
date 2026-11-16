@@ -9,7 +9,7 @@ from types import TracebackType
 from typing import Any, Optional
 
 from bro.base import credentials
-from bro.trails import formats
+from bro.trails import backends, formats
 from bro.trails.model import (
   BlazeRequest,
   ForkedFrom,
@@ -523,8 +523,9 @@ def delete_manifest(*, trail_id: str, at: str, header: dict, steps: list[dict]) 
 
 def fetch_recorded_trail(store: TrailsStore, trail_id: str) -> RecordedTrail:
   header = trail_from_header(store.get_trail(trail_id))
+  trail_format = backends.get_format(header.harness)
   steps = [
-    step_from_row({**row, 'body': store.resolve_body(row.get('body'))})
+    step_from_row(trail_format.native_record({**row, 'body': store.resolve_body(row.get('body'))}))
     for row in store.iter_steps(trail_id)
   ]
   return RecordedTrail(header=header, steps=steps)

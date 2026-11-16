@@ -90,3 +90,8 @@ def test_registry_refuses_duplicate_names(monkeypatch):
 def test_format_names_have_a_stable_grammar(name):
   with pytest.raises(ValueError, match='invalid trail-format name'):
     replace(BRO_FORMAT, name=name)
+
+
+def test_native_record_defaults_to_identity():
+  row = {'body': 'stored record', 'step_id': 2}
+  assert TEST_FORMAT.native_record(row) is row
