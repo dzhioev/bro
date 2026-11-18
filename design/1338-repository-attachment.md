@@ -1,4 +1,4 @@
-# Design: repository attachment, provisioning and the runtime toolset
+# Design: workspace attachments, provisioning and the runtime toolset
 
 This file is the specification of [#1338](https://github.com/dzhioev/bro/issues/1338).
 It lives on the branch `design/1338-repository-attachment`, which is never merged:
@@ -6,8 +6,10 @@ the pull request that carries it is a design review only.
 
 ## 1. Goal, scope and constraints
 
-Goal: a ride workspace is the bro's own directory, and a repository is one optional thing in it.
-An attached repository is cloned into a subdirectory of the workspace, describes itself in a language-neutral `bro.toml`, and is provisioned by the session itself, under the session's own identity.
+Goal: a ride workspace's tree is the bro's own directory, and what the host provides for a session to work with arrives in it as attachments.
+An attachment is a typed unit of data in its own subdirectory of the tree;
+a git repository is one type of it, the only one so far.
+An attached repository describes itself in a language-neutral `.bro/config.toml` and is provisioned by the session itself, under the session's own identity.
 Every session, boxed or unboxed, runs on the installed bro toolset alone, frozen once per root and installed for the host and for containers the same way:
 the launcher fetches every git dependency, so an install inside a container needs no credential.
 
@@ -19,19 +21,22 @@ What it enables, for example:
   the session's own `github` identity installs it into the project's environment, and a private pin of the toolset reaches the runtime volume through the launcher.
 - A non-Python repository declares its provisioning command.
 - Upgrading one of the project's development tools, its linter say, no longer creates a new runtime bundle.
+- A distribution adds a type of attachment without changing ride's workspace machinery.
 
 The owner settled the design's decisions on 2026-11-18;
-§15 records each one and the section that applies it.
+§16 records each one and the section that applies it.
 
 Out of scope, each with where it belongs:
 
-- launch configuration, which stays the home settings' and the host configuration's (`bro/reference/ride.md`, "Home settings"):
-  a repository never contributes launch configuration;
+- launch configuration, meaning the default bro, the harnesses, the model recipe, the credentials, the authority and the summon depth,
+  which stays the installation's packaged `bro-settings.toml` and the host configuration `~/.bro.json` (`bro/reference/ride.md`, "Home settings"):
+  nothing a repository's `.bro/config.toml` says changes it;
+- several attachments in one workspace, and the per-attachment facts they need, which are [#1341](https://github.com/dzhioev/bro/issues/1341)'s;
 - a provisioning hook for workspace creation alone, since one command at every start covers the framework's consumers;
 - a package cache shared between boxed workspaces, which §8.3 rules out;
 - private package indexes, authenticated archive pins and the submodules of a git pin as sources of the runtime volume (§10.3);
 - the benchmark's relocatable bundle, which its host builds from the workspace (`benchmark/AGENTS.md`);
-- migrating workspaces recorded in today's layout, which are refused instead (§4.3).
+- migrating workspaces recorded in today's layout, which are refused instead (§4.2).
 
 Constraints:
 
@@ -48,7 +53,8 @@ Constraints:
 
 Terms the repository already defines (`bro/reference/ride.md`), as this design uses them:
 
-- **Workspace** — `<runtime-root>/workspaces/<name>/`, a globally named directory holding a writable tree and the records the launch machinery keeps about it.
+- **Workspace** — `<runtime-root>/workspaces/<name>/`, the globally named unit ride creates, runs sessions in and cleans up, holding a tree and the records the launch machinery keeps about it.
+  "Workspace" names only this unit.
 - **Workspace record** — the workspace's `workspace.json`, written once at creation.
 - **Isolation** — `boxed`, in a container, or `unboxed`, on the launcher's filesystem, fixed at creation.
 - **Launcher** — the `ride` process that prepares a workspace and supervises its session;
@@ -65,14 +71,15 @@ Terms the repository already defines (`bro/reference/ride.md`), as this design u
 
 Terms this design introduces or redefines:
 
-- **Workspace tree** — the workspace's writable directory, `tree/` on the launcher and `/workspace` in a container (§3).
-  It is no longer the clone.
-- **Attachment** — the repository a workspace works on:
-  its identity, a checkout path or a normalized git URL as `--repo` resolves it, its branch, and its clone name (§4).
-- **Clone** — the attachment's independent git clone, a directory directly inside the workspace tree named by the **clone name** (§4.2).
-- **Start directory** — the directory a session starts in:
-  the clone when the workspace is attached, the workspace tree otherwise (§3).
-- **Repository configuration** — the file `bro.toml` at a repository's root (§6).
+- **Tree** — the workspace's writable directory, `tree/` on the launcher and `/tree` in a container (§3).
+  It is no longer a git clone.
+- **Attachment** — a unit of data the host provides for a session to work with, of one **attachment type**, under an **attachment name** that is its directory directly inside the tree (§5).
+  A workspace with no attachment is **detached**.
+- **`repo` attachment** — the attachment type that is a git repository:
+  its **clone** is an independent git clone in the attachment's directory (§5.2).
+  "Clone" names only that checkout.
+- **Start directory** — the directory a session starts in (§3).
+- **Repository configuration** — the file `.bro/config.toml` at a repository's root (§6).
 - **Provisioning command** — the shell command a repository configuration declares to make its clone ready for work (§6.1).
 - **Provisioning** — what `do-ride` does to the clone before the harness starts:
   the provisioning command, then the persona's provisioning steps (§7).
@@ -86,39 +93,41 @@ Terms this design introduces or redefines:
 ```
 <runtime-root>/workspaces/<name>/
   workspace.json       the workspace record (§4)
-  tree/                the workspace tree, /workspace in a container
-    <clone name>/      the clone, present only when attached
+  tree/                the tree, /tree in a container
+    <attachment name>/ an attachment, such as a repo attachment's clone
   lock, exit, resume.json, session.log, session/, <harness>/, party/
                        the records `bro/reference/ride.md`, "Workspaces", describes
 ```
 
-The workspace tree belongs to the session:
-ride creates it empty, places the clone in it on an attached workspace's first launch, and writes nothing else into it.
-What a session writes beside the clone stays in the workspace tree, inside the session's artifact reach (§11.2) and outside every git repository.
+The tree belongs to the session:
+ride creates it empty, places each attachment in it before the session's first start, and writes nothing else into it.
+What a session writes beside its attachments stays in the tree, inside the session's artifact reach (§11.2) and outside every git repository.
 
-A session starts in its start directory, in both isolations:
+A session with one attachment starts in that attachment's directory, and a detached session starts in the tree.
+That holds in both isolations:
 
 | Workspace | Boxed start directory | Unboxed start directory |
 |---|---|---|
-| attached, clone name `bro` | `/workspace/bro` | `<runtime-root>/workspaces/<name>/tree/bro` |
-| detached | `/workspace` | `<runtime-root>/workspaces/<name>/tree` |
+| a `repo` attachment named `bro` | `/tree/bro` | `<runtime-root>/workspaces/<name>/tree/bro` |
+| detached | `/tree` | `<runtime-root>/workspaces/<name>/tree` |
 | detached, `--tree PATH` | — | `PATH` |
 
 A joined member starts in its party's start directory, and `ride exec` enters a running boxed workspace there too.
 An external tree (`--tree`) still belongs only to a detached unboxed workspace.
+Where a session with several attachments starts is #1341's to settle.
 
-For example, `ride along --repo ~/bro -w fix-12 bro-dev` creates the clone at `<runtime-root>/workspaces/fix-12/tree/bro/` and starts the session in `/workspace/bro`;
-a reviewer joining that party writes its notes to `/workspace/review/` and never touches `/workspace/bro`.
-`ride along -w notes bro` starts in an empty `/workspace`.
+For example, `ride along --repo ~/bro -w fix-12 bro-dev` creates the clone at `<runtime-root>/workspaces/fix-12/tree/bro/` and starts the session in `/tree/bro`;
+a reviewer joining that party writes its notes to `/tree/review/` and never touches `/tree/bro`.
+`ride along -w notes bro` starts in an empty `/tree`.
 
 ## 4. The workspace record
 
 ### 4.1 Shape
 
-An attached workspace's record:
+A workspace's record with a `repo` attachment:
 
 ```json
-{"isolation": "boxed", "attachment": {"repo": "/home/me/bro", "branch": "workspace-fix-12", "clone": "bro"}, "throwaway": false, "tree": null}
+{"isolation": "boxed", "attachments": [{"type": "repo", "name": "bro", "repo": "/home/me/bro", "branch": "workspace-fix-12"}], "throwaway": false, "tree": null}
 ```
 
 A detached one:
@@ -127,64 +136,71 @@ A detached one:
 {"isolation": "boxed", "throwaway": false, "tree": null}
 ```
 
-- **`attachment`** — present exactly when the workspace is attached, holding three non-empty strings:
-  - `repo` — the attachment's identity, the resolved checkout path or normalized git URL;
-  - `branch` — the clone's branch, `workspace-<name>` for a new workspace;
-  - `clone` — the clone name (§4.2).
+- **`attachments`** — present exactly when the workspace has an attachment, as a non-empty list of objects, each holding:
+  - `type` — the attachment type, a name registered in `bro.attachment_types` (§5.1);
+  - `name` — the attachment name, unique within the workspace;
+  - the fields its type records, which for `repo` are `repo`, the resolved checkout path or normalized git URL, and `branch`, the clone's branch, `workspace-<name>` for a new workspace.
 - `isolation`, `throwaway` and `tree` keep their meanings (`bro/reference/ride.md`, "Workspaces").
 
-A launch naming an existing workspace with an attachment whose identity differs from the recorded `attachment.repo`, or with one where the record has none, or with none where it has one, is refused, as reusing a name with a different `repo` is today.
+A launch naming an existing workspace with attachments that differ from the recorded ones in type or in their type's identity, `repo` for a `repo` attachment, is refused, as reusing a name with a different `repo` is today.
 
-### 4.2 The clone name
-
-The launcher derives the clone name once, when it creates an attached workspace, and records it;
-every later reader takes it from the record.
-
-- A checkout path's clone name is its last component:
-  `/home/me/bro` gives `bro`.
-- A URL's clone name is the last segment of its normalized path, with a trailing `.git` removed:
-  `https://github.com/dzhioev/bro` gives `bro`, and `git@github.com:acme/widget.git` gives `widget`.
-
-A derived name that is empty, `.` or `..` refuses the launch, naming the attachment.
-A started or manual child derives its clone name from the same attachment, so it is its root's.
-
-### 4.3 Records in today's layout
+### 4.2 Records in today's layout
 
 A record carrying top-level `repo` and `branch` is not in the current shape, so every command that reads it refuses the workspace by name and points to `ride clean --force <name>` (`bro/reference/ride.md`, "Runtime state").
 Its directory is left as it is, so its files stay readable for recovery.
 Today's detached record is already in the current shape.
 A kept attached workspace therefore lands or pushes its work before the host's installations move to this design (§13).
 
-## 5. Attachment
+## 5. Attachments
 
-### 5.1 The component
+### 5.1 Attachment types
 
-Attachment is one component of `bro-ride`, and the rest of ride reaches a repository only through it.
-It owns:
+An attachment type is a registered object of `bro-ride`'s attachment contract, `<type> = "<module>:<object>"` in the `bro.attachment_types` entry-point group, loaded lazily by name as harnesses and worker types are.
+The group's `bro.` prefix makes a type's distribution a toolset root (§9.1), so `do-ride` finds the type in the bundle.
+A type supplies:
 
-- resolving `--repo` to an identity, and the managed URL mirrors (`bro/reference/ride.md`, "Managed URL mirrors"), unchanged;
-- the bases a clone is created at (§5.3);
-- the record's `attachment` (§4);
-- preparing the clone (§5.2);
-- the session facts an attachment contributes (§5.4);
-- what an attachment changes in a workspace's lifecycle (§5.5);
-- the human's git identity, read from the attachment's own git configuration (`ride/ride/identity.py`), unchanged.
+- **resolution** — turning its launch value into the attachment's name and recorded fields;
+- **preparation** — filling `tree/<attachment name>/` on the launcher before the session's first start;
+- **session facts** — the environment variables it contributes to the session;
+- **a session-start step** — what `do-ride` runs for it after the credential hooks (§7.2), which may be nothing;
+- **inheritance** — the attachment a started or manual child gets from its summoner's;
+- **lifecycle** — what it adds to the workspace's cleanliness, what `ride clean` removes for it, and what `ride list` shows of it.
 
-The neutral launcher, the workspace model, the container machinery and the bro worker's lowering handle a workspace with or without an attachment, and run no git operation of their own.
-What a session does to its clone at start is provisioning, which is `do-ride`'s (§7);
-the repository configuration's reader is core's (§6.2).
+The neutral launcher, the workspace model, the container machinery and the bro worker's lowering reach a workspace's attachments only through this contract, and run no git operation of their own.
 
-### 5.2 Preparing the clone
+A launch carries at most one attachment until #1341 lifts the limit.
+`--repo PATH|URL` is the only launch syntax, adding a `repo` attachment;
+a type another distribution registers has no launch syntax until a generic one comes with a second type (§15).
+A started or manual child gets its root's attachment through the type's inheritance, and a detached root starts detached children.
 
-On an attached workspace's first launch, before its container is created when boxed or its session process starts when unboxed, the launcher creates the clone at `tree/<clone name>/` with today's clone machinery and its ambient git authentication:
+### 5.2 The `repo` type
+
+The `repo` type ships in `bro-ride`.
+It owns what an attached repository is today:
+resolving `--repo` to an identity and the managed URL mirrors (`bro/reference/ride.md`, "Managed URL mirrors"), the bases a clone is created at, the clone and its session facts,
+provisioning as its session-start step (§7), and the human's git identity read from the attachment's own git configuration (`ride/ride/identity.py`).
+
+Its attachment name is the repository's name, derived once at creation and recorded:
+
+- A checkout path's name is its last component:
+  `/home/me/bro` gives `bro`.
+- A URL's name is the last segment of its normalized path, with a trailing `.git` removed:
+  `https://github.com/dzhioev/bro` gives `bro`, and `git@github.com:acme/widget.git` gives `widget`.
+
+A derived name that is empty, `.` or `..` refuses the launch, naming the attachment.
+A child derives its name from the same repository, so it is its root's.
+
+### 5.3 Preparing the clone
+
+On the workspace's first launch, before its container is created when boxed or its session process starts when unboxed, the launcher creates the clone at `tree/<attachment name>/` with today's clone machinery and its ambient git authentication:
 an independent clone of the checkout or managed mirror, with `origin` retargeted upstream and the attachment's `refs/remotes/origin/*`,
 the recorded branch at the resolved base, the initialized submodules, and no alternates (`bro/reference/ride.md`, "Boxed isolation").
 It publishes the clone atomically from a temporary sibling.
-The clone exists when `tree/<clone name>/.git` is a directory;
-a `tree/<clone name>` that exists without one refuses the launch.
+The clone exists when `tree/<attachment name>/.git` is a directory;
+a `tree/<attachment name>` that exists without one refuses the launch.
 Later launches leave the clone exactly as the session left it.
 
-### 5.3 Bases
+### 5.4 Bases
 
 The base is the commit a new clone's branch starts at;
 a launch uses it only to create the clone.
@@ -192,30 +208,29 @@ The rules are today's:
 
 - a root bases on `--into` when given, otherwise on a URL attachment's freshly fetched `origin/HEAD` or a checkout's `HEAD`;
 - a started child bases on its request's `into` when given, otherwise on the `HEAD` of its summoner's clone, read at summon time
-  — the clone of the workspace the summoner runs in, its party's for a joined summoner —
+  — the clone in the workspace the summoner runs in, its party's for a joined summoner —
   after transferring into the attachment the commits it lacks, as `bro.workspace.git.resolve_head` does;
 - a manual child bases the same way, its pending record naming the summoner's clone;
-- a detached root starts detached children and refuses `into`.
+- a detached root refuses `into`.
 
-### 5.4 Session facts
+### 5.5 Session facts
 
-The launcher of an attached session:
+The `repo` type sets `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRANCH` and `RIDE_BASE_SHA`, and the human's `BRO_HUMAN_NAME` and `BRO_HUMAN_EMAIL`, with today's meanings,
+reading `RIDE_REPO_URL` and `RIDE_BASE_SHA` from the clone where today they are read from the tree.
+They stay singular until #1341 replaces them.
 
-- starts it in the clone (§3), as the container's working directory or the process's `cwd` and `PWD`;
-- sets `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRANCH` and `RIDE_BASE_SHA`, and the human's `BRO_HUMAN_NAME` and `BRO_HUMAN_EMAIL`, with today's meanings,
-  reading `RIDE_REPO_URL` and `RIDE_BASE_SHA` from the clone where today they are read from the tree.
-
-`RIDE_HOST_WORKSPACE` keeps naming the workspace tree's launcher-side path, attached or not.
+Every launcher sets `RIDE_HOST_TREE`, which replaces `RIDE_HOST_WORKSPACE`, to the tree's launcher-side path;
+the banner reports the tree as `tree_host_path` and `tree_container_path`, which replace `workspace_host_path` and `workspace_container_path`.
 
 A harness keys the state it keeps per working directory to the start directory:
-the Claude harness's project directory and trusted path name `/workspace/bro` in the example of §3, and `/workspace` only for a detached boxed session.
+the Claude harness's project directory and trusted path name `/tree/bro` in the example of §3, and `/tree` only for a detached boxed session.
 Every container's entrypoint marks every directory safe for git (`safe.directory=*`), so it reads no attachment fact.
 
-### 5.5 Lifecycle
+### 5.6 Lifecycle
 
-- An attached workspace is clean only when its last session exited `0`, and a detached managed tree only while it is empty, as today.
-- `ride list` shows `attachment.repo` as the workspace's attachment.
-- `ride clean` keeps a managed mirror while some record's `attachment.repo` names its URL, and removes an attached workspace whose checkout or mirror is gone only with `--force`, as today.
+- A workspace with a `repo` attachment is clean only when its last session exited `0`, and a detached managed tree only while it is empty, as today.
+- `ride list` shows a `repo` attachment's `repo`.
+- `ride clean` keeps a managed mirror while some record's `repo` attachment names its URL, and removes a workspace whose attached checkout or mirror is gone only with `--force`, as today.
 - The launch configuration a root reads depends on no attachment:
   the reading stops carrying the attachment identities and repository sections it holds today, which no rule reads (`ride/ride/authority_reading.py`), and `ride scope` drops `--repo`.
 
@@ -223,7 +238,7 @@ Every container's entrypoint marks every directory safe for git (`safe.directory
 
 ### 6.1 The file
 
-A repository describes itself to bro in `bro.toml` at its root:
+A repository describes itself to bro in `.bro/config.toml` at its root:
 
 ```toml
 # runs at every session start, so it must be idempotent
@@ -238,15 +253,15 @@ target-registry = "oops.deploy_targets:registry"
   `[devoops]` is `bro-oops`'s target registry.
 - Any other top-level key refuses the file wherever it is read, naming the file and the key.
 
-A repository without `bro.toml` has no repository configuration.
+A repository without `.bro/config.toml` has no repository configuration, and its sessions set themselves up from its own instructions, such as its `AGENTS.md`.
 `[tool.bro]` in `pyproject.toml` is no longer read by anything:
-its owner tables move to `bro.toml`, and its `build-context-command` goes with the project image it served (§8.1).
+its owner tables move to `.bro/config.toml`, and its `build-context-command` goes with the project image it served (§8.1).
 
 ### 6.2 Readers
 
 One reader in `bro.workspace`, replacing `bro/workspace/project.py`, parses and validates the file for every consumer.
 
-- `do-ride` reads `<start directory>/bro.toml` at each attached start, as the clone holds it then, so a commit that changes the file takes effect at the next start.
+- The `repo` type's session-start step reads `<clone>/.bro/config.toml` at each start, as the clone holds it then, so a commit that changes the file takes effect at the next start.
 - `bro-oops` reads `[devoops]` from the file at the root of the repository it runs in, found as today (`bro.workspace.paths.find_project_root`).
 - The launcher reads nothing from a repository's content.
 
@@ -254,22 +269,23 @@ One reader in `bro.workspace`, replacing `bro/workspace/project.py`, parses and 
 
 ### 7.1 When
 
-Provisioning runs at every start of an attached session that is not a joined member:
+Provisioning runs at every start of a session with a `repo` attachment that is not a joined member:
 a root's launch and each of its resumes, a started child, and a manual child, in both isolations.
 A detached session and a joined member run none;
 a joined member's party has already provisioned the shared clone.
 
 ### 7.2 Order
 
-`do-ride` starts an attached session in this order:
+`do-ride` starts a session in this order:
 
 1. the session environment it sets today:
    the bro's git identity, the `RIDE_*` facts, `BRO_HOLD` and `RIDE_RUNNER_PID`;
 2. the scoped credential hooks;
-3. the provisioning command, when the repository configuration declares one;
-4. the persona's provisioning steps (`BaseBro.provision_workspace`), given the clone's root;
+3. each attachment's session-start step, which for a `repo` attachment is its provisioning command when the repository configuration declares one;
+4. when the session has a `repo` attachment, the persona's provisioning steps (`BaseBro.provision_workspace`), given the clone's root;
 5. the harness's session preparation, then its run.
 
+A joined member runs steps 1, 2 and 5.
 The credential hooks come first so provisioning fetches what only the session's identity reaches (§7.4).
 The command comes before the persona's steps so a step that leaves an existing file alone, such as the dev family's footer hooks, keeps what the repository installs.
 
@@ -296,6 +312,8 @@ a uv project's `uv sync` in its provisioning command, or its first `uv run` wher
 A session scoped without access to a private dependency therefore cannot install it:
 its provisioning, or its first `uv run`, fails naming the dependency.
 
+A declared command makes the setup the same in every session, so an unattended session never mistakes a missing environment for failing code;
+a repository that declares none still works, its sessions setting themselves up as its instructions say.
 This repository declares `provision-command = "./setup.sh"`, whose sync no longer compares a baked environment's manifests.
 A plain uv project needs no declaration.
 
@@ -303,24 +321,24 @@ A plain uv project needs no declaration.
 
 Nothing runs a file by its name any more:
 the entrypoint's `setup.sh` call and project-venv link, `RIDE_VENV_MANIFEST`, and the unboxed launcher's own `setup.sh` run (`ride/ride/workspace/worktrees.py`) go.
-The entrypoint keeps aligning the `ride` user with the workspace tree's owner, re-owning the scoped store, marking directories safe for git, and executing `do-ride`.
+The entrypoint keeps aligning the `ride` user with the tree's owner, re-owning the scoped store, marking directories safe for git, and executing `do-ride`.
 
 ## 8. Images and package caches
 
 ### 8.1 One image
 
-Every boxed session runs the runtime image, attached or not.
+Every boxed session runs the runtime image, whatever its attachments.
 The project image goes, and with it `project.Dockerfile`, the project build context and its manifests, `build-context-command`, the `ride-attachment` label and the project-image pruning;
 removing a workspace's root-owned files uses a present runtime image.
 The runtime image's tag stops hashing `project.Dockerfile`, so the landing builds one new runtime image.
 
 ### 8.2 The project's environment
 
-What provisioning builds in the clone, such as its `.venv`, lives on the workspace tree's mount, so it persists through the workspace's later sessions and resumes;
+What provisioning builds in the clone, such as its `.venv`, lives on the tree's mount, so it persists through the workspace's later sessions and resumes;
 a new workspace builds it at its first start.
 A boxed session's uv cache stays in its container's own layer, and the runtime image sets `UV_LINK_MODE=copy`, since that cache and the clone lie on different filesystems.
 
-A cold full sync of this repository, `uv sync --frozen --all-packages --all-groups --all-extras`, took 6.8 s in a boxed session, and 5.4 s with a warm cache (§16).
+A cold full sync of this repository, `uv sync --frozen --all-packages --all-groups --all-extras`, took 6.8 s in a boxed session, and 5.4 s with a warm cache (§17).
 
 ### 8.3 No shared cache
 
@@ -348,7 +366,7 @@ a distribution outside the toolset leaves the manifest, the wheels and the hash.
 For example, this checkout's development environment holds 116 distributions, 18 of them toolset roots:
 `bro` and every member of the workspace.
 The extras its sync installs, `bro[aws]`, `bro[runtime]` and `bro-openai[client]` among them, are active, so the OpenAI SDK and `boto3` stay in the toolset.
-The 18 distributions left out are development tools and what only they need (§16):
+The 18 distributions left out are development tools and what only they need (§17):
 the checkers `deptry`, `pyright`, `ruff`, `shellcheck-py`, `types-python-dateutil` and `types-pyyaml`;
 the test tools `moto`, `pytest-aiohttp`, `pytest-asyncio` and `pytest-xdist`;
 and what only those require, `execnet`, `markupsafe`, `nodeenv`, `requirements-parser`, `responses`, `tomli`, `werkzeug` and `xmltodict`.
@@ -391,7 +409,7 @@ The variables add to whatever configuration git reads otherwise rather than repl
 - The host materialization's install reaches `<bundle root>/git-pins/` at its own path, over the launching user's git configuration.
 - The materializer mounts `<bundle root>/git-pins/` read-only at `/var/ride/git-pins`, and its install has no other git configuration.
 
-The pins themselves are unchanged, and the installed record keeps each pin's original URL and commit (§16).
+The pins themselves are unchanged, and the installed record keeps each pin's original URL and commit (§17).
 The launcher removes `<bundle root>/git-pins/` once the materialization ends, whether it succeeded or failed, so nothing staged persists:
 the bundle, its hash and both materializations are what they would be without staging.
 Every materialization goes this way:
@@ -417,7 +435,7 @@ The client that builds the request makes a relative path absolute against its wo
 
 The host owns the check.
 Its description of each peer carries, beside the peer's tree, the path the peer sees that tree at:
-`/workspace` for a peer that runs in a container, which is a boxed session, a joined member of a boxed party or a worker container, and the tree's own path for an unboxed peer.
+`/tree` for a peer that runs in a container, which is a boxed session, a joined member of a boxed party or a worker container, and the tree's own path for an unboxed peer.
 One core helper, replacing `bro.worker_types.tree_path`, maps a wire path from that view to the tree and resolves it on the host.
 It refuses the path, naming it, when it is relative, lies outside the peer's view of its tree, or resolves outside the tree.
 
@@ -425,52 +443,54 @@ It refuses the path, naming it, when it is relative, lies outside the peer's vie
 
 `artifact mint <path>`, and the client function under it, accept a path relative to the caller's working directory or an absolute one, and send it as a wire path.
 
-From `/workspace/bro` in the workspace `fix-12` of §3:
+From `/tree/bro` in the workspace `fix-12` of §3:
 
-- `artifact mint report.md` sends `/workspace/bro/report.md`, which the host reads at `<runtime-root>/workspaces/fix-12/tree/bro/report.md`;
-- `artifact mint ../review/r3.md` sends `/workspace/review/r3.md`;
+- `artifact mint report.md` sends `/tree/bro/report.md`, which the host reads at `<runtime-root>/workspaces/fix-12/tree/bro/report.md`;
+- `artifact mint ../review/r3.md` sends `/tree/review/r3.md`;
 - `artifact mint /etc/hosts` reaches the host and is refused;
 - a symbolic link inside the tree that points to `/opt/cache` resolves outside the tree on the host and is refused.
 
-The webview mints paths relative to its working directory, its workspace tree, so they keep their meaning.
+The webview mints paths relative to its working directory, its tree, so they keep their meaning, and its artifact view moves from `/workspace/artifacts` to `/tree/artifacts`.
 
 ### 11.3 A joined reviewer's oversized round
 
-The eyebro's `review` spell writes an oversized round to a unique directory in the workspace tree outside the clone, at the workspace path its banner reports, mints it from there, and removes that directory;
+The eyebro's `review` spell writes an oversized round to a unique directory in the tree outside the clone, at the tree path its banner reports, mints it from there, and removes that directory;
 the stopgap that stages it under the clone's `.git/review-rounds/` goes.
 
 ### 11.4 The benchmark job
 
 `benchmark-run` sends its job's `config` and, in a new `project` field, the benchmark project's directory, both as wire paths;
 the job maps both through the helper of §11.1 and refuses a `project` without a `pyproject.toml`.
-Its environment stays beside the workspace tree, at `<workspace>/benchmark-venv`.
+Its environment stays beside the tree, at `<workspace>/benchmark-venv`.
 
 ## 12. Documentation, this repository and its consumers
 
 - `bro/reference/ride.md`:
   the mode verbs' attachment, "Runtime bundles" (§9, §10), "Workspaces" (§3, §4),
-  "Attached-tree configuration" rewritten as the repository configuration (§6),
-  "Unboxed isolation" and "Boxed isolation" (§5.2, §7.5, §8.1), "Sharing artifacts between peers" (§11.2), and "Forwarded env vars" (the start directory);
+  "Attached-tree configuration" rewritten as attachments and the repository configuration (§5, §6),
+  "Unboxed isolation" and "Boxed isolation" (§5.3, §7.5, §8.1), "Sharing artifacts between peers" (§11.2), and "Forwarded env vars" (`RIDE_HOST_TREE`, the start directory);
   provisioning's contract, its idempotency included, is stated there once.
 - `BOOTSTRAP.md`:
   the root-lock image gates and project-image proofs go;
-  a repository with a setup flow declares it as `provision-command` in `bro.toml`, replacing the `setup.sh` rule;
-  `[tool.bro]` becomes `bro.toml`;
+  a repository with a setup flow declares it as `provision-command` in `.bro/config.toml`, replacing the `setup.sh` rule;
+  `[tool.bro]` becomes `.bro/config.toml`;
   and the packaging choice states what reaches the toolset (§9.2).
 - `bro/reference/extending.md`:
-  the `bro.` entry-point namespace defines the toolset roots.
+  the `bro.attachment_types` group, and the `bro.` entry-point namespace defining the toolset roots.
 - `bro/artifact.py`'s wire contract:
   `artifact.mint` carries a wire path.
+- Every `/workspace` path a session or its tooling names becomes `/tree`:
+  the container setup, the Claude harness, the banner, the trail display, the webview, and the prompts and spells that cite it.
 - The maps (`ride/AGENTS.md`, `ride/ride/workspace/AGENTS.md`, `ride/ride/setup/AGENTS.md`, `bro/workspace/AGENTS.md`), `oops/README.md`, and the `[tool.bro]` mentions in `dev/bro/dev/spells/reflect.md` and `dev/bro/prompts/dev/bump_bro.md`.
 - This repository:
-  `bro.toml` declares `provision-command = "./setup.sh"` and carries `[devoops]`, `pyproject.toml` drops `[tool.bro.devoops]`, and `setup.sh` drops `manifests_match`.
-- Consumer repositories move their `[tool.bro]` tables to `bro.toml` and declare their provisioning command in the commit that takes the framework revision.
-- Regatta's builder pilot reads a build's result from the clone, now at `tree/<clone name>/` as its workspace record names it;
-  `RIDE_BRANCH`, `RIDE_BASE_SHA` and the clone's extra local branch stay as they are.
+  `.bro/config.toml` declares `provision-command = "./setup.sh"` and carries `[devoops]`, `pyproject.toml` drops `[tool.bro.devoops]`, and `setup.sh` drops `manifests_match`.
+- Consumer repositories move their `[tool.bro]` tables to `.bro/config.toml` and declare their provisioning command in the commit that takes the framework revision.
+- Regatta's builder pilot reads a build's result from the clone, now at `tree/<attachment name>/` as its workspace record names it;
+  `RIDE_BRANCH`, `RIDE_BASE_SHA` and the clone's extra local branch stay as they are, and `RIDE_HOST_WORKSPACE` is now `RIDE_HOST_TREE`.
 
 ## 13. Rollout
 
-- A launcher reads only the record shape it writes (§4.3), so an old launcher refuses a new record and a new launcher an old attached record, each by name;
+- A launcher reads only the record shape it writes (§4.2), so an old launcher refuses a new attached record and a new launcher an old attached record, each by name;
   neither misreads the other.
 - Before the host's installations move, every kept attached workspace lands or pushes its work, since it is refused afterwards.
 - Project images left on the daemon carry a label no launcher reads any more;
@@ -481,36 +501,48 @@ Its environment stays beside the workspace tree, at `<workspace>/benchmark-venv`
 
 Each route below needs automated coverage, the boxed ones in the host-only Docker stage:
 
-- an attached boxed launch and an attached unboxed launch start in the clone, with the workspace tree writable beside it;
+- a boxed launch and an unboxed launch with a `repo` attachment start in the clone, with the tree writable beside it;
+- a detached launch starts in the tree;
 - a relative mint from the clone and an absolute one beside it are accepted, while a path outside the tree and a symbolic link out of it are refused by the host;
 - a repository declaring a provisioning command runs it at the launch and at a resume, after the credential hooks, and a failing command ends the start before the harness runs;
 - a repository with a `setup.sh` and no declaration starts without running it;
-- an unknown top-level key in `bro.toml` refuses the start;
+- an unknown top-level key in `.bro/config.toml` refuses the start;
+- an attachment type registered by a test distribution prepares its directory, contributes its facts and runs its session-start step, reached through the contract alone;
 - a freeze leaves out a distribution no root reaches, keeps an active extra's requirements, and its bundle reproduces itself;
 - a bundle with a git pin whose URL neither the host nor the container can reach materializes for both through its staged pin, and leaves nothing staged;
 - an attached record in today's layout is refused by name.
 
 A private dependency fetched through a real `github` credential is verified live, once, by the verification phase.
 
-## 15. Decision record
+## 15. Follow-ups
+
+- [#1341](https://github.com/dzhioev/bro/issues/1341):
+  several attachments in one workspace, replacing the singular facts of §5.5 with per-attachment ones.
+- A generic launch syntax for attachment types, with the second type that needs it (§5.1).
+
+## 16. Decision record
 
 The owner settled every decision below on 2026-11-18.
 
 | # | Decision | Applied in |
 |---|---|---|
-| 1 | Attachment stays one self-contained component of `bro-ride` rather than a separate distribution | §5.1 |
-| 2 | The clone is a subdirectory of the workspace tree, named after the repository and recorded | §3, §4 |
-| 3 | A language-neutral `bro.toml` replaces `[tool.bro]`, carrying `provision-command` and owner tables | §6 |
-| 4 | Provisioning runs in `do-ride` after the credential hooks, in both isolations, and fails the start | §7 |
+| 1 | Attachment machinery stays in `bro-ride` rather than a separate distribution | §5.1 |
+| 2 | Each attachment is a subdirectory of the tree, and a `repo` attachment is named after its repository and recorded | §3, §4, §5.2 |
+| 3 | A language-neutral `.bro/config.toml` replaces `[tool.bro]`, carrying `provision-command` and owner tables | §6 |
+| 4 | Provisioning stays declared and automatic: it runs in `do-ride` after the credential hooks, in both isolations, and fails the start | §7 |
 | 5 | The project image and the `setup.sh` filename hook go | §7.5, §8.1 |
 | 6 | Boxed workspaces share no package cache | §8.3 |
 | 7 | Every materialization, host and container, reaches git pins through launcher-staged one-commit copies, the redirect layered over the git configuration through `GIT_CONFIG_COUNT` | §10 |
 | 8 | A runtime bundle carries the bro toolset rather than the whole invoking installation | §9 |
-| 9 | Workspaces recorded in today's layout are refused, not migrated | §4.3, §13 |
+| 9 | Workspaces recorded in today's layout are refused, not migrated | §4.2, §13 |
 | 10 | Every session, boxed or unboxed, runs its root's one bundle | §1, §2 |
 | 11 | A path a session names to its host travels absolute; the client makes it absolute and the host maps and checks it | §11.1 |
+| 12 | An attachment is a typed unit of host-provided data, types registering through `bro.attachment_types`, with `repo` the one type | §2, §5.1, §5.2 |
+| 13 | A launch carries at most one attachment and the singular facts stay until #1341; a session starts in its attachment's directory, or in the tree when detached | §3, §5.1, §5.5 |
+| 14 | `--repo` stays the only launch syntax until a second type needs a generic one | §5.1, §15 |
+| 15 | The workspace's writable directory is the tree, `/tree` in a container, and "workspace" names only the managed unit | §2, §3, §5.5 |
 
-## 16. Assumptions and evidence
+## 17. Assumptions and evidence
 
 - **Cold sync** — measured on 2026-11-18 in a boxed session of this repository at `6f175d19` with uv 0.13.1, a fresh `UV_CACHE_DIR` and a fresh environment:
   6.8 s, then 5.4 s with the cache kept and the environment removed.
