@@ -70,7 +70,7 @@ class TestLaunchCommand:
       {},
       {'forwarded': ['--unboxed']},
       {'forwarded': ['--unboxed', '--hold', 'guided']},
-      {'command': 'do a thing', 'new': True},
+      {'message': 'do a thing', 'new': True},
     ],
   )
   def test_emitted_command_parses(self, kwargs, fake_proj, capsys):
@@ -150,7 +150,7 @@ class TestNewMode:
     assert tokens[-1] == '[[fix --new ""]]'
 
   def test_seed_stays_inside_spell_command(self, fake_proj, capsys):
-    rc = dive_in.dive_in(forwarded=[], dry_run=True, new=True, command='do a thing')
+    rc = dive_in.dive_in(forwarded=[], dry_run=True, new=True, message='do a thing')
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     assert tokens[-1] == '[[fix --new do a thing]]'
@@ -191,22 +191,22 @@ class TestTaskMode:
     prompt = tokens[-1]
     assert prompt.startswith(f'[[fix {URL}]]\n\ntask block')
 
-  def test_prefetch_and_appended_command_stay_outside_the_spell_command(
+  def test_prefetch_and_the_message_stay_outside_the_spell_command(
     self, fake_proj, monkeypatch, capsys
   ):
     monkeypatch.setattr(dive_in, '_prefetch_task', lambda system, ref: (_brog_task(), 'task block'))
+    message = "isn't the access problem odd?"
     rc = dive_in.dive_in(
       forwarded=['--bro', 'bro-dev'],
       dry_run=True,
       task=URL,
-      command='run the focused checks',
+      message=message,
     )
     assert rc == 0
     tokens = shlex.split(capsys.readouterr().out.strip())
     prompt = tokens[-1]
-    assert prompt == (
-      f'[[fix {URL}]]\n\ntask block\n\nOnce you understand the task, run the focused checks'
-    )
+    assert prompt.startswith(f'[[fix {URL}]]\n\ntask block\n\n')
+    assert prompt.endswith(f'\n\n{message}')
 
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
     captured = {}
