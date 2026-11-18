@@ -8,7 +8,8 @@ the pull request that carries it is a design review only.
 
 Goal: a ride workspace is the bro's own directory, and a repository is one optional thing in it.
 An attached repository is cloned into a subdirectory of the workspace, describes itself in a language-neutral `bro.toml`, and is provisioned by the session itself, under the session's own identity.
-The runtime a boxed session runs on is the installed bro toolset alone, and it installs into a container without the launcher's credentials.
+Every session, boxed or unboxed, runs on the installed bro toolset alone, frozen once per root and installed for the host and for containers the same way:
+the launcher fetches every git dependency, so an install inside a container needs no credential.
 
 What it enables, for example:
 
@@ -59,7 +60,8 @@ Terms the repository already defines (`bro/reference/ride.md`), as this design u
   Its **bundle root** is the directory it persists in, `<runtime-root>/runtime/<hash>/`.
 - **Host materialization** — the bundle installed into `host/venv` on the launcher, which the launcher re-executes from.
 - **Runtime volume** — the Docker volume `ride-runtime-<hash>`, mounted read-only at `/var/ride/runtime` in every boxed session of that bundle;
-  the **materializer** is the throwaway runtime-image container that installs the bundle into it.
+  the **materializer** is the throwaway runtime-image container that installs the bundle into it, the **container materialization**.
+  An unboxed session runs the host materialization, a boxed one the runtime volume, both of its root's one bundle.
 
 Terms this design introduces or redefines:
 
@@ -76,7 +78,8 @@ Terms this design introduces or redefines:
   the provisioning command, then the persona's provisioning steps (§7).
 - **Toolset** — the installed distributions that plug into bro, the **toolset roots**, together with everything they depend on (§9).
 - **Active extra** — an optional-dependency group of an installed distribution whose requirements the installation satisfies (§9.1).
-- **Staged pin** — a one-commit bare git repository the launcher fetches for a git pin before it materializes a runtime volume (§10).
+- **Staged pin** — a one-commit bare git repository the launcher fetches for a git pin before it materializes a bundle, for the host or for a container (§10).
+- **Wire path** — a path a session names to its host in a request, absolute as the session sees it (§11.1).
 
 ## 3. Workspace layout
 
@@ -91,7 +94,7 @@ Terms this design introduces or redefines:
 
 The workspace tree belongs to the session:
 ride creates it empty, places the clone in it on an attached workspace's first launch, and writes nothing else into it.
-What a session writes beside the clone stays in the workspace tree, inside the session's artifact reach (§11.1) and outside every git repository.
+What a session writes beside the clone stays in the workspace tree, inside the session's artifact reach (§11.2) and outside every git repository.
 
 A session starts in its start directory, in both isolations:
 
@@ -365,67 +368,81 @@ an extra active in the frozen installation has its requirements in the toolset, 
 
 The manifest's format, host materialization, the re-execution, `--runtime-bundle`, the bundle locks and their cleanup stay as they are.
 
-## 10. Git pins in the runtime volume
+## 10. Git pins
 
 ### 10.1 Staging
 
-When the launcher materializes a bundle's runtime volume, it first stages the bundle's git pins, holding the bundle's materialization lock as the materialization does:
-
-- For each distinct URL among the bundle's git pins, it creates a bare repository under `<bundle root>/git-pins/`, fetches each commit the bundle pins from that URL with `git fetch --depth 1 <url> <commit>`, and places a ref at it.
-  The fetch runs under the launcher's ambient git authentication with prompts disabled, as mirror fetches do.
-- It writes `<bundle root>/git-pins/gitconfig`, mapping each URL to its staged repository's path inside the materializer:
-  `url."file:///var/ride/git-pins/<repository>".insteadOf = <url>`.
+Before it materializes a bundle, for the host or for a container, the launcher stages the bundle's git pins, holding the bundle's materialization lock as the materialization does.
+For each distinct URL among the bundle's git pins, it creates a bare repository under `<bundle root>/git-pins/`, fetches each commit the bundle pins from that URL with `git fetch --depth 1 <url> <commit>`, and places a ref at it.
+The fetch runs under the launcher's ambient git authentication with prompts disabled, as mirror fetches do.
 
 The URL is the pin's, without its `git+` prefix, its `@<commit>` and its fragment, which is how uv hands it to git.
 Every git pin is staged, public or not, since the launcher cannot tell which ones a container could fetch.
 A failed fetch fails the materialization, naming the pin and git's message.
 A `git-pins/` directory a killed launch left behind is replaced.
+A bundle without git pins stages nothing.
 
 ### 10.2 Installing through the staged pins
 
-The materializer mounts `<bundle root>/git-pins/` read-only at `/var/ride/git-pins` and runs the bundle's install with `GIT_CONFIG_GLOBAL=/var/ride/git-pins/gitconfig`;
-the pins themselves are unchanged, and the installed record keeps each pin's original URL and commit (§16).
-The launcher removes `<bundle root>/git-pins/` once the materializer ends, whether it succeeded or failed, so nothing staged persists:
-the bundle, its hash and the volume are what they would be without staging.
-A bundle without git pins stages nothing.
+The install runs with one redirect per staged URL added to its git configuration through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`:
+`url.<staged repository>.insteadOf = <url>`, where the staged repository is a `file://` URL of its path as the install sees it.
+The variables add to whatever configuration git reads otherwise rather than replacing it.
 
-Every container materialization goes this way, so session containers, worker containers and foreground worker runs all reach their git pins.
-Host materialization is unchanged:
-the host's own git already fetches the pins under the launching user's authentication.
+- The host materialization's install reaches `<bundle root>/git-pins/` at its own path, over the launching user's git configuration.
+- The materializer mounts `<bundle root>/git-pins/` read-only at `/var/ride/git-pins`, and its install has no other git configuration.
+
+The pins themselves are unchanged, and the installed record keeps each pin's original URL and commit (§16).
+The launcher removes `<bundle root>/git-pins/` once the materialization ends, whether it succeeded or failed, so nothing staged persists:
+the bundle, its hash and both materializations are what they would be without staging.
+Every materialization goes this way:
+the host's, and the container's for session containers, worker containers and foreground worker runs.
 
 ### 10.3 Limits
 
-Staging covers each git pin's own commit and nothing it needs beyond:
+Inside the materializer, staging covers each git pin's own commit and nothing it needs beyond:
 
-- a staged pin's submodules are fetched from their own URLs inside the materializer, without credentials;
-- a distribution from a private package index, and a remote-archive pin behind authentication, are downloaded inside the materializer, without credentials.
+- a staged pin's submodules are fetched from their own URLs, without credentials;
+- a distribution from a private package index, and a remote-archive pin behind authentication, are downloaded without credentials.
 
-Each still fails the materialization with the installer's error, which names the distribution.
+Each still fails the container materialization with the installer's error, which names the distribution.
+The host materialization reaches them through the launching user's own configuration, as today.
 
 ## 11. Paths a session names to its host
 
-### 11.1 Minting artifacts
+### 11.1 Wire paths
 
-`RIDE_WORKSPACE_TREE` names the workspace tree as the session's processes see it:
-`/workspace` in a container, and the launcher-side path unboxed.
-Every launcher sets it beside `RIDE_HOST_WORKSPACE`, for sessions, joined members and worker containers alike.
+Every path a session names to its host in a request, an artifact to mint or a benchmark job's files, is a wire path:
+absolute, as the session's own processes see it.
+The client that builds the request makes a relative path absolute against its working directory, lexically and without resolving symbolic links, and checks nothing else.
 
-`artifact mint <path>`, and the client function under it, takes a path as any command does, relative to the caller's working directory or absolute.
-The client resolves it, requires it to lie inside `RIDE_WORKSPACE_TREE`, and sends it relative to the workspace tree, which the host resolves against the minting peer's tree as today.
-A path outside the workspace tree is refused by the client, naming the path.
+The host owns the check.
+Its description of each peer carries, beside the peer's tree, the path the peer sees that tree at:
+`/workspace` for a peer that runs in a container, which is a boxed session, a joined member of a boxed party or a worker container, and the tree's own path for an unboxed peer.
+One core helper, replacing `bro.worker_types.tree_path`, maps a wire path from that view to the tree and resolves it on the host.
+It refuses the path, naming it, when it is relative, lies outside the peer's view of its tree, or resolves outside the tree.
 
-From `/workspace/bro`, `artifact mint report.md` sends `bro/report.md`, `artifact mint ../review/r3.md` sends `review/r3.md`, and `artifact mint /etc/hosts` is refused.
-A worker container starts in its workspace tree, so the relative paths the webview mints keep their meaning.
+### 11.2 Minting artifacts
 
-### 11.2 A joined reviewer's oversized round
+`artifact mint <path>`, and the client function under it, accept a path relative to the caller's working directory or an absolute one, and send it as a wire path.
 
-The eyebro's `review` spell writes an oversized round to a unique directory in the workspace tree outside the clone, mints it from there, and removes that directory;
+From `/workspace/bro` in the workspace `fix-12` of §3:
+
+- `artifact mint report.md` sends `/workspace/bro/report.md`, which the host reads at `<runtime-root>/workspaces/fix-12/tree/bro/report.md`;
+- `artifact mint ../review/r3.md` sends `/workspace/review/r3.md`;
+- `artifact mint /etc/hosts` reaches the host and is refused;
+- a symbolic link inside the tree that points to `/opt/cache` resolves outside the tree on the host and is refused.
+
+The webview mints paths relative to its working directory, its workspace tree, so they keep their meaning.
+
+### 11.3 A joined reviewer's oversized round
+
+The eyebro's `review` spell writes an oversized round to a unique directory in the workspace tree outside the clone, at the workspace path its banner reports, mints it from there, and removes that directory;
 the stopgap that stages it under the clone's `.git/review-rounds/` goes.
 
-### 11.3 The benchmark job
+### 11.4 The benchmark job
 
-`benchmark-run` sends its job's `config` and, in a new `project` field, the benchmark project's directory, both relative to the workspace tree;
-the job resolves both against the owner's tree, as it resolves `config` today, and refuses a `project` without a `pyproject.toml`.
+`benchmark-run` sends its job's `config` and, in a new `project` field, the benchmark project's directory, both as wire paths;
+the job maps both through the helper of §11.1 and refuses a `project` without a `pyproject.toml`.
 Its environment stays beside the workspace tree, at `<workspace>/benchmark-venv`.
 
 ## 12. Documentation, this repository and its consumers
@@ -433,7 +450,7 @@ Its environment stays beside the workspace tree, at `<workspace>/benchmark-venv`
 - `bro/reference/ride.md`:
   the mode verbs' attachment, "Runtime bundles" (§9, §10), "Workspaces" (§3, §4),
   "Attached-tree configuration" rewritten as the repository configuration (§6),
-  "Unboxed isolation" and "Boxed isolation" (§5.2, §7.5, §8.1), and "Forwarded env vars" (`RIDE_WORKSPACE_TREE`, the start directory);
+  "Unboxed isolation" and "Boxed isolation" (§5.2, §7.5, §8.1), "Sharing artifacts between peers" (§11.2), and "Forwarded env vars" (the start directory);
   provisioning's contract, its idempotency included, is stated there once.
 - `BOOTSTRAP.md`:
   the root-lock image gates and project-image proofs go;
@@ -442,6 +459,8 @@ Its environment stays beside the workspace tree, at `<workspace>/benchmark-venv`
   and the packaging choice states what reaches the toolset (§9.2).
 - `bro/reference/extending.md`:
   the `bro.` entry-point namespace defines the toolset roots.
+- `bro/artifact.py`'s wire contract:
+  `artifact.mint` carries a wire path.
 - The maps (`ride/AGENTS.md`, `ride/ride/workspace/AGENTS.md`, `ride/ride/setup/AGENTS.md`, `bro/workspace/AGENTS.md`), `oops/README.md`, and the `[tool.bro]` mentions in `dev/bro/dev/spells/reflect.md` and `dev/bro/prompts/dev/bump_bro.md`.
 - This repository:
   `bro.toml` declares `provision-command = "./setup.sh"` and carries `[devoops]`, `pyproject.toml` drops `[tool.bro.devoops]`, and `setup.sh` drops `manifests_match`.
@@ -462,12 +481,13 @@ Its environment stays beside the workspace tree, at `<workspace>/benchmark-venv`
 
 Each route below needs automated coverage, the boxed ones in the host-only Docker stage:
 
-- an attached boxed launch and an attached unboxed launch start in the clone, with the workspace tree writable beside it and a mint from beside the clone accepted;
+- an attached boxed launch and an attached unboxed launch start in the clone, with the workspace tree writable beside it;
+- a relative mint from the clone and an absolute one beside it are accepted, while a path outside the tree and a symbolic link out of it are refused by the host;
 - a repository declaring a provisioning command runs it at the launch and at a resume, after the credential hooks, and a failing command ends the start before the harness runs;
 - a repository with a `setup.sh` and no declaration starts without running it;
 - an unknown top-level key in `bro.toml` refuses the start;
 - a freeze leaves out a distribution no root reaches, keeps an active extra's requirements, and its bundle reproduces itself;
-- a bundle with a git pin whose URL the container cannot reach materializes through its staged pin, and leaves nothing staged;
+- a bundle with a git pin whose URL neither the host nor the container can reach materializes for both through its staged pin, and leaves nothing staged;
 - an attached record in today's layout is refused by name.
 
 A private dependency fetched through a real `github` credential is verified live, once, by the verification phase.
@@ -484,9 +504,11 @@ The owner settled every decision below on 2026-11-18.
 | 4 | Provisioning runs in `do-ride` after the credential hooks, in both isolations, and fails the start | §7 |
 | 5 | The project image and the `setup.sh` filename hook go | §7.5, §8.1 |
 | 6 | Boxed workspaces share no package cache | §8.3 |
-| 7 | The runtime volume reaches git pins through launcher-staged one-commit copies | §10 |
+| 7 | Every materialization, host and container, reaches git pins through launcher-staged one-commit copies, the redirect layered over the git configuration through `GIT_CONFIG_COUNT` | §10 |
 | 8 | A runtime bundle carries the bro toolset rather than the whole invoking installation | §9 |
 | 9 | Workspaces recorded in today's layout are refused, not migrated | §4.3, §13 |
+| 10 | Every session, boxed or unboxed, runs its root's one bundle | §1, §2 |
+| 11 | A path a session names to its host travels absolute; the client makes it absolute and the host maps and checks it | §11.1 |
 
 ## 16. Assumptions and evidence
 
@@ -499,6 +521,7 @@ The owner settled every decision below on 2026-11-18.
   `uv pip install --no-deps "examplepkg @ git+https://github.com/<nonexistent owner>/<repository>@<commit>#subdirectory=sub"`,
   with `GIT_CONFIG_GLOBAL` naming an `insteadOf` rule to a read-only one-commit bare repository, installed the package,
   and its `direct_url.json` recorded the original URL and commit.
+  The same install through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0`, with a global git configuration present, installed it too while git still read that configuration.
   #1336's session verified the same redirect for `uv sync --frozen`.
 - **Unverified** — a git pin spelled `git+ssh://` reaches git as `ssh://…` and the same mapping applies;
   the implementation's test covers it.
