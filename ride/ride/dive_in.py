@@ -119,7 +119,7 @@ def _task_system(
 def dive_in(
   forwarded: list[str],
   dry_run: bool = False,
-  command: Optional[str] = None,
+  message: Optional[str] = None,
   task: Optional[str] = None,
   new: bool = False,
   cred: Optional[list[str]] = None,
@@ -145,12 +145,12 @@ def dive_in(
     return 1
   prompt: Optional[str] = None
   if new:
-    base = _slugify(command) if command is not None else ''
+    base = _slugify(message) if message is not None else ''
     if len(base) == 0:
       base = 'dive-in-new'
     name = fresh_workspace_name(base)
     log.info('workspace: %s', name)
-    prompt = '[[fix --new ""]]' if command is None else f'[[fix --new {command}]]'
+    prompt = '[[fix --new ""]]' if message is None else f'[[fix --new {message}]]'
   elif task is not None:
     task_ref = task
     try:
@@ -170,8 +170,8 @@ def dive_in(
     log.info('task: %s', brog_task.name)
     # the ref exactly as given — the prefetch block carries the canonical form
     prompt = f'[[fix {task_ref}]]\n\n{task_block}'
-    if command is not None:
-      prompt = f'{prompt}\n\nOnce you understand the task, {command}'
+    if message is not None:
+      prompt = f"{prompt}\n\n## User's message\n\n{message}"
 
     base = _slugify(brog_task.name)
     if len(base) == 0:
@@ -179,7 +179,7 @@ def dive_in(
     name = fresh_workspace_name(base)
     log.info('workspace: %s', name)
   else:
-    prompt = command
+    prompt = message
     name = fresh_workspace_name('dive-in')
     log.info('workspace: %s', name)
 
@@ -216,10 +216,10 @@ def main(argv: list[str]) -> Optional[int]:
     help='start by creating a new task, then dive into it',
   )
   parser.add_argument(
-    'command',
+    'message',
     nargs='?',
     default=None,
-    help='initial command for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; otherwise appended to the prompt)',
+    help="initial message for the session (with no task flag, used as the entire prompt; with --new, used as the seed idea for the task; with --task, sent after the prefetched task as the user's message)",
   )
   args = parser.parse(argv)
   repo = project_root()

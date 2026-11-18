@@ -12,13 +12,13 @@ The wrapper is shipped by `bro-ride`.
 Exactly one mode applies:
 
 - **bare** — no task flag;
-  the optional positional command is the initial prompt;
+  the optional positional message is the initial prompt;
 - **task** — `-t / --task REF`;
   resolves and prefetches the task, then seeds `[[fix REF]]`;
 - **new task** — `--new [seed]`;
   seeds `[[fix --new ""]]` or `[[fix --new <seed>]]`.
 
-A positional command beside `--task` is appended as `Once you understand the task, <command>`.
+A positional message beside `--task` follows the prefetched task verbatim, as a section of its own marked as the user's message.
 Task metadata, description, and comments are embedded in the launch prompt so the first turn does not race the session-local brog server.
 
 ## Workspace naming
