@@ -96,12 +96,21 @@ A turn that does not stop within a bound is interrupted after all.
 
 ## The claude argv
 
-The builder (`harnesses/claude/harness/bro/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings` (fastMode, the statusLine, the attribution opt-out, and the hooks, kept on over a repository's `disableAllHooks`),
+The builder (`harnesses/claude/harness/bro/claude/claude_argv.py:build_claude_launch`) assembles the merged `--settings`
+(fastMode, the statusLine, the attribution opt-out, the hooks, kept on over a repository's `disableAllHooks`, and the permission settings below),
 a resume's `--resume <session id>`, prompt seeding, the `--model` / `--effort` / fastMode it reads off the session's anthropic recipe in `RIDE_RESOLVED_RECIPE`, `--model` always passed and `--effort` passed only when set,
-the ride-injected `--append-system-prompt` (see "The append prompt"), `--dangerously-skip-permissions` under every `--hold` level but guided,
+the ride-injected `--append-system-prompt` (see "The append prompt"), the `--permission-mode` below,
 the `--mcp-config` mounting the persona's namespaces from the session-local server below,
 `--strict-mcp-config`, so that config is the session's only MCP source and a repository's `.mcp.json` loads nothing,
 and `--disallowed-tools mcp__claude_ai_*` to keep account-level claude.ai MCP integrations out of the managed session.
+
+The session's hold and isolation select its permission mode.
+`guided` starts in manual mode, which asks before each call, under either isolation.
+Every other hold starts a boxed session in bypass mode, whose acceptance dialog the boxed settings pre-answer,
+and an unboxed one in auto mode, whose classifier reviews each call in place of a prompt.
+An unboxed session's settings turn bypass mode off (`permissions.disableBypassPermissionsMode`),
+so no flag, Shift+Tab, repository `defaultMode`, or agent `permissionMode` reaches it.
+`harnesses/claude/harness/bro/claude/permission_mode_llm_test.py` holds the modes and the unboxed settings against the pinned release.
 
 `--tools` passes exactly the Claude natives the persona's tool groups map to, an allowlist, plus the loop tools every session gets;
 `harnesses/claude/harness/bro/claude/native_tools.py` names them per group on the pinned release.
@@ -210,7 +219,6 @@ No Claude Code hooks are wired for clone creation or workspace provisioning, whi
 An unboxed Claude session points `CLAUDE_CONFIG_DIR` at the workspace's `claude/` directory.
 The directory carries only the constructed session settings, the setup-token auth, the workspace tree's trust entry, and the launcher's account identity when its host state provides one.
 The launcher's settings, hooks, permissions, custom agents, and OAuth credentials file do not enter it.
-The bypass-permissions acceptance stays interactive because an unboxed session has no container boundary.
 
 ### Container credential isolation
 
@@ -250,9 +258,7 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   and its telemetry (`DISABLE_TELEMETRY`, which also leaves the feature flags Claude Code's server serves, fetched or cached, without effect, so a session runs the pinned release's own defaults;
   `harnesses/claude/harness/bro/claude/remote_flags_llm_test.py` holds that against the pinned release),
   and setting the text of the reminder Claude Code adds after a run of silent turns (`CLAUDE_CODE_SILENT_TURN_REMINDER_TEXT`, pointing what the answer needs at the turn's final message rather than a thinking note;
-  `harnesses/claude/harness/bro/claude/silent_turn_reminder_llm_test.py` holds it against the pinned release),
-  and `skipDangerousModePermissionPrompt: true`
-  — boxed sessions pre-answer the `--dangerously-skip-permissions` acceptance dialog, while unboxed sessions keep it.
+  `harnesses/claude/harness/bro/claude/silent_turn_reminder_llm_test.py` holds it against the pinned release).
   Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.
 - `<runtime-root>/workspaces/<name>/claude/` (host) → `/home/ride/.claude` (container).
   Per-workspace overlay of everything else.

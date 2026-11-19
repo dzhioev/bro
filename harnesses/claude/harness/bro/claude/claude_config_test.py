@@ -119,13 +119,6 @@ class TestProvisionHostClaudeDir:
     assert not (claude_dir / '.credentials.json').exists()
     assert not (claude_dir / 'CLAUDE.md').exists()
 
-  def test_settings_do_not_preaccept_the_bypass_permissions_dialog(self, home):
-    # only boxed sessions pre-accept it; an unboxed session can touch the
-    # launcher's filesystem, so the dialog stays
-    claude_dir, _ = self._provision(home)
-    settings = json.loads((claude_dir / 'settings.json').read_text())
-    assert 'skipDangerousModePermissionPrompt' not in settings
-
   def test_settings_rewritten_each_provision(self, home):
     claude_dir, _ = self._provision(home)
     (claude_dir / 'settings.json').write_text('{"stale": true}')
@@ -152,17 +145,6 @@ class TestContainerClaudeState:
       'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
       'DISABLE_INSTALLATION_CHECKS': '1',
     }
-
-  def test_settings_preaccept_the_bypass_permissions_dialog(self, monkeypatch, tmp_path):
-    # the boxed workspace is an isolated clone, so --dangerously-skip-permissions
-    # needs no interactive acknowledgement (container sessions only — the host
-    # provision keeps the dialog, see TestProvisionHostClaudeDir)
-    monkeypatch.setattr(ride_claude_config.Path, 'home', lambda: tmp_path)
-    monkeypatch.setattr(ride_claude_config, '_seed_claude_json', lambda d, h, **k: None)
-    ride_claude_config.container_claude_state(tmp_path / 'ws', Path('/tree'))
-    settings_file = tmp_path / 'ws' / 'claude' / 'settings.json'
-    settings = json.loads(settings_file.read_text())
-    assert settings['skipDangerousModePermissionPrompt'] is True
 
 
 class TestWorkspaceProjectsDir:

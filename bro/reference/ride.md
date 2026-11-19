@@ -33,7 +33,7 @@ A launch without `-w / --workspace` receives a fresh name and removes that works
 
 Starts an interactive session.
 The default hold is `attended`, and the workspace is kept after exit.
-`--unboxed` runs the workspace tree directly on the launcher's filesystem and changes the omitted hold to `guided`, because a non-guided unboxed session skips permission prompts without a container boundary.
+`--unboxed` runs the workspace tree directly on the launcher's filesystem and changes the omitted hold to `guided`, so that a session no container bounds keeps a human in each step.
 
 A launch without `-w / --workspace` receives a fresh name.
 `-w NAME` creates or reuses that exact workspace after checking its isolation;
@@ -765,7 +765,7 @@ Later launches preserve the clone exactly as the session left it.
 Inside the container, the entrypoint (running as root first):
 
 1. Aligns the `ride` user's UID/GID with whoever owns `/tree` on the launcher,
-   then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
+   then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse bypass-permissions mode).
 2. Marks every directory safe for git with `safe.directory=*`.
    The host's `~/.gitconfig` is not seeded:
    a session's git configuration is what its own hooks declare later in `do-ride`.

@@ -122,7 +122,7 @@ def test_managed_claude_launch_hooks_recording_and_resume(
     monkeypatch.setenv(name, value)
   with patch.dict(os.environ), watches.Owner.for_session():
     binary = write_fake_claude(tmp_path / 'claude-binary', _FAKE_SESSION)
-    monkeypatch.setattr(runner, '_claude_binary', lambda: binary)
+    monkeypatch.setattr(runner, '_claude_binary', lambda isolation: binary)
     harness = get_harness('claude')
     spec = _session(tmp_path)
     if legacy_workspace:

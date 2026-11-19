@@ -16,8 +16,9 @@ from bro.claude.assembly import persona_servers
 from bro.claude.mcp import MCPEndpoint
 from bro.claude.session_end_state import ANSWER_TOOL, RAISE_TOOL
 from bro.claude.statusline import statusline_command
-from bro.mcp import ToolLayer, brash, files
+from bro.mcp import HOLDS, ToolLayer, brash, files
 from ride.session_test import _spec as _session_spec
+from ride.workspace.metadata import Isolation
 
 _ENDPOINT = MCPEndpoint(port=1234, token='tok')
 _ACTIVITY_FILE = Path('/session/activity')
@@ -47,6 +48,7 @@ def _dev_persona_namespaces(hold: str) -> list[str]:
 
 
 def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
+  kwargs.setdefault('isolation', Isolation.BOXED)
   kwargs.setdefault('resume_session', None)
   kwargs.setdefault('endpoint', _ENDPOINT)
   kwargs.setdefault('brash_policy', None)
@@ -58,6 +60,10 @@ def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
 
 def _settings(argv: list[str]) -> dict:
   return json.loads(argv[argv.index('--settings') + 1])
+
+
+def _permission_mode(argv: list[str]) -> str:
+  return argv[argv.index('--permission-mode') + 1]
 
 
 def _tools(argv: list[str]) -> list[str]:
@@ -255,13 +261,31 @@ class TestRideSessionLaunch:
     assert argv[:2] == ['--model', 'claude-opus-5']
 
   @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
-  def test_non_guided_holds_skip_permissions(self, hold):
-    argv = _ride_session_launch(_spec(hold=hold)).argv
-    assert '--dangerously-skip-permissions' in argv
+  def test_boxed_non_guided_holds_skip_permissions(self, hold):
+    argv = _ride_session_launch(_spec(hold=hold), isolation=Isolation.BOXED).argv
+    assert _permission_mode(argv) == 'bypassPermissions'
 
-  def test_guided_hold_keeps_permission_prompts(self):
-    argv = _ride_session_launch(_spec(hold='guided')).argv
-    assert '--dangerously-skip-permissions' not in argv
+  @pytest.mark.parametrize('hold', ['unattended', 'detached', 'attended'])
+  def test_unboxed_non_guided_holds_run_auto_mode(self, hold):
+    argv = _ride_session_launch(_spec(hold=hold), isolation=Isolation.UNBOXED).argv
+    assert _permission_mode(argv) == 'auto'
+
+  @pytest.mark.parametrize('isolation', list(Isolation))
+  def test_the_guided_hold_keeps_permission_prompts(self, isolation):
+    argv = _ride_session_launch(_spec(hold='guided'), isolation=isolation).argv
+    assert _permission_mode(argv) == 'manual'
+
+  @pytest.mark.parametrize('hold', HOLDS)
+  def test_boxed_settings_pre_answer_the_bypass_mode_dialog(self, hold):
+    settings = _settings(_ride_session_launch(_spec(hold=hold), isolation=Isolation.BOXED).argv)
+    assert settings['skipDangerousModePermissionPrompt'] is True
+    assert 'permissions' not in settings
+
+  @pytest.mark.parametrize('hold', HOLDS)
+  def test_unboxed_settings_turn_bypass_mode_off(self, hold):
+    settings = _settings(_ride_session_launch(_spec(hold=hold), isolation=Isolation.UNBOXED).argv)
+    assert settings['permissions'] == {'disableBypassPermissionsMode': 'disable'}
+    assert 'skipDangerousModePermissionPrompt' not in settings
 
   def test_mcp_config_covers_the_personas_namespaces(self):
     spec = _spec(bro='dev')
@@ -288,7 +312,7 @@ class TestRideSessionLaunch:
   def test_solo_adds_print_mode_to_the_full_session_composition(self):
     argv = _ride_session_launch(_spec(solo=True, hold='unattended', prompt='answer')).argv
     assert '-p' in argv
-    assert '--dangerously-skip-permissions' in argv
+    assert '--permission-mode' in argv
     assert '--mcp-config' in argv
     assert '--append-system-prompt' in argv
     assert '--no-session-persistence' not in argv
@@ -298,6 +322,7 @@ def test_unknown_bro_raises():
   with pytest.raises(KeyError, match='unknown bro'):
     ride_claude_argv.build_claude_launch(
       _spec(bro='does-not-exist'),
+      isolation=Isolation.BOXED,
       resume_session=None,
       endpoint=_ENDPOINT,
       brash_policy=None,

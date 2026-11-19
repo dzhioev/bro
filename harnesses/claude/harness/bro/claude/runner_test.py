@@ -29,6 +29,7 @@ from bro.summon import RUNTIME_ENV, SUMMONED_ENV
 from ride.do_ride import SessionRun
 from ride.repo_attachment import repository_attachment
 from ride.session_test import _spec as _session_spec
+from ride.workspace.metadata import Isolation
 
 _PINNED_CLAUDE = Path('/pinned/claude')
 
@@ -126,6 +127,7 @@ class _Harness:
     self.env.pop(SUMMONED_ENV, None)
     self.env['CLAUDE_CONFIG_DIR'] = str(self.claude_config_dir)
     self.env[SESSION_DIR_ENV] = str(self.session_dir)
+    self.env['RIDE_ISOLATION'] = 'boxed'
     self.claude_binary = entered[2]
     self.start_server = entered[3]
     self.build = entered[4]
@@ -143,15 +145,13 @@ class _Harness:
 
 class TestClaudeBinary:
   def test_boxed_session_uses_the_image_install(self, monkeypatch):
-    monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
     cached = MagicMock()
     monkeypatch.setattr(ride_runner.claude_release, 'cached_binary', cached)
 
-    assert ride_runner._claude_binary() == Path('/opt/claude-code/claude')
+    assert ride_runner._claude_binary(Isolation.BOXED) == Path('/opt/claude-code/claude')
     cached.assert_not_called()
 
   def test_unboxed_session_uses_the_pinned_host_release(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     monkeypatch.setenv(RUNTIME_ENV, str(tmp_path / 'runtime'))
     monkeypatch.setattr(ride_runner, 'claude_code_version', lambda: '2.1.280')
     monkeypatch.setattr(ride_runner.claude_release, 'host_platform', lambda: 'linux-x64')
@@ -159,11 +159,10 @@ class TestClaudeBinary:
     cached = MagicMock(return_value=binary)
     monkeypatch.setattr(ride_runner.claude_release, 'cached_binary', cached)
 
-    assert ride_runner._claude_binary() == binary
+    assert ride_runner._claude_binary(Isolation.UNBOXED) == binary
     cached.assert_called_once_with('2.1.280', 'linux-x64')
 
   def test_unboxed_session_uses_a_release_carried_by_its_runtime(self, monkeypatch, tmp_path):
-    monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     runtime = tmp_path / 'runtime'
     carried = runtime / 'claude' / 'claude'
     carried.parent.mkdir(parents=True)
@@ -174,7 +173,7 @@ class TestClaudeBinary:
     monkeypatch.setattr(ride_runner.claude_release, 'verified_binary', verified)
     monkeypatch.setattr(ride_runner.claude_release, 'cached_binary', cached)
 
-    assert ride_runner._claude_binary() == carried
+    assert ride_runner._claude_binary(Isolation.UNBOXED) == carried
     verified.assert_called_once_with(carried)
     cached.assert_not_called()
 
@@ -334,6 +333,22 @@ class TestSessionRun:
       assert h.server.stop.call_count == 1
       assert h.start_recorder.call_count == 1
       assert h.build.call_args.kwargs['endpoint'] == h.server.endpoint
+
+  @pytest.mark.parametrize('isolation', list(Isolation))
+  def test_claude_runs_under_the_sessions_isolation(self, monkeypatch, tmp_path, isolation):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      h.env['RIDE_ISOLATION'] = isolation.value
+      assert ride_runner.run_session(_spec()) == 0
+      assert h.claude_binary.call_args.args == (isolation,)
+      assert h.build.call_args.kwargs['isolation'] is isolation
+
+  def test_a_session_without_an_isolation_does_not_start(self, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    with _Harness(tmp_path) as h:
+      del h.env['RIDE_ISOLATION']
+      assert ride_runner.run_session(_spec()) == 1
+      assert h.build.call_count == 0
 
   def test_ride_session_uses_the_project_default_bro(self, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)

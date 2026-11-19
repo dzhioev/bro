@@ -4,9 +4,10 @@ Every session runs Claude Code with the natives its bro's reach maps to, the
 ride-injected append prompt, and its bro's session-local MCP namespaces mounted
 as its only MCP servers. Model, the merged `--settings` (fastMode + statusLine +
 attribution + hooks, kept on), `--effort`, a resume, and prompt seeding are
-handled once, identically wherever the session runs. Model, effort and fast mode
-come off the session's anthropic `Recipe` (`SessionRun.recipe`); unset
-effort is Claude Code's own default.
+handled once, identically wherever the session runs; the permission mode follows
+the session's hold and isolation. Model, effort and fast mode come off the
+session's anthropic `Recipe` (`SessionRun.recipe`); unset effort is Claude
+Code's own default.
 """
 
 import contextlib
@@ -27,6 +28,7 @@ from bro.claude.statusline import REFRESH_SECONDS, statusline_command
 from bro.claude.system_prompt import session_append_prompt
 from bro.claude.waiter_state import WAITER_EVENTS, WAITER_MARK
 from bro.mcp import Reach
+from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
@@ -115,6 +117,23 @@ def activity_hooks(activity_file: Path) -> dict:
   return {event: [{'hooks': [touch]}] for event in ACTIVITY_EVENTS}
 
 
+def permission_mode(hold: str, isolation: Isolation) -> str:
+  """the permission mode a session's claude starts in."""
+  if hold == 'guided':
+    # passed rather than left to claude, whose own default starts a TUI in auto mode
+    return 'manual'
+  return 'bypassPermissions' if isolation is Isolation.BOXED else 'auto'
+
+
+def permission_settings(isolation: Isolation) -> dict:
+  """the settings block a session's permission modes run under: boxed, it
+  pre-answers bypass mode's acceptance dialog; unboxed, it turns bypass mode
+  off however the session is asked into it."""
+  if isolation is Isolation.BOXED:
+    return {'skipDangerousModePermissionPrompt': True}
+  return {'permissions': {'disableBypassPermissionsMode': 'disable'}}
+
+
 @dataclass(frozen=True)
 class ClaudeLaunch:
   """a built claude invocation: the argv, everything after the `claude` program
@@ -151,6 +170,7 @@ HOOKS_ON = {'disableAllHooks': False}
 def build_claude_launch(
   spec: 'SessionSpec | SessionRun',
   *,
+  isolation: Isolation,
   resume_session: Optional[str],
   endpoint: MCPEndpoint,
   brash_policy: Optional[Path],
@@ -159,6 +179,7 @@ def build_claude_launch(
 ) -> ClaudeLaunch:
   """build the claude argv for a session.
 
+  `isolation` is the session's, which with its hold selects the permission mode.
   `resume_session` is the id of the Claude session a resume continues, which the
   caller resolves from the workspace's transcripts; None for a fresh session.
   `endpoint` is the session-local MCP server's (the caller owns the server
@@ -181,6 +202,7 @@ def build_claude_launch(
     },
     'attribution': _ATTRIBUTION,
     **HOOKS_ON,
+    **permission_settings(isolation),
   }
   argv = ['--model', llm.model]
   bro = create_bro(spec.bro)
@@ -206,11 +228,11 @@ def build_claude_launch(
     mcp_config,
     '--append-system-prompt',
     session_append_prompt(spec.hold, spec.bro),
+    '--permission-mode',
+    permission_mode(spec.hold, isolation),
   ]
   if plugin_dir is not None:
     argv += ['--plugin-dir', str(plugin_dir)]
-  if spec.hold != 'guided':
-    argv.append('--dangerously-skip-permissions')
   if llm.effort is not None:
     argv += ['--effort', llm.effort]
   if spec.solo:

@@ -2075,6 +2075,7 @@ def test_configured_record_reaches_harness_argv_and_banner(
   else:
     built = build_claude_launch(
       run,
+      isolation=Isolation.BOXED,
       resume_session=None,
       endpoint=MCPEndpoint(port=1234, token='test'),
       brash_policy=None,
