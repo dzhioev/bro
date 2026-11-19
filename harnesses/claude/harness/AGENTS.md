@@ -28,7 +28,7 @@ The package `bro.claude` imports nothing from its `__init__.py`.
   its stop waits for the turn the session-end hook stopped, which a print session's stream ends at and a TUI quits after.
   Either stop stands the watch waiter down first.
 - `claude_argv.py`
-  — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, and the append prompt;
+  — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, the append prompt, and the permission mode a hold and isolation select;
   the `--tools` allowlist, the command gate on a finite command list, and the read gate without files;
   and model/effort/fast delivery, prompt, and the resumed session.
 - `native_tools.py` — Claude Code's own tool names per reach group on the pinned release, the loop tools every session gets, the gated `Read` of a persona without files, and the command tools a finite command list gates;

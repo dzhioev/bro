@@ -1238,8 +1238,7 @@ class TestClaudeSummonLowering:
     records = party_member_dir(workspace.path, 'broker-CH')
     assert lowered.launch.env[CLAUDE_CONFIG_DIR_ENV] == '/var/ride/party/broker-CH/claude'
     assert lowered.launch.env['DISABLE_INSTALLATION_CHECKS'] == '1'
-    settings = json.loads((records / 'claude' / 'settings.json').read_text())
-    assert settings['skipDangerousModePermissionPrompt'] is True
+    assert (records / 'claude' / 'settings.json').is_file()
     seeded = json.loads((records / 'claude' / '.claude.json').read_text())
     assert seeded['projects'] == {'/tree': {'hasTrustDialogAccepted': True}}
     shutil.rmtree(records)

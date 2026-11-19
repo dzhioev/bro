@@ -11,17 +11,12 @@ start, and an end and a stop that a pending waiter holds up neither of.
 """
 
 import contextlib
-import fcntl
 import http.client
 import http.server
 import json
 import os
-import pty
 import signal
 import ssl
-import struct
-import subprocess
-import termios
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -37,6 +32,7 @@ from bro.claude.live_claude_test_helper import (
   Feed,
   bounded,
   claude_token,
+  terminal,
   watched_session,
 )
 from bro.claude.waiter_state import WaiterState
@@ -410,42 +406,6 @@ def test_a_turn_ending_in_an_api_error_leaves_a_stop_failure_waiter(
   assert _LINE in run.results[1]
 
 
-@contextlib.contextmanager
-def _terminal(argv: list[str], env: dict[str, str], cwd: Path) -> Iterator[subprocess.Popen]:
-  """run `argv` on a pty of its own, draining what it draws, until the block ends."""
-  terminal, child_end = pty.openpty()
-  fcntl.ioctl(child_end, termios.TIOCSWINSZ, struct.pack('HHHH', 50, 160, 0, 0))
-  process = subprocess.Popen(
-    argv,
-    env={**env, 'TERM': 'xterm-256color'},
-    cwd=cwd,
-    stdin=child_end,
-    stdout=child_end,
-    stderr=child_end,
-    start_new_session=True,
-  )
-  os.close(child_end)
-
-  def _drain() -> None:
-    with contextlib.suppress(OSError):
-      while len(os.read(terminal, 65536)) > 0:
-        pass
-
-  drain = threading.Thread(target=_drain, daemon=True)
-  drain.start()
-  try:
-    yield process
-  finally:
-    process.terminate()
-    try:
-      process.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-      process.kill()
-      process.wait()
-    os.close(terminal)
-    drain.join()
-
-
 def test_an_idle_tui_wakes_with_its_lines(tmp_path: Path, claude: Path) -> None:
   config = _config(tmp_path)
   argv = [
@@ -459,7 +419,7 @@ def test_an_idle_tui_wakes_with_its_lines(tmp_path: Path, claude: Path) -> None:
   ]
   with watched_session(tmp_path / 'session') as (store, waiters):
     feed = Feed(store, tmp_path / 'lines')
-    with _terminal(argv, _environment(config), tmp_path):
+    with terminal(argv, _environment(config), tmp_path):
       _await(lambda: len(_said(config, 'assistant', 'READY')) > 0, 'the TUI never replied')
       _await(waiters.registered, 'no waiter started at the turn end')
       feed.say(_LINE)

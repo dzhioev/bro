@@ -234,7 +234,6 @@ def _provision_session_claude_dir(
   *,
   install_method: Optional[str],
   trusted_paths: Sequence[str],
-  preaccept_bypass_dialog: bool,
 ) -> Path:
   """provision a session's private claude state dir and return it. idempotent
   because both launch layers apply it: the `.claude.json` is seeded once, the
@@ -248,10 +247,7 @@ def _provision_session_claude_dir(
     install_method=install_method,
     trusted_paths=trusted_paths,
   )
-  settings = dict(_SESSION_SETTINGS_JSON)
-  if preaccept_bypass_dialog:
-    settings['skipDangerousModePermissionPrompt'] = True
-  (claude_dir / 'settings.json').write_text(json.dumps(settings))
+  (claude_dir / 'settings.json').write_text(json.dumps(_SESSION_SETTINGS_JSON))
   return claude_dir
 
 
@@ -270,7 +266,6 @@ def container_claude_state(
     workspace,
     install_method='global',
     trusted_paths=[str(start_directory)],
-    preaccept_bypass_dialog=True,
   )
   mounts = [f'{claude_dir}:{_CONTAINER_CLAUDE_DIR}']
   env = {
@@ -291,7 +286,6 @@ def container_member_claude_state(
     records,
     install_method='global',
     trusted_paths=[str(start_directory)],
-    preaccept_bypass_dialog=True,
   )
   return {
     CLAUDE_CONFIG_DIR_ENV: str(member_root / claude_dir.name),
@@ -305,6 +299,5 @@ def provision_unboxed_claude_dir(workspace: Path, tree: Path) -> Path:
     workspace,
     install_method=None,
     trusted_paths=[str(tree)],
-    preaccept_bypass_dialog=False,
   )
   return claude_dir

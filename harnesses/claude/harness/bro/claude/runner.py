@@ -35,6 +35,7 @@ from bro.monitor import SESSION_DIR_ENV, harness_session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
 from bro.workspace.paths import ISOLATION_ENV
+from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
   from ride.do_ride import SessionRun
@@ -44,13 +45,16 @@ _CONTAINER_CLAUDE = Path('/opt/claude-code/claude')
 _MCP_BACKSTOP_MILLISECONDS = 24 * 60 * 60 * 1000
 
 
-def _claude_binary() -> Path:
-  isolation = os.environ.get(ISOLATION_ENV)
-  if isolation == 'boxed':
-    return _CONTAINER_CLAUDE
-  if isolation != 'unboxed':
-    raise RuntimeError(f'{ISOLATION_ENV} must be set to boxed or unboxed')
+def _isolation() -> Isolation:
+  try:
+    return Isolation(os.environ.get(ISOLATION_ENV))
+  except ValueError:
+    raise RuntimeError(f'{ISOLATION_ENV} must be set to boxed or unboxed') from None
 
+
+def _claude_binary(isolation: Isolation) -> Path:
+  if isolation is Isolation.BOXED:
+    return _CONTAINER_CLAUDE
   runtime_value = os.environ.get(RUNTIME_ENV)
   if runtime_value is None:
     raise RuntimeError(f'{RUNTIME_ENV} is unset')
@@ -229,7 +233,8 @@ def _session_brash_policy(bro: str, tree: Path) -> Optional[Path]:
 def run_session(spec: 'SessionRun') -> int:
   tree = Path.cwd()
   try:
-    binary = _claude_binary()
+    isolation = _isolation()
+    binary = _claude_binary(isolation)
   except (OSError, RuntimeError, ValueError) as error:
     log.error('cannot prepare pinned Claude Code: %s', error)
     return 1
@@ -274,6 +279,7 @@ def run_session(spec: 'SessionRun') -> int:
 
     launch = build_claude_launch(
       spec,
+      isolation=isolation,
       resume_session=resume_session,
       endpoint=server.endpoint,
       brash_policy=policy,

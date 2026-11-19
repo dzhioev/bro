@@ -48,7 +48,7 @@ An explicit `--into REF` wins and skips the fetch.
 An omitted hold is forwarded unset and takes `ride along`'s default:
 `attended` when boxed,
 `guided` under `--unboxed`.
-Unboxed sessions have no container boundary, so the guided default retains permission prompts.
+Unboxed sessions have no container boundary, so the guided default keeps a human in each step.
 
 ## Bro and launch flags
 

@@ -1,14 +1,20 @@
-"""the credential a live probe signs Claude Code in with, and the session state a
-ride runner would own around it.
+"""the credential a live probe signs Claude Code in with, the terminal a probe
+runs its TUI on, and the session state a ride runner would own around it.
 
 A probe holds undocumented Claude Code behavior at the version managed sessions
 run, so it drives that pinned release, the `claude` fixture, rather than whichever
 `claude` the host has installed."""
 
 import contextlib
+import fcntl
 import os
+import pty
 import shlex
 import signal
+import struct
+import subprocess
+import termios
+import threading
 from collections.abc import Iterator
 from pathlib import Path
 from unittest import mock
@@ -48,6 +54,42 @@ def bounded(seconds: float) -> Iterator[None]:
   finally:
     signal.alarm(0)
     signal.signal(signal.SIGALRM, previous)
+
+
+@contextlib.contextmanager
+def terminal(argv: list[str], env: dict[str, str], cwd: Path) -> Iterator[subprocess.Popen]:
+  """run `argv` on a pty of its own, draining what it draws, until the block ends."""
+  parent_end, child_end = pty.openpty()
+  fcntl.ioctl(child_end, termios.TIOCSWINSZ, struct.pack('HHHH', 50, 160, 0, 0))
+  process = subprocess.Popen(
+    argv,
+    env={**env, 'TERM': 'xterm-256color'},
+    cwd=cwd,
+    stdin=child_end,
+    stdout=child_end,
+    stderr=child_end,
+    start_new_session=True,
+  )
+  os.close(child_end)
+
+  def _drain() -> None:
+    with contextlib.suppress(OSError):
+      while len(os.read(parent_end, 65536)) > 0:
+        pass
+
+  drain = threading.Thread(target=_drain, daemon=True)
+  drain.start()
+  try:
+    yield process
+  finally:
+    process.terminate()
+    try:
+      process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+      process.kill()
+      process.wait()
+    os.close(parent_end)
+    drain.join()
 
 
 @contextlib.contextmanager

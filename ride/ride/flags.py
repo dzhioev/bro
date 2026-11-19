@@ -80,7 +80,8 @@ def add_session_flags(parser: Parser, *, include_bro: bool = True) -> None:
     choices=HOLDS,
     help='how firmly the human holds the session: unattended = no human channel, detached = launched and left, '
     'attended = human watching while the work runs autonomously, guided = human drives each step. '
-    'every level but guided skips permission prompts (unsandboxed when combined with --unboxed). '
+    'on claude, every level but guided skips permission prompts when boxed and runs auto mode when '
+    'unboxed. '
     'defaults: unattended for ride solo; attended for boxed ride along and dive-in, guided when unboxed',
   )
   add_llm_flags(parser)

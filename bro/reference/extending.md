@@ -194,8 +194,8 @@ What the session's Claude configuration runs is not checked:
 hooks from your, the repository's, or your organization's managed settings, plugins, and a skill's inline `!cmd` lines, which Claude runs without consulting any `PreToolUse` hook.
 So a model that can write files can get around its command list:
 it writes a skill whose `!cmd` runs what it likes, and the skill takes effect from the next session.
-Claude's own guard against that is a permission prompt, which ride skips under every hold but `guided`;
-even Claude's auto mode let a benign-looking skill write through when probed.
+Claude's own guard against that is a permission prompt, which under every hold but `guided` ride skips in a boxed session and hands to auto mode's classifier in an unboxed one;
+probed, auto mode let a benign-looking skill write through.
 The command list catches a model that goes off-script, not one working to get around it.
 A session with a finite command list refuses to start while its project or local settings, the skills, commands, and agents Claude would load, or its enabled plugins carry a `PreToolUse` hook matching `Bash`,
 which could rewrite its calls after the gate.
