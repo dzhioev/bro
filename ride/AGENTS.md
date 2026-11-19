@@ -75,7 +75,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
   assignment parsing for the CLI, and the validation every reader of a recorded mapping applies.
-- `ride/runtime_bundle.py` — installation freeze, content-addressed bundle persistence and locking, runtime validation and re-exec, shared host/container materialization, session-command shims, runtime-volume lifecycle, and bundle GC.
+- `ride/runtime_bundle.py` — toolset freezing, bundle locking and re-exec, host/container materialization with staged git pins, session-command shims, runtime volumes, and bundle GC.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown;

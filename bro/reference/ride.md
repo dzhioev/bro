@@ -261,7 +261,16 @@ That explicit force-clean path removes the directory without interpreting its me
 
 ### Runtime bundles
 
-Every outer root freezes the Python installation that invoked `ride`, by each distribution's recorded provenance:
+Every outer root freezes the invoking installation's **bro toolset**.
+Its roots are the installed distributions declaring an entry point in any group whose name starts with `bro.`, and the toolset is their dependency closure over counted requirements.
+A requirement counts when its environment marker holds unconditionally or under one of its distribution's active extras.
+An extra is active when the installation satisfies every requirement it adds, including the extras those requirements name;
+mutually recursive extras are active together unless an unsatisfied requirement reaches their cycle.
+A counted requirement the installation does not satisfy fails the freeze, naming the requirement and the member.
+Distributions outside the toolset contribute nothing to the bundle or its hash.
+Every toolset member must declare what it imports, since an undeclared dependency outside that closure is absent in sessions.
+
+The freeze carries each member by its recorded provenance:
 index installations become exact `name==version` pins;
 version-control and remote-archive installations become direct-reference pins at their resolved commit or recorded hash;
 local sources — a directory or an archive
@@ -274,7 +283,7 @@ so an unchanged source tree at an unchanged commit keeps resolving to the bundle
 The Python major/minor and the installation's home join the manifest, and a content hash names the persisted bundle under `~/.local/share/ride/runtime/<hash>/` (or `$XDG_DATA_HOME/ride/runtime/<hash>/`).
 Carrying local sources keeps the snapshot self-reproducing:
 re-resolving from a materialized bundle's own venv lands on the same hash.
-A distribution that cannot be pinned reproducibly
+A toolset member that cannot be pinned reproducibly
 — a vanished local source, a version-control installation with no resolved commit
 — fails the launch naming what to reinstall it from, instead of silently escaping the snapshot.
 The root holds the bundle's shared flock until its session and summoned children exit;
@@ -311,8 +320,23 @@ the volume holds `venv/` and the matching `bin/` shim farm.
 The materializer container's lifetime is tethered to the launching ride
 — its main command exits when the ride's death closes its stdin, and `--rm` then has the daemon remove it
 — so a killed launch cannot strand a container pinning the volume.
-Materialization is where every pin is fetched, so a version-control or remote-archive pin has to be reachable from the materializing environment
-— in boxed isolation that is the runtime image's own git and network, without the launcher's credentials.
+Before each host or container materialization, the launcher stages every git pin under the bundle's `git-pins/` directory, holding the materialization lock.
+Each distinct URL gets one bare repository, fetched at every pinned commit with its whole history and the tags in it, so builds deriving their version from tags keep that version.
+The fetch uses the launcher's ambient git authentication with prompts disabled;
+a failed fetch fails the materialization naming the pin and git's message.
+A directory left by a killed launch is replaced, and staging is removed when materialization ends, on success or failure.
+
+The install reaches these copies through `url.<staged repository>.insteadOf` entries supplied through `GIT_CONFIG_COUNT`.
+The host install reads no system or global git configuration and inherits no environment-carried git configuration, so an existing URL rewrite cannot divert it from a staged copy.
+The container materializer reaches them at `/bundle/git-pins/` with no launcher credentials;
+before installing as root, it names each staged repository in its own system git configuration's `safe.directory` so git can serve the launching user's repositories.
+The installed records keep the original URLs and commits, and staging changes neither the manifest nor its hash.
+Session containers, worker containers and foreground worker runs use this same materialization.
+
+Staging covers a git pin's own commit and history, not its submodules, build hooks that fetch additional git sources, private package indexes or authenticated remote archives.
+The same limits apply to host and container installs:
+anything beyond the staged copies must be reachable without the launcher's git configuration, or installation fails with the installer's error naming the distribution.
+A git server speaking only the original protocol must permit fetching by commit id, or staging fails for either materialization with git's error.
 The session PATH starts with the runtime shims and then the system paths in both isolations, with the launcher's active venv removed on the launcher.
 Repository commands are explicit through `uv run` or `.venv/bin/`.
 The shims serve the session;

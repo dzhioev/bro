@@ -23,9 +23,12 @@ from pathlib import Path
 from types import MappingProxyType
 
 import certifi
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 from bro.base import log
 from bro.base.source_commit import RECORD_NAME, SourceCommit, checkout_commit
+from bro.workspace.git import no_prompt_env
 from bro.workspace.installation import MARKER, installation_home, validate_home
 from bro.workspace.paths import runtime_base
 
@@ -137,7 +140,20 @@ class RuntimeBundle:
       log.info('materializing runtime bundle %s for the host', self.hash[:12])
       shutil.rmtree(host, ignore_errors=True)
       host.mkdir()
-      _materialize(self.root, host, sys.executable, home=_manifest_home(self.root))
+      with _staged_git_pins(self.root) as repositories:
+        environment = {
+          **{key: value for key, value in os.environ.items() if not key.startswith('GIT_CONFIG')},
+          'GIT_CONFIG_NOSYSTEM': '1',
+          'GIT_CONFIG_GLOBAL': os.devnull,
+          **_git_redirects(repositories),
+        }
+        _materialize(
+          self.root,
+          host,
+          sys.executable,
+          home=_manifest_home(self.root),
+          run=lambda command, description: _run(command, description=description, env=environment),
+        )
       complete.touch()
 
   def require_frozen_manifest(self) -> None:
@@ -177,16 +193,30 @@ class RuntimeBundle:
           wheel_names = [wheel.name for wheel in wheels]
           for wheel in wheels:
             _assert_pure_wheel(wheel)
-          _materialize(
-            Path('/bundle'),
-            Path('/var/ride/runtime'),
-            '/usr/local/bin/python',
-            home=_manifest_home(self.root),
-            wheel_names=wheel_names,
-            run=lambda command, description: _container_run(
-              container_id, command, description=description
-            ),
-          )
+          with _staged_git_pins(self.root) as repositories:
+            mounted = {
+              url: Path('/bundle') / repository.relative_to(self.root)
+              for url, repository in repositories.items()
+            }
+            for repository in mounted.values():
+              _container_run(
+                container_id,
+                ['git', 'config', '--system', '--add', 'safe.directory', str(repository)],
+                description=f'cannot trust staged git repository {repository}',
+              )
+            environment = _git_redirects(mounted)
+            _materialize(
+              Path('/bundle'),
+              Path('/var/ride/runtime'),
+              '/usr/local/bin/python',
+              home=_manifest_home(self.root),
+              wheel_names=wheel_names,
+              run=lambda command, description: _container_run(
+                container_id,
+                ['env', *(f'{key}={value}' for key, value in environment.items()), *command],
+                description=description,
+              ),
+            )
           _container_run(
             container_id,
             ['touch', '/var/ride/runtime/.complete'],
@@ -451,11 +481,76 @@ def _installed_distributions() -> list[importlib.metadata.Distribution]:
   return installed
 
 
+def _toolset_distributions() -> list[importlib.metadata.Distribution]:
+  installed: dict[str, importlib.metadata.Distribution] = {
+    canonicalize_name(_distribution_name(distribution)): distribution
+    for distribution in _installed_distributions()
+  }
+  requirements = {
+    name: [Requirement(text) for text in distribution.requires or []]
+    for name, distribution in installed.items()
+  }
+  active = {
+    (name, canonicalize_name(extra))
+    for name, distribution in installed.items()
+    for extra in distribution.metadata.get_all('Provides-Extra', [])
+  }
+
+  def counts(requirement: Requirement, extra: str = '') -> bool:
+    return requirement.marker is None or requirement.marker.evaluate({'extra': extra})
+
+  def satisfied(requirement: Requirement) -> bool:
+    name = canonicalize_name(requirement.name)
+    distribution = installed.get(name)
+    return (
+      distribution is not None
+      and requirement.specifier.contains(distribution.version, prereleases=True)
+      and all((name, canonicalize_name(extra)) in active for extra in requirement.extras)
+    )
+
+  # Start with every extra: mutually recursive extras stay active unless an
+  # unsatisfied requirement reaches their cycle.
+  while True:
+    inactive = {
+      (name, extra)
+      for name, extra in active
+      if any(
+        counts(requirement, extra) and not counts(requirement) and not satisfied(requirement)
+        for requirement in requirements[name]
+      )
+    }
+    if not inactive:
+      break
+    active.difference_update(inactive)
+
+  pending = [
+    name
+    for name, distribution in installed.items()
+    if any(entry.group.startswith('bro.') for entry in distribution.entry_points)
+  ]
+  members: set[str] = set()
+  while pending:
+    name = pending.pop()
+    if name in members:
+      continue
+    members.add(name)
+    extras = ['', *(extra for owner, extra in active if owner == name)]
+    for requirement in requirements[name]:
+      if not any(counts(requirement, extra) for extra in extras):
+        continue
+      if not satisfied(requirement):
+        raise RuntimeBundleError(
+          f'{_distribution_name(installed[name])}: installation does not satisfy {requirement}'
+        )
+      pending.append(canonicalize_name(requirement.name))
+  return [installed[name] for name in sorted(members)]
+
+
 def _classify_installation() -> tuple[str, list[str], list[_LocalDistribution]]:
   python = f'{sys.version_info.major}.{sys.version_info.minor}'
   pins: list[str] = []
   local: list[_LocalDistribution] = []
-  for distribution in _installed_distributions():
+  for distribution in _toolset_distributions():
     name = _distribution_name(distribution)
     direct_url = distribution.read_text('direct_url.json')
     if direct_url is None:
@@ -474,15 +569,61 @@ def _classify_installation() -> tuple[str, list[str], list[_LocalDistribution]]:
   return python, pins, local
 
 
-def _run(command: list[str], *, description: str) -> subprocess.CompletedProcess[str]:
+def _run(
+  command: list[str], *, description: str, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
   try:
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(command, capture_output=True, text=True, env=env)
   except OSError as error:
     raise RuntimeBundleError(f'{description}: {error}') from error
   if result.returncode == 0:
     return result
   detail = result.stderr.strip() or result.stdout.strip() or f'exit code {result.returncode}'
   raise RuntimeBundleError(f'{description}: {detail}')
+
+
+@contextlib.contextmanager
+def _staged_git_pins(root: Path) -> Generator[dict[str, Path]]:
+  staging = root / 'git-pins'
+  if staging.exists():
+    shutil.rmtree(staging)
+  repositories: dict[str, Path] = {}
+  fetched: set[tuple[str, str]] = set()
+  try:
+    for pin in (root / 'pins.txt').read_text().splitlines():
+      url = Requirement(pin).url
+      if url is None or not url.startswith('git+'):
+        continue
+      url, commit = url.removeprefix('git+').partition('#')[0].rsplit('@', 1)
+      if (url, commit) in fetched:
+        continue
+      repository = repositories.get(url)
+      if repository is None:
+        repository = staging / hashlib.sha256(url.encode()).hexdigest()
+        repository.mkdir(parents=True)
+        _run(
+          ['git', 'init', '--bare', '--quiet', str(repository)],
+          description=f'cannot stage git pin {pin}',
+        )
+        repositories[url] = repository
+      _run(
+        ['git', '-C', str(repository), 'fetch', url, f'+{commit}:refs/commit/{commit}'],
+        description=f'cannot stage git pin {pin}',
+        env=no_prompt_env(),
+      )
+      fetched.add((url, commit))
+    yield repositories
+  finally:
+    if staging.exists():
+      shutil.rmtree(staging)
+
+
+def _git_redirects(repositories: Mapping[str, Path]) -> dict[str, str]:
+  entries = {'GIT_CONFIG_COUNT': str(len(repositories))}
+  for count, (url, repository) in enumerate(repositories.items()):
+    entries[f'GIT_CONFIG_KEY_{count}'] = f'url.{repository.as_uri()}.insteadOf'
+    entries[f'GIT_CONFIG_VALUE_{count}'] = url
+  return entries
 
 
 def _container_run(
