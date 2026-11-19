@@ -90,27 +90,18 @@ Refer to credentials only by kind, instance name, expected non-secret identity, 
 2. Identify the distribution and package-discovery rule that would ship the bro declaration.
 3. Inspect the active environment and lock for private, local-only, platform-specific, or otherwise unreproducible distributions.
    `ride` freezes the installed bro toolset, rooted at distributions declaring `bro.` entry points, with their counted dependency closure (the ride reference, "Runtime bundles").
-4. Search installed and declared `bro.bros.<home>` entry points and existing `[tool.bro]` tables for name or behavior conflicts.
+4. Search installed and declared `bro.bros.<home>` entry points and existing `.bro/config.toml` tables for name or behavior conflicts.
 5. Reconcile any partial bootstrap across dependencies, Git sources, entry point, module, lock, project configuration, environment, and ignored files.
 6. If the repository root has `uv.lock`, inspect the root and every workspace member, dependency group, extra, source override, and local path dependency.
-   The root lock triggers a project image independently of the environment that supplied `ride`.
-7. Treat both project-image phases as mandatory:
-   the manifest-only phase receives the root lock, root manifest, and discovered workspace-member manifests and runs `uv sync --frozen --all-packages --all-groups --all-extras --no-install-workspace`;
-   the full-tree phase receives the complete tracked build context and runs the same command with workspace installation enabled.
-8. A non-workspace path source may pass the full-tree phase while failing the manifest-only phase.
-   Do not infer support from a successful host sync.
 
 ### Ask
 
 1. In an existing uv-managed Python project, ask whether the bro declaration may join its installable distribution or an installed workspace member.
-2. Use the integrated shape only when the project's package discovery, toolset closure, and both root-lock image phases are reproducible under the runtime image's Linux, Python, network, and no-launcher-credential conditions.
-3. Propose an independent `bro_project/` sidecar when the repository uses another package manager, has ambiguous package discovery, or has no root lock and its application environment is too broad.
+2. Use the integrated shape only when the project's package discovery and toolset closure are reproducible under the runtime image's Linux and Python.
+3. Propose an independent `bro_project/` sidecar when the repository uses another package manager, has ambiguous package discovery, or its application environment is too broad.
 4. In a viable uv workspace, choose deliberately between an installed member and a sidecar excluded from workspace discovery.
 5. Explain that registering the project's bros from its application distribution makes that distribution a toolset root, bringing its whole dependency closure into every runtime bundle.
    A dedicated persona member or sidecar keeps application dependencies out when the persona distribution does not depend on them.
-   A sidecar does not suppress either image phase selected by a root `uv.lock`.
-6. If either root-lock phase cannot succeed, stop before claiming support.
-   Name the missing project-bake selection or suppression seam as prerequisite framework work.
 
 ### Act
 
@@ -173,7 +164,7 @@ Adapt an existing backend's own package-discovery configuration instead of addin
 
 For a sidecar:
 
-1. Keep tree-specific `[tool.bro]` configuration, if any, in the repository-root `pyproject.toml`.
+1. Keep repository configuration, if any, in `.bro/config.toml` at the repository root.
 2. Create `bro_project/pyproject.toml` as a complete Python 3.12 uv-build project named `<project-slug>-bros`.
 3. Give it the same framework runtime dependencies and Git sources, with `bro-native`, `bro-claude`, and `bro-ride` in its `dev` group.
 4. Register `my-dev = "<project_slug>_bros.my_dev:MyDev"`.
@@ -184,7 +175,8 @@ For a sidecar:
 9. Address every sidecar operation with `--project bro_project`.
 10. Ignore only `bro_project/.venv/`, build output, and normal Python cache files, and commit `bro_project/uv.lock`.
 
-If a root `setup.sh` exists, preserve its flow and add the selected sync, installation-home marker write and `bro.dev.install` operations after reading and obtaining approval.
+If the repository has a setup flow, preserve it and add the selected sync, installation-home marker write and `bro.dev.install` operations after reading and obtaining approval.
+Declare that flow as `provision-command` in `.bro/config.toml`, following the pinned ride reference's repository-provisioning contract.
 Use `uv run --project bro_project bro.dev.install` for a sidecar.
 Do not add a setup script merely because one is absent.
 
@@ -215,7 +207,7 @@ Fetch and read these paths before using their contracts:
 - `bro/registry.py`;
 - `dev/bros/dev/dev.py`;
 - `local/bros/bro_dev/__init__.py`;
-- `bro/workspace/project.py`;
+- `bro/workspace/repository.py`;
 - `llms/anthropic/bro/anthropic/declaration.py`;
 - `llms/openai/bro/openai/declaration.py`;
 - `bro/reference/ride.md`, especially **Harness selection**, **Home settings**, **Summoning another bro**, and **Session permissions and credentials**;
@@ -227,23 +219,13 @@ Fetch and read these paths before using their contracts:
 - `bro/base/host_config.py`;
 - `bro/brog/system.py`;
 - `bro/brog/github.py`;
-- `ride/ride/setup/container/project.Dockerfile`;
 - `ride/ride/workspace/build_context.py` and `ride/ride/workspace/docker.py`.
 
 If any read fails or the source contradicts this prompt, stop and show the contradiction.
 Do not combine instructions from current `master` with an older lock.
 
-For the preliminary root-lock gate, use the pinned `ride.workspace.build_context` rules to prepare two temporary trees without changing the target.
-The first contains only `uv.lock`, the root `pyproject.toml`, and every discovered workspace-member `pyproject.toml` at its original relative path.
-The second contains the complete tracked build context plus the approved pending packaging files.
-Build the computed pinned runtime image if absent, then run each uv command in a fresh container from that image with no launcher credential, credential directory, or host package cache mounted.
-Run the manifest tree with `--no-install-workspace` and the full tree without it, using `--frozen --all-packages --all-groups --all-extras` in both.
-This is a support gate, not the final image proof; section 4 builds the actual project image after its home settings and declaration exist.
-Run both gates against the root even when `ride` comes from `bro_project/.venv`, and do not substitute a sidecar-only sync.
-Ask before local Docker image writes, show the image tag and temporary paths, remove the temporary trees afterward, and fail closed on either phase.
-
 **Checkpoint 2:** report the selected packaging shape, owning distribution, exact `BRO_SHA`, all four locked source records, and source paths read at that SHA;
-then the host check's result, root-lock status, both image-phase results, and any preserved project setup conventions.
+then the host check's result and the declared provisioning command or preserved project setup conventions.
 
 ## 3. Choose the home and write its launch settings
 
@@ -251,7 +233,7 @@ then the host check's result, root-lock status, both image-phase results, and an
 
 1. Read installed `bro.settings` entries and the pinned home-settings schema.
 2. Choose a well-formed home name for this consumer, distinct from the framework's `bro` home, and inspect any existing home settings and host `~/.bro.json` without reading secrets.
-3. Keep the attached tree's build-context command and sub-tables separate from installation settings.
+3. Keep the repository's provisioning command and owner tables separate from installation settings.
 
 ### Ask
 
@@ -304,8 +286,7 @@ printf '<home>\n' > .venv/bro-installation-home
 ```
 
 Use `bro_project/.venv/bro-installation-home` for a sidecar environment.
-Ride names project images itself; no image repository needs configuring.
-The attached tree's `[tool.bro]` reads only `build-context-command` and sub-tables, and ignores other keys.
+The repository's `.bro/config.toml` describes its setup and owner tables, not its launch settings.
 `--harness` on a `ride` or `dive-in` command and `harness` on a summon request override the keys for one launch;
 do not add them to ordinary commands.
 
@@ -426,14 +407,8 @@ Use the established sync and build commands for an existing integrated applicati
 For a sidecar, add `--project bro_project` to every uv command.
 Inspect the built wheel for the bro module and the `bro` entry point so an editable import cannot hide missing wheel contents.
 Rerun the one-SHA lock assertion after the final metadata changes.
-For a root lock, obtain approval to stage only the intended bootstrap paths so the default tracked build context includes new files.
-Then use the pinned selected environment's `ride.workspace.build_context` and `ride.workspace.docker` functions against the repository root.
-Build the computed runtime image if absent, assemble the root project context, and build the computed project image.
-The pinned `project.Dockerfile` must complete both its manifest-only `--no-install-workspace` layer and its full tracked-tree workspace-installation layer without launcher credentials.
-Run this root proof even when the executable and imports come from the sidecar environment.
-A repository with no root lock must return no project-image tag; do not manufacture a root bake for it.
 
-**Checkpoint 4:** report the entry-point mapping, class behavior choices, successful installed-registry probe, wheel contents, final one-SHA assertion, and final image-phase results.
+**Checkpoint 4:** report the entry-point mapping, class behavior choices, successful installed-registry probe, wheel contents, and final one-SHA assertion.
 
 ## 5. Prepare host credentials and select their instances
 
@@ -445,12 +420,8 @@ A repository with no root lock must return no project-image tag; do not manufact
 4. Inspect only safe metadata needed to distinguish existing instances.
 5. Read `git remote get-url origin` exactly.
 6. Classify the result with the pinned framework's Git URL rules.
-   An origin naming a local filesystem path contributes no URL identity, including when that path is relative.
 7. If a Git URL embeds a password or token, including either one in HTTPS userinfo, do not display or record it; propose replacing it with an approved credential-free SSH or HTTPS URL first.
    An ordinary SSH username, including the `git@` in a standard SCP-like GitHub remote, is not credential material and must be preserved.
-8. Use the exact credential-free Git URL spelling as the portable project identity.
-   URL matching preserves path case, `.git`, userinfo, and transport spelling while normalizing only scheme and hostname case plus trailing slashes.
-9. Use the canonical checkout path when no origin exists, when origin names a local path, or for a machine-specific override.
 
 ### Ask
 
@@ -618,7 +589,7 @@ ride solo my-dev "sup?" --repo .
 Substitute only the selected public name when it differs.
 Do not add `--unboxed`, `--grant`, `--no-trails`, or `--llm`, and add `--harness` only on the second run below.
 Success means exit status zero and a coherent reply from the harness the installation stack selects.
-The first run may build runtime and project images, so inspect active output before calling ordinary build latency a hang.
+The first run may build the runtime image and provision the clone, so inspect active output before calling ordinary build or setup latency a hang.
 
 When an OpenAI key was wired, run the same command again with `--harness` naming the other installed harness, so both installed harnesses are proven;
 without one, report the native harness as installed but unproven.
@@ -630,7 +601,7 @@ Diagnose failures from the earliest failing layer:
 3. A home settings or installation-marker error names the configuration to fix; do not invent fallback keys.
 4. A `MISSING` scope row requires repairing material or host selection, not masking it with `--grant`.
 5. A Claude auth error requires repairing the scalar `claude_code` setup token.
-6. A native run refusing for a missing `bro` command requires `bro-native` in the synced environment and a rebuilt project image;
+6. A native run refusing for a missing `bro` command requires `bro-native` in the synced launch environment and a fresh runtime bundle;
    an OpenAI auth error requires repairing the `openai` material.
 7. A repository or ref error requires a valid committed `HEAD`.
 8. A Docker error requires repairing the daemon.
@@ -641,7 +612,8 @@ Diagnose failures from the earliest failing layer:
 Report the failed command, upstream cause, and correction before retrying.
 Never declare a partial or host-only workaround complete.
 
-**Checkpoint 7:** report each acceptance command run with its exit status and coherent-reply summary, the runtime/project image result, whether the other harness was proven or left unproven, and the retained workspace name if diagnosis was needed.
+**Checkpoint 7:** report each acceptance command run with its exit status and coherent-reply summary, the runtime image and repository-provisioning result, whether the other harness was proven or left unproven,
+and the retained workspace name if diagnosis was needed.
 
 ## 8. Reconcile or create the initial roster-design task
 

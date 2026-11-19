@@ -45,7 +45,6 @@ from ride.authority_reading import Reading
 from ride.bro_worker import BroType
 from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
-from ride.repository import Repository
 
 pytestmark = LIVE_TRIAL
 
@@ -183,7 +182,7 @@ def test_a_session_starts_the_trial_over_its_broker_channel(tmp_path):
   runs = _RunDirectories(tmp_path / 'runs')
   spawner = _SessionSpawner()
   broker = Broker(TcpServerTransport([LOCAL_HOST]), job_output=runs)
-  reading = Reading.take(Repository(str(tree), tree))
+  reading = Reading.take()
   operator = reading.operator()
   requested, _ = authority_request(
     BroType,

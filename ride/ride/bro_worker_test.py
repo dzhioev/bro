@@ -10,7 +10,6 @@ import ride.bro_worker as bro_worker
 from bro.authority.patterns import Descriptor
 from bro.authority.records import dump_request
 from bro.authority.rules import Mission, Prepared
-from bro.base.host_config import Attachment
 from bro.bro import BaseBro
 from bro.broker.brotocol import request
 from bro.worker_types import Expect, LaunchDenied, PeerDescription, Spawn
@@ -269,7 +268,7 @@ def test_an_incompatible_harness_and_llm_are_denied_before_acceptance(tmp_path):
 
 def _host_recipes(recipe):
   source = reading(config={'homes': {'test-home': {'bros': {'dev': {'llm': {'bro': recipe}}}}}})
-  return Host(replace(source, attachment=Attachment(path='/proj')))
+  return Host(source)
 
 
 def test_a_spawned_summon_refuses_a_configured_provider_its_harness_cannot_run(tmp_path):

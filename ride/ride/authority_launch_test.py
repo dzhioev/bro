@@ -67,7 +67,6 @@ def source(monkeypatch, tmp_path):
     Configuration.parse({'defaults': {'llm': {'probe': 'echo:echo'}}}),
     {},
     installed,
-    host_config.Attachment(path='/project'),
     settings=HomeSettings(summon_harness='probe'),
   )
 

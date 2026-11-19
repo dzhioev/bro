@@ -158,7 +158,7 @@ def test_foreground_run_freezes_runtime_publishes_ports_and_removes_container(mo
       assert prune_images is False
 
     def resolve(self):
-      return ContainerRuntime('runtime-image', 'bundle', 'runtime-image')
+      return ContainerRuntime('runtime-image', 'bundle')
 
   class Process:
     stdin = object()
@@ -296,9 +296,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
     ),
   )
   artifacts = _Artifacts()
-  runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime('project-image', 'bundle-hash', 'runtime-image')
-  )
+  runtime = ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash'))
   launch = worker_container.WorkerContainerLaunch(
     type='webview',
     spec=_spec(PurePosixPath('/workspace/shared')),
@@ -345,7 +343,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
 
 def test_lowering_hydrates_the_passed_instances_into_the_container_store(monkeypatch, tmp_path):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
-  monkeypatch.setattr('ride.workspace.model._cleanup_image', lambda repository: None)
+  monkeypatch.setattr('ride.workspace.model._cleanup_image', lambda: None)
   store = tmp_path / 'store'
   material = store / credentials.MATERIAL_DIR
   material.mkdir(parents=True)
@@ -358,7 +356,7 @@ def test_lowering_hydrates_the_passed_instances_into_the_container_store(monkeyp
     passes=('github+work',),
     share=(),
   )
-  runtime = ContainerRuntime('project-image', 'bundle-hash', 'runtime-image')
+  runtime = ContainerRuntime('runtime-image', 'bundle-hash')
 
   lowered = worker_container._lower_worker_container(
     launch,
@@ -385,7 +383,7 @@ def test_lowering_hydrates_the_passed_instances_into_the_container_store(monkeyp
 
 def test_missing_pass_removes_the_throwaway_workspace(monkeypatch, tmp_path):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
-  monkeypatch.setattr('ride.workspace.model._cleanup_image', lambda repository: None)
+  monkeypatch.setattr('ride.workspace.model._cleanup_image', lambda: None)
   store = tmp_path / 'store'
   store.mkdir()
   monkeypatch.setattr(credentials, 'STORE_DIR', str(store))
@@ -401,7 +399,7 @@ def test_missing_pass_removes_the_throwaway_workspace(monkeypatch, tmp_path):
     worker_container._lower_worker_container(
       launch,
       'webview-missing-pass',
-      ContainerRuntime('project-image', 'bundle-hash', 'runtime-image'),
+      ContainerRuntime('runtime-image', 'bundle-hash'),
       'bro/webview:image-hash',
       cast(Any, _Artifacts()),
     )
@@ -505,7 +503,7 @@ async def test_spawner_records_lowered_facts_and_delegates(monkeypatch):
   facts = _Facts()
   spawner = worker_container.WorkerContainerSpawner(
     cast(Any, docker),
-    ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'bundle', 'runtime')),
+    ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'bundle')),
     cast(Any, facts),
     cast(Any, _Artifacts()),
   )

@@ -6,14 +6,12 @@ import hashlib
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Generator
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Optional
 
-from bro.base import host_config
 from bro.base.git_url import (
   git_url_path,
   is_git_url,
@@ -23,7 +21,6 @@ from bro.base.git_url import (
 )
 from bro.workspace.git import git_run, rev_parse_commit
 from bro.workspace.paths import project_root, runtime_base
-from bro.workspace.project import ProjectConfig, project_config, project_config_from_text
 
 _SLUG_CHARACTER = re.compile(r'[^a-zA-Z0-9]+')
 
@@ -43,67 +40,6 @@ class Repository:
   @property
   def default_base(self) -> Optional[str]:
     return self.tree_ref
-
-  def read_file(self, relative: str) -> Optional[bytes]:
-    _validate_relative_path(relative)
-    if not self.is_url:
-      path = self.git_dir / relative
-      return path.read_bytes() if path.is_file() else None
-    assert self.tree_ref is not None
-    result = subprocess.run(
-      ['git', 'show', f'{self.tree_ref}:{relative}'], cwd=self.git_dir, capture_output=True
-    )
-    if result.returncode == 0:
-      return result.stdout
-    missing = subprocess.run(
-      ['git', 'cat-file', '-e', f'{self.tree_ref}:{relative}'],
-      cwd=self.git_dir,
-      capture_output=True,
-    )
-    if missing.returncode != 0:
-      return None
-    raise RuntimeError(
-      f'cannot read {relative} from {self.identity}: {result.stderr.decode().strip()}'
-    )
-
-  def list_files(self) -> list[str]:
-    if self.is_url:
-      assert self.tree_ref is not None
-      command = ['git', 'ls-tree', '-r', '-z', '--name-only', self.tree_ref]
-    else:
-      command = ['git', 'ls-files', '-z']
-    result = subprocess.run(command, cwd=self.git_dir, capture_output=True)
-    if result.returncode != 0:
-      raise RuntimeError(f'cannot list files in {self.identity}: {result.stderr.decode().strip()}')
-    return [name for name in result.stdout.decode().split('\0') if name]
-
-  def project_config(self) -> ProjectConfig:
-    if not self.is_url:
-      return project_config(self.git_dir)
-    content = self.read_file('pyproject.toml')
-    if content is None:
-      return ProjectConfig()
-    return project_config_from_text(
-      content.decode(), f'{self.identity}:{self.tree_ref}:pyproject.toml'
-    )
-
-
-def _validate_relative_path(relative: str) -> None:
-  path = PurePosixPath(relative)
-  if path.is_absolute() or '..' in path.parts:
-    raise ValueError(f'repository path must be relative: {relative!r}')
-
-
-def attachment_identities(attachment: str) -> host_config.Attachment:
-  """the host-config identities a launch against `attachment` matches.
-
-  a URL attachment names itself; a checkout names its path and its `origin`
-  remote. an `origin` naming a local path is left out — it identifies the
-  checkout this one was cloned from.
-  """
-  if is_git_url(attachment):
-    return host_config.Attachment(url=attachment)
-  return host_config.Attachment(path=attachment, url=_origin_url(Path(attachment)))
 
 
 def _origin_url(root: Path) -> Optional[str]:

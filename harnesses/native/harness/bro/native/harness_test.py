@@ -101,9 +101,7 @@ def _runtime_bundle(tmp_path: Path) -> RuntimeBundle:
 
 
 def _container_runtime() -> ContainerRuntimeResolver:
-  return ContainerRuntimeResolver.fixed(
-    ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
-  )
+  return ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash'))
 
 
 def _scope(**overrides) -> ScopedLaunch:
@@ -399,7 +397,6 @@ class TestUnboxedSession:
     runtime_bundle = RuntimeBundle(root, '3.12')
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
-    monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
 
     launch = ride_session.started_party_launch(

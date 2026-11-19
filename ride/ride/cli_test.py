@@ -621,9 +621,7 @@ class TestCredentialHydrationRoutes:
       configuration['defaults']['harness'] = 'bro'
     route.config.write_text(json.dumps(configuration))
     flags = ['--harness', 'bro'] if layer == 'launch' else []
-    result = ride_cli.main(
-      ['ride', 'scope', '--repo', str(route.repository), '--bro', 'hydration-test', *flags]
-    )
+    result = ride_cli.main(['ride', 'scope', '--bro', 'hydration-test', *flags])
     captured = capsys.readouterr()
     if layer == 'absent':
       assert result == 1
@@ -728,7 +726,8 @@ class TestAlong:
   def test_attached_launch_defers_project_defaults_to_the_runtime_start(self, monkeypatch):
     monkeypatch.setattr(ride_cli, 'project_root', lambda _path: Path('/repo'))
     monkeypatch.setattr(
-      'bro.workspace.project.project_config', lambda *args: pytest.fail('pre-runtime project read')
+      'bro.workspace.repository.repository_config',
+      lambda *args: pytest.fail('pre-runtime project read'),
     )
     monkeypatch.setattr('bro.base.host_config._read', lambda: pytest.fail('pre-runtime host read'))
     with patch('ride.cli.start_session', return_value=0) as start:
@@ -804,7 +803,6 @@ class TestLifecycle:
     with patch('ride.scope_report.report_scope', return_value=0) as report:
       assert ride_cli.main(['ride', 'scope', '--bro', 'dev', '--harness', 'claude']) == 0
     assert report.call_args.kwargs == {
-      'repo': None,
       'bro': 'dev',
       'harness': 'claude',
       'llm': None,
@@ -817,7 +815,7 @@ class TestLifecycle:
       from ride.repository import Repository
 
       resolve.return_value = Repository(str(tmp_path), tmp_path)
-      assert ride_cli.main(['ride', 'scope', '--repo', str(tmp_path), '--bro', 'dev']) == 1
+      assert ride_cli.main(['ride', 'scope', '--bro', 'dev']) == 1
     assert 'harness' in capsys.readouterr().err
 
   def test_an_unusable_runtime_location_is_a_cli_error(self, monkeypatch, caplog):

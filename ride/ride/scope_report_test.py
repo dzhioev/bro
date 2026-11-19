@@ -43,7 +43,7 @@ def test_report_shows_descriptor_usable_give_only_and_presence(report_environmen
       }
     )
   )
-  assert report_scope(repository, None, 'claude') == 0
+  assert report_scope(None, 'claude') == 0
   output = capsys.readouterr().out
   descriptor = json.loads(
     next(line for line in output.splitlines() if line.startswith('descriptor: ')).removeprefix(
@@ -65,7 +65,7 @@ def test_report_checks_presence_without_loading_material(report_environment, cap
   repository, _, material = report_environment
   (material / 'github.cred').write_bytes(b'\xff')
   monkeypatch.setattr(credentials.LocalSource, 'fetch', lambda *_: pytest.fail('material read'))
-  assert report_scope(repository, 'report-test', 'claude') == 0
+  assert report_scope('report-test', 'claude') == 0
   assert 'github+: PRESENT' in capsys.readouterr().out
 
 
@@ -80,7 +80,7 @@ def test_explicit_pick_of_optional_kind_is_missing_not_skipped(report_environmen
       }
     )
   )
-  assert report_scope(repository, 'report-test', 'claude') == 0
+  assert report_scope('report-test', 'claude') == 0
   assert 'trails+absent: MISSING' in capsys.readouterr().out
 
 
@@ -98,18 +98,18 @@ def test_authority_instance_presence_is_independent_of_kind_hold(report_environm
       }
     )
   )
-  assert report_scope(repository, 'report-test', 'claude') == 0
+  assert report_scope('report-test', 'claude') == 0
   assert 'authority instance cookies+reviewer: PRESENT' in capsys.readouterr().out
 
 
 def test_detached_report_requires_an_explicit_target(capsys):
-  assert report_scope(None, None, 'claude') == 1
+  assert report_scope(None, 'claude') == 1
   assert 'no default bro' in capsys.readouterr().err
 
 
 def test_unknown_target_is_reported_as_an_existence_error(report_environment, capsys):
   repository, _, _ = report_environment
-  assert report_scope(repository, 'uninstalled', 'claude') == 1
+  assert report_scope('uninstalled', 'claude') == 1
   assert "target 'uninstalled' is not installed" in capsys.readouterr().err
 
 
@@ -124,14 +124,14 @@ def test_unknown_target_is_reported_as_an_existence_error(report_environment, ca
 def test_invalid_policy_is_reported_without_escaping(report_environment, capsys, policy):
   repository, _, _ = report_environment
   (repository / 'host.json').write_text(json.dumps({'defaults': policy}))
-  assert report_scope(repository, 'report-test', 'claude') == 1
+  assert report_scope('report-test', 'claude') == 1
   assert 'cannot compute the scope:' in capsys.readouterr().err
 
 
 def test_explicit_target_overrides_the_project_default(report_environment, capsys):
   repository, _, _ = report_environment
   (repository / 'pyproject.toml').write_text('[tool.bro]\ndefault = "uninstalled"\n')
-  assert report_scope(repository, 'report-test', 'bro') == 0
+  assert report_scope('report-test', 'bro') == 0
   descriptor = json.loads(capsys.readouterr().out.splitlines()[0].removeprefix('descriptor: '))
   assert descriptor['target'] == 'report-test'
   assert descriptor['provider'] == 'echo'
@@ -142,10 +142,7 @@ def test_scope_llm_override_reports_selected_provider_key(report_environment, ca
   repository, _, material = report_environment
   if present:
     (material / 'openai.cred').write_text('{}')
-  assert (
-    report_scope(repository, 'report-test', 'bro', 'openai:gpt-5.6-terra,reasoning_effort=high')
-    == 0
-  )
+  assert report_scope('report-test', 'bro', 'openai:gpt-5.6-terra,reasoning_effort=high') == 0
   output = capsys.readouterr().out
   descriptor = json.loads(
     next(line for line in output.splitlines() if line.startswith('descriptor: ')).removeprefix(
@@ -159,13 +156,13 @@ def test_scope_llm_override_reports_selected_provider_key(report_environment, ca
 def test_scope_without_a_configured_recipe_refuses(report_environment, capsys, home_settings_file):
   repository, _, _ = report_environment
   home_settings_file.write_text('default-bro = "report-test"\n')
-  assert report_scope(repository, 'report-test', 'bro') == 1
+  assert report_scope('report-test', 'bro') == 1
   assert 'has no recipe for harness bro' in capsys.readouterr().err
-  assert report_scope(repository, 'report-test', 'bro', 'openai:gpt-5.6-terra') == 0
+  assert report_scope('report-test', 'bro', 'openai:gpt-5.6-terra') == 0
 
 
 def test_detached_scope_uses_the_installation_default(report_environment, capsys):
-  assert report_scope(None, None, 'claude') == 0
+  assert report_scope(None, 'claude') == 0
   descriptor = json.loads(capsys.readouterr().out.splitlines()[0].removeprefix('descriptor: '))
   assert descriptor['target'] == ReportBro.name
 

@@ -4,7 +4,6 @@ import os
 import re
 import shlex
 from datetime import UTC
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -162,7 +161,7 @@ class TestTaskMode:
     monkeypatch.setattr(
       dive_in,
       '_task_system',
-      lambda repo, cred, grant, revoke, bro, harness, llm: object(),
+      lambda cred, grant, revoke, bro, harness, llm: object(),
     )
 
   def test_every_launch_picks_a_fresh_workspace_name(self, fake_proj, monkeypatch, capsys):
@@ -211,7 +210,7 @@ class TestTaskMode:
   def test_prefetch_binds_the_launch_scope_flags(self, fake_proj, monkeypatch, capsys):
     captured = {}
 
-    def fake_task_system(repo, cred, grant, revoke, bro, harness, llm):
+    def fake_task_system(cred, grant, revoke, bro, harness, llm):
       captured.update(
         cred=cred,
         grant=grant,
@@ -269,7 +268,7 @@ class TestTaskMode:
   def test_a_scope_failure_fails_before_any_launch(self, fake_proj, monkeypatch, capsys):
     from ride.scope import LaunchScopeError
 
-    def bad_override(repo, cred, grant, revoke, bro, harness, llm):
+    def bad_override(cred, grant, revoke, bro, harness, llm):
       raise LaunchScopeError("cannot grant 'brog': already in the scoped credential set")
 
     monkeypatch.setattr(dive_in, '_task_system', bad_override)
@@ -345,7 +344,7 @@ class TestTaskSystem:
 
     monkeypatch.setattr(brog_system, 'build_system', build_system)
 
-    system = dive_in._task_system(fake_proj, [], [], [], 'bro-dev', harness, llm)
+    system = dive_in._task_system([], [], [], 'bro-dev', harness, llm)
 
     assert system == 'task-system'
     assert captured == {'backend': 'github', 'token': 'reviewer-token', 'repo': 'owner/repo'}
@@ -363,7 +362,6 @@ class TestTaskSystem:
       match='required credential instances are missing:.*brog',
     ):
       dive_in._task_system(
-        fake_proj,
         ['brog+missing'],
         [],
         [],
@@ -380,7 +378,7 @@ class TestTaskSystem:
           return read()
         return {'backend': 'github', 'token': 't', 'repo': 'owner/repo'}
 
-    def fake_scoped_secrets(bro_name, surface, *, attachment, recipe, cred, grant, revoke):
+    def fake_scoped_secrets(bro_name, surface, *, recipe, cred, grant, revoke):
       calls['scoped'] = (bro_name, surface, cred, grant, revoke)
       calls['recipe'] = recipe
       return 'base-scope'
@@ -389,7 +387,7 @@ class TestTaskSystem:
     monkeypatch.setattr(
       dive_in,
       'launch_recipe',
-      lambda driver, attachment, bro, llm: bind_recipe(
+      lambda driver, bro, llm: bind_recipe(
         llm or ('openai:gpt-5.6-terra' if driver.name == 'bro' else 'anthropic:claude-opus-5')
       ),
     )
@@ -406,7 +404,7 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    system = dive_in._task_system(Path('/repo'), ['brog+github'], [], [], None, 'claude', None)
+    system = dive_in._task_system(['brog+github'], [], [], None, 'claude', None)
     assert calls['scoped'] == (
       'bro-dev',
       CLAUDE.scope_recipe(),
@@ -423,7 +421,7 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system(Path('/repo'), [], [], [], 'dev', 'claude', None)
+    dive_in._task_system([], [], [], 'dev', 'claude', None)
     assert calls['scoped'] == ('dev', CLAUDE.scope_recipe(), [], [], [])
 
   def test_bro_harness_scopes_the_native_recipe(self, monkeypatch):
@@ -431,7 +429,7 @@ class TestTaskSystem:
 
     calls: dict = {}
     self._fake_wiring(monkeypatch, calls)
-    dive_in._task_system(Path('/repo'), [], [], [], None, 'bro', None)
+    dive_in._task_system([], [], [], None, 'bro', None)
     assert calls['scoped'] == ('bro-dev', bro_recipe, [], [], [])
 
   def test_the_prefetch_scope_follows_the_settled_recipe(self, monkeypatch, tmp_path):
@@ -455,9 +453,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, calls)
     monkeypatch.setattr(dive_in, 'launch_recipe', launch_recipe)
-    dive_in._task_system(
-      tmp_path, [], [], [], None, 'bro', 'openai:gpt-6.1-sol,reasoning_effort=low'
-    )
+    dive_in._task_system([], [], [], None, 'bro', 'openai:gpt-6.1-sol,reasoning_effort=low')
     assert calls['recipe'] == bind_recipe('openai:gpt-6.1-sol,reasoning_effort=low')
 
   def test_a_malformed_config_names_the_launch(self, monkeypatch):
@@ -468,7 +464,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, {}, read=malformed)
     with pytest.raises(LaunchScopeError, match='not valid json'):
-      dive_in._task_system(Path('/repo'), [], [], [], None, 'claude', None)
+      dive_in._task_system([], [], [], None, 'claude', None)
 
   def test_an_unresolvable_brog_names_the_launch(self, monkeypatch):
     from bro.base import credentials
@@ -479,7 +475,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, {}, read=unresolvable)
     with pytest.raises(LaunchScopeError, match="secret 'brog' not found"):
-      dive_in._task_system(Path('/repo'), [], [], [], None, 'claude', None)
+      dive_in._task_system([], [], [], None, 'claude', None)
 
   def test_the_backends_own_re_read_names_the_launch(self, monkeypatch):
     from ride.scope import LaunchScopeError
@@ -498,7 +494,7 @@ class TestTaskSystem:
 
     self._fake_wiring(monkeypatch, {}, read=read)
     monkeypatch.setattr(brog_system, 'build_system', capture)
-    dive_in._task_system(Path('/repo'), [], [], [], None, 'claude', None)
+    dive_in._task_system([], [], [], None, 'claude', None)
     broken.append(True)
     with pytest.raises(LaunchScopeError, match='not valid json'):
       providers[0]()
@@ -571,7 +567,7 @@ def test_harness_resolution_precedes_task_prefetch(
   )
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(host))
   seen = []
-  monkeypatch.setattr(dive_in, '_task_system', lambda *args: seen.append(args[5]))
+  monkeypatch.setattr(dive_in, '_task_system', lambda *args: seen.append(args[4]))
   monkeypatch.setattr(dive_in, '_prefetch_task', lambda *_: (_brog_task(), 'task block'))
   flags = ['--harness', 'bro'] if layer == 'launch' else []
   result = dive_in.main(['dive-in', '-n', '--task', UUID, *flags])
