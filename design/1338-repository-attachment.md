@@ -36,7 +36,7 @@ Out of scope, each with where it belongs:
 - a package cache shared between boxed workspaces, which §8.3 rules out;
 - private package indexes, authenticated archive pins and the submodules of a git pin as sources of the runtime volume (§10.3);
 - the benchmark's relocatable bundle, which its host builds from the workspace (`benchmark/AGENTS.md`);
-- migrating workspaces recorded in today's layout, which are refused instead (§4.2).
+- migrating attached workspaces recorded in today's layout, which are refused instead (§4.2).
 
 Constraints:
 
@@ -61,6 +61,8 @@ Terms the repository already defines (`bro/reference/ride.md`), as this design u
   its **ambient git authentication** is whatever the launching user's own git configuration supplies.
 - **`do-ride`** — the session executable every launcher runs inside a prepared workspace.
 - **Joined member** — a session that joined another session's party and shares its workspace.
+- **Installation** — the Python environment `ride` is invoked from, which pins one revision of the framework.
+  A host holds one for each repository that adopted the framework, and they share one runtime root.
 - **Runtime bundle** — the frozen, content-addressed snapshot of the installation that invoked `ride`:
   a manifest of **pins**, `name==version` for an index installation and `name @ git+<url>@<commit>` for a git one, and the wheels of its **local sources**, named by its hash.
   Its **bundle root** is the directory it persists in, `<runtime-root>/runtime/<hash>/`.
@@ -146,10 +148,25 @@ A launch naming an existing workspace with attachments that differ from the reco
 
 ### 4.2 Records in today's layout
 
-A record carrying top-level `repo` and `branch` is not in the current shape, so every command that reads it refuses the workspace by name and points to `ride clean --force <name>` (`bro/reference/ride.md`, "Runtime state").
+A record carrying top-level `repo` and `branch` is not in the current shape, so a command that names its workspace refuses it by name and points to `ride clean --force <name>` (`bro/reference/ride.md`, "Runtime state").
 Its directory is left as it is, so its files stay readable for recovery.
-Today's detached record is already in the current shape.
-A kept attached workspace therefore lands or pushes its work before the host's installations move to this design (§13).
+A kept attached workspace therefore lands or pushes its work while an installation from before this design can still open it (§13.3).
+
+A command that enumerates workspaces passes over a record outside the current shape instead of failing on it,
+since installations of different framework revisions share one runtime root and meet each other's records there (§13.2):
+
+- `ride list` lists the workspace by name, marked as unrecognised, with the `ride clean --force <name>` hint in place of its attachment and subject;
+- a `ride clean` that names no workspace leaves it and reports it by name,
+  and removes no managed mirror while such a record exists, since it cannot read which mirror the record names;
+- the check that an external tree is recorded by one workspace (`--tree`) reads the records it recognises.
+
+Today's detached record is already in the current shape, and the session record a resume reads keeps its fields, `repo` among them (§5.1),
+so a launcher of either layout opens the other's detached workspace.
+An unboxed one keeps its tree's path and resumes as before.
+A boxed one keeps its files, but its sessions see the tree at `/tree` where they saw `/workspace`,
+so a harness that keys its session state to the start directory (§5.5) finds none recorded there:
+`ride resume` of a Claude session refuses, naming the directory it looked in, and a new launch on the workspace starts a fresh session over the files it holds.
+A session of the bro harness resumes from its trail, whose earlier turns name paths under `/workspace`.
 
 ## 5. Attachments
 
@@ -167,6 +184,8 @@ A type supplies:
 - **lifecycle** — what it adds to the workspace's cleanliness, what `ride clean` removes for it, and what `ride list` shows of it.
 
 The neutral launcher, the workspace model, the container machinery and the bro worker's lowering reach a workspace's attachments only through this contract, and run no git operation of their own.
+`do-ride` learns its session's attachments from the launcher, which passes each one's type, name and recorded fields with the session's launch:
+the workspace record lies outside what a boxed session mounts.
 
 A launch carries at most one attachment until #1341 lifts the limit.
 `--repo PATH|URL` is the only launch syntax, adding a `repo` attachment;
@@ -195,7 +214,8 @@ A child derives its name from the same repository, so it is its root's.
 On the workspace's first launch, before its container is created when boxed or its session process starts when unboxed, the launcher creates the clone at `tree/<attachment name>/` with today's clone machinery and its ambient git authentication:
 an independent clone of the checkout or managed mirror, with `origin` retargeted upstream and the attachment's `refs/remotes/origin/*`,
 the recorded branch at the resolved base, the initialized submodules, and no alternates (`bro/reference/ride.md`, "Boxed isolation").
-It publishes the clone atomically from a temporary sibling.
+It prepares the clone in a temporary directory of the workspace directory, beside the tree, and publishes it atomically,
+so a killed launch leaves nothing in the tree.
 The clone exists when `tree/<attachment name>/.git` is a directory;
 a `tree/<attachment name>` that exists without one refuses the launch.
 Later launches leave the clone exactly as the session left it.
@@ -210,7 +230,8 @@ The rules are today's:
 - a started child bases on its request's `into` when given, otherwise on the `HEAD` of its summoner's clone, read at summon time
   — the clone in the workspace the summoner runs in, its party's for a joined summoner —
   after transferring into the attachment the commits it lacks, as `bro.workspace.git.resolve_head` does;
-- a manual child bases the same way, its pending record naming the summoner's clone;
+- a manual child bases on its request's `into` when given, otherwise on the `HEAD` of its summoner's clone as it stands when the user launches the child:
+  its pending record names that clone rather than a commit, so a commit the summoner makes after the summon reaches the child;
 - a detached root refuses `into`.
 
 ### 5.5 Session facts
@@ -339,6 +360,8 @@ a new workspace builds it at its first start.
 A boxed session's uv cache stays in its container's own layer, and the runtime image sets `UV_LINK_MODE=copy`, since that cache and the clone lie on different filesystems.
 
 A cold full sync of this repository, `uv sync --frozen --all-packages --all-groups --all-extras`, took 6.8 s in a boxed session, and 5.4 s with a warm cache (§17).
+The environment it builds is 294 MB, which each boxed workspace holds as its own copy for as long as it is kept,
+where the project image held one copy for every workspace of a lock.
 
 ### 8.3 No shared cache
 
@@ -404,10 +427,14 @@ A bundle without git pins stages nothing.
 
 The install runs with one redirect per staged URL added to its git configuration through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>`:
 `url.<staged repository>.insteadOf = <url>`, where the staged repository is a `file://` URL of its path as the install sees it.
-The variables add to whatever configuration git reads otherwise rather than replacing it.
+The entries follow those the launcher's environment already carries, such as the ones a session's `github` credential hook sets for a launcher started inside that session,
+so the variables add to whatever configuration git reads otherwise rather than replacing it.
 
 - The host materialization's install reaches `<bundle root>/git-pins/` at its own path, over the launching user's git configuration.
-- The materializer mounts `<bundle root>/git-pins/` read-only at `/var/ride/git-pins`, and its install has no other git configuration.
+- The materializer reaches it at `/bundle/git-pins/`, through the read-only bind of the bundle root it already has, and its install has no other git configuration.
+  It runs as root over repositories the launching user owns, which git refuses to serve until `safe.directory` names them,
+  and git passes no environment-carried configuration to the process that serves a local repository (§17).
+  So before the install the materializer names each staged repository in the `safe.directory` of its own system configuration, which goes with the container.
 
 The pins themselves are unchanged, and the installed record keeps each pin's original URL and commit (§17).
 The launcher removes `<bundle root>/git-pins/` once the materialization ends, whether it succeeded or failed, so nothing staged persists:
@@ -425,6 +452,9 @@ Inside the materializer, staging covers each git pin's own commit and nothing it
 Each still fails the container materialization with the installer's error, which names the distribution.
 The host materialization reaches them through the launching user's own configuration, as today.
 
+Staging fetches a pin by its commit id, which a server speaking only git's original protocol refuses unless it is configured to allow it (§17).
+Such a pin fails the materialization at staging, for the host and for a container alike, naming the pin and git's message (§10.1).
+
 ## 11. Paths a session names to its host
 
 ### 11.1 Wire paths
@@ -436,8 +466,14 @@ The client that builds the request makes a relative path absolute against its wo
 The host owns the check.
 Its description of each peer carries, beside the peer's tree, the path the peer sees that tree at:
 `/tree` for a peer that runs in a container, which is a boxed session, a joined member of a boxed party or a worker container, and the tree's own path for an unboxed peer.
-One core helper, replacing `bro.worker_types.tree_path`, maps a wire path from that view to the tree and resolves it on the host.
-It refuses the path, naming it, when it is relative, lies outside the peer's view of its tree, or resolves outside the tree.
+One core helper, replacing `bro.worker_types.tree_path`, maps a wire path from that view to the tree and resolves it on the host:
+
+- for a peer in a container it replaces the leading `/tree` with the tree's launcher-side path, refusing a path that does not lie under `/tree`;
+- for an unboxed peer, which names paths of the launcher's own filesystem, it takes the path as it stands,
+  so a path spelled through a symbolic link to the runtime root stays valid.
+
+It then resolves the result and refuses it when it lies outside the resolved tree.
+A relative path is refused before any mapping, and every refusal names the path.
 
 ### 11.2 Minting artifacts
 
@@ -490,12 +526,57 @@ Its environment stays beside the tree, at `<workspace>/benchmark-venv`.
 
 ## 13. Rollout
 
-- A launcher reads only the record shape it writes (§4.2), so an old launcher refuses a new attached record and a new launcher an old attached record, each by name;
-  neither misreads the other.
-- Before the host's installations move, every kept attached workspace lands or pushes its work, since it is refused afterwards.
-- Project images left on the daemon carry a label no launcher reads any more;
-  they are removed by hand, as `docker image rm` of the `bro/ride-project` repository's tags.
-- The plan phase settles the stages, their order and the moves of the consumer repositories.
+### 13.1 What moves together
+
+Everything one ride runs comes from one runtime bundle:
+the launcher, the `do-ride` it starts, the session commands, a manual child's launch and the operator verbs (`bro/reference/ride.md`, "The launcher↔session contract").
+So nothing inside a ride meets another revision of the framework, and a root keeps the bundle it froze for its whole lifetime:
+a ride started before its installation moved finishes under today's layout, and its children with it.
+
+The trail format does not change:
+a trail's `location.dir` carries the tree's launcher-side path as it does today, so the trails server and the stored trails need no move.
+
+### 13.2 Mixed revisions on one host
+
+Installations move to this design one at a time, and they share a runtime root and a Docker daemon.
+While their revisions are mixed:
+
+- **Attached workspaces** — each launcher works with those of its own layout.
+  A launcher of this design passes over the others in an enumeration and reports them by name (§4.2).
+  A launcher from before it fails `ride list`, a `ride clean` that names no workspace and a `--tree` launch on the first attached record this design wrote, naming that workspace,
+  until its installation moves or that workspace is removed;
+  its launches, its resumes and its `ride clean <name>` are unaffected.
+- **Detached workspaces** — either launcher opens them, with the consequence §4.2 states for a boxed one.
+- **Managed mirrors** — shared, in an unchanged format;
+  a `ride clean` of this design keeps them all while an unrecognised record exists (§4.2).
+- **Runtime images** — the two revisions compute different tags, since the entrypoint and the image's inputs change (§7.5, §8.1), and each builds its own.
+  A launcher prunes the superseded runtime tags no process holds, so launches alternating between the two revisions rebuild the image.
+- **Runtime bundles and volumes** — content-addressed, so neither revision reads the other's.
+- **Project images** — an installation from before this design still builds and prunes its own.
+  No launcher of this design reads their `ride-attachment` label, so the ones left once every installation has moved are removed by hand,
+  as `docker image rm` of the `bro/ride-project` repository's tags.
+
+A repository and the launcher that attaches it move apart too:
+
+- A launcher from before this design attaches a tree that already carries `.bro/config.toml` as it attaches any tree:
+  it bakes the project image, runs `setup.sh` by its name and ignores the file.
+- A launcher of this design attaches a tree from before its repository declared a provisioning command without provisioning it (§6.1).
+  Such a session sets itself up as the repository's instructions say, until its branch takes the commit that declares the command.
+
+### 13.3 Order
+
+1. This design lands in the framework's repository.
+2. Each installation moves, in any order:
+   the framework's checkout by taking the landed commit,
+   and a consumer's by a commit that takes that framework revision, moves its `[tool.bro]` tables to `.bro/config.toml` and declares its provisioning command (§12).
+   A kept attached workspace recorded in today's layout lands or pushes its work before the last installation that can open it moves (§4.2).
+3. Once every installation on the host has moved, the workspaces recorded in today's layout are removed by name with `ride clean --force <name>`,
+   and the project images by hand.
+
+An installation rolls back by returning to its previous revision;
+the attached workspaces it created under this design are then the ones its launcher does not recognise.
+
+The plan phase settles the stages and names the session that runs each step of the rollout.
 
 ## 14. Verification
 
@@ -509,8 +590,10 @@ Each route below needs automated coverage, the boxed ones in the host-only Docke
 - an unknown top-level key in `.bro/config.toml` refuses the start;
 - an attachment type registered by a test distribution prepares its directory, contributes its facts and runs its session-start step, reached through the contract alone;
 - a freeze leaves out a distribution no root reaches, keeps an active extra's requirements, and its bundle reproduces itself;
-- a bundle with a git pin whose URL neither the host nor the container can reach materializes for both through its staged pin, and leaves nothing staged;
-- an attached record in today's layout is refused by name.
+- a bundle with a git pin whose URL neither the host nor the container can reach materializes for both through its staged pin,
+  the container's install running as root over a staged copy the launching user owns, and leaves nothing staged;
+- a command naming a workspace whose attached record is in today's layout refuses it by name,
+  while `ride list` and a `ride clean` naming no workspace pass over it and report it.
 
 A private dependency fetched through a real `github` credential is verified live, once, by the verification phase.
 
@@ -522,7 +605,7 @@ A private dependency fetched through a real `github` credential is verified live
 
 ## 16. Decision record
 
-The owner settled every decision below on 2026-11-18.
+The owner settled decisions 1 to 15 on 2026-11-18, and decisions 16 to 18, which the review of this design raised, on 2026-11-19.
 
 | # | Decision | Applied in |
 |---|---|---|
@@ -541,19 +624,35 @@ The owner settled every decision below on 2026-11-18.
 | 13 | A launch carries at most one attachment and the singular facts stay until #1341; a session starts in its attachment's directory, or in the tree when detached | §3, §5.1, §5.5 |
 | 14 | `--repo` stays the only launch syntax until a second type needs a generic one | §5.1, §15 |
 | 15 | The workspace's writable directory is the tree, `/tree` in a container, and "workspace" names only the managed unit | §2, §3, §5.5 |
+| 16 | The materializer names the staged repositories in the `safe.directory` of its own system git configuration before the install | §10.2 |
+| 17 | An enumeration of workspaces passes over a record outside the current shape and reports it by name | §4.2, §13.2 |
+| 18 | The detached record keeps its shape, and a boxed detached workspace's Claude session does not survive the move to `/tree` | §4.2 |
 
 ## 17. Assumptions and evidence
 
 - **Cold sync** — measured on 2026-11-18 in a boxed session of this repository at `6f175d19` with uv 0.13.1, a fresh `UV_CACHE_DIR` and a fresh environment:
   6.8 s, then 5.4 s with the cache kept and the environment removed.
+  The review of this design measured the cold sync again the same way at 6.7 s, the environment at 294 MB and the cache the sync fills at 293 MB.
 - **Toolset** — computed with §9.1's rules over this checkout's development environment at `6f175d19`:
   116 installed, 18 roots, 98 in the toolset and the 18 listed in §9.1 left out.
   Without the active-extra rule the OpenAI SDK, `boto3` and their dependencies would also be left out, which is why the rule exists.
+  The review recomputed it over that environment and over the container materialization of a bundle frozen from this repository's checkout, with the same result for both.
 - **Redirect** — verified on 2026-11-18 with uv 0.13.1 and a cold cache:
   `uv pip install --no-deps "examplepkg @ git+https://github.com/<nonexistent owner>/<repository>@<commit>#subdirectory=sub"`,
   with `GIT_CONFIG_GLOBAL` naming an `insteadOf` rule to a read-only one-commit bare repository, installed the package,
   and its `direct_url.json` recorded the original URL and commit.
   The same install through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0` and `GIT_CONFIG_VALUE_0`, with a global git configuration present, installed it too while git still read that configuration.
   #1336's session verified the same redirect for `uv sync --frozen`.
-- **Unverified** — a git pin spelled `git+ssh://` reaches git as `ssh://…` and the same mapping applies;
-  the implementation's test covers it.
+  A pin spelled `git+ssh://git@github.com/…` reaches git as `ssh://git@github.com/…`, and the same install through a redirect of that URL installed it and recorded it.
+- **Ownership** — verified on 2026-11-18 with uv 0.13.1 and git 2.47.3,
+  `GIT_TEST_ASSUME_DIFFERENT_OWNER=1` standing in for a staged repository that another user owns:
+  the install through the redirect fails with git's `detected dubious ownership in repository` naming the staged repository,
+  fails the same way with a `safe.directory` entry for that repository among the `GIT_CONFIG_COUNT` variables,
+  and succeeds with the entry in a global configuration file.
+  A plain `git fetch` from the staged repository succeeds likewise with the entry in a system configuration file.
+- **Fetch by commit id** — verified with git 2.47.3 against a `file://` remote:
+  `git fetch --depth 1 <url> <commit>` of a commit no ref names succeeds under protocol version 2,
+  and fails under version 0 with `Server does not allow request for unadvertised object`.
+- **Installations** — read on 2026-11-18: the owner's host holds this checkout and three consumer repositories that pin the framework from git, all four sharing one runtime root.
+- **Unverified** — the materializer's `safe.directory` step has not run on a Docker daemon, where root really reads a repository another user owns;
+  the route of §14 covers it.
