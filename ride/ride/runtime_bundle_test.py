@@ -11,6 +11,7 @@ import subprocess
 import sys
 import zipfile
 from dataclasses import dataclass
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,9 @@ _PROBE_PYPROJECT = """\
 name = "demo"
 version = "1.0"
 
+[project.entry-points."bro.toolsets"]
+demo = "demo:toolset"
+
 [build-system]
 requires = ["uv_build>=0.9,<0.99"]
 build-backend = "uv_build"
@@ -71,8 +75,20 @@ class _Distribution:
     direct_url: dict | str | None = None,
     *,
     egg_info: bool = False,
+    requirements: tuple[str, ...] = (),
+    extras: tuple[str, ...] = (),
+    group: str | None = 'bro.toolsets',
   ):
-    self.metadata = {'Name': name}
+    self.metadata = Message()
+    self.metadata['Name'] = name
+    for extra in extras:
+      self.metadata['Provides-Extra'] = extra
+    self.requires = requirements
+    self.entry_points = (
+      []
+      if group is None
+      else [importlib.metadata.EntryPoint(name=name, value='demo:entry', group=group)]
+    )
     self.version = version
     self._direct_url = direct_url
     self._egg_info = egg_info
@@ -640,6 +656,7 @@ def test_container_materialization_and_preflight_settle_once_per_bundle(
   root = tmp_path / ('a' * 64)
   (root / 'wheels').mkdir(parents=True)
   (root / 'bundle.json').write_text(json.dumps({'home': 'root-home'}))
+  (root / 'pins.txt').touch()
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   preflights: list[str] = []
   calls, launches, materialized = _fake_container_docker(monkeypatch, [None])
@@ -676,6 +693,7 @@ def test_a_volume_the_marker_was_not_written_for_is_materialized_again(monkeypat
   root = tmp_path / ('a' * 64)
   (root / 'wheels').mkdir(parents=True)
   (root / 'bundle.json').write_text(json.dumps({'home': 'root-home'}))
+  (root / 'pins.txt').touch()
   bundle = runtime_bundle.RuntimeBundle(root, '3.12')
   held: list[str | None] = [None]
   _calls, _launches, materialized = _fake_container_docker(monkeypatch, held)
@@ -1124,3 +1142,365 @@ def test_the_installation_home_partitions_frozen_bundle_identity(installation_en
   assert first['home'] == 'first-home'
   assert second['home'] == 'second-home'
   assert runtime_bundle._bundle_hash(first) != runtime_bundle._bundle_hash(second)
+
+
+def test_toolset_follows_roots_requirements_markers_and_active_extras(monkeypatch):
+  distributions = [
+    _Distribution(
+      'root',
+      '1.0',
+      group='bro.future',
+      extras=('client', 'incomplete'),
+      requirements=(
+        'base-package>=1',
+        'optional[enabled]; extra == "client"',
+        'missing; extra == "incomplete"',
+        'wrong-platform; python_version < "1"',
+      ),
+    ),
+    _Distribution('base_package', '2.0', group=None, requirements=('leaf',)),
+    _Distribution('leaf', '1.0', group=None),
+    _Distribution(
+      'optional',
+      '1.0',
+      group=None,
+      extras=('enabled',),
+      requirements=('extra-leaf; extra == "enabled"',),
+    ),
+    _Distribution('extra-leaf', '1.0', group=None),
+    _Distribution(
+      'unreachable-source', '1.0', {'url': 'file:///vanished', 'dir_info': {}}, group=None
+    ),
+    _Distribution('unrelated-command', '1.0', group='console_scripts'),
+    _Distribution('wrong-prefix', '1.0', group='broader.plugins'),
+    _Distribution('bare-prefix', '1.0', group='bro'),
+  ]
+  monkeypatch.setattr(runtime_bundle.importlib.metadata, 'distributions', lambda: distributions)
+
+  _, pins, local = runtime_bundle._classify_installation()
+
+  assert pins == ['base_package==2.0', 'extra-leaf==1.0', 'leaf==1.0', 'optional==1.0', 'root==1.0']
+  assert local == []
+
+
+@pytest.mark.parametrize('outside_satisfied', [False, True])
+def test_mutually_recursive_extras_are_active_unless_their_outside_requirement_fails(
+  monkeypatch, outside_satisfied
+):
+  distributions = [
+    _Distribution(
+      'root', '1.0', extras=('client',), requirements=('first[cycle]; extra == "client"',)
+    ),
+    _Distribution(
+      'first',
+      '1.0',
+      group=None,
+      extras=('cycle',),
+      requirements=('second[cycle]; extra == "cycle"',),
+    ),
+    _Distribution(
+      'second',
+      '1.0',
+      group=None,
+      extras=('cycle',),
+      requirements=('first[cycle]; extra == "cycle"', 'outside>=2; extra == "cycle"'),
+    ),
+    _Distribution('outside', '2.0' if outside_satisfied else '1.0', group=None),
+  ]
+  monkeypatch.setattr(runtime_bundle.importlib.metadata, 'distributions', lambda: distributions)
+
+  _, pins, _ = runtime_bundle._classify_installation()
+
+  assert pins == (
+    ['first==1.0', 'outside==2.0', 'root==1.0', 'second==1.0']
+    if outside_satisfied
+    else ['root==1.0']
+  )
+
+
+@pytest.mark.parametrize('requirement', ['missing>=2', 'dependency>=2', 'dependency[unknown]'])
+def test_unsatisfied_counted_requirement_names_the_member_and_requirement(monkeypatch, requirement):
+  distributions = [
+    _Distribution('root', '1.0', requirements=(requirement,)),
+    _Distribution('dependency', '1.0', group=None),
+  ]
+  monkeypatch.setattr(runtime_bundle.importlib.metadata, 'distributions', lambda: distributions)
+
+  with pytest.raises(runtime_bundle.RuntimeBundleError) as error:
+    runtime_bundle._classify_installation()
+
+  assert 'root' in str(error.value)
+  assert requirement in str(error.value)
+
+
+def test_a_toolset_with_an_active_extra_reproduces_without_unrelated_distributions(
+  monkeypatch, tmp_path
+):
+  wheels = tmp_path / 'wheels'
+  for name in ('root', 'addon', 'unrelated'):
+    source = tmp_path / name
+    (source / 'src' / name).mkdir(parents=True)
+    (source / 'src' / name / '__init__.py').touch()
+    metadata = _PROBE_PYPROJECT.replace('demo', name)
+    if name == 'root':
+      metadata += '\n[project.optional-dependencies]\nclient = ["addon==1.0"]\n'
+    else:
+      metadata = metadata.replace(
+        f'[project.entry-points."bro.toolsets"]\n{name} = "{name}:toolset"\n', ''
+      )
+    (source / 'pyproject.toml').write_text(metadata)
+    _uv('build', '--wheel', '--out-dir', str(wheels), str(source))
+  installation = tmp_path / 'installation'
+  _uv('venv', '--python', sys.executable, str(installation))
+  _uv(
+    'pip',
+    'install',
+    '--python',
+    str(installation / 'bin' / 'python'),
+    '--no-index',
+    '--find-links',
+    str(wheels),
+    'root[client]',
+    'unrelated',
+  )
+  monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path / 'runtime')
+  _read_installation(monkeypatch, _site_packages(installation))
+
+  with runtime_bundle.resolve_runtime_bundle() as bundle:
+    assert (bundle.root / 'pins.txt').read_text() == 'addon==1.0\nroot==1.0\n'
+    monkeypatch.setenv('UV_NO_INDEX', '1')
+    monkeypatch.setenv('UV_FIND_LINKS', str(wheels))
+    bundle.materialize_host()
+    _read_installation(monkeypatch, _site_packages(bundle.host_venv))
+    with runtime_bundle.resolve_runtime_bundle() as snapshot:
+      assert snapshot.hash == bundle.hash
+
+
+def test_staging_fetches_every_commit_of_a_url_once_into_one_repository(
+  monkeypatch, probe, tmp_path
+):
+  root = tmp_path / 'bundle'
+  root.mkdir()
+  url = 'https://example.invalid/private.git'
+  source = tmp_path / 'source'
+  subprocess.run(['git', 'clone', '--quiet', str(probe.source), str(source)], check=True)
+  subprocess.run(
+    [
+      'git',
+      '-C',
+      str(source),
+      '-c',
+      'user.name=probe',
+      '-c',
+      'user.email=probe@invalid',
+      'commit',
+      '--allow-empty',
+      '--quiet',
+      '--message',
+      'second',
+    ],
+    check=True,
+  )
+  second = subprocess.run(
+    ['git', '-C', str(source), 'rev-parse', 'HEAD'], check=True, capture_output=True, text=True
+  ).stdout.strip()
+  (root / 'pins.txt').write_text(
+    f'demo @ git+{url}@{probe.commit}\nother @ git+{url}@{second}#subdirectory=sub\n'
+    f'another @ git+{url}@{second}#subdirectory=another\n'
+  )
+  monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+  monkeypatch.setenv('GIT_CONFIG_KEY_0', f'url.{source.as_uri()}.insteadOf')
+  monkeypatch.setenv('GIT_CONFIG_VALUE_0', url)
+  stale = root / 'git-pins' / 'stale'
+  stale.mkdir(parents=True)
+
+  run = runtime_bundle._run
+  fetches = []
+
+  def record(command, **keywords):
+    if 'fetch' in command:
+      assert keywords['env']['GIT_TERMINAL_PROMPT'] == '0'
+      fetches.append(command)
+    return run(command, **keywords)
+
+  monkeypatch.setattr(runtime_bundle, '_run', record)
+  with runtime_bundle._staged_git_pins(root) as repositories:
+    assert len(fetches) == 2
+    assert list(repositories) == [url]
+    assert not stale.exists()
+    repository = repositories[url]
+    result = subprocess.run(
+      ['git', '-C', str(repository), 'rev-parse', f'refs/commit/{probe.commit}'],
+      check=True,
+      text=True,
+      capture_output=True,
+    )
+    assert result.stdout.strip() == probe.commit
+    assert (
+      subprocess.check_output(
+        ['git', '-C', str(repository), 'rev-parse', f'refs/commit/{second}'], text=True
+      ).strip()
+      == second
+    )
+    assert runtime_bundle._git_redirects(repositories)['GIT_CONFIG_COUNT'] == '1'
+
+  assert not (root / 'git-pins').exists()
+
+
+def test_a_failed_git_fetch_names_the_pin_and_cleans_up(tmp_path):
+  root = tmp_path / 'bundle'
+  root.mkdir()
+  pin = f'demo @ git+{(tmp_path / "missing").as_uri()}@c0ffee'
+  (root / 'pins.txt').write_text(pin + '\n')
+
+  with pytest.raises(runtime_bundle.RuntimeBundleError) as error:
+    with runtime_bundle._staged_git_pins(root):
+      pytest.fail('an unreachable pin was staged')
+
+  assert pin in str(error.value)
+  assert 'does not appear to be a git repository' in str(error.value)
+  assert not (root / 'git-pins').exists()
+
+
+def test_staged_pins_are_removed_when_the_install_fails(monkeypatch, probe, tmp_path):
+  root = tmp_path / 'bundle'
+  root.mkdir()
+  (root / 'pins.txt').write_text(f'demo @ git+{probe.source.as_uri()}@{probe.commit}\n')
+  (root / 'bundle.json').write_text(json.dumps({'home': 'test-home'}))
+
+  def fail(*_args, **_kwargs):
+    assert (root / 'git-pins').is_dir()
+    raise runtime_bundle.RuntimeBundleError('installer failure')
+
+  monkeypatch.setattr(runtime_bundle, '_materialize', fail)
+  with pytest.raises(runtime_bundle.RuntimeBundleError, match='installer failure'):
+    runtime_bundle.RuntimeBundle(root, '3.12').materialize_host()
+
+  assert not (root / 'git-pins').exists()
+  assert not (root / 'host' / '.complete').exists()
+
+
+def test_host_installs_an_unreachable_git_pin_through_staging_with_its_tagged_version(
+  monkeypatch, tmp_path
+):
+  from ride.runtime_bundle_test_helper import tagged_git_bundle
+
+  frozen = tagged_git_bundle(tmp_path)
+  materialize = runtime_bundle._materialize
+
+  def install(*arguments, **keywords):
+    with frozen.source_hidden():
+      materialize(*arguments, **keywords)
+
+  monkeypatch.setattr(runtime_bundle, '_materialize', install)
+  monkeypatch.setenv('UV_NO_CACHE', '1')
+  frozen.bundle.materialize_host()
+
+  [installed] = _discover_distributions(path=[str(_site_packages(frozen.bundle.host_venv))])
+  assert installed.version == frozen.version
+  assert installed.version.startswith('1.2.4.dev1+')
+  direct_url = installed.read_text('direct_url.json')
+  assert direct_url is not None
+  assert json.loads(direct_url)['url'] == frozen.source.as_uri()
+  assert not (frozen.bundle.root / 'git-pins').exists()
+
+
+@pytest.mark.parametrize('fails', [False, True])
+def test_container_install_uses_isolated_redirects_system_trust_and_cleans_staging(
+  monkeypatch, tmp_path, fails
+):
+  root = tmp_path / ('a' * 64)
+  (root / 'wheels').mkdir(parents=True)
+  (root / 'bundle.json').write_text(json.dumps({'home': 'root-home'}))
+  url = 'ssh://git@example.invalid/private.git'
+  (root / 'pins.txt').write_text(f'demo @ git+{url}@c0ffee#subdirectory=package\n')
+  calls, _, _ = _fake_container_docker(monkeypatch, [None])
+  monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+  monkeypatch.setenv('GIT_CONFIG_KEY_0', 'credential.helper')
+  monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'host-only-secret')
+
+  def install(*_arguments, run, **_keywords):
+    assert (root / 'git-pins').is_dir()
+    run(['uv', 'pip', 'install'], description='install')
+    if fails:
+      raise runtime_bundle.RuntimeBundleError('installer failure')
+
+  monkeypatch.setattr(runtime_bundle, '_materialize', install)
+  bundle = runtime_bundle.RuntimeBundle(root, '3.12')
+  if fails:
+    with pytest.raises(runtime_bundle.RuntimeBundleError, match='installer failure'):
+      bundle.materialize_container('runtime-image', preflight=lambda: None)
+  else:
+    bundle.materialize_container('runtime-image', preflight=lambda: None)
+
+  fetch = next(command for command in calls if 'fetch' in command)
+  assert fetch[-2:] == [url, '+c0ffee:refs/commit/c0ffee']
+  trust = next(command for command in calls if 'safe.directory' in command)
+  assert trust[3:8] == ['git', 'config', '--system', '--add', 'safe.directory']
+  assert trust[-1].startswith('/bundle/git-pins/')
+  install_command = next(command for command in calls if command[-3:] == ['uv', 'pip', 'install'])
+  assert f'GIT_CONFIG_KEY_0=url.file://{trust[-1]}.insteadOf' in install_command
+  assert f'GIT_CONFIG_VALUE_0={url}' in install_command
+  assert 'GIT_CONFIG_COUNT=1' in install_command
+  assert 'host-only-secret' not in ' '.join(install_command)
+  assert calls.index(trust) < calls.index(install_command)
+  assert not (root / 'git-pins').exists()
+  assert (root / '.container-ready').exists() is not fails
+
+
+@pytest.mark.parametrize('rewrite_scope', ['global', 'environment'])
+def test_host_install_ignores_ambient_git_configuration_and_exact_url_rewrites(
+  monkeypatch, tmp_path, rewrite_scope
+):
+  from ride.runtime_bundle_test_helper import tagged_git_bundle
+
+  frozen = tagged_git_bundle(tmp_path)
+  url = 'https://example.invalid/private.git'
+  pin = f'demo @ git+{url}@{frozen.commit}'
+  manifest = runtime_bundle._manifest(frozen.bundle.python_version, [pin], [], home='probe')
+  bundle = runtime_bundle.RuntimeBundle(
+    runtime_bundle._persist_bundle(tmp_path / 'redirected', manifest, []),
+    frozen.bundle.python_version,
+  )
+  system_config = tmp_path / 'system-config'
+  system_config.write_text('[core]\neditor = ambient-system\n')
+  global_config = tmp_path / 'global-config'
+  global_config.write_text('[core]\npager = ambient-global\n')
+  monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(system_config))
+  monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(global_config))
+  monkeypatch.setenv('GIT_CONFIG_PARAMETERS', "'core.autocrlf=true'")
+  if rewrite_scope == 'global':
+    with global_config.open('a') as config:
+      config.write(f'[url "{frozen.source.as_uri()}"]\ninsteadOf = {url}\n')
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+    monkeypatch.setenv('GIT_CONFIG_KEY_0', 'credential.helper')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', 'ambient-helper')
+  else:
+    monkeypatch.setenv('GIT_CONFIG_COUNT', '2')
+    monkeypatch.setenv('GIT_CONFIG_KEY_0', f'url.{frozen.source.as_uri()}.insteadOf')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_0', url)
+    monkeypatch.setenv('GIT_CONFIG_KEY_1', 'credential.helper')
+    monkeypatch.setenv('GIT_CONFIG_VALUE_1', 'ambient-helper')
+  monkeypatch.setenv('UV_NO_CACHE', '1')
+  ambient = dict(os.environ)
+  materialize = runtime_bundle._materialize
+
+  def install(*arguments, run, **keywords):
+    config = run(['git', 'config', '--list'], description='inspect installer git configuration')
+    assert 'ambient-' not in config.stdout
+    assert 'autocrlf' not in config.stdout
+    assert frozen.source.as_uri() not in config.stdout
+    assert 'git-pins/' in config.stdout
+    with frozen.source_hidden():
+      materialize(*arguments, run=run, **keywords)
+
+  monkeypatch.setattr(runtime_bundle, '_materialize', install)
+  bundle.materialize_host()
+
+  [installed] = _discover_distributions(path=[str(_site_packages(bundle.host_venv))])
+  assert installed.version == frozen.version
+  direct_url = installed.read_text('direct_url.json')
+  assert direct_url is not None
+  assert json.loads(direct_url)['url'] == url
+  assert not (bundle.root / 'git-pins').exists()
+  assert dict(os.environ) == ambient

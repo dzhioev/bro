@@ -89,7 +89,7 @@ Refer to credentials only by kind, instance name, expected non-secret identity, 
 1. Classify the target as an installable PEP 621 project, a uv workspace, a non-Python repository, or a project owned by another packaging system.
 2. Identify the distribution and package-discovery rule that would ship the bro declaration.
 3. Inspect the active environment and lock for private, local-only, platform-specific, or otherwise unreproducible distributions.
-   `ride` freezes the entire invoking installation, not only bro's dependency closure.
+   `ride` freezes the installed bro toolset, rooted at distributions declaring `bro.` entry points, with their counted dependency closure (the ride reference, "Runtime bundles").
 4. Search installed and declared `bro.bros.<home>` entry points and existing `[tool.bro]` tables for name or behavior conflicts.
 5. Reconcile any partial bootstrap across dependencies, Git sources, entry point, module, lock, project configuration, environment, and ignored files.
 6. If the repository root has `uv.lock`, inspect the root and every workspace member, dependency group, extra, source override, and local path dependency.
@@ -103,11 +103,12 @@ Refer to credentials only by kind, instance name, expected non-secret identity, 
 ### Ask
 
 1. In an existing uv-managed Python project, ask whether the bro declaration may join its installable distribution or an installed workspace member.
-2. Use the integrated shape only when the project's package discovery, complete invoking environment, and both root-lock image phases are reproducible under the runtime image's Linux, Python, network, and no-launcher-credential conditions.
+2. Use the integrated shape only when the project's package discovery, toolset closure, and both root-lock image phases are reproducible under the runtime image's Linux, Python, network, and no-launcher-credential conditions.
 3. Propose an independent `bro_project/` sidecar when the repository uses another package manager, has ambiguous package discovery, or has no root lock and its application environment is too broad.
 4. In a viable uv workspace, choose deliberately between an installed member and a sidecar excluded from workspace discovery.
-5. Explain that a sidecar narrows only the invoking installation.
-   It does not suppress either image phase selected by a root `uv.lock`.
+5. Explain that registering the project's bros from its application distribution makes that distribution a toolset root, bringing its whole dependency closure into every runtime bundle.
+   A dedicated persona member or sidecar keeps application dependencies out when the persona distribution does not depend on them.
+   A sidecar does not suppress either image phase selected by a root `uv.lock`.
 6. If either root-lock phase cannot succeed, stop before claiming support.
    Name the missing project-bake selection or suppression seam as prerequisite framework work.
 
