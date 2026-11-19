@@ -227,16 +227,10 @@ def test_dependency_edges_follow_the_distribution_boundaries(wheels):
     _requirement_name(requirement)
     for requirement in (_metadata(wheels['bro-native-trails']).get_all('Requires-Dist') or [])
   } == {'bro'}
-  assert _project_dependencies(_ROOT / 'ride' / 'pyproject.toml') == {
-    'bro',
-    'certifi',
-    'humanize',
-    'mcp',
-    'rich',
-    'textual',
-    'tree-sitter',
-    'tree-sitter-bash',
-  }
+  assert {
+    _requirement_name(requirement)
+    for requirement in (_metadata(wheels['bro-ride']).get_all('Requires-Dist') or [])
+  } == _project_dependencies(_ROOT / 'ride' / 'pyproject.toml')
   assert _project_dependencies(_ROOT / 'dev' / 'pyproject.toml') == {
     'bro',
     'markdown-it-py',
