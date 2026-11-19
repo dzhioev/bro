@@ -11,7 +11,7 @@ from typing import ClassVar, Optional
 from bro.monitor import workspace_session_dir
 from bro.workspace.paths import runtime_base, workspace_dir, workspace_tree, workspaces_dir
 from ride.repository import Repository, as_repository, is_git_url, open_repository
-from ride.workspace.docker import project_image_tag, runtime_image_tag
+from ride.workspace.docker import runtime_image_tag
 from ride.workspace.metadata import (
   Isolation,
   WorkspaceMetadata,
@@ -70,39 +70,17 @@ KILLED = 'killed'
 ACTIVITY_FILENAME = 'activity'
 
 
-def _cleanup_image(repository: Optional[Repository]) -> Optional[str]:
-  """a locally-present session image usable to delete root-owned container files.
-
-  prefers the current image tag, then any other locally-present image of the
-  attachment. returns None when none exist (nothing to escalate the
-  removal with).
-  """
-  runtime = runtime_image_tag()
-  tag = project_image_tag(runtime, repository) if repository is not None else runtime
-  tag = tag or runtime
+def _cleanup_image() -> Optional[str]:
+  """A present runtime image usable to delete root-owned container files."""
+  tag = runtime_image_tag()
   if subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0:
     return tag
   listed = subprocess.run(
-    [
-      'docker',
-      'images',
-      tag.split(':')[0],
-      '--format',
-      '{{.Repository}}:{{.Tag}}',
-      *(
-        ['--filter', f'label=ride-attachment={repository.identity}']
-        if repository is not None and tag != runtime
-        else []
-      ),
-    ],
+    ['docker', 'images', tag.split(':')[0], '--format', '{{.Repository}}:{{.Tag}}'],
     capture_output=True,
     text=True,
   )
-  for line in listed.stdout.splitlines():
-    candidate = line.strip()
-    if len(candidate) > 0 and '<none>' not in candidate:
-      return candidate
-  return None
+  return next((line for line in listed.stdout.split() if '<none>' not in line), None)
 
 
 def _remove_container_dir(path: Path, image: Optional[str]) -> None:
@@ -186,7 +164,7 @@ def hold_workspace_removal(path: Path, mounts: set[str]) -> Generator[None]:
 
 def remove_workspace_path(path: Path) -> None:
   """Remove a workspace whose metadata cannot select an isolation subclass."""
-  _remove_container_dir(path, _cleanup_image(None))
+  _remove_container_dir(path, _cleanup_image())
 
 
 class Workspace(ABC):
@@ -468,11 +446,7 @@ class BoxedWorkspace(Workspace):
     del force
 
   def _remove_dir(self) -> None:
-    repository = None
-    if self.repo is not None:
-      with contextlib.suppress(RuntimeError, ValueError):
-        repository = self.repository
-    _remove_container_dir(self.path, _cleanup_image(repository))
+    _remove_container_dir(self.path, _cleanup_image())
 
 
 _ISOLATIONS: dict[Isolation, type[Workspace]] = {

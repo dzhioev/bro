@@ -90,12 +90,12 @@ Classify each changed file by how the repository reaches it:
   `cli('<command>')` commands, `mount(toolset, '<tool>')` names, feature names, `[[…]]` spell markers in prompt text, and `{{…}}` directive vocabulary.
   Read each string-keyed call in the repository's persona modules against the new declaration.
 - **Declarative schemas** — what the framework reads as data:
-  `[tool.bro]` and its sub-tables (`bro/workspace/project.py` and each section's owner),
+  `.bro/config.toml` and its owner tables (`bro/workspace/repository.py` and each section's owner),
   the host config (`bro/base/host_config.py`),
   credential kinds and material shapes (`bro/base/registry.json`, `bro/setup/AGENTS.md`),
   the entry-point groups the repository contributes to (`bro/reference/extending.md`, "Entry-point groups"),
   and the operations registry (`bro/oops/targets.py`).
-  Hold the repository's `pyproject.toml`, entry points, registry module, and credential material shapes against the new schema.
+  Hold the repository's `.bro/config.toml`, `pyproject.toml`, entry points, registry module, and credential material shapes against the new schema.
 - **Copied files** — a file the repository holds as a copy of a packaged pattern rather than reading it from the wheel (a CodeBuild buildspec, a workflow, a Dockerfile fragment).
 - **Inherited prompts and spells** — `bro/prompts/**`, `bros/*/spells/*.md`, and the system prompts of the personas the repository's bros derive from.
   A changed instruction a persona inherits may now contradict or duplicate the repository's own prompt text and repository instructions;

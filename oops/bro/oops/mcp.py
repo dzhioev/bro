@@ -57,7 +57,7 @@ def _operations_state() -> OperationsState:
   if registry is None:
     raise ValueError(
       'this repository declares no deploy targets; configure '
-      '[tool.bro.devoops] target-registry in pyproject.toml'
+      '[devoops] target-registry in .bro/config.toml'
     )
   return OperationsState(root=root, registry=registry)
 

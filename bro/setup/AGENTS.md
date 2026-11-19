@@ -5,12 +5,11 @@ Run any script with `--help` for flags.
 
 ## Setup
 
-A repository operated by `ride` may provide a root `setup.sh` to provision its project environment;
-an absent script is logged and skipped.
+A repository operated by `ride` may declare its provisioning command in `.bro/config.toml`:
+see `bro/reference/ride.md`, "Repository configuration", for the contract.
 Session machinery comes from the invoking installation's frozen runtime bundle in both modes, so the project environment need not provide `ride` or `bro`.
 A setup script can run `uv sync`, activate the project environment only for its own provisioning process, and call `bro.dev.install`;
 managed sessions keep that environment off PATH.
-In containers, `RIDE_VENV_MANIFEST` names the optional project's staged manifests so setup can reuse the bake until the tree diverges.
 
 The framework checkout's own bring-up is `./setup.sh` (root `AGENTS.md`, "Development");
 its prerequisites are documented in `README.md`.
@@ -18,10 +17,8 @@ After syncing, it dispatches installed harness runtime setup through `python -m 
 
 ### Worktrees
 
-An unboxed clone's `setup.sh` may create its `.venv`.
-Boxed workspaces receive an optional project dependency bake at `/opt/project-venv`;
-setup syncs it once the workspace manifests move away from the staged baseline.
-Neither environment enters the session PATH.
+A clone's provisioning command may create its `.venv` in either isolation.
+That environment does not enter the session PATH.
 Never run `uv sync` against the main checkout from inside another clone:
 editable installs record absolute source paths.
 

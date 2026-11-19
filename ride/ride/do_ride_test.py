@@ -165,6 +165,9 @@ class TestRunSession:
     party_member=False,
     harness_code=0,
     harness_effect=None,
+    resume=False,
+    hooks=None,
+    persona_effect=None,
   ):
     monkeypatch.chdir(tmp_path)
     if party_member:
@@ -176,8 +179,9 @@ class TestRunSession:
       do_ride, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
     )
     declaration = MagicMock()
+    declaration.provision_workspace.side_effect = persona_effect
     monkeypatch.setattr(do_ride, 'create_bro', lambda _name: declaration)
-    monkeypatch.setattr(do_ride, '_install_credential_hooks', lambda: None)
+    monkeypatch.setattr(do_ride, '_install_credential_hooks', hooks or (lambda: None))
     harness = MagicMock()
     if harness_effect is None:
       harness.run_session.return_value = harness_code
@@ -190,12 +194,118 @@ class TestRunSession:
       hold='attended',
       resolved_recipe=_spec().resolved_recipe,
       solo=False,
-      resume=False,
+      resume=resume,
       bro='dev',
       prompt=None,
       activity_file=tmp_path / 'session' / 'activity',
     )
     return do_ride.run_session(harness, run), harness, declaration
+
+  @pytest.mark.parametrize('isolation', ['boxed', 'unboxed'])
+  def test_declared_command_runs_on_launch_and_resume_after_hooks(
+    self, monkeypatch, tmp_path, capfd, isolation
+  ):
+    monkeypatch.setenv('RIDE_ISOLATION', isolation)
+    config = tmp_path / '.bro' / 'config.toml'
+    config.parent.mkdir()
+    config.write_text(
+      'provision-command = \'test -n "$RIDE_RUNNER_PID" && '
+      'test "$BRO_HOLD" = attended && '
+      'test "$(pwd)" = "$EXPECTED_ROOT" && '
+      '! read -r answer && '
+      'printf "%s\\n" "$HOOK_VALUE" >> provisioned && '
+      'printf "setup output\\n" && printf "setup error\\n" >&2\'\n'
+    )
+    observed = []
+
+    def hooks():
+      assert os.environ['RIDE_WORKSPACE'] == 'w'
+      monkeypatch.setenv('HOOK_VALUE', 'session-identity')
+      monkeypatch.setenv('EXPECTED_ROOT', str(tmp_path))
+
+    def persona(root):
+      observed.append((root / 'provisioned').read_text())
+
+    def harness(run):
+      assert len(observed) == (2 if run.resume else 1)
+      return 0
+
+    for resume in (False, True):
+      code, driver, _ = self._run(
+        monkeypatch,
+        tmp_path,
+        resume=resume,
+        hooks=hooks,
+        persona_effect=persona,
+        harness_effect=harness,
+      )
+      assert code == 0
+      driver.prepare_session.assert_called_once()
+    assert observed == ['session-identity\n', 'session-identity\nsession-identity\n']
+    output = capfd.readouterr()
+    assert output.out == ''
+    assert output.err.count('setup output') == 2
+    assert output.err.count('setup error') == 2
+
+  def test_resume_reads_the_clones_updated_configuration(self, monkeypatch, tmp_path):
+    config = tmp_path / '.bro' / 'config.toml'
+    config.parent.mkdir()
+    config.write_text('provision-command = "touch provisioned"\n')
+    assert self._run(monkeypatch, tmp_path)[0] == 0
+    assert (tmp_path / 'provisioned').is_file()
+    config.write_text('provision-command = "exit 23"\n')
+    code, harness, declaration = self._run(monkeypatch, tmp_path, resume=True)
+    assert code == 1
+    declaration.provision_workspace.assert_not_called()
+    harness.run_session.assert_not_called()
+
+  def test_a_setup_script_without_a_declaration_does_not_run(self, monkeypatch, tmp_path):
+    script = tmp_path / 'setup.sh'
+    script.write_text('#!/bin/sh\ntouch filename-hook-ran\n')
+    script.chmod(0o755)
+    code, harness, _ = self._run(monkeypatch, tmp_path)
+    assert code == 0
+    harness.run_session.assert_called_once()
+    assert not (tmp_path / 'filename-hook-ran').exists()
+
+  @pytest.mark.parametrize('resume', [False, True])
+  def test_failing_command_stops_before_persona_and_harness(
+    self, monkeypatch, tmp_path, caplog, resume
+  ):
+    config = tmp_path / '.bro' / 'config.toml'
+    config.parent.mkdir()
+    config.write_text('provision-command = "exit 23"\n')
+    code, harness, declaration = self._run(monkeypatch, tmp_path, resume=resume)
+    assert code == 1
+    declaration.provision_workspace.assert_not_called()
+    harness.prepare_session.assert_not_called()
+    harness.run_session.assert_not_called()
+    assert 'provisioning command failed with exit status 23: exit 23' in caplog.text
+
+  def test_refused_configuration_stops_before_persona_and_harness(
+    self, monkeypatch, tmp_path, caplog
+  ):
+    config = tmp_path / '.bro' / 'config.toml'
+    config.parent.mkdir()
+    config.write_text('unknown = true\n')
+    code, harness, declaration = self._run(monkeypatch, tmp_path)
+    assert code == 1
+    declaration.provision_workspace.assert_not_called()
+    harness.prepare_session.assert_not_called()
+    harness.run_session.assert_not_called()
+    assert str(config) in caplog.text and 'unknown' in caplog.text
+
+  @pytest.mark.parametrize('repo, member', [(False, False), (True, True)])
+  def test_detached_and_joined_sessions_do_not_read_repository_configuration(
+    self, monkeypatch, tmp_path, repo, member
+  ):
+    config = tmp_path / '.bro' / 'config.toml'
+    config.parent.mkdir()
+    config.write_text('unknown = true\n')
+    code, harness, declaration = self._run(monkeypatch, tmp_path, repo=repo, party_member=member)
+    assert code == 0
+    declaration.provision_workspace.assert_not_called()
+    harness.run_session.assert_called_once()
 
   def test_the_session_environment_precedes_the_harness_run(self, monkeypatch, tmp_path):
     code, harness, declaration = self._run(monkeypatch, tmp_path, harness_code=7)

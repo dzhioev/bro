@@ -248,7 +248,7 @@ def test_scope_and_summon_lower_the_selected_recipe_without_material_reads(
   reading = Reading(
     Configuration.parse({}), {}, installation, settings=HomeSettings(summon_harness='bro')
   )
-  monkeypatch.setattr(Reading, 'take', lambda repository: reading)
+  monkeypatch.setattr(Reading, 'take', lambda: reading)
   monkeypatch.setattr(credentials, 'STORE_DIR', str(tmp_path))
   if present:
     (tmp_path / 'creds').mkdir()

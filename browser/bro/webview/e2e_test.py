@@ -1139,8 +1139,7 @@ def _run_route(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image),
-    workspace.repository,
+    ContainerRuntime(env.image, env.runtime_bundle_hash),
   )
   monkeypatch.setenv('HOME', str(env.home))
   launch = DockerLaunchSpec(
@@ -1168,7 +1167,6 @@ def _run_route(
       workspace=workspace,
       bro=target,
       mission=_root_mission(
-        workspace.repository,
         grants=grants
         if grants is not None
         else (('webview', 'webview.vnc') if vnc else ('webview',) if allowed else ()),

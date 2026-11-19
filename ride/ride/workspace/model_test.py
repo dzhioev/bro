@@ -36,7 +36,7 @@ class TestCleanupImage:
   def test_prefers_current_tag_when_present(self, monkeypatch):
     monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'example/session:cur')
     monkeypatch.setattr(model.subprocess, 'run', lambda *a, **k: _FakeProc(returncode=0))
-    assert model._cleanup_image(None) == 'example/session:cur'
+    assert model._cleanup_image() == 'example/session:cur'
 
   def test_falls_back_to_an_image_from_the_same_repository(self, monkeypatch):
     monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'example/session:cur')
@@ -47,7 +47,7 @@ class TestCleanupImage:
       return _FakeProc(returncode=0, stdout='example/session:<none>\nexample/session:abc123\n')
 
     monkeypatch.setattr(model.subprocess, 'run', fake_run)
-    assert model._cleanup_image(None) == 'example/session:abc123'
+    assert model._cleanup_image() == 'example/session:abc123'
 
   def test_none_when_no_image(self, monkeypatch):
     monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'example/session:cur')
@@ -58,7 +58,7 @@ class TestCleanupImage:
       return _FakeProc(returncode=0, stdout='')
 
     monkeypatch.setattr(model.subprocess, 'run', fake_run)
-    assert model._cleanup_image(None) is None
+    assert model._cleanup_image() is None
 
 
 class TestRemoveContainerDir:
@@ -134,7 +134,7 @@ class TestRemoveContainerDir:
 
 class TestBoxedWorkspaceRemove:
   def test_removes_the_whole_workspace_dir_with_the_cleanup_image(self, monkeypatch, tmp_path):
-    monkeypatch.setattr(model, '_cleanup_image', lambda _repo: 'example/session:img')
+    monkeypatch.setattr(model, '_cleanup_image', lambda: 'example/session:img')
     removed = {}
     monkeypatch.setattr(
       model,
@@ -358,7 +358,7 @@ class TestDetachedWorkspace:
     repo.mkdir()
     workspace = Workspace.create('ws', repo, Isolation.BOXED)
     repo.rmdir()
-    monkeypatch.setattr(model, '_cleanup_image', lambda _repo: None)
+    monkeypatch.setattr(model, '_cleanup_image', lambda: None)
     with pytest.raises(RuntimeError, match='no longer exists.*--force'):
       workspace.remove()
     workspace.remove(force=True)

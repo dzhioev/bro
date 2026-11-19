@@ -91,7 +91,6 @@ from ride.workspace.docker import (
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import AttachmentMismatch, IsolationMismatch, SessionBusy, Workspace
 from ride.workspace.store import ScopedSecrets, materialize_scoped_store
-from ride.workspace.worktrees import provision_workspace
 
 _SESSION_INPUT_FIELDS = frozenset(
   {
@@ -621,8 +620,6 @@ def started_party_launch(
     if branch is None:
       raise ValueError('attached unboxed workspace has no recorded branch')
     ensure_clone(repository, tree, branch, base_ref)
-    if not provision_workspace(tree):
-      raise RuntimeError(f'failed to provision workspace {tree}')
 
   return prepared_unboxed_session_launch(
     spec,
@@ -839,7 +836,7 @@ def _prepare_session(
         if commit is None:
           raise ValueError(f'existence check: into: cannot resolve {spec.into!r}')
         repository = replace(repository, tree_ref=commit)
-      reading = Reading.take(repository)
+      reading = Reading.take()
       resolved = None
       if spec.authority_request:
         requested = load_request(spec.authority_request, reading.syntax)
@@ -1002,7 +999,7 @@ def _prepare_session(
         if base_ref is None:
           log.error('cannot read HEAD of %s', repository.git_dir)
           return 1
-      container_runtime = ContainerRuntimeResolver(runtime_bundle, repository)
+      container_runtime = ContainerRuntimeResolver(runtime_bundle)
       human_env = human_git_identity_env(repository)
       workspace = Workspace.ensure(
         spec.name,

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from bro.authority.authority import Authority
 from bro.authority.patterns import Descriptor
@@ -18,19 +18,7 @@ from bro.bro import BaseBro
 from bro.harness import Harness
 from bro.llm import providers
 from bro.workspace.installation import installation_home
-from bro.workspace.project import project_config_from_text
 from bro.workspace.settings import HomeSettings, home_settings
-
-if TYPE_CHECKING:
-  from ride.repository import Repository
-
-
-def _freeze(value: Any) -> Any:
-  if isinstance(value, dict):
-    return MappingProxyType({key: _freeze(item) for key, item in value.items()})
-  if isinstance(value, list):
-    return tuple(_freeze(item) for item in value)
-  return value
 
 
 def _object(value: object, where: str, allowed: set[str] | None = None) -> dict[str, Any]:
@@ -232,8 +220,6 @@ class Reading:
   configuration: Configuration
   store_defaults: Mapping[str, str]
   installation: Installation
-  attachment: host_config.Attachment | None = None
-  project: Mapping[str, Any] = field(default_factory=dict)
   home_policy: Policy = Policy()
   settings: HomeSettings = HomeSettings()
   home: str = field(default_factory=installation_home)
@@ -249,7 +235,6 @@ class Reading:
         )
       ),
     )
-    object.__setattr__(self, 'project', _freeze(dict(self.project)))
     if self.home_policy == Policy() and self.settings != HomeSettings():
       object.__setattr__(
         self, 'home_policy', Policy(self.settings, f'{self.home} home settings', home_settings=True)
@@ -259,14 +244,11 @@ class Reading:
   @classmethod
   def take(
     cls,
-    repository: Repository | None = None,
     *,
     store: Path | None = None,
     host: Path | None = None,
     installation: Installation | None = None,
   ) -> Reading:
-    from ride.repository import attachment_identities
-
     home = installation_home()
     installed = installation or Installation.take()
     configuration = Configuration.parse(
@@ -282,15 +264,8 @@ class Reading:
     defaults = credentials.parse_picks(data.get('defaults', []), where=str(index), field='defaults')
     home = installation_home()
     settings = home_settings(home)
-    project = {}
-    attachment = None
-    if repository is not None:
-      attachment = attachment_identities(repository.identity)
-      content = repository.read_file('pyproject.toml')
-      if content is not None:
-        project = project_config_from_text(content.decode(), repository.identity).sections
     policy = Policy(settings, source=f'{home} home settings', home_settings=True)
-    result = cls(configuration, defaults, installed, attachment, project, policy, settings, home)
+    result = cls(configuration, defaults, installed, policy, settings, home)
     return result
 
   @property

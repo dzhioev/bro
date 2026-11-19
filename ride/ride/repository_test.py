@@ -4,9 +4,7 @@ from pathlib import Path
 import pytest
 
 from bro.base.git_url import normalize_git_url
-from bro.base.host_config import Attachment
 from ride.repository import (
-  attachment_identities,
   clean_managed_mirrors,
   mirror_key,
   open_repository,
@@ -47,46 +45,6 @@ class TestMirrorKey:
       resolve_repository('repository-name')
 
 
-class TestAttachmentIdentities:
-  def test_a_checkout_carries_its_path_and_its_origin_url(self, tmp_path):
-    checkout = tmp_path / 'work'
-    subprocess.run(['git', 'init', '-q', checkout], check=True)
-    _git(checkout, 'remote', 'add', 'origin', 'git@github.com:foo/api.git')
-
-    assert attachment_identities(str(checkout)) == Attachment(
-      path=str(checkout), url='git@github.com:foo/api.git'
-    )
-
-  def test_an_aliased_origin_carries_the_url_git_rewrites_it_to(self, tmp_path):
-    checkout = tmp_path / 'work'
-    subprocess.run(['git', 'init', '-q', checkout], check=True)
-    _git(checkout, 'remote', 'add', 'origin', 'gh:foo/api.git')
-    _git(checkout, 'config', 'url.git@github.com:.insteadOf', 'gh:')
-
-    assert attachment_identities(str(checkout)) == Attachment(
-      path=str(checkout), url='git@github.com:foo/api.git'
-    )
-
-  def test_a_local_origin_contributes_no_url(self, tmp_path):
-    work, upstream, _ = _upstream(tmp_path)
-    assert _git(work, 'remote', 'get-url', 'origin') == str(upstream)
-
-    assert attachment_identities(str(work)) == Attachment(path=str(work))
-
-  @pytest.mark.parametrize('state', ['originless', 'absent'])
-  def test_a_checkout_without_a_reachable_origin_carries_its_path_alone(self, tmp_path, state):
-    checkout = tmp_path / 'work'
-    if state == 'originless':
-      subprocess.run(['git', 'init', '-q', checkout], check=True)
-
-    assert attachment_identities(str(checkout)) == Attachment(path=str(checkout))
-
-  def test_a_url_attachment_names_itself(self):
-    assert attachment_identities('https://github.com/foo/api.git') == Attachment(
-      url='https://github.com/foo/api.git'
-    )
-
-
 class TestRecordedOrigin:
   def test_the_resolved_network_origin_is_sanitized(self, tmp_path):
     checkout = tmp_path / 'work'
@@ -120,8 +78,7 @@ class TestManagedMirror:
     assert first.identity == url
     assert first.is_url
     assert first.default_base == first_commit
-    assert first.read_file('value.txt') == b'one\n'
-    assert first.project_config().sections == {}
+    assert _git(first.git_dir, 'show', f'{first.tree_ref}:value.txt') == 'one'
     assert _git(first.git_dir, 'config', '--get', 'gc.auto') == '0'
     assert _git(first.git_dir, 'config', '--get', 'remote.origin.url') == url
     assert _git(first.git_dir, 'symbolic-ref', 'refs/remotes/origin/HEAD') == (
@@ -137,7 +94,7 @@ class TestManagedMirror:
     second = resolve_repository(url)
     assert second.git_dir == first.git_dir
     assert second.default_base == second_commit
-    assert second.read_file('value.txt') == b'two\n'
+    assert _git(second.git_dir, 'show', f'{second.tree_ref}:value.txt') == 'two'
     assert _git(second.git_dir, 'cat-file', '-t', first_commit) == 'commit'
 
   def test_fetch_never_prunes_disappeared_refs(self, tmp_path, monkeypatch):

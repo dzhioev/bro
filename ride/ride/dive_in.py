@@ -16,7 +16,6 @@ from ride.authority_reading import Reading
 from ride.cli import reports_runtime_errors
 from ride.flags import add_forwarded_flags, extract_forwarded_argv
 from ride.harness import get_harness
-from ride.repository import as_repository
 from ride.scope import (
   LaunchScopeError,
   launch_recipe,
@@ -79,7 +78,6 @@ def _prefetch_task(system: brog_system.System, task_ref: str) -> tuple[brog_mode
 
 
 def _task_system(
-  repo: Path,
   cred: list[str],
   grant: list[str],
   revoke: list[str],
@@ -92,7 +90,7 @@ def _task_system(
   LLM selection shape the same scope the session's store hydrates. every read
   carries the launch's error surface (`launch_scope_errors`), the deferred ones
   included: the backend re-reads the config per operation, past this call."""
-  reading = Reading.take(as_repository(repo))
+  reading = Reading.take()
   bro_name = bro if bro is not None else reading.default_bro
   driver = get_harness(harness)
 
@@ -101,8 +99,7 @@ def _task_system(
       scoped_secrets(
         bro_name,
         driver.scope_recipe(),
-        attachment=str(repo),
-        recipe=launch_recipe(driver, str(repo), bro_name, llm),
+        recipe=launch_recipe(driver, bro_name, llm),
         cred=cred,
         grant=grant,
         revoke=revoke,
@@ -136,7 +133,7 @@ def dive_in(
   task prefetch to the same scope (`_task_system`)."""
   repo = project_root() if repo is None else repo
   try:
-    reading = Reading.take(as_repository(repo))
+    reading = Reading.take()
     bro_name = bro if bro is not None else reading.default_bro
     harness = reading.resolve_harness(harness, target=bro_name)
     get_harness(harness)
@@ -155,7 +152,6 @@ def dive_in(
     task_ref = task
     try:
       system = _task_system(
-        repo,
         cred or [],
         grant or [],
         revoke or [],
