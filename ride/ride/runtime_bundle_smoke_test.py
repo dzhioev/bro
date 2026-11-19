@@ -1,9 +1,4 @@
-"""live check of the materializer container's process-tethered lifetime.
-
-Drives the real host docker daemon: the process holding a materializer container
-is SIGKILLed, so no Python teardown runs, and the daemon on its own must observe
-the container exit and remove it.
-"""
+"""Live Docker coverage of runtime materialization and materializer lifetime."""
 
 import contextlib
 import os
@@ -96,3 +91,71 @@ def test_killing_the_holder_ends_and_removes_the_container():
         ['docker', 'wait', container_id], capture_output=True, timeout=_REMOVAL_TIMEOUT
       )
       _assert_removed(container_id)
+
+
+def test_git_pins_materialize_on_host_and_as_container_root_with_history(monkeypatch):
+  import json
+
+  import ride.runtime_bundle as runtime_bundle
+  from ride.runtime_bundle_test_helper import tagged_git_bundle
+
+  with host_docker.scratch_root('git-pins') as root:
+    frozen = tagged_git_bundle(root)
+    bundle = frozen.bundle
+    materialize = runtime_bundle._materialize
+    observed: list[Path] = []
+
+    def install(*arguments, **keywords):
+      repositories = list((bundle.root / 'git-pins').iterdir())
+      assert len(repositories) == 1
+      assert repositories[0].stat().st_uid == os.getuid()
+      observed.extend(repositories)
+      with frozen.source_hidden():
+        materialize(*arguments, **keywords)
+
+    monkeypatch.setattr(runtime_bundle, '_materialize', install)
+    monkeypatch.setenv('UV_NO_CACHE', '1')
+    bundle.materialize_host()
+    assert not (bundle.root / 'git-pins').exists()
+    image = workspace_docker.runtime_image_tag(bundle.python_version)
+    workspace_docker.ensure_runtime_image(image, bundle.python_version, prune=False)
+    with contextlib.ExitStack() as cleanup:
+      cleanup.callback(
+        subprocess.run,
+        ['docker', 'volume', 'rm', '-f', bundle.container_volume],
+        capture_output=True,
+      )
+      bundle.materialize_container(image, preflight=lambda: None)
+      assert not (bundle.root / 'git-pins').exists()
+      assert len(observed) == 2
+      script = """\
+import importlib.metadata
+import json
+import os
+distribution = importlib.metadata.distribution('demo')
+print(json.dumps({'uid': os.getuid(), 'version': distribution.version,
+                  'source': json.loads(distribution.read_text('direct_url.json'))}))
+"""
+      installed = subprocess.run(
+        [
+          'docker',
+          'run',
+          '--rm',
+          '--entrypoint',
+          '/var/ride/runtime/venv/bin/python',
+          '-v',
+          f'{bundle.container_volume}:/var/ride/runtime:ro',
+          image,
+          '-c',
+          script,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+      )
+      result = json.loads(installed.stdout)
+      assert result['uid'] == 0
+      assert result['uid'] != os.getuid(), 'the host-only test must launch as a non-root user'
+      assert result['version'] == frozen.version
+      assert result['source']['url'] == frozen.source.as_uri()
+      assert result['source']['vcs_info']['commit_id'] == frozen.commit

@@ -38,6 +38,10 @@ A distribution contributes through these `[project.entry-points]` groups of its 
 - `bro.trail_formats` — trail-format objects, `<name> = "<module>:<object>"`;
   each object is a `bro.trails.backends.TrailFormat` whose `name` matches the entry
 
+The `bro.` entry-point namespace defines the runtime toolset's roots:
+any installed distribution contributing an entry in a group with that prefix joins the bundle, with its counted dependency closure (the ride reference, "Runtime bundles").
+A group's target need not be imported or selected to make its distribution a root.
+
 Entry points are installation metadata:
 sync the environment (`uv sync`) after adding or removing one, while editing an already-declared target module needs no reinstall.
 Name-keyed groups load only the matching entry, except file-type identification (`bro.files.registry.identify`), which loads every installed type to match content.
