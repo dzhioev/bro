@@ -33,6 +33,7 @@ def _owner(
     mission=mission,
     workspace='workspace',
     tree=tmp_path,
+    tree_view=tmp_path,
     type=type,
     expected=False,
     artifact_view=None,

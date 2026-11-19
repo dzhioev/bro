@@ -1,12 +1,13 @@
 import importlib.metadata
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 import bro.worker_types as worker_types
-from bro.worker_types import LaunchRequest, WorkerType
+from bro.worker_types import LaunchRequest, PeerDescription, WorkerType
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
 
 
@@ -112,10 +113,57 @@ def test_loading_the_bro_type_does_not_import_broker_machinery():
   assert result.returncode == 0, result.stderr
 
 
-def test_tree_path_rejects_an_escape(tmp_path):
-  with pytest.raises(ValueError, match='escapes'):
-    worker_types.tree_path(tmp_path, '../outside')
-  assert worker_types.tree_path(tmp_path, 'inside') == Path(tmp_path / 'inside')
+@pytest.fixture
+def peer(tmp_path):
+  tree = tmp_path / 'tree'
+  tree.mkdir()
+  return PeerDescription('mission', 'workspace', tree, Path('/tree'), 'bro', False, None, (), 0)
+
+
+def test_wire_path_maps_a_container_view(peer):
+  assert worker_types.resolve_wire_path(peer, '/tree/clone/report') == peer.tree / 'clone/report'
+
+
+@pytest.mark.parametrize('path', ['relative', '/etc/hosts', '/tree/../outside', '/treehouse/file'])
+def test_wire_path_rejects_invalid_paths_and_names_them(peer, path):
+  with pytest.raises(ValueError) as raised:
+    worker_types.resolve_wire_path(peer, path)
+  assert repr(path) in str(raised.value)
+
+
+@pytest.mark.parametrize('boxed', [False, True])
+def test_wire_path_refuses_a_symlink_outside_the_tree(peer, tmp_path, boxed):
+  (peer.tree / 'link').symlink_to(tmp_path)
+  if not boxed:
+    peer = replace(peer, tree_view=peer.tree)
+  path = str(peer.tree_view / 'link/file')
+  with pytest.raises(ValueError, match='escapes the tree') as raised:
+    worker_types.resolve_wire_path(peer, path)
+  assert repr(path) in str(raised.value)
+
+
+def test_unboxed_wire_path_accepts_a_symlink_to_the_runtime_root(peer, tmp_path):
+  alias = tmp_path / 'alias'
+  alias.symlink_to(peer.tree, target_is_directory=True)
+  peer = replace(peer, tree_view=peer.tree)
+  assert worker_types.resolve_wire_path(peer, str(alias / 'report')) == peer.tree / 'report'
+
+
+@pytest.mark.parametrize('path', ['/tree/loop', '/tree/nul\0path'])
+def test_wire_path_resolution_errors_name_the_peer_path(peer, path):
+  (peer.tree / 'loop').symlink_to('loop')
+  with pytest.raises(ValueError) as raised:
+    worker_types.resolve_wire_path(peer, path)
+  assert repr(path) in str(raised.value)
+
+
+def test_wire_path_resolves_a_symlinked_tree(peer, tmp_path):
+  alias = tmp_path / 'alias'
+  alias.symlink_to(peer.tree, target_is_directory=True)
+  assert (
+    worker_types.resolve_wire_path(replace(peer, tree=alias), '/tree/report')
+    == peer.tree / 'report'
+  )
 
 
 _CONTAINER_FILES = {

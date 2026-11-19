@@ -10,9 +10,10 @@ from bro.authority.records import dump_values
 from bro.authority.rules import Mission, Prepared
 from bro.monitor.trail_pointer import read, session_pointer
 from bro.worker_types import Extension, PeerDescription, UnattributablePeer
-from bro.workspace.paths import workspace_dir
+from bro.workspace.paths import CONTAINER_TREE, workspace_dir
 from ride import pending_launch
 from ride.authority_reading import SummonAllowance
+from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 if TYPE_CHECKING:
@@ -123,6 +124,7 @@ class PeerFacts:
       mission=mission,
       workspace=workspace,
       tree=tree,
+      tree_view=CONTAINER_TREE if Workspace.open(workspace).isolation == Isolation.BOXED else tree,
       type=facts.type,
       expected=facts.expected,
       artifact_view=facts.artifact_view,

@@ -1,5 +1,6 @@
 import hashlib
 import os
+from pathlib import Path
 
 import pytest
 
@@ -181,13 +182,30 @@ class TestClient:
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
     minted = artifact.mint_artifact('out/bundle')
     assert minted == artifact.Minted(ref=REF, size=7)
-    assert client.calls == [(artifact.MINT, {'path': 'out/bundle'}, artifact.DEFAULT_TIMEOUT)]
+    assert client.calls == [
+      (artifact.MINT, {'path': str(Path.cwd() / 'out/bundle')}, artifact.DEFAULT_TIMEOUT)
+    ]
+
+  @pytest.mark.parametrize('path', ['link/file', 'link/../report', '/etc/hosts'])
+  def test_mint_only_absolutizes_lexically(self, monkeypatch, tmp_path, path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'link').symlink_to(tmp_path / 'absent', target_is_directory=True)
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
+
+    artifact.mint_artifact(path)
+
+    expected = {
+      'link/file': tmp_path / 'link/file',
+      'link/../report': tmp_path / 'report',
+      '/etc/hosts': Path('/etc/hosts'),
+    }
+    assert client.calls[0][1]['path'] == str(expected[path])
 
   def test_mint_sends_an_explicit_name(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
     artifact.mint_artifact('.', name='bundle')
     assert client.calls == [
-      (artifact.MINT, {'path': '.', 'name': 'bundle'}, artifact.DEFAULT_TIMEOUT)
+      (artifact.MINT, {'path': str(Path.cwd()), 'name': 'bundle'}, artifact.DEFAULT_TIMEOUT)
     ]
 
   def test_fetch_sends_the_kind_and_returns_the_path(self, monkeypatch):
@@ -280,7 +298,7 @@ class TestCli:
   def test_mint_forwards_the_name(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
     assert artifact.main(['artifact', 'mint', '.', '--name', 'bundle']) == 0
-    assert client.calls[0][1] == {'path': '.', 'name': 'bundle'}
+    assert client.calls[0][1] == {'path': str(Path.cwd()), 'name': 'bundle'}
 
   def test_fetch_prints_the_path(self, monkeypatch, capsys):
     _serve(monkeypatch, {'outcome': 'ok', 'value': {'path': '/var/ride/artifacts/x'}})

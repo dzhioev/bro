@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -29,9 +30,11 @@ def tree(tmp_path, monkeypatch):
   """a workspace with a benchmark project and a docker-environment job config, on a
   host whose compose plugin answers."""
   monkeypatch.setattr(job, 'compose_missing', lambda: False)
-  (tmp_path / 'benchmark').mkdir()
-  (tmp_path / 'benchmark' / 'pyproject.toml').write_text('[project]\n')
-  config = tmp_path / CONFIG
+  clone = tmp_path / 'clone'
+  clone.mkdir()
+  (clone / 'benchmark').mkdir()
+  (clone / 'benchmark' / 'pyproject.toml').write_text('[project]\n')
+  config = clone / CONFIG
   config.parent.mkdir(parents=True)
   config.write_text('{"datasets": []}\n')
   return tmp_path
@@ -42,6 +45,7 @@ def _owner(tree: Path, *, depth: int = 0) -> PeerDescription:
     mission=ROOT,
     workspace='workspace',
     tree=tree,
+    tree_view=tree,
     type='bro',
     expected=False,
     artifact_view=None,
@@ -54,7 +58,7 @@ def _request(tree: Path, args: dict, *, depth: int = 0) -> LaunchRequest:
   return LaunchRequest(
     id='R',
     type=job.BENCHMARK,
-    args=args,
+    args={'project': str(tree / 'clone/benchmark'), **args},
     owner=_owner(tree, depth=depth),
     requested_talk=frozenset(),
     timeout=job.DEFAULT_TIMEOUT,
@@ -92,16 +96,16 @@ class TestBenchmarkType:
     monkeypatch.setenv('UV_PROJECT_ENVIRONMENT', '/wrong/shared-environment')
     monkeypatch.setenv('VIRTUAL_ENV', '/the/launcher/venv')
 
-    run = _worker_type().launch(_request(tree, {'config': CONFIG}))
+    run = _worker_type().launch(_request(tree, {'config': str(tree / 'clone' / CONFIG)}))
 
     assert run.command.command == (
       'uv',
       'run',
       '--project',
-      str((tree / 'benchmark').resolve()),
+      str((tree / 'clone/benchmark').resolve()),
       'bro.benchmark.job',
       '-c',
-      str((tree / CONFIG).resolve()),
+      str((tree / 'clone' / CONFIG).resolve()),
       '--jobs-dir',
       OUTPUT_DIRECTORY,
     )
@@ -113,49 +117,80 @@ class TestBenchmarkType:
     assert 'VIRTUAL_ENV' not in run.command.env
 
   def test_job_builds_for_a_summoned_owner(self, tree):
-    run = _worker_type().launch(_request(tree, {'config': CONFIG}, depth=1))
+    run = _worker_type().launch(_request(tree, {'config': str(tree / 'clone' / CONFIG)}, depth=1))
     assert run.command.command[0] == 'uv'
 
+  def test_container_paths_map_to_the_clone(self, tree):
+    request = _request(
+      tree, {'config': f'/tree/clone/{CONFIG}', 'project': '/tree/clone/benchmark'}
+    )
+    request = replace(request, owner=replace(request.owner, tree_view=Path('/tree')))
+
+    run = _worker_type().launch(request)
+
+    assert run.command.command[run.command.command.index('--project') + 1] == str(
+      tree / 'clone/benchmark'
+    )
+    assert run.command.command[run.command.command.index('-c') + 1] == str(tree / 'clone' / CONFIG)
+
+  @pytest.mark.parametrize('project', [None, '', 123])
+  def test_invalid_project_is_denied(self, tree, project):
+    denial = _denial(tree, {'config': str(tree / 'clone' / CONFIG), 'project': project})
+    assert "non-empty string 'project'" in denial
+
+  @pytest.mark.parametrize('project', ['relative/project', '/outside/project'])
+  def test_project_paths_are_confined_to_the_tree(self, tree, project):
+    denial = _denial(tree, {'config': str(tree / 'clone' / CONFIG), 'project': project})
+    assert 'benchmark project:' in denial
+    assert repr(project) in denial
+
+  def test_missing_project_is_denied(self, tree):
+    request = _request(tree, {'config': str(tree / 'clone' / CONFIG)})
+    del request.args['project']
+    with pytest.raises(LaunchDenied, match="non-empty string 'project'"):
+      _worker_type().launch(request)
+
   def test_unknown_field_is_denied(self, tree):
-    assert 'unknown benchmark field' in _denial(tree, {'config': CONFIG, 'upload': 'private'})
+    assert 'unknown benchmark field' in _denial(
+      tree, {'config': str(tree / 'clone' / CONFIG), 'upload': 'private'}
+    )
 
   def test_missing_config_is_denied(self, tree):
     assert "non-empty string 'config'" in _denial(tree, {})
 
-  def test_absolute_config_is_denied(self, tree):
-    assert 'relative to the workspace root' in _denial(tree, {'config': str(tree / CONFIG)})
+  def test_relative_config_is_denied(self, tree):
+    assert 'must be an absolute path' in _denial(tree, {'config': CONFIG})
 
   def test_config_escaping_the_workspace_is_denied(self, tree, tmp_path_factory):
     outside = tmp_path_factory.mktemp('outside') / 'job.json'
     outside.write_text('{"datasets": []}\n')
-    relative = '../' * 10 + str(outside).lstrip('/')
-    assert 'escapes the workspace' in _denial(tree, {'config': relative})
+    assert 'escapes the tree' in _denial(tree, {'config': str(outside)})
 
   def test_absent_config_file_is_denied(self, tree):
-    assert 'no job config' in _denial(tree, {'config': 'benchmark/nothing.json'})
+    assert 'no job config' in _denial(tree, {'config': str(tree / 'nothing.json')})
 
   def test_workspace_without_benchmark_project_is_denied(self, tmp_path):
     config = tmp_path / 'job.json'
     config.write_text('{"datasets": []}\n')
-    assert 'no benchmark project' in _denial(tmp_path, {'config': 'job.json'})
+    assert 'no pyproject.toml' in _denial(tmp_path, {'config': str(config)})
 
   def test_a_config_that_is_no_json_object_is_denied(self, tree):
-    (tree / CONFIG).write_text('datasets: []\n')
-    assert 'is not JSON' in _denial(tree, {'config': CONFIG})
+    (tree / 'clone' / CONFIG).write_text('datasets: []\n')
+    assert 'is not JSON' in _denial(tree, {'config': str(tree / 'clone' / CONFIG)})
 
   def test_a_docker_job_on_a_host_without_compose_is_denied_with_the_fix(self, tree, monkeypatch):
     monkeypatch.setattr(job, 'compose_missing', lambda: True)
 
-    denial = _denial(tree, {'config': CONFIG})
+    denial = _denial(tree, {'config': str(tree / 'clone' / CONFIG)})
 
     assert 'no docker compose plugin' in denial
     assert job.COMPOSE_FIX in denial
 
   def test_a_job_on_another_environment_needs_no_compose(self, tree, monkeypatch):
     monkeypatch.setattr(job, 'compose_missing', lambda: True)
-    (tree / CONFIG).write_text('{"environment": {"type": "daytona"}}\n')
+    (tree / 'clone' / CONFIG).write_text('{"environment": {"type": "daytona"}}\n')
 
-    run = _worker_type().launch(_request(tree, {'config': CONFIG}))
+    run = _worker_type().launch(_request(tree, {'config': str(tree / 'clone' / CONFIG)}))
 
     assert run.command.command[0] == 'uv'
 
@@ -247,11 +282,26 @@ async def running_server(monkeypatch):
 @pytest.mark.asyncio
 async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, capsys):
   async with running_server(monkeypatch) as (transport, sink):
-    argv = ['benchmark-job', 'start', '-c', CONFIG, '--timeout', '60', '--detach']
+    argv = [
+      'benchmark-job',
+      'start',
+      '-c',
+      CONFIG,
+      '--project',
+      'benchmark',
+      '--timeout',
+      '60',
+      '--detach',
+    ]
     task = asyncio.create_task(asyncio.to_thread(job.main, argv))
     channel, message = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     assert message.kind == LAUNCH
-    assert message.args == {'type': job.BENCHMARK, 'config': CONFIG, 'timeout': 60}
+    assert message.args == {
+      'type': job.BENCHMARK,
+      'config': str(Path.cwd() / CONFIG),
+      'project': str(Path.cwd() / 'benchmark'),
+      'timeout': 60,
+    }
     mapped = job.BenchmarkType.option_values(
       {name: value for name, value in message.args.items() if name != 'type'}, None
     )
@@ -266,7 +316,7 @@ async def test_start_detach_sends_the_request_and_prints_its_id(monkeypatch, cap
 
 def test_start_without_a_channel_fails(monkeypatch, capsys, caplog):
   monkeypatch.delenv(BROKER_CHANNEL, raising=False)
-  assert job.main(['benchmark-job', 'start', '-c', CONFIG]) == 1
+  assert job.main(['benchmark-job', 'start', '-c', CONFIG, '--project', 'benchmark']) == 1
   assert capsys.readouterr().out == ''
   assert any(BROKER_CHANNEL in record.getMessage() for record in caplog.records)
 
@@ -291,7 +341,7 @@ def test_unknown_verb_is_a_usage_error(caplog):
 @pytest.mark.asyncio
 async def test_detached_denial_fails_before_printing_an_id(monkeypatch, capsys, caplog):
   async with running_server(monkeypatch) as (transport, sink):
-    argv = ['benchmark-job', 'start', '-c', CONFIG, '--detach']
+    argv = ['benchmark-job', 'start', '-c', CONFIG, '--project', 'benchmark', '--detach']
     task = asyncio.create_task(asyncio.to_thread(job.main, argv))
     channel, request = await asyncio.wait_for(sink.messages.get(), TIMEOUT)
     await transport.send(
@@ -359,7 +409,9 @@ async def test_check_reads_pending_and_terminal_journal_records(monkeypatch, cap
 @pytest.mark.parametrize('seconds', ['0.5', '60.0'])
 def test_start_lifetime_requires_whole_seconds(seconds):
   with pytest.raises(SystemExit):
-    job.main(['benchmark-job', 'start', '-c', CONFIG, '--timeout', seconds])
+    job.main(
+      ['benchmark-job', 'start', '-c', CONFIG, '--project', 'benchmark', '--timeout', seconds]
+    )
 
 
 @pytest.mark.parametrize(
