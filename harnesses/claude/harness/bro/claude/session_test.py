@@ -74,7 +74,7 @@ sys.stdin.read()
 def _session(tmp_path: Path) -> SessionRun:
   return SessionRun(
     name='session-route',
-    repo=None,
+    attachments=(),
     harness='claude',
     hold='unattended',
     resolved_recipe={

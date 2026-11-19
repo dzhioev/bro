@@ -16,6 +16,7 @@ from ride.authority_test_helper import mission, reading
 from ride.bro_worker import BroFacts, Placement
 from ride.launch_control import LaunchControl
 from ride.peer_facts import PeerFacts, WorkerFacts
+from ride.repo_attachment import repository_attachment
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -33,7 +34,9 @@ class _Context:
 @pytest.fixture
 def facts(tmp_path, monkeypatch):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'state'))
-  workspace = Workspace.ensure('ws', tmp_path / 'repo', Isolation.BOXED)
+  workspace = Workspace.ensure(
+    'ws', (repository_attachment(tmp_path / 'repo', 'ws'),), Isolation.BOXED
+  )
   table = PeerFacts(
     WorkerFacts(
       type='bro',
@@ -101,7 +104,7 @@ def test_root_row_is_seeded_by_the_host_anchored_mission(facts):
 def test_spawned_peer_resolves_through_worker_binding(facts):
   table, context, _ = facts
   _spawned(table, context, CHILD, 'child-mission', 'root-mission')
-  Workspace.ensure(f'broker-{CHILD}', None, Isolation.BOXED)
+  Workspace.ensure(f'broker-{CHILD}', (), Isolation.BOXED)
   description = table.resolve(context, CHILD)
   assert description.workspace == f'broker-{CHILD}'
   assert description.tree == workspace_tree(f'broker-{CHILD}')
@@ -155,7 +158,7 @@ def test_expected_workspace_is_filled_from_its_claim(facts, monkeypatch, tmp_pat
   monkeypatch.setattr(pending_launch, 'claimed_workspace', lambda mission: 'manual-workspace')
   external_tree = tmp_path / 'manual-tree'
   external_tree.mkdir()
-  Workspace.ensure('manual-workspace', None, Isolation.UNBOXED, tree=external_tree)
+  Workspace.ensure('manual-workspace', (), Isolation.UNBOXED, tree=external_tree)
   description = table.resolve(context, CHILD)
   assert description.workspace == 'manual-workspace'
   assert description.tree == external_tree

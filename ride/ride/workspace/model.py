@@ -5,24 +5,29 @@ import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from collections.abc import Generator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Optional
 
 from bro.monitor import workspace_session_dir
-from bro.workspace.paths import runtime_base, workspace_dir, workspace_tree, workspaces_dir
-from ride.repository import Repository, as_repository, is_git_url, open_repository
+from bro.workspace.paths import (
+  is_workspace_name,
+  runtime_base,
+  workspace_dir,
+  workspace_tree,
+  workspaces_dir,
+)
+from ride.attachments import Attachment, get_attachment_type
 from ride.workspace.docker import runtime_image_tag
 from ride.workspace.metadata import (
   Isolation,
+  UnrecognizedWorkspaceRecord,
   WorkspaceMetadata,
-  is_workspace,
+  WorkspaceNotFound,
   read_metadata,
   unrecognized_workspace_record,
-  workspace_branch,
   write_metadata,
 )
-
-_MISSING_ATTACHMENT = 'attached repository no longer exists:'
 
 
 @contextlib.contextmanager
@@ -169,7 +174,7 @@ def remove_workspace_path(path: Path) -> None:
 
 class Workspace(ABC):
   """a managed workspace: one directory (`path`) holding its writable `tree`,
-  optional repository attachment, and every record kept about it.
+  typed attachments, and every record kept about it.
 
   The subclasses are the isolations, which differ only in how the tree is
   released; launch stays with the surfaces and consumes a Workspace for the
@@ -185,14 +190,23 @@ class Workspace(ABC):
     self.metadata = metadata
 
   @property
-  def repo(self) -> Optional[Path | str]:
-    if self.metadata.repo is None:
-      return None
-    return self.metadata.repo if is_git_url(self.metadata.repo) else Path(self.metadata.repo)
+  def attachments(self) -> tuple[Attachment, ...]:
+    return self.metadata.attachments
 
   @property
-  def repository(self) -> Optional[Repository]:
-    return None if self.metadata.repo is None else open_repository(self.metadata.repo)
+  def start_directory(self) -> Path:
+    return self.tree / self.attachments[0].name if self.attachments else self.tree
+
+  def prepare(self, base: str | None = None) -> None:
+    if not self.attachments and base is not None:
+      raise ValueError('a detached workspace has no attachment base')
+    if self.metadata.tree is not None and not self.tree.is_dir():
+      raise RuntimeError(f'external workspace tree is gone: {self.tree}')
+    self.tree.mkdir(parents=True, exist_ok=True)
+    for attachment in self.attachments:
+      get_attachment_type(attachment.type).prepare(
+        attachment, self.tree / attachment.name, self.path, base
+      )
 
   @property
   def path(self) -> Path:
@@ -228,20 +242,12 @@ class Workspace(ABC):
   def _remove_dir(self) -> None:
     """remove the workspace directory."""
 
-  def _attachment_missing(self) -> bool:
-    """whether this workspace is attached to a repository that no longer resolves."""
-    if self.repo is None:
-      return False
-    try:
-      _ = self.repository
-    except (RuntimeError, ValueError):
-      return True
-    return False
-
   def remove(self, *, force: bool = False) -> None:
-    """remove the workspace: the tree and every record kept about it."""
-    if self._attachment_missing() and not force:
-      raise RuntimeError(f'{_MISSING_ATTACHMENT} {self.repo}; use --force to remove')
+    """Remove the workspace and its records, leaving an external tree alone."""
+    for attachment in self.attachments:
+      get_attachment_type(attachment.type).remove(
+        attachment, self.tree / attachment.name, force=force
+      )
     self._release_tree(force=force)
     self._remove_dir()
 
@@ -297,19 +303,22 @@ class Workspace(ABC):
     return False, [f'last session exited with code {end}']
 
   def is_clean(self) -> tuple[bool, list[str]]:
-    """whether the workspace is safe to remove: its attachment still resolves and
-    its last session finished successfully. the recorded session end is the
-    deciding factor for an attached or external-tree workspace — anything else
-    keeps the workspace for inspection and recovery. returns (safe, reasons)."""
+    """Whether the tree and its attachments are safe to remove, with refusal reasons."""
     if self.metadata.tree is not None:
       return self._recorded_exit_clean()
-    if self.repo is None:
+    if not self.attachments:
       if not self.tree.is_dir() or not any(self.tree.iterdir()):
         return True, []
       return False, ['detached workspace tree is not empty']
-    if self._attachment_missing():
-      return False, [f'{_MISSING_ATTACHMENT} {self.repo}']
-    return self._recorded_exit_clean()
+    results = [
+      get_attachment_type(attachment.type).cleanliness(
+        attachment, self.tree / attachment.name, self._recorded_exit_clean()
+      )
+      for attachment in self.attachments
+    ]
+    return all(clean for clean, _ in results), [
+      reason for _, reasons in results for reason in reasons
+    ]
 
   def last_active(self) -> Optional[float]:
     """when the workspace's session last marked activity, or None if none ever did."""
@@ -327,30 +336,33 @@ class Workspace(ABC):
   def _create(
     cls,
     name: str,
-    repo: Optional[Repository | Path],
+    attachments: tuple[Attachment, ...],
     isolation: Isolation,
     *,
     throwaway: bool,
     tree: Optional[Path],
   ) -> 'Workspace':
     resolved_tree = _resolve_external_tree(tree, isolation)
-    if resolved_tree is not None and repo is not None:
-      raise ValueError('--tree cannot be combined with --repo')
+    if resolved_tree is not None and attachments:
+      raise ValueError('an external tree requires a detached workspace')
     if resolved_tree is not None:
       for workspace in cls.all():
-        if workspace.name != name and workspace.metadata.tree == str(resolved_tree):
+        if (
+          isinstance(workspace, Workspace)
+          and workspace.name != name
+          and workspace.metadata.tree == str(resolved_tree)
+        ):
           raise ValueError(
             f'external workspace tree {resolved_tree} is already recorded by workspace '
             f'{workspace.name!r}'
           )
     path = workspace_dir(name)
-    if path.is_dir() and any(path.iterdir()):
-      raise unrecognized_workspace_record(name)
-    repository = None if repo is None else as_repository(repo)
+    if path.exists():
+      read_metadata(name)
+      raise ValueError(f'workspace {name!r} already exists')
     metadata = WorkspaceMetadata(
       isolation=isolation,
-      repo=None if repository is None else repository.identity,
-      branch=None if repository is None else workspace_branch(name),
+      attachments=attachments,
       throwaway=throwaway,
       tree=None if resolved_tree is None else str(resolved_tree),
     )
@@ -361,33 +373,34 @@ class Workspace(ABC):
   def create(
     cls,
     name: str,
-    repo: Optional[Repository | Path],
+    attachments: tuple[Attachment, ...],
     isolation: Isolation,
     *,
     throwaway: bool = False,
     tree: Optional[Path] = None,
   ) -> 'Workspace':
     with _hold_workspace_namespace():
-      return cls._create(name, repo, isolation, throwaway=throwaway, tree=tree)
+      return cls._create(name, attachments, isolation, throwaway=throwaway, tree=tree)
 
   @classmethod
   def ensure(
     cls,
     name: str,
-    repo: Optional[Repository | Path],
+    attachments: tuple[Attachment, ...],
     isolation: Isolation,
     *,
     throwaway: bool = False,
     tree: Optional[Path] = None,
   ) -> 'Workspace':
     resolved_tree = _resolve_external_tree(tree, isolation)
-    if resolved_tree is not None and repo is not None:
-      raise ValueError('--tree cannot be combined with --repo')
+    if resolved_tree is not None and attachments:
+      raise ValueError('an external tree requires a detached workspace')
     with _hold_workspace_namespace():
-      if not is_workspace(name):
+      path = workspace_dir(name)
+      if not path.exists():
         return cls._create(
           name,
-          repo,
+          attachments,
           isolation,
           throwaway=throwaway,
           tree=resolved_tree,
@@ -398,12 +411,15 @@ class Workspace(ABC):
           f'workspace {name!r} is {workspace.isolation}, not {isolation}; '
           f'pick another name or remove it with `ride clean --force {name}`'
         )
-      expected_repo = None if repo is None else as_repository(repo).identity
-      if workspace.metadata.repo != expected_repo:
-        raise AttachmentMismatch(
-          f'workspace {name!r} is attached to {workspace.repo or "no repository"}, '
-          f'not {expected_repo or "no repository"}'
-        )
+
+      def identities(records):
+        return [
+          (attachment.type, get_attachment_type(attachment.type).identity(attachment))
+          for attachment in records
+        ]
+
+      if identities(workspace.attachments) != identities(attachments):
+        raise AttachmentMismatch(f'workspace {name!r} has different attachments from the launch')
       if workspace.metadata.tree != (None if resolved_tree is None else str(resolved_tree)):
         recorded = workspace.metadata.tree or 'its managed tree'
         requested = str(resolved_tree) if resolved_tree is not None else 'a managed tree'
@@ -414,15 +430,29 @@ class Workspace(ABC):
       return workspace
 
   @classmethod
-  def all(cls) -> list['Workspace']:
+  def all(cls) -> list['Workspace | UnrecognisedWorkspace']:
     root = workspaces_dir()
     if not root.is_dir():
       return []
-    return [
-      cls.open(path.name)
-      for path in sorted(root.iterdir())
-      if path.is_dir() and is_workspace(path.name)
-    ]
+    result: list[Workspace | UnrecognisedWorkspace] = []
+    for path in sorted(root.iterdir()):
+      if not path.is_dir() or not is_workspace_name(path.name):
+        continue
+      try:
+        result.append(cls.open(path.name))
+      except UnrecognizedWorkspaceRecord as error:
+        result.append(UnrecognisedWorkspace(path.name, error))
+      except WorkspaceNotFound as error:
+        result.append(
+          UnrecognisedWorkspace(path.name, unrecognized_workspace_record(path.name, error))
+        )
+    return result
+
+
+@dataclass(frozen=True)
+class UnrecognisedWorkspace:
+  name: str
+  error: UnrecognizedWorkspaceRecord
 
 
 class UnboxedWorkspace(Workspace):

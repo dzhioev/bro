@@ -27,13 +27,6 @@ if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
   exec gosu ride "$0" "$@"
 fi
 
-# --- running as ride from here ---
-
-if [ -n "${RIDE_REPO:-}" ]; then
-# mark /tree safe for git. on Docker for Mac, virtiofs reports the bind
-# mount as root-owned even though ride can read/write it (see uid-remap skip in
-# the root phase); without this, git refuses with "dubious ownership"
-git config --global --add safe.directory /tree
-fi
+git config --global --add safe.directory '*'
 
 exec "$@"

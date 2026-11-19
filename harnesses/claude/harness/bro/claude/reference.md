@@ -220,7 +220,7 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
 — claude state is launch data the harness's boxed extras put on the neutral `Launch`, so a bro-harness container, which runs no Claude, mounts no claude state at all), while session auth comes from the `claude_code` token (below):
 
 - `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`,
-  `projects["/tree"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt,
+  `hasTrustDialogAccepted: true` on the project entry for the session's start directory so guided sessions skip the folder-trust prompt,
   `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't fetch the official plugin marketplace at startup,
   and `lspRecommendationDisabled: true` so it doesn't offer a language-server plugin for the files a session opens
   — sessions install no marketplace plugins, only Claude Code's built-in ones load) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
@@ -252,14 +252,13 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   and setting the text of the reminder Claude Code adds after a run of silent turns (`CLAUDE_CODE_SILENT_TURN_REMINDER_TEXT`, pointing what the answer needs at the turn's final message rather than a thinking note;
   `harnesses/claude/harness/bro/claude/silent_turn_reminder_llm_test.py` holds it against the pinned release),
   and `skipDangerousModePermissionPrompt: true`
-  — the workspace is an isolated clone, so the `--dangerously-skip-permissions` acceptance dialog is pre-answered (boxed sessions only; an unboxed clone keeps the dialog).
+  — boxed sessions pre-answer the `--dangerously-skip-permissions` acceptance dialog, while unboxed sessions keep it.
   Host permissions, hooks, plugins, and model/effort pins do not leak in, and the session's own LLM flags plus the merged `--settings` (see "The claude argv") own session config.
 - `<runtime-root>/workspaces/<name>/claude/` (host) → `/home/ride/.claude` (container).
   Per-workspace overlay of everything else.
   It is mounted from the host rather than living in the container because the container is `--rm`'d at exit while the workspace outlives it:
   the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the launcher while the session runs.
-- `claude/projects/-tree/` — where Claude Code stores the session JSONL for `/tree`.
-  The encoded path `-tree` is fixed (just `/` replaced with `-`).
+- `claude/projects/<encoded start directory>/` — where Claude Code stores the session JSONL for the start directory.
 
 This means each boxed session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
 non-rotating `claude_code` token (so no session's refresh can blow away another's).

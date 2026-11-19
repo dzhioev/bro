@@ -1,4 +1,4 @@
-"""A workspace's recorded identity, isolation, and optional repository attachment."""
+"""A workspace's recorded identity, isolation, and typed attachments."""
 
 import json
 from dataclasses import dataclass
@@ -6,7 +6,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Optional
 
-from bro.workspace.paths import is_workspace_name, workspace_dir
+from bro.workspace.paths import workspace_dir
+from ride.attachments import Attachment
 
 _METADATA_FILE = 'workspace.json'
 
@@ -19,9 +20,9 @@ class UnrecognizedWorkspaceRecord(ValueError):
   pass
 
 
-def unrecognized_workspace_record(name: str) -> UnrecognizedWorkspaceRecord:
+def unrecognized_workspace_record(name: str, error: object) -> UnrecognizedWorkspaceRecord:
   return UnrecognizedWorkspaceRecord(
-    f'workspace {name!r} has an unrecognised record; remove it with `ride clean --force {name}`'
+    f'workspace {name!r} has an unrecognised record: {error}; remove it with `ride clean --force {name}`'
   )
 
 
@@ -30,25 +31,20 @@ class Isolation(StrEnum):
   UNBOXED = 'unboxed'
 
 
-def workspace_branch(name: str) -> str:
-  return f'workspace-{name}'
-
-
 @dataclass(frozen=True)
 class WorkspaceMetadata:
   isolation: Isolation
-  repo: Optional[str]
-  branch: Optional[str]
+  attachments: tuple[Attachment, ...] = ()
   throwaway: bool = False
   tree: Optional[str] = None
 
   def __post_init__(self) -> None:
-    if (self.repo is None) != (self.branch is None):
-      raise ValueError('workspace repo and branch must either both be present or both be absent')
+    if len(self.attachments) > 1:
+      raise ValueError('a workspace supports at most one attachment')
     if self.tree is not None:
       if self.isolation is not Isolation.UNBOXED:
         raise ValueError('an external workspace tree requires unboxed isolation')
-      if self.repo is not None:
+      if self.attachments:
         raise ValueError('an external workspace tree requires a detached workspace')
       if not Path(self.tree).is_absolute():
         raise ValueError('workspace tree must be an absolute path')
@@ -59,32 +55,29 @@ class WorkspaceMetadata:
       'throwaway': self.throwaway,
       'tree': self.tree,
     }
-    if self.repo is not None:
-      data['repo'] = self.repo
-      data['branch'] = self.branch
+    if self.attachments:
+      data['attachments'] = [attachment.dump() for attachment in self.attachments]
     return data
 
   @classmethod
   def load(cls, data: dict) -> 'WorkspaceMetadata':
     required = {'isolation', 'throwaway', 'tree'}
-    optional = {'repo', 'branch'}
-    if not required <= data.keys() or not data.keys() <= required | optional:
-      raise ValueError(f'unexpected fields: {sorted(data.keys() ^ required)}')
-    repo = data.get('repo')
-    branch = data.get('branch')
+    optional = {'attachments'}
+    if missing := required - data.keys():
+      raise ValueError(f'missing fields: {sorted(missing)}')
+    if unexpected := data.keys() - (required | optional):
+      raise ValueError(f'unexpected fields: {sorted(unexpected)}')
+    attachments = data.get('attachments', [])
+    if 'attachments' in data and (not isinstance(attachments, list) or not attachments):
+      raise ValueError('workspace attachments must be a non-empty list when present')
     tree = data['tree']
-    if repo is not None and (not isinstance(repo, str) or repo == ''):
-      raise ValueError('workspace repo must be a non-empty string when present')
-    if branch is not None and (not isinstance(branch, str) or branch == ''):
-      raise ValueError('workspace branch must be a non-empty string when present')
     if tree is not None and (not isinstance(tree, str) or tree == ''):
       raise ValueError('workspace tree must be a non-empty string when present')
     if not isinstance(data['throwaway'], bool):
       raise ValueError('workspace throwaway must be a bool')
     return cls(
       isolation=Isolation(data['isolation']),
-      repo=repo,
-      branch=branch,
+      attachments=tuple(Attachment.load(attachment) for attachment in attachments),
       throwaway=data['throwaway'],
       tree=tree,
     )
@@ -94,25 +87,23 @@ def _metadata_file(name: str) -> Path:
   return workspace_dir(name) / _METADATA_FILE
 
 
-def is_workspace(name: str) -> bool:
-  return is_workspace_name(name) and _metadata_file(name).is_file()
-
-
 def read_metadata(name: str) -> WorkspaceMetadata:
   file = _metadata_file(name)
   try:
     data = json.loads(file.read_text())
   except FileNotFoundError as exception:
     workspace = workspace_dir(name)
-    if workspace.is_dir() and any(workspace.iterdir()):
-      raise unrecognized_workspace_record(name) from exception
+    if workspace.is_dir():
+      raise unrecognized_workspace_record(name, exception) from exception
     raise WorkspaceNotFound(f'workspace not found: {name}') from exception
   except (OSError, UnicodeError, json.JSONDecodeError) as exception:
-    raise unrecognized_workspace_record(name) from exception
+    raise unrecognized_workspace_record(name, exception) from exception
   try:
+    if not isinstance(data, dict):
+      raise ValueError('workspace record must be an object')
     return WorkspaceMetadata.load(data)
-  except (TypeError, ValueError) as exception:
-    raise unrecognized_workspace_record(name) from exception
+  except Exception as exception:
+    raise unrecognized_workspace_record(name, exception) from exception
 
 
 def write_metadata(name: str, metadata: WorkspaceMetadata) -> None:

@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from bro.workspace.paths import workspaces_dir
+from ride.repo_attachment import repository_attachment
 from ride.repository import Repository
 from ride.workspace import model
 from ride.workspace.metadata import Isolation
@@ -25,11 +26,11 @@ class _FakeProc:
 
 
 def _worktree(name: str, project) -> Workspace:
-  return Workspace.create(name, project, Isolation.UNBOXED)
+  return Workspace.create(name, (repository_attachment(project, name),), Isolation.UNBOXED)
 
 
 def _container(name: str, project) -> Workspace:
-  return Workspace.create(name, project, Isolation.BOXED)
+  return Workspace.create(name, (repository_attachment(project, name),), Isolation.BOXED)
 
 
 class TestCleanupImage:
@@ -274,47 +275,49 @@ class TestExternalTreeWorkspace:
   def test_records_and_returns_the_existing_tree(self, tmp_path):
     tree = tmp_path / 'task'
     tree.mkdir()
-    workspace = Workspace.create('external', None, Isolation.UNBOXED, tree=tree)
+    workspace = Workspace.create('external', (), Isolation.UNBOXED, tree=tree)
     assert workspace.metadata.tree == str(tree.resolve())
     assert workspace.tree == tree.resolve()
 
   def test_requires_an_existing_directory_outside_the_runtime_root(self, tmp_path):
     missing = tmp_path / 'missing'
     with pytest.raises(ValueError, match='not an existing directory'):
-      Workspace.create('missing', None, Isolation.UNBOXED, tree=missing)
+      Workspace.create('missing', (), Isolation.UNBOXED, tree=missing)
     inside = workspaces_dir().parent / 'task'
     inside.mkdir(parents=True)
     with pytest.raises(ValueError, match='outside the runtime root'):
-      Workspace.create('inside', None, Isolation.UNBOXED, tree=inside)
+      Workspace.create('inside', (), Isolation.UNBOXED, tree=inside)
 
   def test_requires_detached_unboxed_isolation(self, tmp_path):
     tree = tmp_path / 'task'
     tree.mkdir()
     with pytest.raises(ValueError, match='requires --unboxed'):
-      Workspace.create('boxed', None, Isolation.BOXED, tree=tree)
-    with pytest.raises(ValueError, match='cannot be combined with --repo'):
-      Workspace.create('attached', tmp_path, Isolation.UNBOXED, tree=tree)
+      Workspace.create('boxed', (), Isolation.BOXED, tree=tree)
+    with pytest.raises(ValueError, match='external tree requires a detached workspace'):
+      Workspace.create(
+        'attached', (repository_attachment(tmp_path, 'attached'),), Isolation.UNBOXED, tree=tree
+      )
 
   def test_one_workspace_at_a_time_records_a_tree(self, tmp_path):
     tree = tmp_path / 'task'
     tree.mkdir()
-    Workspace.create('first', None, Isolation.UNBOXED, tree=tree)
+    Workspace.create('first', (), Isolation.UNBOXED, tree=tree)
     with pytest.raises(ValueError, match="already recorded by workspace 'first'"):
-      Workspace.create('second', None, Isolation.UNBOXED, tree=tree)
+      Workspace.create('second', (), Isolation.UNBOXED, tree=tree)
 
   def test_resume_shape_refuses_a_missing_tree(self, tmp_path):
     tree = tmp_path / 'task'
     tree.mkdir()
-    Workspace.create('external', None, Isolation.UNBOXED, tree=tree)
+    Workspace.create('external', (), Isolation.UNBOXED, tree=tree)
     tree.rmdir()
     with pytest.raises(ValueError, match='not an existing directory'):
-      Workspace.ensure('external', None, Isolation.UNBOXED, tree=tree)
+      Workspace.ensure('external', (), Isolation.UNBOXED, tree=tree)
 
   def test_clean_uses_the_last_session_exit_and_removal_keeps_the_tree(self, tmp_path):
     tree = tmp_path / 'task'
     tree.mkdir()
     (tree / 'result').write_text('kept')
-    workspace = Workspace.create('external', None, Isolation.UNBOXED, tree=tree)
+    workspace = Workspace.create('external', (), Isolation.UNBOXED, tree=tree)
     assert workspace.is_clean() == (False, ['no recorded session end'])
     workspace.record_session_end(0)
     assert workspace.is_clean() == (True, [])
@@ -324,18 +327,17 @@ class TestExternalTreeWorkspace:
 
 
 class TestDetachedWorkspace:
-  def test_metadata_omits_repo_and_branch(self):
-    workspace = Workspace.create('detached', None, Isolation.BOXED)
+  def test_metadata_omits_attachments_when_detached(self):
+    workspace = Workspace.create('detached', (), Isolation.BOXED)
     assert workspace.metadata.dump() == {
       'isolation': 'boxed',
       'throwaway': False,
       'tree': None,
     }
-    assert workspace.repo is None
-    assert workspace.metadata.branch is None
+    assert not workspace.attachments
 
   def test_clean_means_the_tree_is_empty(self):
-    workspace = Workspace.create('detached', None, Isolation.UNBOXED)
+    workspace = Workspace.create('detached', (), Isolation.UNBOXED)
     assert workspace.is_clean() == (True, [])
     workspace.tree.mkdir()
     (workspace.tree / 'result').write_text('x')
@@ -343,20 +345,27 @@ class TestDetachedWorkspace:
 
   def test_url_attachment_is_recorded_as_the_url(self, tmp_path):
     repository = Repository('https://example.test/owner/repo.git', tmp_path / 'mirror', 'abc')
-    workspace = Workspace.create('remote', repository, Isolation.BOXED)
-    assert workspace.repo == repository.identity
-    assert workspace.metadata.dump()['repo'] == repository.identity
-    assert Workspace.ensure('remote', repository, Isolation.BOXED).repo == repository.identity
+    workspace = Workspace.create(
+      'remote', (repository_attachment(repository, 'remote'),), Isolation.BOXED
+    )
+    assert workspace.attachments[0].fields['repo'] == repository.identity
+    assert workspace.metadata.dump()['attachments'][0]['repo'] == repository.identity
+    assert (
+      Workspace.ensure('remote', (repository_attachment(repository, 'remote'),), Isolation.BOXED)
+      .attachments[0]
+      .fields['repo']
+      == repository.identity
+    )
 
   def test_existing_workspace_refuses_a_different_attachment(self, tmp_path):
-    Workspace.create('ws', tmp_path, Isolation.BOXED)
-    with pytest.raises(AttachmentMismatch, match='not no repository'):
-      Workspace.ensure('ws', None, Isolation.BOXED)
+    Workspace.create('ws', (repository_attachment(tmp_path, 'ws'),), Isolation.BOXED)
+    with pytest.raises(AttachmentMismatch, match='different attachments'):
+      Workspace.ensure('ws', (), Isolation.BOXED)
 
   def test_missing_attachment_requires_force_to_remove(self, monkeypatch, tmp_path):
     repo = tmp_path / 'repo'
     repo.mkdir()
-    workspace = Workspace.create('ws', repo, Isolation.BOXED)
+    workspace = Workspace.create('ws', (repository_attachment(repo, 'ws'),), Isolation.BOXED)
     repo.rmdir()
     monkeypatch.setattr(model, '_cleanup_image', lambda: None)
     with pytest.raises(RuntimeError, match='no longer exists.*--force'):
@@ -396,42 +405,60 @@ class TestKindsAndEnumeration:
       ValueError,
       match=r"workspace 'old' has an unrecognised record.*ride clean --force old",
     ):
-      Workspace.ensure('old', None, Isolation.BOXED)
+      Workspace.ensure('old', (), Isolation.BOXED)
 
   def test_create_records_kind_branch_and_throwaway(self, tmp_path):
-    workspace = Workspace.create('ws', tmp_path, Isolation.BOXED, throwaway=True)
+    workspace = Workspace.create(
+      'ws', (repository_attachment(tmp_path, 'ws'),), Isolation.BOXED, throwaway=True
+    )
     reopened = Workspace.open('ws')
     assert reopened.metadata == workspace.metadata
     assert reopened.metadata.isolation is Isolation.BOXED
-    assert reopened.metadata.branch == 'workspace-ws'
+    assert reopened.attachments[0].fields['branch'] == 'workspace-ws'
     assert reopened.metadata.throwaway is True
 
   def test_ensure_returns_the_existing_workspace_of_the_same_kind(self, tmp_path):
     created = _container('ws', tmp_path)
-    assert Workspace.ensure('ws', tmp_path, Isolation.BOXED).path == created.path
+    assert (
+      Workspace.ensure('ws', (repository_attachment(tmp_path, 'ws'),), Isolation.BOXED).path
+      == created.path
+    )
 
   def test_ensure_refuses_the_other_kind(self, tmp_path):
     _container('ws', tmp_path)
     with pytest.raises(IsolationMismatch, match='is boxed, not unboxed'):
-      Workspace.ensure('ws', tmp_path, Isolation.UNBOXED)
+      Workspace.ensure('ws', (repository_attachment(tmp_path, 'ws'),), Isolation.UNBOXED)
 
   def test_all_enumerates_one_namespace(self, tmp_path):
     _worktree('h1', tmp_path)
     _worktree('h2', tmp_path)
     _container('c1', tmp_path)
-    listed = {workspace.name: workspace.isolation for workspace in Workspace.all()}
+    listed = {
+      workspace.name: workspace.isolation
+      for workspace in Workspace.all()
+      if isinstance(workspace, Workspace)
+    }
     assert listed == {
       'h1': Isolation.UNBOXED,
       'h2': Isolation.UNBOXED,
       'c1': Isolation.BOXED,
     }
 
-  def test_all_ignores_a_directory_that_records_no_workspace(self, tmp_path):
+  def test_all_marks_a_directory_without_a_record(self, tmp_path):
     _worktree('h1', tmp_path)
     (workspaces_dir() / 'leftover').mkdir()
-    assert [workspace.name for workspace in Workspace.all()] == ['h1']
+    from ride.workspace.model import UnrecognisedWorkspace
+
+    assert isinstance(Workspace.all()[1], UnrecognisedWorkspace)
 
   def test_all_ignores_a_directory_whose_name_is_no_workspace_name(self, tmp_path):
     _worktree('h1', tmp_path)
     (workspaces_dir() / 'ride-\nstray prompt text').mkdir()
     assert [workspace.name for workspace in Workspace.all()] == ['h1']
+
+
+def test_detached_workspace_refuses_a_preparation_base():
+  workspace = Workspace.create('detached-base', (), Isolation.UNBOXED)
+  with pytest.raises(ValueError, match='detached workspace has no attachment base'):
+    workspace.prepare('unexpected-base')
+  assert not workspace.tree.exists()
