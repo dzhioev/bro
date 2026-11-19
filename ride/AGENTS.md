@@ -21,17 +21,16 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/session.py` — harness-neutral session lifecycle:
   recorded `SessionSpec` including isolation and the optional repository attachment, base resolution, auth/scope preflight, and the workspace lock,
   resume records, keep/drop finish behavior, and the one started-party launcher that prepares attached or detached workspaces in either isolation for roots and spawned children.
-- `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches, committed-tree reads, and mirror cleanup.
-  `attachment_identities` is the host-config identities an attachment matches project entries by, reading a checkout's `origin` for the URL one.
+- `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches and mirror cleanup.
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
-  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, persona provisioning, the session broxy, and the owned watch store and session watch;
+  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, repository and persona provisioning, the session broxy, and the owned watch store and session watch;
   plus the selected harness's preparation and SIGTERM-forwarded agent spawn.
   It touches the session's activity file at start and end, and hands its path to the harness on `SessionRun` to touch as the session works;
   `ride list` reads its age off that file.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — prospective credential scopes, the harness's `ScopeRecipe`, and credential-store views.
   `scope_report.py` accepts complete recipe text and reports its resolved recipe and source, or a refusal.
-- `ride/authority_reading.py` — immutable root readings of host and project policy, store defaults, and installation registries.
+- `ride/authority_reading.py` — immutable root readings of host and installation policy, store defaults, and installation registries.
   Broken personas and provider declarations are retained as unavailable with their fault; only launches selecting them are refused.
 - `ride/authority_scope.py` — bro option defaults, credential gate-outcome manifests, wire mapping, existence checks, and layered bases.
 - `ride/authority_launch.py` — request/gift/cap mapping, descriptor-based credential hydration, live authority views, and resume-layer replacement.
@@ -80,7 +79,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown;
   see `ride/workspace/AGENTS.md`.
-- `ride/setup/` — packaged runtime/project image and managed-session entrypoint assets;
+- `ride/setup/` — packaged runtime image and managed-session entrypoint assets;
   see `ride/setup/AGENTS.md`.
 
 The public authority reference is `bro/reference/permissions.md`; scenario-first setup instructions are in `bro/reference/permissions_cheatsheet.md`.
@@ -118,12 +117,12 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   The marker is one file across every Docker context while a volume belongs to one daemon and a name outlives whatever held it, so that label is what sends another daemon's namesake, or a replacement created in its place, back through both.
   A volume found unlabelled is one this runtime never created, and is replaced rather than trusted.
   Every boxed bind source must resolve under that root.
-- Runtime, project, and worker image tags use stable host-wide lock paths under the runtime root.
+- Runtime and worker image tags use stable host-wide lock paths under the runtime root.
   A process holds a shared tag lock from before ensure until exit, missing-tag builds serialize on a separate lock, and pruning keeps a non-blocking exclusive tag lock across removal.
   A foreground worker run resolves and holds the invoking installation's runtime and worker images through those locks but prunes none;
   it mounts only the runtime volume, publishes declared ports on loopback, pipes stdin and stdout, and removes its container on exit.
 - Harness selection follows `bro/reference/ride.md`, "Harness selection"; it remains unset until a launch needs it.
-- A root takes its reading after runtime re-exec and attachment resolution.
+- A root takes its installation and host reading after runtime re-exec.
   Every child and manual commit uses that reading; a resume takes a new one.
   Hydration uses the admitted descriptor's exact picks, while instance material and minting sources stay live.
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,

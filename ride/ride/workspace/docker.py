@@ -17,7 +17,6 @@ from bro.workspace.paths import runtime_base, workspace_tree
 from ride.repository import Repository, as_repository, recorded_origin_url
 from ride.runtime_bundle import SESSION_TERMINAL_ENV, RuntimeBundle
 from ride.workspace import build_context
-from ride.workspace.build_context import CONTAINER_DIR
 from ride.workspace.clones import ensure_clone
 from ride.workspace.image_locks import ensure_image, image_removal_lock
 from ride.workspace.metadata import read_metadata
@@ -30,9 +29,9 @@ _RUNTIME_MOUNT = '/var/ride/runtime'
 # build argument `IMAGE_<name>`
 IMAGE_ENV = {
   'RIDE_IN_CONTAINER': '1',
+  'UV_LINK_MODE': 'copy',
   'PATH': f'{_RUNTIME_MOUNT}/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin',
 }
-_SMOKE_TEST_TAG = 'bro/framework:smoke-test'
 _PREFLIGHT_MOUNT = '/var/ride/daemon-preflight'
 
 
@@ -86,7 +85,6 @@ def _assert_bind_source(source: Path) -> None:
 class ContainerRuntime:
   image: str
   bundle_hash: str
-  runtime_image: str
 
 
 class ContainerRuntimeResolver:
@@ -95,22 +93,18 @@ class ContainerRuntimeResolver:
   def __init__(
     self,
     bundle: Optional[RuntimeBundle],
-    repo: Optional[Repository | Path] = None,
     resolved: Optional[ContainerRuntime] = None,
     *,
     prune_images: bool = True,
   ):
     self._bundle = bundle
-    self._repo = None if repo is None else as_repository(repo)
     self._resolved = resolved
     self._prune_images = prune_images
     self._lock = threading.Lock()
 
   @classmethod
-  def fixed(
-    cls, runtime: ContainerRuntime, repo: Optional[Repository | Path] = None
-  ) -> 'ContainerRuntimeResolver':
-    return cls(None, repo, runtime)
+  def fixed(cls, runtime: ContainerRuntime) -> 'ContainerRuntimeResolver':
+    return cls(None, runtime)
 
   def resolve(self) -> ContainerRuntime:
     with self._lock:
@@ -123,19 +117,12 @@ class ContainerRuntimeResolver:
         ensure_runtime_image(runtime_image, self._bundle.python_version)
       else:
         ensure_runtime_image(runtime_image, self._bundle.python_version, prune=False)
-      if self._repo is None:
-        image = runtime_image
-      elif self._prune_images:
-        image = ensure_project_image(runtime_image, self._repo)
-      else:
-        image = ensure_project_image(runtime_image, self._repo, prune=False)
       self._bundle.materialize_container(
         runtime_image, preflight=lambda: _preflight_daemon(runtime_image)
       )
       self._resolved = ContainerRuntime(
-        image=image,
+        image=runtime_image,
         bundle_hash=self._bundle.hash,
-        runtime_image=runtime_image,
       )
       return self._resolved
 
@@ -254,40 +241,22 @@ def runtime_image_tag(python_version: Optional[str] = None) -> str:
   seed = '\0'.join([version, *(f'{name}={value}' for name, value in sorted(arguments.items()))])
   digest = hashlib.sha256(seed.encode())
   digest.update(build_context.UV_VERSION_FILE.read_bytes())
-  digest.update((CONTAINER_DIR / 'project.Dockerfile').read_bytes())
   digest.update(build_context.assemble_runtime(entries))
   return f'{_RUNTIME_IMAGE_REPOSITORY}:{digest.hexdigest()[:12]}'
-
-
-def project_image_tag(runtime_image: str, project: Repository | Path) -> Optional[str]:
-  repository = as_repository(project)
-  manifests = build_context.manifest_paths(repository)
-  if len(manifests) == 0:
-    return None
-  digest = hashlib.sha256(f'{runtime_image}\0{repository.identity}\0'.encode())
-  for relative in manifests:
-    content = repository.read_file(relative)
-    if content is None:
-      raise FileNotFoundError(f'{repository.identity} is missing manifest {relative}')
-    digest.update(relative.encode())
-    digest.update(b'\0')
-    digest.update(content)
-  return f'bro/ride-project:{digest.hexdigest()[:12]}'
 
 
 def image_present(tag: str) -> bool:
   return subprocess.run(['docker', 'image', 'inspect', tag], capture_output=True).returncode == 0
 
 
-def prune_superseded_images(current: str, *, attachment: str | None = None) -> None:
-  """Untag unlocked predecessors of a runtime or an attachment."""
+def prune_superseded_images(current: str) -> None:
+  """Untag unlocked predecessors of an image."""
   repository = current.rsplit(':', 1)[0]
   listed = subprocess.run(
     [
       'docker',
       'images',
       repository,
-      *(['--filter', f'label=ride-attachment={attachment}'] if attachment is not None else []),
       '--format',
       '{{.Repository}}:{{.Tag}}',
     ],
@@ -297,7 +266,7 @@ def prune_superseded_images(current: str, *, attachment: str | None = None) -> N
   if listed.returncode != 0:
     return
   for image in listed.stdout.split():
-    if image in (current, _SMOKE_TEST_TAG) or image.endswith(':<none>'):
+    if image == current or image.endswith(':<none>'):
       continue
     with image_removal_lock(image) as reserved:
       if not reserved:
@@ -338,27 +307,6 @@ def build_runtime_image(tag: str, python_version: str) -> None:
   )
 
 
-def build_project_image(tag: str, runtime_image: str, project: Repository | Path) -> None:
-  log.info('building project image %s from %s', tag, runtime_image)
-  subprocess.run(
-    [
-      'docker',
-      'build',
-      '-t',
-      tag,
-      '-f',
-      build_context.DOCKERFILE_PATH,
-      '--label',
-      f'ride-attachment={as_repository(project).identity}',
-      '--build-arg',
-      f'RUNTIME_IMAGE={runtime_image}',
-      '-',
-    ],
-    input=build_context.assemble_project(project),
-    check=True,
-  )
-
-
 def ensure_runtime_image(tag: str, python_version: str, *, prune: bool = True) -> None:
   with ensure_image(tag):
     if image_present(tag):
@@ -367,25 +315,6 @@ def ensure_runtime_image(tag: str, python_version: str, *, prune: bool = True) -
     build_runtime_image(tag, python_version)
     if prune:
       prune_superseded_images(tag)
-
-
-def ensure_project_image(
-  runtime_image: str,
-  project: Repository | Path,
-  *,
-  prune: bool = True,
-) -> str:
-  tag = project_image_tag(runtime_image, project)
-  if tag is None:
-    return runtime_image
-  with ensure_image(tag):
-    if image_present(tag):
-      log.verbose('image %s ready', tag)
-      return tag
-    build_project_image(tag, runtime_image, project)
-    if prune:
-      prune_superseded_images(tag, attachment=as_repository(project).identity)
-  return tag
 
 
 def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:

@@ -35,7 +35,7 @@ The `devoops` persona mounts the `infra` toolset for plan, verify, restart, ECS 
 It adds brog task tools only when a `brog` credential resolves, so the same persona works with any contributed brog backend.
 Its credential manifest is the union of the active target registry, the optional brog component, and the selected harness tools.
 
-Each consuming repository points `[tool.bro.devoops].target-registry` at a `module:attribute` holding a `TargetRegistry`.
+Each consuming repository points `[devoops].target-registry` in its root `.bro/config.toml` at a `module:attribute` holding a `TargetRegistry`.
 The registry declares its credential requirements and lazily produces named `DeployTarget` values with repository-relative deploy, plan, and verification commands.
 Each runs in the repository's own environment, through `uv run` from the repository root, so a command reaches the console scripts that environment installs, such as `bro-oops-dir`;
 `infra::list_targets` reports each command as that shell line.

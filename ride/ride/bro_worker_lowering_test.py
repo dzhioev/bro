@@ -28,7 +28,6 @@ import ride.workspace.store as workspace_store
 from bro.authority.records import dump_request
 from bro.authority.rules import Mission
 from bro.base import credentials
-from bro.base.host_config import Attachment
 from bro.bro import BaseBro
 from bro.broker.journal import Journal
 from bro.broker.transport import Provisioned
@@ -65,7 +64,7 @@ _REAL_HUMAN_IDENTITY = ride.identity.human_git_identity_env
 
 def _container_runtime() -> workspace_docker.ContainerRuntimeResolver:
   return workspace_docker.ContainerRuntimeResolver.fixed(
-    workspace_docker.ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
+    workspace_docker.ContainerRuntime('runtime-image', 'bundle-hash')
   )
 
 
@@ -350,17 +349,14 @@ class TestSummonLowering:
   def test_the_hosts_per_bro_recipe_settles_the_childs_llm(
     self, lowering_harness, monkeypatch, tmp_path
   ):
-    source = replace(
-      reading(
-        config={
-          'homes': {
-            'test-home': {
-              'bros': {'dev': {'llm': {'bro': 'openai:gpt-6.1-sol,reasoning_effort=xhigh'}}}
-            }
+    source = reading(
+      config={
+        'homes': {
+          'test-home': {
+            'bros': {'dev': {'llm': {'bro': 'openai:gpt-6.1-sol,reasoning_effort=xhigh'}}}
           }
         }
-      ),
-      attachment=Attachment(path='/proj'),
+      }
     )
     monkeypatch.setattr('bro.base.host_config._read', lambda: pytest.fail('launch reread policy'))
     launch = _launch(

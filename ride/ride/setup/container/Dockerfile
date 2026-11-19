@@ -46,7 +46,9 @@ RUN python -m compileall -q -j0 "$(python -c 'import sysconfig; print(sysconfig.
 WORKDIR /workspace
 ARG IMAGE_RIDE_IN_CONTAINER
 ARG IMAGE_PATH
-RUN [ -n "$IMAGE_RIDE_IN_CONTAINER" ] && [ -n "$IMAGE_PATH" ]
+ARG IMAGE_UV_LINK_MODE
+RUN [ -n "$IMAGE_RIDE_IN_CONTAINER" ] && [ -n "$IMAGE_PATH" ] && [ -n "$IMAGE_UV_LINK_MODE" ]
+ENV UV_LINK_MODE=${IMAGE_UV_LINK_MODE}
 ENV RIDE_IN_CONTAINER=${IMAGE_RIDE_IN_CONTAINER}
 ENV PATH=${IMAGE_PATH}
 

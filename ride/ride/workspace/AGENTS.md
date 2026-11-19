@@ -27,15 +27,13 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
 
 ## Components
 
-- `build_context.py` — normalized runtime and project-image contexts, with each installed harness contributing runtime instructions, build arguments and namespaced files;
-  path attachments read the working tree, URL attachments the resolved commit
-- `docker.py` — runtime/project image hashing, locked builds and pruning, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
+- `build_context.py` — normalized runtime image contexts, with each installed harness contributing runtime instructions, build arguments and namespaced files
+- `docker.py` — runtime image hashing, locked builds and pruning, plus lazy per-ride container-runtime resolution with the daemon mount preflight;
   broker-free launch descriptions, root-bounded bind validation, loopback-only published ports, container creation, scoped-store copy, member-exec preparation and checked in-container kills,
   attach suspension, Docker inspection, and the bridge gateway a container reaches its launcher through
-- `image_locks.py` — the stable host-wide lock paths and process-lifetime reservation, build, and removal protocol shared by runtime, project, and worker images
+- `image_locks.py` — the stable host-wide lock paths and process-lifetime reservation, build, and removal protocol shared by runtime and worker images
 - `metadata.py` — strict `workspace.json` records, boxed/unboxed isolation, and optional external-tree identity
 - `model.py` — workspace factories, namespace/session locking, external-tree ownership, inspection, clean-exit records, and isolation-specific teardown
-- `worktrees.py` — the surviving unboxed `setup.sh` runner
 - `clones.py` — clone creation for every attached tree, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — boxed execution and attachment plus the broker availability gate
 - `spawn.py` — boxed, unboxed-process, and member-exec broker spawner adapters, each selected by the launch that owns it.

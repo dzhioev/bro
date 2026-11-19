@@ -1,0 +1,4 @@
+provision-command = "./setup.sh"
+
+[devoops]
+target-registry = "oops.deploy_targets:registry"

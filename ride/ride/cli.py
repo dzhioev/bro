@@ -193,9 +193,6 @@ def build_parser() -> Parser:
     'scope', help='print a prospective session credential scope with instance-selection layers'
   )
   scope.add_argument(
-    '--repo', default=None, metavar='PATH|URL', help='attach an existing checkout path or git URL'
-  )
-  scope.add_argument(
     '--bro', default=None, help="bro to scope (default: the installation's default-bro)"
   )
   add_harness_flags(scope)
@@ -498,12 +495,7 @@ def main(argv: list[str]) -> Optional[int]:
   if command == 'scope':
     from ride.scope_report import report_scope
 
-    try:
-      repository = None if args['repo'] is None else _resolve_repository_argument(args['repo'])
-    except (RuntimeError, ValueError) as error:
-      parser.error(str(error))
     return report_scope(
-      repo=repository,
       bro=args['bro'],
       harness=args['harness'],
       llm=args['llm'],

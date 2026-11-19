@@ -165,9 +165,8 @@ The base is empty and no option is overridable.
 
 ## Readings, bases, and configuration
 
-A root takes one reading after runtime re-exec and attachment resolution.
-It includes the installation's home and settings, applicable host home layers, store defaults, attached-tree sections, and installed bros, types, kinds, harnesses and providers.
-Path attachments read the working-tree `pyproject.toml`; URL attachments read it at the resolved commit.
+A root takes one reading after runtime re-exec.
+It includes the installation's home and settings, applicable host configuration layers, store defaults, and installed bros, types, kinds, harnesses and providers.
 Every descendant and manual commit uses this reading.
 Editing configuration cannot change a live tree or break its next summon with a malformed edit.
 A resume takes a new reading.

@@ -1,5 +1,4 @@
 import json
-import subprocess
 from collections.abc import MutableMapping
 from dataclasses import replace
 from itertools import product
@@ -12,7 +11,7 @@ from bro.authority.oracle_test_helper import evaluate
 from bro.authority.patterns import Descriptor
 from bro.authority.rules import Refusal, Request
 from bro.authority.syntax import parse_layer
-from bro.base import credentials, host_config
+from bro.base import credentials
 from bro.base.condition import iff, when
 from bro.bro import BaseBro, feature
 from bro.harness import Harness
@@ -24,7 +23,6 @@ from ride.authority_launch import mission_view
 from ride.authority_reading import Configuration, HarnessReading, Installation, Reading
 from ride.authority_scope import configured_entries, configured_kinds, existence
 from ride.bro_worker import BroType
-from ride.repository import Repository
 
 
 def unbuilt() -> NoReturn:
@@ -98,7 +96,7 @@ def installation(monkeypatch):
   )
 
 
-def reading(installation, configuration=None, project=None, defaults=None, settings=None):
+def reading(installation, configuration=None, defaults=None, settings=None):
   configuration = configuration or {}
   defaults_layer = {
     'llm': {'native': 'echo:echo', 'auth': 'echo:echo'},
@@ -108,8 +106,6 @@ def reading(installation, configuration=None, project=None, defaults=None, setti
     Configuration.parse({**configuration, 'defaults': defaults_layer}),
     defaults or {},
     installation,
-    host_config.Attachment(path='/project', url='https://github.com/example/project.git'),
-    project=project or {},
     settings=settings or HomeSettings(summon_harness='native'),
   )
 
@@ -292,7 +288,6 @@ def test_home_settings_refuse_instance_entries(tmp_path, installation, home_sett
     home_settings_file.write_text('grant = [' + json.dumps(entry) + ']')
     with pytest.raises(ValueError, match='credential instances'):
       Reading.take(
-        Repository(str(project), project),
         host=tmp_path / 'absent',
         store=tmp_path / 'absent',
         installation=installation,
@@ -313,46 +308,6 @@ def test_other_types_defaults_domains_and_empty_bases(installation):
   assert job.base == Authority()
   with pytest.raises(Refusal, match='domain check'):
     source.rules.normalize(Request('benchmark', {'timeout': 'none'}), source)
-
-
-def test_url_attachment_reads_only_tree_sections_at_the_resolved_commit(
-  tmp_path, installation, home_settings_file
-):
-  home_settings_file.write_text('summon-harness = "native"\ngrant = ["@other"]\n')
-  subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
-  project = tmp_path / 'pyproject.toml'
-  project.write_text(
-    '[tool.bro]\nsummon-harness = "ignored"\ngrant = ["invalid"]\n[tool.bro.example]\nvalue = "committed"'
-  )
-  subprocess.run(['git', '-C', str(tmp_path), 'add', 'pyproject.toml'], check=True)
-  subprocess.run(
-    [
-      'git',
-      '-C',
-      str(tmp_path),
-      '-c',
-      'user.name=Test',
-      '-c',
-      'user.email=test@example.com',
-      'commit',
-      '-qm',
-      'fixture',
-    ],
-    check=True,
-  )
-  commit = subprocess.check_output(
-    ['git', '-C', str(tmp_path), 'rev-parse', 'HEAD'], text=True
-  ).strip()
-  project.write_text('[tool.bro.example]\nvalue = "working"')
-  source = Reading.take(
-    Repository('https://github.com/example/project.git', tmp_path, commit),
-    host=tmp_path / 'absent',
-    store=tmp_path / 'absent',
-    installation=installation,
-  )
-  assert source.resolve_harness(summon=True) == 'native'
-  assert source.home_policy.layer.grant and not source.home_policy.layer.revoke
-  assert source.project['example']['value'] == 'committed'
 
 
 def test_wire_mapping_separates_values_from_content_and_checks_sentinels(installation):
@@ -944,9 +899,7 @@ def test_owned_home_unknown_values_refuse_every_launch(installation, entry):
     reading(installation, {'homes': {'test-home': entry}})
 
 
-def test_reading_freezes_the_home_stack_and_ignores_attachment_edits(
-  tmp_path, installation, home_settings_file
-):
+def test_reading_freezes_the_home_stack(tmp_path, installation, home_settings_file):
   home_settings_file.write_text('summon-harness = "native"\n[llm]\nnative = "echo:echo"\n')
   config = {
     'homes': {
@@ -968,9 +921,6 @@ def test_reading_freezes_the_home_stack_and_ignores_attachment_edits(
   assert source.default_bro == 'other' and source.root_allowance('other').value == 0
   with pytest.raises(TypeError):
     cast(MutableMapping, source.layers('child')[-1].config.llm)['native'] = 'echo:changed'
-  assert resolve_recipe(replace(source, attachment=None), 'child', 'native') == resolve_recipe(
-    source, 'child', 'native'
-  )
 
 
 @pytest.mark.parametrize(

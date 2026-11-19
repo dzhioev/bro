@@ -30,7 +30,7 @@ Isolation: every launch runs under a throwaway HOME, data home and project root,
 so no scenario touches the user's own claude or runtime state. The
 project root is a local git clone of this checkout. The launcher freezes the
 current installation, materializes its container runtime volume, and resolves the
-clone's project image before the scenarios start; the runtime volume serves the
+runtime image before the scenarios start; the runtime volume serves the
 `broker`/`bro` code to in-container probes.
 
 Scenario containers synchronize with the harness through files on the shared
@@ -112,7 +112,6 @@ def launch_recipes(monkeypatch, tmp_path):
 
 
 def _root_mission(
-  repository: Repository | None,
   grants=(),
   *,
   targets=(),
@@ -123,7 +122,7 @@ def _root_mission(
   target: str = 'bro-dev',
   placement: str = 'boxed',
 ) -> Mission:
-  reading = Reading.take(repository)
+  reading = Reading.take()
   if depth is not None:
     reading = replace(
       reading,
@@ -674,7 +673,7 @@ if child_command is not None:
 from ride.authority_reading import Reading
 from ride.authority_launch import request as authority_request
 from ride.bro_worker import BroType
-reading = Reading.take(workspace.repository)
+reading = Reading.take()
 operator = reading.operator()
 request, _ = authority_request(
     BroType,
@@ -690,8 +689,8 @@ code = run_started_party(
     credential_scope=ScopedSecrets(set(launch.secrets), set()),
     container_runtime=ContainerRuntimeResolver.fixed(
         ContainerRuntime(
-            launch.image, runtime_hash, os.environ['RIDE_E2E_RUNTIME_IMAGE']
-        ), workspace.repository
+            launch.image, runtime_hash
+        )
     ),
     runtime_bundle=runtime_bundle,
 )
@@ -713,7 +712,6 @@ class IsolatedEnv:
   data_home: Path
   runtime_root: Path
   image: str
-  runtime_image: str
   runtime_bundle_hash: str
 
   @property
@@ -786,7 +784,7 @@ def isolated_env() -> Iterator[IsolatedEnv]:
       runtime_root = workspace_paths.runtime_base()
       with resolve_runtime_bundle() as bundle:
         bundle.materialize_host()
-        runtime = workspace_docker.ContainerRuntimeResolver(bundle, project).resolve()
+        runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
         env = IsolatedEnv(
           root=root,
           project=project,
@@ -794,7 +792,6 @@ def isolated_env() -> Iterator[IsolatedEnv]:
           data_home=data_home,
           runtime_root=runtime_root,
           image=runtime.image,
-          runtime_image=runtime.runtime_image,
           runtime_bundle_hash=runtime.bundle_hash,
         )
         yield env
@@ -859,7 +856,6 @@ class _Driver:
     driver_env['RIDE_E2E_HOME'] = installation_home()
     driver_env['RIDE_E2E_COMMAND'] = json.dumps(command)
     driver_env['RIDE_E2E_IMAGE'] = env.image
-    driver_env['RIDE_E2E_RUNTIME_IMAGE'] = env.runtime_image
     driver_env['RIDE_E2E_RUNTIME_HASH'] = env.runtime_bundle_hash
     driver_env['RIDE_E2E_CLAUDE'] = _FAKE_CLAUDE
     driver_env['XDG_DATA_HOME'] = str(env.data_home)
@@ -1972,7 +1968,7 @@ def test_spawned_summon_pass_overrides_the_targets_configured_credential(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   host_store = env.home / '.bro'
   (host_store / 'creds' / 'aws+summoned.cred').write_text('summoned-aws')
@@ -2073,7 +2069,6 @@ Path('/workspace/.summon-credential-report').write_text(answer)
     workspace=workspace,
     bro='bro-dev',
     mission=_root_mission(
-      workspace.repository,
       targets=('bro',),
       placements=('boxed', 'unboxed'),
       passes=('github+passed',),
@@ -2172,7 +2167,7 @@ def _host_root_route(
     mission=mission,
     runtime_bundle=bundle,
     container_runtime=ContainerRuntimeResolver.fixed(
-      ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+      ContainerRuntime(env.image, env.runtime_bundle_hash)
     ),
   )
 
@@ -2225,9 +2220,7 @@ def test_manual_summon_commits_over_the_operator_channel_through_credential_pick
   repository = _permission_repository(env, 'manual')
   workspace = Workspace.ensure(f'{_NAME_PREFIX}manual-prepare', repository, Isolation.UNBOXED)
   child_name = f'{_NAME_PREFIX}manual-commit'
-  mission = _root_mission(
-    workspace.repository, targets=('bro',), passes=('github+passed',), placement='unboxed'
-  )
+  mission = _root_mission(targets=('bro',), passes=('github+passed',), placement='unboxed')
 
   root_ended = threading.Event()
 
@@ -2365,7 +2358,7 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_started_party_launch = ride_spawn.started_party_launch
   original_boxed_member_launch = ride_spawn.boxed_member_launch
@@ -2444,7 +2437,6 @@ time.sleep(2)
     workspace=workspace,
     bro='bro-dev',
     mission=_root_mission(
-      workspace.repository,
       targets=('bro',),
       placements=('boxed', 'unboxed', 'join'),
       depth=5,
@@ -2636,7 +2628,7 @@ def _run_watch_route(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -2665,7 +2657,7 @@ def _run_watch_route(
     launch,
     workspace=workspace,
     bro='bro-dev',
-    mission=_root_mission(workspace.repository, targets=('bro',)),
+    mission=_root_mission(targets=('bro',)),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -3001,7 +2993,7 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -3038,7 +3030,7 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
     launch,
     workspace=workspace,
     bro='bro-dev',
-    mission=_root_mission(workspace.repository, targets=('bro',), depth=3),
+    mission=_root_mission(targets=('bro',), depth=3),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -3097,7 +3089,7 @@ def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -3148,7 +3140,7 @@ Path('/workspace/.quest-chat-report').write_text(outcome.answer)
     launch,
     workspace=workspace,
     bro='bro-dev',
-    mission=_root_mission(workspace.repository, targets=('bro',)),
+    mission=_root_mission(targets=('bro',)),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -3191,7 +3183,7 @@ def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_started_party_launch = ride_spawn.started_party_launch
 
@@ -3244,7 +3236,7 @@ Path('/workspace/.quest-cancel-report').write_text(json.dumps({
     launch,
     workspace=workspace,
     bro='bro-dev',
-    mission=_root_mission(workspace.repository, targets=('bro',)),
+    mission=_root_mission(targets=('bro',)),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
   )
@@ -3282,7 +3274,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_launch = BenchmarkType.launch
 
@@ -3326,7 +3318,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
   code = run_started_party(
     launch,
     workspace,
-    mission=_root_mission(workspace.repository, grants=('benchmark',), targets=('bro',)),
+    mission=_root_mission(grants=('benchmark',), targets=('bro',)),
     credential_scope=ScopedSecrets(set(), set()),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
@@ -3401,8 +3393,7 @@ def test_worker_container_runs_through_the_live_broker(
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image),
-    workspace.repository,
+    ContainerRuntime(env.image, env.runtime_bundle_hash),
   )
   monkeypatch.setenv('HOME', str(env.home))
   launch = DockerLaunchSpec(
@@ -3422,9 +3413,7 @@ def test_worker_container_runs_through_the_live_broker(
     launch,
     workspace=workspace,
     bro='bro-dev',
-    mission=_root_mission(
-      workspace.repository, grants=(ContainerType.name,), types={ContainerType.name: ContainerType}
-    ),
+    mission=_root_mission(grants=(ContainerType.name,), types={ContainerType.name: ContainerType}),
     container_runtime=container_runtime,
     runtime_bundle=runtime_bundle,
     types={ContainerType.name: ContainerType},
@@ -3536,7 +3525,6 @@ def test_configuration_rules_refuse_cli_tool_and_wire_starts(
   repository = _permission_repository(env, layer)
   workspace = Workspace.ensure(f'{_NAME_PREFIX}refusals-{layer}', repository, Isolation.UNBOXED)
   mission = _root_mission(
-    workspace.repository,
     grants=('webview.cred=cookies+e2e to @bro',),
     placement='unboxed',
     target=PermissionOwner.name,
@@ -3749,7 +3737,7 @@ def test_operator_override_grants_summons_revokes_and_delivers_the_deferred_cont
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
   container_runtime = ContainerRuntimeResolver.fixed(
-    ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), workspace.repository
+    ContainerRuntime(env.image, env.runtime_bundle_hash)
   )
   original_launch = ride_spawn.started_party_launch
 
@@ -3809,7 +3797,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
         launch,
         workspace=workspace,
         bro='bro',
-        mission=_root_mission(workspace.repository, target='bro'),
+        mission=_root_mission(target='bro'),
         runtime_bundle=runtime,
         container_runtime=container_runtime,
       )
@@ -3885,7 +3873,7 @@ assert read()['may_summon'] == []
         env,
         workspace,
         source,
-        mission=_root_mission(workspace.repository, target='bro', placement='unboxed'),
+        mission=_root_mission(target='bro', placement='unboxed'),
       )
     refused.result(timeout=10)
   assert code == 0
@@ -4137,7 +4125,6 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
   channel.completed('parent verified', 'ok')
 """
   root_mission = _root_mission(
-    repository,
     targets=('bro',),
     placements=('boxed', 'unboxed', 'join'),
     passes=passes,
@@ -4299,7 +4286,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
           mission=root_mission,
           runtime_bundle=runtime,
           container_runtime=ContainerRuntimeResolver.fixed(
-            ContainerRuntime(env.image, env.runtime_bundle_hash, env.runtime_image), repository
+            ContainerRuntime(env.image, env.runtime_bundle_hash)
           ),
         )
     future.result(timeout=30)

@@ -182,30 +182,7 @@ class TestSuspendUntilContinued:
 
 
 class TestImageTag:
-  @pytest.fixture
-  def project(self, monkeypatch, tmp_path):
-    (tmp_path / 'pyproject.toml').write_text(
-      '[tool.bro]\ndefault = "foo"\nimage-repository = "custom-images"\n\n'
-      '[tool.uv.workspace]\nmembers = ["member"]\n'
-    )
-    (tmp_path / 'uv.lock').write_text('lock')
-    (tmp_path / 'member').mkdir()
-    (tmp_path / 'member' / 'pyproject.toml').write_text('[project]\nname = "member"\n')
-    return tmp_path
-
-  def test_project_image_uses_the_runtime_owned_repository(self, project):
-    tag = workspace_docker.project_image_tag(workspace_docker.runtime_image_tag(), project)
-    assert tag is not None and tag.startswith('bro/ride-project:')
-
-  def test_a_member_manifest_edit_changes_the_tag(self, project):
-    runtime = workspace_docker.runtime_image_tag()
-    before = workspace_docker.project_image_tag(runtime, project)
-    (project / 'member' / 'pyproject.toml').write_text(
-      '[project]\nname = "member"\nversion = "2"\n'
-    )
-    assert workspace_docker.project_image_tag(runtime, project) != before
-
-  def test_a_runtime_asset_edit_changes_only_the_runtime_tag(self, project, monkeypatch, tmp_path):
+  def test_a_runtime_asset_edit_changes_the_runtime_tag(self, monkeypatch, tmp_path):
     before = workspace_docker.runtime_image_tag('3.12')
     edited = tmp_path / 'prelude.sh'
     edited.write_text('# edited\n')
@@ -214,27 +191,22 @@ class TestImageTag:
     monkeypatch.setattr(workspace_docker.build_context, 'RUNTIME_FILES', files)
     assert workspace_docker.runtime_image_tag('3.12') != before
 
-  def test_python_minor_changes_the_runtime_tag(self, project):
+  def test_python_minor_changes_the_runtime_tag(self):
     assert workspace_docker.runtime_image_tag('3.12') != workspace_docker.runtime_image_tag('3.13')
 
-  def test_the_uv_pin_changes_the_runtime_tag(self, project, monkeypatch, tmp_path):
+  def test_the_uv_pin_changes_the_runtime_tag(self, monkeypatch, tmp_path):
     before = workspace_docker.runtime_image_tag('3.12')
     edited = tmp_path / 'uv-version'
     edited.write_text('next-version\n')
     monkeypatch.setattr(workspace_docker.build_context, 'UV_VERSION_FILE', edited)
     assert workspace_docker.runtime_image_tag('3.12') != before
 
-  def test_the_image_environment_changes_the_runtime_tag(self, project, monkeypatch):
+  def test_the_image_environment_changes_the_runtime_tag(self, monkeypatch):
     before = workspace_docker.runtime_image_tag('3.12')
     monkeypatch.setattr(
       workspace_docker, 'IMAGE_ENV', {**workspace_docker.IMAGE_ENV, 'RIDE_IN_CONTAINER': '2'}
     )
     assert workspace_docker.runtime_image_tag('3.12') != before
-
-  def test_a_repository_without_uv_manifests_uses_the_runtime_image(self, tmp_path):
-    (tmp_path / 'pyproject.toml').write_text('[tool.bro]\ndefault = "bro"\n')
-    runtime = workspace_docker.runtime_image_tag('3.12')
-    assert workspace_docker.project_image_tag(runtime, tmp_path) is None
 
 
 def test_runtime_build_passes_the_packaged_uv_pin(monkeypatch):
@@ -328,17 +300,12 @@ class TestContainerRuntimeResolver:
       lambda tag, version: events.append(('runtime', tag, version)),
     )
     monkeypatch.setattr(
-      workspace_docker,
-      'ensure_project_image',
-      lambda runtime, project: events.append(('project', runtime, project)) or 'project-image',
-    )
-    monkeypatch.setattr(
       RuntimeBundle,
       'materialize_container',
       lambda self, image, *, preflight: events.append(('volume', image)),
     )
 
-    resolver = workspace_docker.ContainerRuntimeResolver(bundle, tmp_path / 'project')
+    resolver = workspace_docker.ContainerRuntimeResolver(bundle)
     first = resolver.resolve()
     second = resolver.resolve()
 
@@ -346,28 +313,11 @@ class TestContainerRuntimeResolver:
       first
       == second
       == workspace_docker.ContainerRuntime(
-        'project-image',
-        'a' * 64,
         workspace_docker.runtime_image_tag('3.12'),
+        'a' * 64,
       )
     )
-    assert [event[0] for event in events] == ['runtime', 'project', 'volume']
-
-  def test_detached_runtime_skips_project_image_resolution(self, monkeypatch, tmp_path):
-    from ride.runtime_bundle import RuntimeBundle
-
-    bundle = RuntimeBundle(tmp_path / ('a' * 64), '3.12')
-    monkeypatch.setattr(workspace_docker, 'ensure_runtime_image', lambda tag, version: None)
-    monkeypatch.setattr(
-      workspace_docker,
-      'ensure_project_image',
-      lambda runtime, repo: pytest.fail('detached launch has no project image'),
-    )
-    monkeypatch.setattr(
-      RuntimeBundle, 'materialize_container', lambda self, image, *, preflight: None
-    )
-    runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
-    assert runtime.image == workspace_docker.runtime_image_tag('3.12')
+    assert [event[0] for event in events] == ['runtime', 'volume']
 
 
 def test_runtime_image_build_can_skip_pruning(monkeypatch):
@@ -420,7 +370,7 @@ class TestPruneSupersededImages:
   def test_removes_all_but_current_smoke_test_and_untagged(self, monkeypatch):
     listing = _FakeProc(
       returncode=0,
-      stdout='bro/framework:cur\nbro/framework:smoke-test\nbro/framework:<none>\nbro/framework:old1\nbro/framework:old2\n',
+      stdout='bro/framework:cur\nbro/framework:<none>\nbro/framework:old1\nbro/framework:old2\n',
     )
     calls = self._patch_run(monkeypatch, listing)
     workspace_docker.prune_superseded_images('bro/framework:cur')
@@ -880,64 +830,3 @@ class TestDockerCreateArgv:
   def test_no_extra_mounts_by_default(self, build_argv):
     # the every-session path stays unchanged: still -it, no stray broker mount.
     assert build_argv()[:4] == ['docker', 'create', '-it', '--rm']
-
-
-def test_project_images_are_partitioned_by_attachment(tmp_path, monkeypatch):
-  import ride.workspace.model as model
-
-  attachments = [tmp_path / 'first', tmp_path / 'second']
-  for attachment in attachments:
-    attachment.mkdir()
-    (attachment / 'pyproject.toml').write_text('[project]\nname = "same"\n')
-    (attachment / 'uv.lock').write_text('same-lock')
-  images: dict[str, str] = {}
-  removed = []
-
-  def docker(command, **kwargs):
-    if command[:2] == ['docker', 'build']:
-      images[command[command.index('-t') + 1]] = command[command.index('--label') + 1]
-    elif command[:3] == ['docker', 'image', 'inspect']:
-      return _FakeProc(returncode=0 if command[-1] in images else 1)
-    elif command[:2] == ['docker', 'images']:
-      label = command[command.index('--filter') + 1].removeprefix('label=')
-      arguments = iter(command[2:])
-      repository = None
-      for argument in arguments:
-        if argument in ('--filter', '--format'):
-          next(arguments)
-        else:
-          assert repository is None
-          repository = argument
-      return _FakeProc(
-        stdout='\n'.join(
-          tag
-          for tag, value in images.items()
-          if value == label and (repository is None or tag.rsplit(':', 1)[0] == repository)
-        )
-      )
-    elif command[:3] == ['docker', 'image', 'rm']:
-      removed.append(command[-1])
-      del images[command[-1]]
-    else:
-      pytest.fail(f'unexpected Docker command: {command}')
-    return _FakeProc()
-
-  monkeypatch.setattr(workspace_docker.subprocess, 'run', docker)
-  monkeypatch.setattr(workspace_docker, 'ensure_image', lambda _: contextlib.nullcontext())
-  monkeypatch.setattr(workspace_docker.build_context, 'assemble_project', lambda _: b'context')
-  runtime = 'test/runtime:one'
-  first, second = [workspace_docker.ensure_project_image(runtime, path) for path in attachments]
-  assert first != second
-  assert images == {
-    first: f'ride-attachment={attachments[0]}',
-    second: f'ride-attachment={attachments[1]}',
-  }
-  downstream = 'acme/application:release'
-  images[downstream] = images[first]
-  (attachments[0] / 'uv.lock').write_text('new-lock')
-  newer = workspace_docker.ensure_project_image(runtime, attachments[0])
-  assert removed == [first]
-  assert set(images) == {newer, second, downstream}
-  monkeypatch.setattr(model, 'runtime_image_tag', lambda: 'test/runtime:another')
-  assert model._cleanup_image(Repository(str(attachments[0]), attachments[0])) == newer
-  assert model._cleanup_image(Repository(str(attachments[1]), attachments[1])) == second

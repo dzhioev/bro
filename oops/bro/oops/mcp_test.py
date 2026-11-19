@@ -290,3 +290,21 @@ def test_devoops_manifest_comes_from_its_components(monkeypatch):
 def test_devoops_is_registered_as_a_persona():
   entries = importlib.metadata.entry_points(group='bro.bros.bro', name=Devoops.name)
   assert [entry.load() for entry in entries] == [Devoops]
+
+
+def test_registry_loads_repository_configuration_without_python_metadata(tmp_path, monkeypatch):
+  registry = TargetRegistry(load_targets=dict, needed_secrets=())
+  module = SimpleNamespace(registry=registry)
+  monkeypatch.setitem(sys.modules, 'repository_targets', module)
+  config = tmp_path / '.bro' / 'config.toml'
+  config.parent.mkdir()
+  config.write_text('[devoops]\ntarget-registry = "repository_targets:registry"\n')
+  monkeypatch.setattr('bro.oops.targets.find_project_root', lambda: tmp_path)
+  assert load_project_registry() is registry
+
+
+def test_registry_ignores_pyproject_owner_tables(tmp_path):
+  (tmp_path / 'pyproject.toml').write_text(
+    '[tool.bro.devoops]\ntarget-registry = "missing_module:registry"\n'
+  )
+  assert load_project_registry(tmp_path) is None

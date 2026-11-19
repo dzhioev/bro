@@ -29,34 +29,11 @@ fi
 
 # --- running as ride from here ---
 
-# Repository setup runs only for an explicitly attached launch.
 if [ -n "${RIDE_REPO:-}" ]; then
 # mark /workspace safe for git. on Docker for Mac, virtiofs reports the bind
 # mount as root-owned even though ride can read/write it (see uid-remap skip in
 # the root phase); without this, git refuses with "dubious ownership"
 git config --global --add safe.directory /workspace
-fi
-
-# Link and provision the operated repository only when one is attached.
-if [ -n "${RIDE_REPO:-}" ]; then
-# Link the optional dependency bake into the clone. A symlink whose old image
-# target disappeared is replaced; any real workspace environment is preserved.
-if [ -L /workspace/.venv ] && [ ! -e /workspace/.venv ]; then
-  rm /workspace/.venv
-fi
-if [ -d /opt/project-venv ]; then
-  if [ ! -e /workspace/.venv ]; then
-    log VERBOSE 'linking the project venv baked into the image'
-    ln -s /opt/project-venv /workspace/.venv
-    export RIDE_VENV_MANIFEST=/opt/project-venv-manifest
-  fi
-fi
-
-if [ -f /workspace/setup.sh ]; then
-  /workspace/setup.sh >&2
-else
-  log INFO 'setup.sh not found; skipping project provisioning'
-fi
 fi
 
 exec "$@"

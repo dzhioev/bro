@@ -15,7 +15,6 @@ if TYPE_CHECKING:
   from bro.harness import Harness
   from bro.llm.llm import Recipe
   from ride.harness import SessionHarness
-  from ride.repository import Repository
 
 
 class LaunchScopeError(Exception):
@@ -38,17 +37,14 @@ class ScopeRecipe:
   llm_key: bool
 
 
-def launch_recipe(
-  driver: SessionHarness, attachment: str | None, bro_name: str, llm: str | None
-) -> Recipe:
+def launch_recipe(driver: SessionHarness, bro_name: str, llm: str | None) -> Recipe:
   from ride.authority_launch import request
   from ride.authority_reading import Reading
   from ride.authority_scope import checked_recipe
   from ride.bro_worker import BroType
-  from ride.repository import open_repository
 
   with launch_scope_errors():
-    reading = Reading.take(None if attachment is None else open_repository(attachment))
+    reading = Reading.take()
     fields = {'target': bro_name, 'harness': driver.name}
     if llm is not None:
       fields['llm'] = llm
@@ -61,8 +57,6 @@ def scoped_secrets(
   bro_name: str,
   scope: ScopeRecipe,
   *,
-  attachment: str | None = None,
-  attachment_repository: Repository | None = None,
   recipe: Recipe | None = None,
   cred: Sequence[str] = (),
   grant: Sequence[str] = (),
@@ -72,13 +66,9 @@ def scoped_secrets(
   from ride.authority_launch import credentials_for, request
   from ride.authority_reading import Reading
   from ride.bro_worker import BroType
-  from ride.repository import open_repository
 
   with launch_scope_errors():
-    repository = attachment_repository or (
-      None if attachment is None else open_repository(attachment)
-    )
-    reading = Reading.take(repository)
+    reading = Reading.take()
     fields = {
       'target': bro_name,
       'harness': scope.harness.name,
