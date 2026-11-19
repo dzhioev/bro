@@ -27,6 +27,7 @@ from bro.mcp import ANY, brash
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
 from bro.summon import RUNTIME_ENV, SUMMONED_ENV
 from ride.do_ride import SessionRun
+from ride.repo_attachment import repository_attachment
 from ride.session_test import _spec as _session_spec
 
 _PINNED_CLAUDE = Path('/pinned/claude')
@@ -36,7 +37,7 @@ def _spec(**kwargs) -> SessionRun:
   spec = _session_spec(**kwargs)
   return SessionRun(
     name=spec.name,
-    repo=spec.repo,
+    attachments=() if spec.repo is None else (repository_attachment(Path(spec.repo), spec.name),),
     harness=spec.resolved_harness,
     hold=spec.hold,
     resolved_recipe=spec.resolved_recipe,

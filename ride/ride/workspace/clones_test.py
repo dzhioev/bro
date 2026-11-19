@@ -134,13 +134,13 @@ def test_failed_preparation_leaves_no_partial_clone(tmp_path):
   source = _source_repository(tmp_path)
   _git('remote', 'remove', 'origin', cwd=source)
   tree = tmp_path / 'workspace' / 'tree'
-  tree.mkdir(parents=True)
+  tree.parent.mkdir(parents=True)
 
   with pytest.raises(RuntimeError, match='remote get-url origin'):
     ensure_clone(_repository(source), tree, 'worktree-session')
 
-  assert tree.is_dir()
-  assert list(tree.iterdir()) == []
+  assert not tree.exists()
+  assert list(tree.parent.iterdir()) == []
 
 
 def _superproject_with_submodule(tmp_path: Path) -> tuple[Path, Path]:

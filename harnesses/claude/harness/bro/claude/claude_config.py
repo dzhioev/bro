@@ -106,8 +106,12 @@ def workspace_projects_dir(workspace: Workspace) -> Path:
   """the host-side claude projects dir of a workspace's sessions."""
   session_dir = workspace_claude_dir(workspace.path)
   if workspace.isolation is Isolation.BOXED:
-    return session_dir / 'projects' / encode_project_path(CONTAINER_TREE)
-  return session_dir / 'projects' / encode_project_path(workspace.tree)
+    return (
+      session_dir
+      / 'projects'
+      / encode_project_path(CONTAINER_TREE / workspace.start_directory.relative_to(workspace.tree))
+    )
+  return session_dir / 'projects' / encode_project_path(workspace.start_directory)
 
 
 def read_subject(workspace: Workspace) -> Optional[str]:
@@ -251,7 +255,9 @@ def _provision_session_claude_dir(
   return claude_dir
 
 
-def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
+def container_claude_state(
+  workspace: Path, start_directory: PurePath
+) -> tuple[list[str], dict[str, str]]:
   """provision the workspace's claude state for a container launch and return
   the (extra_mounts, extra_env) a claude-running container adds to its `Launch`.
 
@@ -259,13 +265,11 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   must not live: the container is `--rm`'d at exit while the workspace outlives
   it. the env names that dir to claude and turns off its installation checks
   (doctor would flag the absent host-native ~/.local/bin/claude).
-
-  the workspace is an isolated clone, so the `--dangerously-skip-permissions`
-  acceptance dialog is pre-answered."""
+  """
   claude_dir = _provision_session_claude_dir(
     workspace,
     install_method='global',
-    trusted_paths=[str(CONTAINER_TREE)],
+    trusted_paths=[str(start_directory)],
     preaccept_bypass_dialog=True,
   )
   mounts = [f'{claude_dir}:{_CONTAINER_CLAUDE_DIR}']
@@ -276,7 +280,9 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   return mounts, env
 
 
-def container_member_claude_state(records: Path, member_root: PurePath) -> dict[str, str]:
+def container_member_claude_state(
+  records: Path, member_root: PurePath, start_directory: PurePath
+) -> dict[str, str]:
   """provision a boxed party member's claude state host-side and return the env
   naming it under `member_root`, the records' path inside the container. No
   mount of its own: the party mount already carries the member's records
@@ -284,7 +290,7 @@ def container_member_claude_state(records: Path, member_root: PurePath) -> dict[
   claude_dir = _provision_session_claude_dir(
     records,
     install_method='global',
-    trusted_paths=[str(CONTAINER_TREE)],
+    trusted_paths=[str(start_directory)],
     preaccept_bypass_dialog=True,
   )
   return {

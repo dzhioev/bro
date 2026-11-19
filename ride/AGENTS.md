@@ -19,11 +19,13 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/dive_in.py` — task utility wrapper:
   prefetch, task-derived workspace naming, fresh-origin base selection, hold defaults, and forwarding to `ride along` with the project-default bro.
 - `ride/session.py` — harness-neutral session lifecycle:
-  recorded `SessionSpec` including isolation and the optional repository attachment, base resolution, auth/scope preflight, and the workspace lock,
+  recorded `SessionSpec`, attachment-contract resolution, auth/scope preflight, and the workspace lock,
   resume records, keep/drop finish behavior, and the one started-party launcher that prepares attached or detached workspaces in either isolation for roots and spawned children.
-- `ride/repository.py` — path/URL attachment resolution, normalized managed-mirror keys, flocked no-prune fetches and mirror cleanup.
+- `ride/attachments.py` — attachment records, requests, the type contract and lazy `bro.attachment_types` registry.
+- `ride/repo_attachment.py` — the `repo` type: names, bases, preparation, session facts, provisioning, inheritance and lifecycle.
+  Its git machinery is `ride/repository.py` (checkout/URL resolution and managed mirrors), `ride/workspace/clones.py` (independent clones), and `ride/identity.py` (git identities).
 - `ride/do_ride.py` — the `do-ride` session executable every launcher runs inside a prepared workspace:
-  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, repository and persona provisioning, the session broxy, and the owned watch store and session watch;
+  its own parser and argv builder, the session environment and pid/start-time record, credential hooks, attachment session-start steps, the session broxy, and the owned watch store and session watch;
   plus the selected harness's preparation and SIGTERM-forwarded agent spawn.
   It touches the session's activity file at start and end, and hands its path to the harness on `SessionRun` to touch as the session works;
   `ride list` reads its age off that file.
@@ -104,12 +106,13 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
 - A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail with its recorded resolved recipe and source, its set option values and newly computed defaults.
   `--llm` replaces the recipe on the recorded harness, with a same-wire check for native continuation.
   No pointer is published when trail recording is disabled.
-- Workspace state is global under `runtime_base()/workspaces/`, with each workspace's optional repository attachment recorded in metadata.
+- Workspace state is global under `runtime_base()/workspaces/`, with each workspace's typed attachments recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
   managed URL mirrors under `runtime_base()/repos/`.
   Their flocks serialize fetch/cleanup, mirrors never prune, and `ride clean` removes one only when no workspace references its URL.
   Container trails use a dedicated fixed absolute mount.
-- Every attached workspace tree is an independent clone on its recorded branch.
+- Each attachment occupies its named directory inside the writable tree; a session starts there, or in the tree when detached.
+  A `repo` attachment is an independent clone on its recorded branch.
   A detached unboxed workspace may instead record one existing external tree outside the runtime root;
   one workspace records that path at a time, resume requires it to remain present, and workspace removal never removes it.
 - A ride preflights its Docker daemon by reading a nonce through a bind of the runtime root, whenever a bundle's container runtime is not yet settled;
@@ -127,7 +130,7 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   Hydration uses the admitted descriptor's exact picks, while instance material and minting sources stay live.
 - Both isolations pass `BRO_STORE` and `BRO_INSTALL_KINDS` to `do-ride`, which installs the hooks through one applier into the named session environment directory,
   so a session's git and `gh` reach GitHub as the identity it was scoped with rather than through the operator's own configuration.
-  An unboxed process gets a closed environment snapshot with its workspace as `PWD`;
+  An unboxed process gets a closed environment snapshot with its start directory as `PWD`;
   only the baseline roster and, for a session on the launcher's terminal, its identity cross from the ambient environment,
   and a launch's recorded `--env` additions sit beneath it all, carried by the root and every party member alike.
   Every unboxed session's store and install-hook output share a private temporary root removed by its supervisor;

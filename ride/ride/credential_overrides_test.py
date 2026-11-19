@@ -43,7 +43,7 @@ class Context:
 
 @pytest.fixture
 def running(tmp_path, monkeypatch):
-  workspace = Workspace.ensure('credential-root', None, Isolation.UNBOXED)
+  workspace = Workspace.ensure('credential-root', (), Isolation.UNBOXED)
   source = tmp_path / 'source'
   (source / 'creds').mkdir(parents=True)
   for name, value in {

@@ -45,8 +45,7 @@ class Host:
     self.reading = source or reading(config={'defaults': {'summon-depth': 2}})
     self.workspace = SimpleNamespace(
       name='ws',
-      metadata=SimpleNamespace(repo=None),
-      repository=None,
+      attachments=(),
     )
     self.peers = Peers(self.reading.root_allowance('bro-dev'))
     self.journal = MagicMock()
@@ -128,6 +127,10 @@ def test_spawn_launch_carries_the_authorized_child(tmp_path):
 
 def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
   host = Host()
+  from ride.attachments import inherited_attachment
+  from ride.repo_attachment import repository_attachment
+
+  host.workspace.attachments = (repository_attachment(tmp_path / 'project', 'ws'),)
   admitted = _request(
     tmp_path,
     host=host,
@@ -139,14 +142,15 @@ def test_manual_launch_returns_the_type_owned_pending_extension(tmp_path):
   run = BroType(host).launch(admitted)
   assert isinstance(run, Expect)
   assert isinstance(admitted.record, Prepared)
+  inherited = inherited_attachment(host.workspace.attachments, tmp_path, 'feature')
+  assert inherited is not None
   assert run.pending == {
     'target': 'dev',
     'prompt': 'work',
     'request': dump_request(admitted.record.request, Descriptor('bro', {})),
     'root': 'ws',
     'summoner': {'trail_id': 'trail'},
-    'repo': None,
-    'into': 'feature',
+    'attachment': inherited.dump(),
   }
   assert cast(BroFacts, run.extension).placement == Placement('start', None)
 

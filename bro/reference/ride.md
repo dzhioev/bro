@@ -1,7 +1,7 @@
 # ride
 
 `ride` is the managed-workspace runtime.
-It combines a harness implementation with a bro personality and prepares a boxed or unboxed workspace around an independent clone.
+It combines a harness implementation with a bro personality and prepares a boxed or unboxed workspace with optional typed attachments.
 It hydrates the launch scope, supervises the root session and its summons, and records enough state to resume the workspace later.
 
 The runtime is published by the `bro-ride` distribution and depends on the `bro` framework.
@@ -42,6 +42,9 @@ For an automatically named workspace, `--drop` removes it only after a clean exi
 
 Both mode verbs start **detached**:
 `/tree` is an empty writable directory and no repository is cloned.
+With `--repo PATH|URL`, the clone is `/tree/<repository name>/` and the session starts there;
+an unboxed session starts in the same subdirectory of its host tree.
+The tree beside the clone is writable session space, outside git.
 `--repo PATH|URL` accepts either an existing path inside a checkout (resolved to its root) or a scheme/scp-shaped git URL.
 A path attachment bases on the checkout's current `HEAD`;
 a URL attachment fetches its managed mirror and bases on the fresh `origin/HEAD`.
@@ -89,7 +92,7 @@ the launcher's own `--log` never reaches the session.
   idle badges are `[-]` boxed and `.-.` unboxed.
 - `ride clean` removes inactive clean workspaces, managed URL mirrors no workspace references, unlocked runtime bundles, and each installed harness's unused host caches;
   `--force` permits dirty workspaces and removal when an attached repository no longer exists, while `--dry-run` reports only.
-- `ride exec <workspace> [command ...]` enters a running boxed workspace.
+- `ride exec <workspace> [command ...]` enters a running boxed workspace in its start directory.
   The exec process is outside the running session's process tree and has no broker channel of its own.
 - `ride check-clean <workspace>` reports whether removal is safe.
 - `ride check-host [--install]` probes the host prerequisites a launch needs and prints each with the fix for its macOS or Ubuntu host, exiting nonzero while any fails;
@@ -256,7 +259,12 @@ Its top-level stores are `workspaces/`, `runtime/`, `repos/`, `trails/`, `launch
 workspace metadata records which repository, if any, each workspace is attached to.
 
 Workspace metadata is read only in its current strict shape.
-A command naming a non-empty workspace directory without a current record, or one whose `workspace.json` does not match that shape, refuses the workspace by name and points to `ride clean --force <name>`.
+A command naming a workspace whose record cannot be read fails with the read error and the `ride clean --force <name>` hint.
+Enumerations mark it unrecognised instead of raising:
+`ride list` lists it with that hint and logs the error details, and `ride clean` without workspace names leaves it.
+Removing an unrecognised workspace requires its name and `--force`;
+while any such workspace remains, cleanup keeps every managed mirror because its references cannot be read.
+No earlier record format is recognised or migrated.
 That explicit force-clean path removes the directory without interpreting its metadata, after the same session-lock and running-container checks used for a current workspace.
 
 ### Runtime bundles
@@ -357,12 +365,13 @@ The launcher's ambient git authentication performs mirror fetches and first-laun
 A workspace is one directory, `<runtime-root>/workspaces/<name>/`, holding its writable tree plus everything the launch machinery records about it.
 Workspace names are global, so every lifecycle verb identifies one by name from any directory.
 A name is one path component, and one a launch cannot use fails naming it rather than reaching the filesystem.
-A directory under the store that records no workspace is ignored by enumeration, so a stray entry cannot disable the lifecycle verbs:
+A directory with a usable workspace name but no readable record is enumerated as unrecognised ("Runtime state"):
 
 ```
 <runtime-root>/workspaces/<name>/
   workspace.json      what the workspace is (below)
-  tree/                empty when detached; otherwise an independent clone
+  tree/               writable session directory, /tree in a container
+    <attachment name>/  host-provided attachment, such as a repo clone
   lock                the session lock ("One session per workspace")
   exit                how the last session ended (below)
   resume.json         the spec `ride resume` relaunches ("Lifecycle verbs")
@@ -380,6 +389,9 @@ A directory under the store that records no workspace is ignored by enumeration,
     trails/           a local-recording boxed member's trails, staged here then adopted into the ride's host store on exit
 ```
 
+A session starts in its attachment directory, or in the tree when detached.
+A joined member and `ride exec` use their party's start directory.
+Harness state keyed by directory, including Claude's project and trusted path, uses that start directory.
 The tree sits in its own subdirectory rather than being the workspace directory itself:
 a container bind-mounts it as `/tree`, and the records must stay outside that mount.
 Whichever harness ran it, everything a session leaves behind is one of these records, so removing the workspace directory is what reclaims it.
@@ -406,22 +418,23 @@ The one deliberate exception to all of this is the launch audit, under `<runtime
 `workspace.json` is written once at creation and read by every later launch, so nothing downstream re-derives it:
 
 ```json
-{"isolation": "boxed", "repo": "/home/me/project", "branch": "workspace-my-task", "throwaway": false, "tree": null}
+{"isolation": "boxed", "attachments": [{"type": "repo", "name": "project", "repo": "/home/me/project", "branch": "workspace-my-task"}], "throwaway": false, "tree": null}
 ```
 
 - **`isolation`** — `boxed` (the default) or `unboxed` (`--unboxed`).
   It is fixed at creation;
   a launch naming an existing workspace must request the same isolation.
-- **`repo`** — the resolved checkout path or normalized git URL for an attached workspace.
-  It is absent when detached;
-  reusing a name with a different attachment is refused.
-- **`branch`** — the attached clone's branch, present if and only if `repo` is present.
-  A new workspace uses `workspace-<name>`.
+- **`attachments`** — a non-empty list, present exactly when the workspace has an attachment.
+  A launch supports at most one attachment.
+  Each record holds its registered `type`, its directory `name`, and the fields its type owns.
+  A `repo` record holds `repo`, the resolved checkout path or normalized git URL, and `branch`, the clone's branch (`workspace-<name>` for a new workspace).
+  Reusing a workspace name with a different attachment type or identity is refused.
 - **`throwaway`** — the workspace is disposable.
   Its supervisor removes it once its session exits cleanly.
   It is set for the workspaces summoned children run in.
 - **`tree`** — the absolute external tree named by `--tree`, otherwise `null`.
   An external tree belongs only to a detached unboxed workspace, must exist outside the runtime root, and may be recorded by one workspace at a time.
+  That ownership check inspects the records it can read and passes over unrecognised records.
   Resume fails if it disappears;
   workspace removal deletes only the records and never this directory.
 
@@ -431,9 +444,10 @@ A detached record is `{"isolation": "boxed", "throwaway": false, "tree": null}`.
 The session's supervisor clears it when the session starts and, once the session ends, writes the exit code there, or `killed` for a child the host killed;
 a session that dies before its supervisor writes, such as one under a crashed launcher, leaves no record.
 A managed detached tree is clean exactly when it is empty;
-an attached or external-tree workspace is clean only when `exit` records `0`,
+a workspace with a `repo` attachment or an external tree is clean only when `exit` records `0`,
 so a failed, killed, or unrecorded session keeps it for inspection and recovery.
-Removing an attached workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
+Other attachment types supply their own cleanliness rules.
+Removing a `repo` workspace whose recorded checkout or managed mirror no longer exists requires `ride clean --force`.
 
 ## The launch stack
 
@@ -582,7 +596,21 @@ Unrelated home sections are never read.
 A root freezes this reading for all its descendants and manual commits;
 configuration edits affect later roots only.
 
-### Repository configuration
+### Attachments
+
+An attachment is typed host-provided data in its own named subdirectory of the tree.
+Types register through `bro.attachment_types` as `name = "module:object"`, loading an instance of `ride.attachments.AttachmentType` lazily by name.
+The type validates its recorded fields and supplies resolution, preparation, session environment, a session-start step, child inheritance, cleanliness, removal, listing and shared-data cleanup.
+The launcher passes each attachment's complete record to `do-ride`, since boxed sessions do not mount `workspace.json`.
+The neutral launcher, workspace, container machinery and worker lowering use only that contract.
+
+The `repo` type ships in `bro-ride` and is the only launch syntax:
+`--repo PATH|URL` attaches a repository, while omitting it starts detached.
+Its attachment name is the checkout path's last component, or the normalized URL's last path segment without a trailing `.git`.
+An empty name, `.` or `..` refuses the launch.
+The name is derived at creation and recorded, not re-derived at each start.
+
+#### Repository configuration
 
 Only `--repo PATH|URL` attaches a repository to `ride solo|along`; cwd is never an implicit attachment.
 The clone's root may carry `.bro/config.toml`:
@@ -637,7 +665,7 @@ Whatever the isolation and harness, the outer:
   — the harness's cheap existence check with its own refusal wording (`session_exists` / `missing_session_error`), run before the tree is materialized for a mistyped name;
 - calls the shared started-party launcher to prepare the workspace (the two isolation sections below) and the `do-ride` command with only the session shape;
   the launcher emits a container description for boxed isolation or a closed process-environment snapshot for unboxed isolation,
-  whose `PWD` names the session tree and whose only ambient inputs are the baseline roster in `ride.runtime_bundle` and, for a session attached to the launcher's terminal, its terminal identity;
+  whose `PWD` names the start directory and whose only ambient inputs are the baseline roster in `ride.runtime_bundle` and, for a session attached to the launcher's terminal, its terminal identity;
   both run the frozen bundle through the host materialization or container volume;
 - owns the post-exit UX, identical in both isolations
   — the resume hint, `--drop` removal (honored only on a clean exit; see the flag).
@@ -655,14 +683,14 @@ The lock releases with the session, so re-entry and `ride resume` afterwards are
 ### Unboxed isolation (`ride along --unboxed -w <name> <bro>`)
 
 An unboxed workspace runs its tree directly on the launcher's filesystem.
-With an attachment, the first launch creates the same independent clone a boxed workspace uses and checks out the workspace's recorded branch at the resolved base.
+With a `repo` attachment, the first launch creates the same independent clone a boxed workspace uses and checks out the workspace's recorded branch at the resolved base.
 Later launches preserve that clone exactly as the session left it.
-After clone preparation, `ride` starts the runtime bundle's absolute `do-ride` with the tree as cwd.
+After clone preparation, `ride` starts the runtime bundle's absolute `do-ride` with the start directory as cwd.
 Every unboxed session's store and install-hook output live under one private temporary root that its supervisor removes after exit, so a retained workspace contains no credential material.
 `BRO_STORE` and `BRO_INSTALL_DIR` point at those directories.
 The harness's `prepare_unboxed_env` hook supplies launch-time state;
 `do-ride` owns credential hooks and provisioning as described in "Repository configuration".
-The launch removes the invoking environment's active-venv marker and PATH entry, so the workspace's own `.venv` is never activated implicitly.
+The launch removes the invoking environment's active-venv marker and PATH entry, so the start directory's `.venv` is never activated implicitly.
 
 A detached unboxed launch normally creates a plain empty `tree/`, skips repository and persona provisioning, and runs the same pinned `do-ride` there.
 With `--tree PATH`, it runs instead in that existing directory while keeping every record under the runtime root.
@@ -674,7 +702,7 @@ an external tree is never removed.
 
 `/tree` is always the workspace's writable `tree/` bind.
 It starts and stays empty for a detached launch.
-With an attachment, the launcher creates a **plain local clone** before container creation.
+With a `repo` attachment, the launcher creates a **plain local clone** before container creation.
 The same clone machinery serves both isolations and leaves no dependency on the attached checkout's git directory.
 A local clone hardlinks objects when the attachment and runtime root share a filesystem and copies them otherwise;
 it carries no alternates dependency on the attachment.
@@ -683,7 +711,7 @@ Layout:
 
 - `<runtime-root>/workspaces/<name>/tree/` (host) → `/tree` rw.
   Empty while detached;
-  an attached workspace contains the host-prepared clone.
+  an attached workspace contains the host-prepared clone at `<attachment name>/`.
 - `ride-runtime-<bundle-hash>` → `/var/ride/runtime` ro.
   Its `bin/` is first on PATH and its `venv/` carries the root's frozen Python installation.
 - a per-launch **scoped credential store** injected into `/home/ride/.bro`.
@@ -723,7 +751,8 @@ Layout:
   In-container readers resolve that fixed absolute path;
   no state path is relative to `/tree`.
 
-On an attached workspace's first launch, `prepare_container` clones from the checkout or managed mirror into a temporary sibling and publishes the completed clone atomically.
+On an attached workspace's first launch, the `repo` type clones from the checkout or managed mirror into a temporary directory beside the tree, then atomically publishes the completed clone at `tree/<attachment name>/`.
+An existing attachment directory without a `.git` directory refuses the launch.
 It retargets `origin` to the attachment's upstream URL, spelling a github.com one as `https://github.com/<owner>/<name>` and keeping any other host's verbatim, and ref-refreshes the attachment's `refs/remotes/origin/*` without adding another remote.
 It creates the recorded workspace branch from the resolved base:
 a URL attachment's fresh `origin/HEAD`, an explicit `--into`, or a summon's inherited base;
@@ -737,7 +766,7 @@ Inside the container, the entrypoint (running as root first):
 
 1. Aligns the `ride` user's UID/GID with whoever owns `/tree` on the launcher,
    then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
-2. When attached, marks `/tree` as a safe git directory.
+2. Marks every directory safe for git with `safe.directory=*`.
    The host's `~/.gitconfig` is not seeded:
    a session's git configuration is what its own hooks declare later in `do-ride`.
 3. Execs `do-ride`.
@@ -747,8 +776,8 @@ Inside the container, the entrypoint (running as root first):
 
 Every root and spawned child goes through `ride.session.started_party_launch` with a `SessionSpec`, workspace, hydrated scope, runtime bundle, and requested isolation.
 The boxed result is one broker-free `ride.workspace.docker.Launch` carrying the full launch:
-the workspace name, optional resolved repository attachment and base ref, command, explicit env snapshot, credential tiers, TTY, extra mounts, resolved image tag, and runtime bundle hash.
-`prepare_container` consumes that immutable description for clone preparation → scoped-store build → `docker create` + store copy;
+the workspace name, typed attachment records and their resolved base, command, explicit env snapshot, credential tiers, TTY, extra mounts, resolved image tag, and runtime bundle hash.
+`prepare_container` consumes that immutable description for attachment preparation → scoped-store build → `docker create` + store copy;
 it does not re-resolve images or bundles.
 The unboxed result is a `ProcessLaunch` carrying the absolute snapshot command, cwd, and complete environment;
 broker supervision adapts it to `ProcessLaunchSpec` without reading ambient process state.
@@ -921,9 +950,13 @@ An unboxed child starts in its own process group;
 kill sends SIGTERM only to `do-ride` so its harness-specific shutdown can unwind and flush state, then sends SIGKILL to the group if the process tree or inherited output pipe survives that grace period.
 A boxed member’s kill follows the same TERM → grace → KILL shape through `docker exec`, signaling only while the container’s `/proc` still shows the recorded start time, so a late kill finds no target and never a reused pid.
 The request’s complete `llm` text replaces the child’s configured recipe within that harness and never switches it;
-the child runs with the root session’s attachment.
-A started child in an attached ride bases on the summoner’s workspace `HEAD` read at summon time (uncommitted changes never transfer;
-a container summoner’s local-only commits are transferred into the attachment first so the child’s host-side clone can copy them) unless the request’s `into` ref overrides, while a detached root starts detached children and rejects `into`.
+the child inherits the root session’s attachment through its type.
+A child with a `repo` attachment bases on the request's `into` ref when given.
+Otherwise a started child uses the summoner's clone `HEAD` read at summon time, and a manual child reads that clone's `HEAD` when the operator launches it.
+A joined summoner uses its party's clone.
+Local-only commits are transferred into the attached checkout or mirror before the child's host-side clone is prepared;
+uncommitted changes never transfer.
+A detached root starts detached children and rejects `into`.
 A joined child uses the party’s existing tree directly, including its current uncommitted state, and runs no workspace setup or persona provisioning of its own.
 The quest carries a fixed **talk** over four rights:
 `owner.say`, `owner.question`, `worker.say`, and `worker.question`.
@@ -1184,7 +1217,7 @@ removing a bundle also removes its unused runtime volume, while Docker keeps an 
 
 ## The session executable
 
-`do-ride solo|along --workspace NAME --harness H [--resume] [--repo R] --hold HOLD [--] <bro> [prompt]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
+`do-ride solo|along --workspace NAME --harness H [--resume] [--attachment JSON] --hold HOLD [--] <bro> [prompt]` (`ride/ride/do_ride.py`) runs one session in a prepared workspace.
 It has its own parser:
 there is no `--in-place`, no outer machinery flags or combination refusals, and `--resume` is an ordinary session flag.
 The launcher puts the bro and the prompt past `--`, so a prompt that reads as a flag stays the prompt.
@@ -1224,14 +1257,14 @@ Wrappers and session daemons rely on a small set of env vars:
   `ride banner` derives the container path and Docker shell command from it rather than probing `/.dockerenv`, and a trail's `location.is_container` is the same fact.
   `do-ride` uses the same fact for isolation-specific setup, so an unboxed ride launched inside a foreign container remains unboxed.
 - `RIDE_REPO` — the root session's resolved checkout path or normalized git URL, absent when detached.
-  Set by each launcher and overwritten from `do-ride --repo`;
-  banner and summon lowering read this launch state rather than deriving a repository from cwd.
+  The `repo` type contributes it to the launch environment;
+  the banner reads that fact rather than deriving a repository from cwd.
 - `RIDE_REPO_URL` — the attached session tree's sanitized network `origin`, absent when detached or when `origin` is a local path or `file://` URL.
-  Each launcher reads it on the host side, and `do-ride` refreshes it from the prepared tree before the harness starts.
+  The `repo` type reads it from the prepared clone for each launch.
 - `RIDE_BRANCH` — the attached workspace's recorded branch, absent when detached.
-  The launcher reads it from `workspace.json` and passes it to `do-ride`.
-- `RIDE_BASE_SHA` — the commit the attached workspace's tree starts the session at, set beside `RIDE_BRANCH` and absent with it:
-  the resolved base a fresh clone is made at, or the tree's HEAD for a resume and for a joined member.
+  The `repo` type reads it from its attachment record.
+- `RIDE_BASE_SHA` — the commit the attached clone starts the session at, set beside `RIDE_BRANCH` and absent with it:
+  the resolved base a fresh clone is made at, or the clone's HEAD for a resume and for a joined member.
 - `RIDE_HOST_TREE` — launcher-side absolute path to the workspace tree, set explicitly in both isolations.
   It is normally `<runtime-root>/workspaces/<name>/tree`, or the recorded external path for `--tree`;
   in a container it names the host path bound at `/tree`.
@@ -1251,7 +1284,7 @@ Wrappers and session daemons rely on a small set of env vars:
   — never an input:
   the session's bro identity travels in the spec's own flags.
 - `BRO_HUMAN_NAME` / `BRO_HUMAN_EMAIL` — the human the session works for, as the attached repository's `user.name` / `user.email` name them on the launcher (`ride/ride/identity.py`).
-  Resolved once per launch, set in both isolations, and set by the summon lowering for a child
+  Contributed by the `repo` type in both isolations, including children
   — whose repository is its summoner's, so the two credit the same human.
   Absent for a detached launch, which has no commits to credit, and for an attachment declaring no identity
   — which the launch warns about.

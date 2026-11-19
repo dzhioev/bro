@@ -16,13 +16,16 @@ import ride.workspace.spawn as workspace_spawn
 from bro.broker.transports.tcp import Endpoint
 from bro.monitor import PROCESS_FILENAME, party_member_dir, workspace_session_dir
 from bro.workspace.paths import workspace_dir
+from ride.repo_attachment import repository_attachment
 from ride.workspace.docker import CONTAINER_BROKER_HOST, MemberExec
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
 
 def _throwaway(name: str, project) -> Workspace:
-  return Workspace.create(name, project, Isolation.BOXED, throwaway=True)
+  return Workspace.create(
+    name, (repository_attachment(project, name),), Isolation.BOXED, throwaway=True
+  )
 
 
 def _exit_record(tmp_path) -> str:
@@ -474,7 +477,7 @@ class TestProcessChildWorkspaceCleanup:
     project.mkdir()
     workspace = Workspace.create(
       'broker-CH',
-      project,
+      (repository_attachment(project, 'broker-CH'),),
       Isolation.UNBOXED,
       throwaway=True,
     )
@@ -787,7 +790,12 @@ class TestProcessChildPartyRecords:
   ):
     project = tmp_path / 'project'
     project.mkdir()
-    workspace = Workspace.create('broker-owner', project, Isolation.UNBOXED, throwaway=True)
+    workspace = Workspace.create(
+      'broker-owner',
+      (repository_attachment(project, 'broker-owner'),),
+      Isolation.UNBOXED,
+      throwaway=True,
+    )
     workspace.tree.mkdir(parents=True)
     owner_store = tmp_path / 'owner-store'
     owner_store.mkdir()
@@ -841,7 +849,12 @@ class TestProcessChildPartyRecords:
   async def test_concurrent_owner_kill_and_wait_finish_member_teardown_once(self, tmp_path):
     project = tmp_path / 'concurrent-project'
     project.mkdir()
-    workspace = Workspace.create('broker-concurrent', project, Isolation.UNBOXED, throwaway=True)
+    workspace = Workspace.create(
+      'broker-concurrent',
+      (repository_attachment(project, 'broker-concurrent'),),
+      Isolation.UNBOXED,
+      throwaway=True,
+    )
     workspace.tree.mkdir(parents=True)
     owner_store = tmp_path / 'concurrent-owner-store'
     owner_store.mkdir()
@@ -914,7 +927,10 @@ time.sleep(30)
     project = tmp_path / 'failed-teardown-project'
     project.mkdir()
     workspace = Workspace.create(
-      'broker-failed-teardown', project, Isolation.UNBOXED, throwaway=True
+      'broker-failed-teardown',
+      (repository_attachment(project, 'broker-failed-teardown'),),
+      Isolation.UNBOXED,
+      throwaway=True,
     )
     workspace.tree.mkdir(parents=True)
     owner_store = tmp_path / 'failed-teardown-owner-store'
@@ -1028,6 +1044,7 @@ class TestExecMember:
         command=['do-ride', 'solo'],
         env={'RIDE_BRO': 'dev'},
         secrets=set(),
+        cwd='/tree',
       ),
       party_workspace='party-ws',
       records_directory=str(records),
@@ -1133,6 +1150,7 @@ class TestExecMember:
         command=['do-ride', 'solo'],
         env={},
         secrets=set(),
+        cwd='/tree',
       ),
       party_workspace='broker-owner',
       records_directory=str(records),

@@ -44,6 +44,7 @@ import os
 import pty
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -73,6 +74,7 @@ from ride.bro_worker import BroType
 from ride.broker_root import broker_bind_hosts
 from ride.do_ride import RESOLVED_RECIPE_ENV, encode_resolved_recipe
 from ride.harness import get_harness
+from ride.repo_attachment import repository_attachment
 from ride.repository import Repository
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import CONTAINER_BROKER_HOST, find_container_id
@@ -615,12 +617,13 @@ from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, La
 from bro.workspace.git import rev_parse_commit
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
+from ride.repo_attachment import repository_attachment
 from ride.workspace.store import ScopedSecrets
 from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV, ISOLATION_ENV, project_root, runtime_base
 
 name = os.environ['RIDE_E2E_NAME']
-workspace = Workspace.ensure(name, project_root(), Isolation.BOXED)
-assert workspace.metadata.branch is not None
+workspace = Workspace.ensure(name, (repository_attachment(project_root(), name),), Isolation.BOXED)
+assert workspace.attachments[0].fields["branch"] is not None
 claude_dir = workspace.path / 'claude'
 session_dir = workspace.path / 'session'
 claude_dir.mkdir()
@@ -644,7 +647,7 @@ launch = Launch(name=name,
                      'RIDE_BRO': 'bro-dev',
                      'RIDE_COMMAND': 'ride along bro-dev',
                      ISOLATION_ENV: workspace.isolation.value,
-                     BRANCH_ENV: workspace.metadata.branch,
+                     BRANCH_ENV: workspace.attachments[0].fields["branch"],
                      BASE_SHA_ENV: rev_parse_commit(project_root(), 'HEAD'),
                      'RIDE_SESSION_DIR': '/var/ride/session',
                      **{
@@ -657,7 +660,7 @@ launch = Launch(name=name,
                 image=os.environ['RIDE_E2E_IMAGE'],
                 runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'],
                 extra_mounts=tuple(extra_mounts),
-                repo=project_root())
+                attachments=workspace.attachments)
 runtime_hash = os.environ['RIDE_E2E_RUNTIME_HASH']
 runtime_bundle = RuntimeBundle(runtime_base() / 'runtime' / runtime_hash, f'{sys.version_info.major}.{sys.version_info.minor}')
 child_command = os.environ.get('RIDE_E2E_CHILD_COMMAND')
@@ -1068,7 +1071,7 @@ def _run_broker_scenario(
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
   child = DockerLaunchSpec(
@@ -1080,7 +1083,7 @@ def _run_broker_scenario(
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, f'{name}-child'),),
     )
   )
   transport = TcpServerTransport(broker_bind_hosts())
@@ -1404,8 +1407,8 @@ def scenario_f(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
       name,
       '--harness',
       'claude',
-      '--repo',
-      str(env.project),
+      '--attachment',
+      json.dumps(repository_attachment(env.project, name).dump()),
       '--hold',
       'unattended',
       'bro-dev',
@@ -1474,8 +1477,8 @@ def test_claude_summoner_receives_a_child_question_and_end_through_its_session_w
       name,
       '--harness',
       'claude',
-      '--repo',
-      str(env.project),
+      '--attachment',
+      json.dumps(repository_attachment(env.project, name).dump()),
       '--hold',
       'unattended',
       'bro-dev',
@@ -1526,8 +1529,8 @@ def test_a_launched_native_session_records_the_git_header(
         name,
         '--harness',
         'bro',
-        '--repo',
-        str(env.project),
+        '--attachment',
+        json.dumps(repository_attachment(env.project, name).dump()),
         '--hold',
         'unattended',
         'bro',
@@ -1574,8 +1577,8 @@ def scenario_g(isolated_env: IsolatedEnv, request: pytest.FixtureRequest) -> Liv
       name,
       '--harness',
       'claude',
-      '--repo',
-      str(env.project),
+      '--attachment',
+      json.dumps(repository_attachment(env.project, name).dump()),
       '--hold',
       'unattended',
       'bro-dev',
@@ -1734,7 +1737,7 @@ def _run_boxed_join_scenario(
   )
 
   name = f'{_NAME_PREFIX}h-{case}-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   party_dir = workspace.path / 'party'
   party_dir.mkdir(parents=True, exist_ok=True)
   records = party_member_dir(workspace.path, _MEMBER_NAME)
@@ -1749,7 +1752,7 @@ def _run_boxed_join_scenario(
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
       extra_mounts=(f'{party_dir}:/var/ride/party',),
     )
   )
@@ -1770,6 +1773,7 @@ def _run_boxed_join_scenario(
           'RIDE_SESSION_DIR': f'/var/ride/party/{_MEMBER_NAME}/session',
         },
         secrets=(),
+        cwd='/tree',
       ),
       party_workspace=name,
       records_directory=str(records),
@@ -1962,7 +1966,7 @@ def test_spawned_summon_pass_overrides_the_targets_configured_credential(
   env = isolated_env
   child_placement = 'boxed' if child_isolation is None else child_isolation
   name = f'{_NAME_PREFIX}i-pass-{child_placement}-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -2060,7 +2064,7 @@ Path('/tree/.summon-credential-report').write_text(answer)
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -2142,12 +2146,10 @@ def _host_root_route(
 ) -> int:
   from ride.broker_root import run_root_via_broker
   from ride.runtime_bundle import RuntimeBundle
-  from ride.workspace.clones import ensure_clone
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.spawn import ProcessLaunchSpec
 
-  assert workspace.repository is not None and workspace.metadata.branch is not None
-  ensure_clone(workspace.repository, workspace.tree, workspace.metadata.branch, None)
+  workspace.prepare()
   bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -2155,9 +2157,9 @@ def _host_root_route(
   return run_root_via_broker(
     ProcessLaunchSpec(
       command=_broxy_probe(str(bundle.host_venv / 'bin' / 'python'), source),
-      cwd=str(workspace.tree),
+      cwd=str(workspace.start_directory),
       env={
-        **bundle.host_session_env(workspace.tree, tty=False),
+        **bundle.host_session_env(workspace.start_directory, tty=False),
         'RIDE_BRO': cast(str, mission.descriptor.values['target']),
       },
       interactive=False,
@@ -2218,14 +2220,18 @@ def test_manual_summon_commits_over_the_operator_channel_through_credential_pick
   monkeypatch.setattr(credentials, 'STORE_DIR', str(env.home / '.bro'))
   _replace_unboxed_session(monkeypatch, _MANUAL_CREDENTIAL_CHILD)
   repository = _permission_repository(env, 'manual')
-  workspace = Workspace.ensure(f'{_NAME_PREFIX}manual-prepare', repository, Isolation.UNBOXED)
+  workspace = Workspace.ensure(
+    f'{_NAME_PREFIX}manual-prepare',
+    (repository_attachment(repository, f'{_NAME_PREFIX}manual-prepare'),),
+    Isolation.UNBOXED,
+  )
   child_name = f'{_NAME_PREFIX}manual-commit'
   mission = _root_mission(targets=('bro',), passes=('github+passed',), placement='unboxed')
 
   root_ended = threading.Event()
 
   def commit() -> None:
-    token_path = workspace.tree / '.manual-token'
+    token_path = workspace.start_directory / '.manual-token'
     _wait_until(
       lambda: token_path.is_file() or root_ended.is_set(), 20, 'manual prepare acceptance', None
     )
@@ -2256,7 +2262,9 @@ def test_manual_summon_commits_over_the_operator_channel_through_credential_pick
     committed.result(timeout=10)
 
   assert code == 0
-  assert json.loads((workspace.tree / '.manual-report').read_text()) == {'github': 'manual-github'}
+  assert json.loads((workspace.start_directory / '.manual-report').read_text()) == {
+    'github': 'manual-github'
+  }
   child = Workspace.open(child_name)
   record = json.loads(child.resume_file.read_text())
   assert record['runtime_bundle'] is None
@@ -2350,7 +2358,7 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
   monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
   name = f'{_NAME_PREFIX}i-chain-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   party_directory = workspace.path / 'party'
   party_directory.mkdir(parents=True, exist_ok=True)
   runtime_bundle = RuntimeBundle(
@@ -2428,7 +2436,7 @@ time.sleep(2)
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
       extra_mounts=(f'{party_directory}:/var/ride/party',),
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -2622,7 +2630,7 @@ def _run_watch_route(
   from ride.workspace.model import Workspace
 
   name = f'{_NAME_PREFIX}j-{case}-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -2649,7 +2657,7 @@ def _run_watch_route(
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -2987,7 +2995,7 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
 
   env = isolated_env
   name = f'{_NAME_PREFIX}j-remind-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -3022,7 +3030,7 @@ def test_native_summoner_receives_a_child_question_and_end_through_its_session_w
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -3083,7 +3091,7 @@ def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
 
   env = isolated_env
   name = f'{_NAME_PREFIX}j-chat-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -3132,7 +3140,7 @@ Path('/tree/.quest-chat-report').write_text(outcome.answer)
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -3177,7 +3185,7 @@ def test_cancel_kills_a_live_child_and_ends_its_quest_on_reap(
 
   env = isolated_env
   name = f'{_NAME_PREFIX}k-cancel-party'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -3228,7 +3236,7 @@ Path('/tree/.quest-cancel-report').write_text(json.dumps({
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -3268,7 +3276,29 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
 
   env = isolated_env
   name = f'{_NAME_PREFIX}m-benchmark-type'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  benchmark_repository = env.root / 'benchmark'
+  (benchmark_repository / 'settings').mkdir(parents=True)
+  for relative in ('pyproject.toml', 'settings/smoke.json'):
+    shutil.copy2(env.project / 'benchmark' / relative, benchmark_repository / relative)
+  for arguments in (
+    ['init', '--quiet'],
+    ['remote', 'add', 'origin', 'https://example.test/benchmark.git'],
+    ['add', '.'],
+    [
+      '-c',
+      'user.name=Example',
+      '-c',
+      'user.email=example@test',
+      'commit',
+      '--quiet',
+      '-m',
+      'benchmark fixture',
+    ],
+  ):
+    subprocess.run(['git', '-C', str(benchmark_repository), *arguments], check=True)
+  workspace = Workspace.ensure(
+    name, (repository_attachment(benchmark_repository, name),), Isolation.BOXED
+  )
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -3312,7 +3342,7 @@ def test_benchmark_launch_runs_as_a_registered_type(isolated_env: IsolatedEnv, m
     tty=False,
     image=env.image,
     runtime_bundle_hash=env.runtime_bundle_hash,
-    repo=env.project,
+    attachments=(repository_attachment(benchmark_repository, name),),
   )
 
   code = run_started_party(
@@ -3387,7 +3417,7 @@ def test_worker_container_runs_through_the_live_broker(
 
   env = isolated_env
   name = f'{_NAME_PREFIX}n-worker-container'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -3405,7 +3435,7 @@ def test_worker_container_runs_through_the_live_broker(
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
 
@@ -3523,7 +3553,11 @@ def test_configuration_rules_refuse_cli_tool_and_wire_starts(
       lambda home: replace(settings, limit=tuple(policy['limit'])),
     )
   repository = _permission_repository(env, layer)
-  workspace = Workspace.ensure(f'{_NAME_PREFIX}refusals-{layer}', repository, Isolation.UNBOXED)
+  workspace = Workspace.ensure(
+    f'{_NAME_PREFIX}refusals-{layer}',
+    (repository_attachment(repository, f'{_NAME_PREFIX}refusals-{layer}'),),
+    Isolation.UNBOXED,
+  )
   mission = _root_mission(
     grants=('webview.cred=cookies+e2e to @bro',),
     placement='unboxed',
@@ -3531,7 +3565,7 @@ def test_configuration_rules_refuse_cli_tool_and_wire_starts(
   )
   code = _host_root_route(env, workspace, _PERMISSION_REFUSAL_ROOT, mission=mission)
   assert code == 0
-  report = json.loads((workspace.tree / '.permission-refusals').read_text())
+  report = json.loads((workspace.start_directory / '.permission-refusals').read_text())
   assert set(report) == {'cli', 'tool', 'wire', 'gift'}
 
 
@@ -3602,7 +3636,7 @@ def test_resume_rechecks_operator_rules_and_recomputes_the_default_credential_pi
     == 0
   )
   workspace = Workspace.open(name)
-  report = workspace.tree / '.resume-picks'
+  report = workspace.start_directory / '.resume-picks'
   assert json.loads(report.read_text()) == ['first-github']
   recorded = json.loads(workspace.resume_file.read_text())
   assert 'cred.github' not in recorded['authority_request']['values']
@@ -3731,7 +3765,7 @@ def test_operator_override_grants_summons_revokes_and_delivers_the_deferred_cont
 
   env = isolated_env
   name = f'{_NAME_PREFIX}override-targets'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -3754,7 +3788,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
     )
 
   monkeypatch.setattr(ride_spawn, 'started_party_launch', child_launch)
-  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args: None)
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args, **_kwargs: None)
   monkeypatch.setenv('HOME', str(env.home))
   monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
   root_ended = threading.Event()
@@ -3786,7 +3820,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
   with ThreadPoolExecutor(max_workers=1) as executor:
@@ -3818,7 +3852,7 @@ def test_override_refuses_old_roots_fixed_names_and_operator_gifts(
   env = isolated_env
   monkeypatch.setenv('HOME', str(env.home))
   monkeypatch.setenv('XDG_DATA_HOME', str(env.data_home))
-  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args: None)
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args, **_kwargs: None)
   with pytest.raises(SystemExit):
     ride_cli.main(['ride', 'override', 'before-switch', '--grant', '@bro'])
   assert 'before-switch' in capsys.readouterr().err
@@ -3826,7 +3860,11 @@ def test_override_refuses_old_roots_fixed_names_and_operator_gifts(
   config.write_text(json.dumps({'operator': {'revoke': ['@browser']}}))
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', str(config))
   repository = _permission_repository(env, 'override-refusal')
-  workspace = Workspace.ensure(f'{_NAME_PREFIX}override-refusal', repository, Isolation.UNBOXED)
+  workspace = Workspace.ensure(
+    f'{_NAME_PREFIX}override-refusal',
+    (repository_attachment(repository, f'{_NAME_PREFIX}override-refusal'),),
+    Isolation.UNBOXED,
+  )
   source = """
 import time
 from pathlib import Path
@@ -3848,7 +3886,7 @@ assert read()['may_summon'] == []
   root_ended = threading.Event()
 
   def refused_overrides():
-    ready = workspace.tree / '.override-refusal-ready'
+    ready = workspace.start_directory / '.override-refusal-ready'
     _wait_until(lambda: ready.exists() or root_ended.is_set(), 60, 'refusal root ready', None)
     assert ready.exists(), 'root ended before refusal checks'
     [root_mission] = [
@@ -3863,7 +3901,7 @@ assert read()['may_summon'] == []
           'operator.override',
           {'id': root_mission, 'changes': [['grant', name]]},
         )
-    (workspace.tree / '.override-refusal-finished').touch()
+    (workspace.start_directory / '.override-refusal-finished').touch()
 
   with ThreadPoolExecutor(max_workers=1) as executor:
     refused = executor.submit(refused_overrides)
@@ -4023,8 +4061,8 @@ def _credential_override_route(
     json.dumps({'defaults': ['github+one', 'brave+one', 'aws+one']})
   )
   monkeypatch.setattr(credentials, 'STORE_DIR', str(host_store))
-  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args: None)
-  monkeypatch.setattr(ride_session, 'reexec_from_runtime', lambda *_args: None)
+  monkeypatch.setattr(ride_cli, 'reexec_from_runtime', lambda *_args, **_kwargs: None)
+  monkeypatch.setattr(ride_session, 'reexec_from_runtime', lambda *_args, **_kwargs: None)
   probe = _CREDENTIAL_OVERRIDE_PROBE if fault is None else _CREDENTIAL_OVERRIDE_ONCE_PROBE
   publication_finished, release_completion = threading.Event(), threading.Event()
   if fault is not None:
@@ -4095,7 +4133,12 @@ def _credential_override_route(
     suffix += '-late-receipt'
   repository = _permission_repository(env, suffix)
   root_isolation = Isolation(isolation) if shape == 'join' else Isolation.UNBOXED
-  workspace = Workspace.ensure(f'{_NAME_PREFIX}{suffix}', repository, root_isolation)
+  workspace = Workspace.ensure(
+    f'{_NAME_PREFIX}{suffix}',
+    (repository_attachment(repository, f'{_NAME_PREFIX}{suffix}'),),
+    root_isolation,
+  )
+  relative_start_directory = workspace.start_directory.relative_to(workspace.tree)
   passes = ['github+one', 'brave+one', 'aws+one']
   if shape == 'manual':
     parent = f"""
@@ -4136,14 +4179,14 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
   with ThreadPoolExecutor(max_workers=2) as executor:
 
     def operate():
-      parent_ready = workspace.tree / '.credential-parent-ready'
+      parent_ready = workspace.start_directory / '.credential-parent-ready'
       _wait_until(
         lambda: parent_ready.exists() or root_ended.is_set(), 90, 'parent channel readiness', None
       )
       assert parent_ready.exists(), 'root ended before channel readiness'
       manual = None
       if shape == 'manual':
-        token_path = workspace.tree / '.credential-manual-token'
+        token_path = workspace.start_directory / '.credential-manual-token'
         _wait_until(lambda: token_path.exists() or root_ended.is_set(), 90, 'manual token', None)
         assert token_path.exists(), 'root ended before manual prepare'
         arguments = [
@@ -4170,7 +4213,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
           return True
         for row in mission_rows(workspace.name):
           if row['workspace'] is not None:
-            path = workspace_paths.workspace_dir(row['workspace']) / 'tree'
+            path = workspace_paths.workspace_tree(row['workspace']) / relative_start_directory
             name = row['extension']['member'] or row['workspace']
             if (path / ('.credential-' + name + '-ready-0')).exists():
               target = row
@@ -4179,7 +4222,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
 
       _wait_until(ready, 150, 'credential probe readiness', None)
       assert target is not None, 'root ended before credential probe readiness'
-      tree = workspace_paths.workspace_dir(target['workspace']) / 'tree'
+      directory = workspace_paths.workspace_tree(target['workspace']) / relative_start_directory
       name = target['extension']['member'] or target['workspace']
       operations = [
         [('cred', 'github+two'), ('cred', 'brave+two')],
@@ -4190,7 +4233,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
         operations = operations[:1]
       for stage, changes in enumerate(operations):
         if stage:
-          marker = tree / ('.credential-' + name + '-ready-' + str(stage))
+          marker = directory / ('.credential-' + name + '-ready-' + str(stage))
           _wait_until(
             lambda marker=marker: marker.exists() or root_ended.is_set(),
             150,
@@ -4216,13 +4259,13 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
               None,
             )
         assert set(result['next_start']) == {'github', 'brave'}
-        (tree / ('.credential-' + name + '-go-' + str(stage))).touch()
-      marker = tree / ('.credential-' + name + '-verified')
+        (directory / ('.credential-' + name + '-go-' + str(stage))).touch()
+      marker = directory / ('.credential-' + name + '-verified')
       _wait_until(
         lambda: marker.exists() or root_ended.is_set(), 150, 'credential verification', None
       )
       assert marker.exists(), 'session ended without verifying credential overrides'
-      (tree / ('.credential-' + name + '-finish')).touch()
+      (directory / ('.credential-' + name + '-finish')).touch()
       if fault == 'ended':
         target_id = target['id']
         _wait_until(
@@ -4277,7 +4320,7 @@ with contextlib.closing(RunLifecycle.from_env()) as channel:
               tty=False,
               image=env.image,
               runtime_bundle_hash=env.runtime_bundle_hash,
-              repo=repository,
+              attachments=(repository_attachment(repository, workspace.name),),
               extra_mounts=(f'{party_directory}:{workspace_paths.CONTAINER_PARTY_DIR}',),
             )
           ),

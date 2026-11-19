@@ -32,7 +32,7 @@ def project(monkeypatch):
 
 
 def _session_command(spec) -> list[str]:
-  return do_ride_command(spec)
+  return do_ride_command(spec, ())
 
 
 class TestSolo:
@@ -157,8 +157,7 @@ class TestAttachment:
     monkeypatch.setattr(ride_cli, '_resolve_repository_argument', lambda _value: repository)
     with patch('ride.cli.start_session', return_value=0) as start:
       assert ride_cli.main(['ride', 'along', '--repo', url, 'dev']) == 0
-    spec, resolved = start.call_args.args
-    assert resolved is repository
+    [spec] = start.call_args.args
     assert spec.repo == url
 
   def test_into_requires_an_attachment(self, capsys):
@@ -824,12 +823,16 @@ class TestLifecycle:
     assert 'XDG_DATA_HOME must be an absolute path' in caplog.text
 
   @pytest.mark.parametrize('contents', [b'{}', b'\xff'])
-  def test_an_unrecognized_workspace_record_is_a_cli_error(self, caplog, contents):
+  def test_an_unrecognized_workspace_is_listed_but_a_named_command_fails(
+    self, caplog, capsys, contents
+  ):
     workspace = workspace_dir('old')
     workspace.mkdir(parents=True)
     (workspace / 'workspace.json').write_bytes(contents)
 
-    assert ride_cli.main(['ride', 'list']) == 1
+    assert ride_cli.main(['ride', 'list']) == 0
+    assert 'unrecognised' in capsys.readouterr().out
+    assert ride_cli.main(['ride', 'check-clean', 'old']) == 1
     assert "workspace 'old' has an unrecognised record" in caplog.text
     assert 'ride clean --force old' in caplog.text
 
@@ -861,8 +864,7 @@ class TestSummonedLaunch:
         'request': {'type': 'bro', 'values': {'target': 'dev', 'cred.github': 'passed'}},
         'root': 'parent-root',
         'summoner': {'trail_id': 'T1'},
-        'repo': None,
-        'into': None,
+        'attachment': None,
       },
     )
     pending_launch.write(record)

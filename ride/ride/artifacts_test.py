@@ -30,6 +30,7 @@ from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspa
 from ride.artifacts import JOB_RUN_NAME, ArtifactControl, ArtifactStore, JobArtifacts
 from ride.bro_worker import BroFacts
 from ride.peer_facts import PeerFacts, WorkerFacts
+from ride.repo_attachment import repository_attachment
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -41,7 +42,7 @@ _DEFAULT_ARTIFACT_VIEW = PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
 
 @pytest.fixture
 def workspace(tmp_path):
-  workspace = Workspace.ensure('ws', tmp_path, Isolation.BOXED)
+  workspace = Workspace.ensure('ws', (repository_attachment(tmp_path, 'ws'),), Isolation.BOXED)
   workspace_tree('ws').mkdir(parents=True)
   return workspace
 
@@ -386,7 +387,9 @@ class TestFetch:
     assert list((ride.artifacts.store_dir('ws') / 'staging').iterdir()) == []
 
   def test_a_shared_boxed_child_gets_its_view_path(self, store, tmp_path):
-    Workspace.create('broker-CH', tmp_path, Isolation.BOXED, throwaway=True)
+    Workspace.create(
+      'broker-CH', (repository_attachment(tmp_path, 'broker-CH'),), Isolation.BOXED, throwaway=True
+    )
     store.view('broker-CH')
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to='broker-CH', by='ws')
@@ -406,7 +409,12 @@ class TestFetch:
       store.fetch(child, ref)
 
   def test_a_shared_unboxed_child_gets_a_private_workspace_copy(self, store, tmp_path):
-    workspace = Workspace.create('broker-CH', tmp_path, Isolation.UNBOXED, throwaway=True)
+    workspace = Workspace.create(
+      'broker-CH',
+      (repository_attachment(tmp_path, 'broker-CH'),),
+      Isolation.UNBOXED,
+      throwaway=True,
+    )
     ref, _ = store.mint(_root_identity(), (), _tree_file('a.bin', b'payload'))
     store.share([ref], to=workspace.name, by='ws')
     child = PeerIdentity(workspace=workspace.name, tree=workspace.tree, artifact_view=None)

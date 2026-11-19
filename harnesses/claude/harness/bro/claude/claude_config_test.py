@@ -6,6 +6,7 @@ import pytest
 
 import bro.claude.claude_config as ride_claude_config
 from bro.base.args import CLIError
+from ride.repo_attachment import repository_attachment
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -144,7 +145,7 @@ class TestContainerClaudeState:
   def test_returns_the_state_mount_and_claude_env(self, monkeypatch, tmp_path):
     monkeypatch.setattr(ride_claude_config.Path, 'home', lambda: tmp_path)
     monkeypatch.setattr(ride_claude_config, '_seed_claude_json', lambda d, h, **k: None)
-    mounts, env = ride_claude_config.container_claude_state(tmp_path / 'ws')
+    mounts, env = ride_claude_config.container_claude_state(tmp_path / 'ws', Path('/tree'))
     claude_dir = tmp_path / 'ws' / 'claude'
     assert mounts == [f'{claude_dir}:/home/ride/.claude']
     assert env == {
@@ -158,7 +159,7 @@ class TestContainerClaudeState:
     # provision keeps the dialog, see TestProvisionHostClaudeDir)
     monkeypatch.setattr(ride_claude_config.Path, 'home', lambda: tmp_path)
     monkeypatch.setattr(ride_claude_config, '_seed_claude_json', lambda d, h, **k: None)
-    ride_claude_config.container_claude_state(tmp_path / 'ws')
+    ride_claude_config.container_claude_state(tmp_path / 'ws', Path('/tree'))
     settings_file = tmp_path / 'ws' / 'claude' / 'settings.json'
     settings = json.loads(settings_file.read_text())
     assert settings['skipDangerousModePermissionPrompt'] is True
@@ -168,15 +169,19 @@ class TestWorkspaceProjectsDir:
   def _projects(self, workspace, encoded: str):
     return workspace.path / 'claude' / 'projects' / encoded
 
-  def test_container_workspace_uses_the_fixed_encoding(self, tmp_path):
-    container = Workspace.create('ws', tmp_path / 'project', Isolation.BOXED)
-    expected = self._projects(container, '-tree')
+  def test_boxed_workspace_encodes_its_attachment_start_directory(self, tmp_path):
+    container = Workspace.create(
+      'ws', (repository_attachment(tmp_path / 'project', 'ws'),), Isolation.BOXED
+    )
+    expected = self._projects(container, '-tree-project')
     assert ride_claude_config.workspace_projects_dir(container) == expected
 
-  def test_worktree_workspace_encodes_its_tree_path(self, tmp_path):
-    worktree = Workspace.create('ws', tmp_path / 'project', Isolation.UNBOXED)
+  def test_unboxed_workspace_encodes_its_attachment_start_directory(self, tmp_path):
+    worktree = Workspace.create(
+      'ws', (repository_attachment(tmp_path / 'project', 'ws'),), Isolation.UNBOXED
+    )
     assert ride_claude_config.workspace_projects_dir(worktree) == self._projects(
-      worktree, ride_claude_config.encode_project_path(worktree.tree)
+      worktree, ride_claude_config.encode_project_path(worktree.start_directory)
     )
 
 

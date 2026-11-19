@@ -3,13 +3,14 @@ from typing import Optional
 
 from bro.base import log
 from bro.workspace.paths import workspace_dir
+from ride.attachments import get_attachment_type, installed_attachment_types
 from ride.harness import get_harness, installed_harness_names
 from ride.operator import clean_controls
-from ride.repository import clean_managed_mirrors
 from ride.runtime_bundle import clean_runtime_bundles
 from ride.workspace.docker import running_mounts
 from ride.workspace.metadata import Isolation, UnrecognizedWorkspaceRecord, WorkspaceNotFound
 from ride.workspace.model import (
+  UnrecognisedWorkspace,
   Workspace,
   WorkspaceActive,
   hold_workspace_removal,
@@ -24,7 +25,11 @@ def clean_workspaces(
   selected = set(names) if names is not None and len(names) > 0 else None
   unrecognized = []
   if selected is None:
-    workspaces = Workspace.all()
+    enumerated = Workspace.all()
+    workspaces = [workspace for workspace in enumerated if isinstance(workspace, Workspace)]
+    for workspace in enumerated:
+      if isinstance(workspace, UnrecognisedWorkspace):
+        log.warning('skip %s: %s', workspace.name, workspace.error)
     missing = []
   else:
     workspaces = []
@@ -115,17 +120,25 @@ def clean_workspaces(
     if not dry_run
     else [workspace for workspace in Workspace.all() if workspace.name not in removed_names]
   )
-  referenced = {
-    workspace.metadata.repo for workspace in remaining if workspace.metadata.repo is not None
-  }
-  mirror_removed, mirror_skipped = clean_managed_mirrors(referenced, dry_run=dry_run)
+  if any(isinstance(workspace, UnrecognisedWorkspace) for workspace in remaining):
+    log.warning('keeping shared attachment data while unrecognised workspace records exist')
+  else:
+    attachments = [
+      attachment
+      for workspace in remaining
+      if isinstance(workspace, Workspace)
+      for attachment in workspace.attachments
+    ]
+    for name in installed_attachment_types():
+      get_attachment_type(name).clean_shared(
+        [attachment for attachment in attachments if attachment.type == name], dry_run=dry_run
+      )
   control_removed, control_active = clean_controls(dry_run=dry_run)
   runtime_removed, runtime_skipped = clean_runtime_bundles(dry_run=dry_run)
   action = 'would clean' if dry_run else 'cleaned'
   log.info(
     '%s %d operator control file(s), skipped %d active', action, control_removed, control_active
   )
-  log.info('%s %d managed mirror(s), skipped %d referenced', action, mirror_removed, mirror_skipped)
   log.info('%s %d runtime bundle(s), skipped %d active', action, runtime_removed, runtime_skipped)
   for name in installed_harness_names():
     get_harness(name).clean_cache(dry_run=dry_run)

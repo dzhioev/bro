@@ -36,6 +36,12 @@ from bro.worker_types import (
   WorkerType,
 )
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
+from ride.attachments import (
+  AttachmentRequest,
+  ResolvedAttachment,
+  inherited_attachment,
+  resolve_attachment,
+)
 from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
@@ -46,7 +52,6 @@ if TYPE_CHECKING:
   from ride.artifacts import ArtifactStore
   from ride.authority_reading import Reading
   from ride.peer_facts import PeerFacts, WorkerFacts
-  from ride.repository import Repository
   from ride.runtime_bundle import RuntimeBundle
   from ride.session import ScopedLaunch, SessionSpec
   from ride.workspace.docker import ContainerRuntimeResolver
@@ -71,24 +76,6 @@ def default_hold(*, solo: bool, isolation: Isolation) -> str:
   from ride.flags import default_hold as resolve
 
   return resolve(solo=solo, isolation=isolation)
-
-
-def resolve_head(*args):
-  from bro.workspace.git import resolve_head as resolve
-
-  return resolve(*args)
-
-
-def resolve_ref(*args):
-  from bro.workspace.git import resolve_ref as resolve
-
-  return resolve(*args)
-
-
-def human_git_identity_env(repository):
-  from ride.identity import human_git_identity_env as resolve
-
-  return resolve(repository)
 
 
 def record_resume_spec(*args, **kwargs):
@@ -138,7 +125,7 @@ class SummonLaunchSpec:
   parent_tree: Path
   summoner: dict[str, Any] | None
   llm: str | None = None
-  repo: Repository | Path | None = None
+  attachment: AttachmentRequest | None = None
   into: str | None = None
   share: tuple[str, ...] = ()
   env: dict[str, str] = field(default_factory=dict)
@@ -181,14 +168,12 @@ def _child_session_spec(
   A started party records its resume variant;
   a joined member uses the spec only to build its `do-ride` argv and environment."""
   from ride.authority_scope import checked_recipe
-  from ride.repository import as_repository
   from ride.session import SessionSpec
 
   harness = get_harness(launch.harness)
   resolved_isolation = launch.isolation if isolation is None else isolation
   if resolved_isolation is None:
     raise ValueError('summoned session isolation is unresolved')
-  repo = None if launch.repo is None else as_repository(launch.repo).identity
   spec = checked_recipe(
     launch.record.descriptor,
     cast('Reading', launch.record.reading),
@@ -196,7 +181,7 @@ def _child_session_spec(
   )
   return SessionSpec(
     name=workspace_name,
-    repo=repo,
+    repo=None,
     harness=harness.name,
     workspace_pinned=False,
     isolation=resolved_isolation,
@@ -226,8 +211,6 @@ def _child_session_spec(
 
 def _child_launch_scope(
   launch: SummonLaunchSpec,
-  spec: SessionSpec,
-  repository: Optional[Repository],
 ) -> tuple[ScopedLaunch, ScopedSecrets]:
   from ride.authority_launch import credentials_for, hydrate
   from ride.session import ScopedLaunch
@@ -247,33 +230,38 @@ def _lower_summon(
   artifacts: ArtifactStore,
 ) -> DockerLaunchSpec | ProcessLaunchSpec:
   """Prepare a summoned started party in its requested isolation."""
+
+  if launch.party != 'start' or launch.isolation is None:
+    raise ValueError('started-party lowering needs a start request with an isolation')
+  with resolve_attachment(launch.attachment, workspace_name) as resolved:
+    return _lower_resolved_summon(
+      launch, workspace_name, runtime_bundle, container_runtime, artifacts, resolved
+    )
+
+
+def _lower_resolved_summon(
+  launch: SummonLaunchSpec,
+  workspace_name: str,
+  runtime_bundle: RuntimeBundle,
+  container_runtime: ContainerRuntimeResolver,
+  artifacts: ArtifactStore,
+  resolved: ResolvedAttachment | None,
+) -> DockerLaunchSpec | ProcessLaunchSpec:
   from ride.artifacts import view_mount
-  from ride.repository import as_repository
   from ride.root import ProcessLaunch
   from ride.workspace.model import Workspace
   from ride.workspace.spawn import DockerLaunchSpec, ProcessLaunchSpec
   from ride.workspace.store import log_scoped_secrets
 
-  if launch.party != 'start' or launch.isolation is None:
-    raise ValueError('started-party lowering needs a start request with an isolation')
-  repo = None if launch.repo is None else as_repository(launch.repo)
-  if launch.into is not None:
-    if repo is None:
-      raise ValueError('summon into requires an attached repository')
-    base_ref = resolve_ref(repo.git_dir, launch.into)
-    if base_ref is None:
-      raise ValueError(f'cannot resolve summon into ref {launch.into!r}')
-  elif repo is None:
-    base_ref = None
-  else:
-    base_ref = resolve_head(repo.git_dir, launch.parent_tree)
-    if base_ref is None:
-      raise ValueError(f"cannot read the summoner's HEAD at {launch.parent_tree}")
+  if launch.isolation is None:
+    raise ValueError('started party has no isolation')
+  base_ref = None if resolved is None else resolved.base
+  attachments = () if resolved is None else (resolved.attachment,)
   spec = _child_session_spec(launch, workspace_name, runtime_bundle.recorded_reference)
-  launch_scope, scoped = _child_launch_scope(launch, spec, repo)
+  launch_scope, scoped = _child_launch_scope(launch)
   if launch.isolation is Isolation.BOXED:
     container_runtime.resolve()
-  workspace = Workspace.ensure(workspace_name, repo, launch.isolation, throwaway=True)
+  workspace = Workspace.ensure(workspace_name, attachments, launch.isolation, throwaway=True)
   record_resume_spec(workspace, spec)
   mounts: tuple[str, ...] = ()
   temporary_store: Optional[Path] = None
@@ -295,10 +283,8 @@ def _lower_summon(
     prepared = started_party_launch(
       spec,
       workspace,
-      repo,
       base_ref,
       launch_scope,
-      human_env=human_git_identity_env(repo),
       runtime_bundle=runtime_bundle,
       container_runtime=container_runtime,
       env=summoned_child_env(launch.summoner),
@@ -373,20 +359,18 @@ def _lower_join(
 ) -> ProcessLaunchSpec | ExecLaunchSpec:
   """Prepare a member beside its summoner: a process in an unboxed party's
   tree, an exec into a boxed party's running container."""
-  from ride.repository import as_repository
   from ride.workspace.model import Workspace
   from ride.workspace.spawn import ExecLaunchSpec, ProcessLaunchSpec
   from ride.workspace.store import log_scoped_secrets
 
   workspace = Workspace.open(launch.parent)
-  repository = None if launch.repo is None else as_repository(launch.repo)
   spec = _child_session_spec(
     launch,
     workspace.name,
     runtime_bundle.recorded_reference,
     isolation=workspace.isolation,
   )
-  launch_scope, scoped = _child_launch_scope(launch, spec, repository)
+  launch_scope, scoped = _child_launch_scope(launch)
   records = party_member_dir(workspace.path, member)
   records.mkdir(parents=True)
   ride_command = _joined_ride_command(launch)
@@ -402,7 +386,6 @@ def _lower_join(
       workspace,
       member,
       launch_scope,
-      human_env=human_git_identity_env(repository),
       runtime_bundle=runtime_bundle,
       env=member_env,
     )
@@ -422,7 +405,6 @@ def _lower_join(
       spec,
       workspace,
       launch_scope,
-      human_env=human_git_identity_env(repository),
       runtime_bundle=runtime_bundle,
       env=member_env,
       credential_directory=temporary_store / 'store',
@@ -578,6 +560,9 @@ class BroType(WorkerType):
       raise LaunchDenied('content check: bro.prompt must be a non-empty string')
     attribution = self.host.peers.attribution_for_mission(self.host.journal, request.owner.mission)
     summoned_by = self._summoned_by(attribution, args)
+    inherited = inherited_attachment(
+      self.host.workspace.attachments, request.owner.tree, args.get('into')
+    )
     if isinstance(record, Prepared):
       return Expect(
         {
@@ -585,8 +570,7 @@ class BroType(WorkerType):
           'prompt': prompt,
           'request': dump_request(record.request, Descriptor('bro', {})),
           'summoner': summoned_by,
-          'repo': self.host.workspace.metadata.repo,
-          'into': args.get('into'),
+          'attachment': None if inherited is None else inherited.dump(),
           'root': self.host.workspace.name,
         },
         BroFacts(bro=target, placement=Placement('start', None)),
@@ -603,7 +587,7 @@ class BroType(WorkerType):
         llm=args.get('llm'),
         parent=request.owner.workspace,
         parent_tree=request.owner.tree,
-        repo=self.host.workspace.repository,
+        attachment=inherited,
         summoner=summoned_by,
         record=record,
         into=args.get('into'),
@@ -680,8 +664,7 @@ class PendingBro:
   request: dict[str, Any]
   root: str
   summoner: dict[str, Any] | None
-  repo: str | None
-  into: str | None
+  attachment: AttachmentRequest | None
 
   @property
   def token(self) -> str:
@@ -711,7 +694,7 @@ def pending_bro(launch: Any) -> PendingBro:
   if launch.type != BRO:
     raise ValueError(f'the launch token names worker type {launch.type!r}, not bro')
   data = launch.extension
-  expected = {'target', 'prompt', 'request', 'root', 'summoner', 'repo', 'into'}
+  expected = {'target', 'prompt', 'request', 'root', 'summoner', 'attachment'}
   if set(data) != expected:
     raise ValueError('pending bro launch carries an invalid extension shape')
   for key in ('target', 'prompt', 'root'):
@@ -724,6 +707,5 @@ def pending_bro(launch: Any) -> PendingBro:
     data['request'],
     data['root'],
     data['summoner'],
-    data['repo'],
-    data['into'],
+    None if data['attachment'] is None else AttachmentRequest.load(data['attachment']),
   )
