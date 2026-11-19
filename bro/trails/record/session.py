@@ -16,7 +16,7 @@ class ManagedSession:
 
   workspace: str
   host: str
-  host_workspace: str
+  host_tree: str
   boxed: bool
   ride_command: str
   repo: Optional[str]
@@ -30,7 +30,7 @@ class ManagedSession:
     return {
       'workspace': self.workspace,
       'host': self.host,
-      'dir': self.host_workspace,
+      'dir': self.host_tree,
       'is_container': self.boxed,
     }
 
@@ -73,7 +73,7 @@ def managed_session() -> Optional[ManagedSession]:
   return ManagedSession(
     workspace=_required('RIDE_WORKSPACE'),
     host=_required('RIDE_HOST'),
-    host_workspace=_required('RIDE_HOST_WORKSPACE'),
+    host_tree=_required('RIDE_HOST_TREE'),
     boxed=isolation == 'boxed',
     ride_command=_required('RIDE_COMMAND'),
     repo=repo,

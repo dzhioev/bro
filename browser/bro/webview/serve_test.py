@@ -258,7 +258,7 @@ def daemon_files(tmp_path, monkeypatch, worker_id):
   _executable(binaries / 'websockify', PORT_SERVER)
   playwright = _executable(binaries / 'playwright-mcp', FAKE_MCP)
 
-  monkeypatch.setattr(serve, 'WORKSPACE', workspace)
+  monkeypatch.setattr(serve, 'TREE', workspace)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', artifacts)
   monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', workspace / 'output')
   monkeypatch.setattr(serve, 'PLAYWRIGHT_COMMAND', str(playwright))
@@ -908,7 +908,7 @@ async def test_dead_vnc_process_fails_startup_before_ready(daemon_files, monkeyp
 
 @pytest.mark.asyncio
 async def test_text_and_whole_reply_spills(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   minted: list[bytes] = []
 
   def mint(path: str, name: str):
@@ -940,7 +940,7 @@ class SimpleMint:
 
 @pytest.mark.asyncio
 async def test_spill_mint_refusal_is_a_bounded_error(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
 
   def refuse(path: str, name: str):
     raise serve.ArtifactError('store cap ' + 'x' * 5000)
@@ -957,7 +957,7 @@ async def test_spill_mint_refusal_is_a_bounded_error(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_command_file_limit_removes_every_output_without_minting(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   monkeypatch.setattr(serve, 'OUTPUT_LIMIT_BYTES', 3)
   serve.ARTIFACT_VIEW.mkdir()
@@ -975,7 +975,7 @@ async def test_command_file_limit_removes_every_output_without_minting(monkeypat
 
 @pytest.mark.asyncio
 async def test_refused_file_mint_is_reported_and_the_file_is_removed(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   serve.ARTIFACT_VIEW.mkdir()
   before = serve.workspace_files()
@@ -993,7 +993,7 @@ async def test_refused_file_mint_is_reported_and_the_file_is_removed(monkeypatch
 
 @pytest.mark.asyncio
 async def test_non_file_output_is_reported_and_removed(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   serve.ARTIFACT_VIEW.mkdir()
   before = serve.workspace_files()
@@ -1010,7 +1010,7 @@ async def test_non_file_output_is_reported_and_removed(monkeypatch, tmp_path):
 async def test_a_named_file_the_command_did_not_write_is_reported_and_left_alone(
   monkeypatch, tmp_path
 ):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   serve.ARTIFACT_VIEW.mkdir()
   (tmp_path / 'existing.txt').write_text('before the command')
@@ -1031,13 +1031,13 @@ async def test_a_named_file_the_command_did_not_write_is_reported_and_left_alone
 # `### <section>` headings, link lines for written files, an Events line per download.
 NAMED_FILES_CASES = {
   'screenshot': (
-    '### Result\n- [Screenshot of viewport](/workspace/output/page-1.png)\n'
+    '### Result\n- [Screenshot of viewport](/tree/output/page-1.png)\n'
     '### Page\n- Page URL: https://example.test/',
-    (['/workspace/output/page-1.png'], []),
+    (['/tree/output/page-1.png'], []),
   ),
   'snapshot written to a file': (
-    '### Page\n- Page URL: https://example.test/\n### Snapshot\n- [Snapshot](/workspace/page.yml)',
-    (['/workspace/page.yml'], []),
+    '### Page\n- Page URL: https://example.test/\n### Snapshot\n- [Snapshot](/tree/page.yml)',
+    (['/tree/page.yml'], []),
   ),
   'inline snapshot': (
     '### Snapshot\n```yaml\n- button "Open" [ref=e5]\n```',
@@ -1045,37 +1045,37 @@ NAMED_FILES_CASES = {
   ),
   'download': (
     '### Events\n- Downloading file report.bin ...\n'
-    '- Downloaded file report.bin to "/workspace/output/report.bin"',
-    ([], ['/workspace/output/report.bin']),
+    '- Downloaded file report.bin to "/tree/output/report.bin"',
+    ([], ['/tree/output/report.bin']),
   ),
   'download still in progress': (
     '### Events\n- Downloading file report.bin ...',
     ([], []),
   ),
   'console entries are not an output': (
-    '### Events\n- New console entries: /workspace/output/console-1.log#L1-L3',
+    '### Events\n- New console entries: /tree/output/console-1.log#L1-L3',
     ([], []),
   ),
   'a link outside the file sections': (
-    '### Open tabs\n- [Tab](/workspace/tab.png)\n### Page\n- [Page](/workspace/page.png)',
+    '### Open tabs\n- [Tab](/tree/tab.png)\n### Page\n- [Page](/tree/page.png)',
     ([], []),
   ),
   'a download line outside the events section': (
-    '### Result\n- Downloaded file a.bin to "/workspace/output/a.bin"',
+    '### Result\n- Downloaded file a.bin to "/tree/output/a.bin"',
     ([], []),
   ),
   'a relative path': ('### Result\n- [Screenshot](./page.png)', ([], [])),
   'a repeated file': (
-    '### Result\n- [Screenshot](/workspace/a.png)\n### Snapshot\n- [Snapshot](/workspace/a.png)',
-    (['/workspace/a.png'], []),
+    '### Result\n- [Screenshot](/tree/a.png)\n### Snapshot\n- [Snapshot](/tree/a.png)',
+    (['/tree/a.png'], []),
   ),
   'a title with brackets and a path with parentheses': (
-    '### Result\n- [Screenshot [full]](/workspace/shot (1).png)',
-    (['/workspace/shot (1).png'], []),
+    '### Result\n- [Screenshot [full]](/tree/shot (1).png)',
+    (['/tree/shot (1).png'], []),
   ),
   'a download name that contains the path delimiter': (
-    '### Events\n- Downloaded file x to "/etc/passwd.bin to "/workspace/output/x.bin"',
-    ([], ['/workspace/output/x.bin']),
+    '### Events\n- Downloaded file x to "/etc/passwd.bin to "/tree/output/x.bin"',
+    ([], ['/tree/output/x.bin']),
   ),
 }
 
@@ -1101,7 +1101,7 @@ def test_named_files_reads_the_paths_a_result_names(text, expected):
 async def test_a_download_that_finished_between_commands_is_minted_when_a_reply_names_it(
   monkeypatch, tmp_path
 ):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', tmp_path / 'output')
   serve.ARTIFACT_VIEW.mkdir()
@@ -1130,7 +1130,7 @@ async def test_a_download_that_finished_between_commands_is_minted_when_a_reply_
 async def test_a_download_outside_the_output_directory_or_missing_is_reported_and_left_alone(
   monkeypatch, tmp_path
 ):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', tmp_path / 'output')
   serve.ARTIFACT_VIEW.mkdir()
@@ -1150,7 +1150,7 @@ async def test_a_download_outside_the_output_directory_or_missing_is_reported_an
 
 @pytest.mark.asyncio
 async def test_output_limit_counts_a_download_that_finished_between_commands(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'WORKSPACE', tmp_path)
+  monkeypatch.setattr(serve, 'TREE', tmp_path)
   monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
   monkeypatch.setattr(serve, 'OUTPUT_DIRECTORY', tmp_path / 'output')
   monkeypatch.setattr(serve, 'OUTPUT_LIMIT_BYTES', 4)

@@ -202,7 +202,7 @@ def test_foreground_run_freezes_runtime_publishes_ports_and_removes_container(mo
     assert ['-p', '127.0.0.1:46080:6080'] == arguments[
       arguments.index('-p') : arguments.index('-p') + 2
     ]
-    assert '/workspace' not in arguments
+    assert '/tree' not in arguments
     assert 'BRO_STORE' not in ' '.join(arguments)
     assert 'RIDE_PUBLISHED_PORTS=6080=46080' in arguments
     assert f'{log.LEVEL_ENV}=VERBOSE' in arguments
@@ -299,7 +299,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
   runtime = ContainerRuntimeResolver.fixed(ContainerRuntime('runtime-image', 'bundle-hash'))
   launch = worker_container.WorkerContainerLaunch(
     type='webview',
-    spec=_spec(PurePosixPath('/workspace/shared')),
+    spec=_spec(PurePosixPath('/tree/shared')),
     owner_workspace='owner',
     passes=(),
     share=('sha256:' + 'a' * 64 + '/upload.txt',),
@@ -328,7 +328,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
       'creds.json': b'{"defaults": [], "sources": {}, "generation": 0, "material": {}, "kinds": []}'
     },
     hydrated_kinds=frozenset(),
-    extra_mounts=(f'{tmp_path}/ride/artifacts/root/shared/webview-CH:/workspace/shared:ro',),
+    extra_mounts=(f'{tmp_path}/ride/artifacts/root/shared/webview-CH:/tree/shared:ro',),
     published_ports=((49152, 8080), (49153, 9090)),
   )
   workspace = Workspace.open('webview-CH')
@@ -439,7 +439,7 @@ async def test_worker_child_prunes_its_empty_artifact_view_after_termination(
   child = worker_container._WorkerContainerChild(
     cast(Any, delegated),
     workspace.name,
-    PurePosixPath('/workspace/mounts/artifacts'),
+    PurePosixPath('/tree/mounts/artifacts'),
   )
 
   result = await getattr(child, operation)()
@@ -462,7 +462,7 @@ def test_artifact_view_mount_cleanup_preserves_content(monkeypatch, tmp_path):
   result.write_text('keep')
 
   worker_container._remove_empty_artifact_view_mount(
-    workspace.name, PurePosixPath('/workspace/artifacts')
+    workspace.name, PurePosixPath('/tree/artifacts')
   )
 
   assert result.read_text() == 'keep'

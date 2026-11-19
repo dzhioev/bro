@@ -6,7 +6,7 @@ from bro import mission, summon
 from bro.broker.environment import channel_intended
 from bro.llm.resolved import ResolvedRecipe
 from bro.monitor import health, trail_pointer
-from bro.workspace.paths import ISOLATION_ENV
+from bro.workspace.paths import CONTAINER_TREE, ISOLATION_ENV
 
 # six-line block-letter "B R O" rendered with box-drawing characters;
 # shown on top of the `ride banner` output when the session carries a bro (RIDE_BRO).
@@ -40,8 +40,8 @@ class SessionFacts:
   isolation: Optional[str]
   name: Optional[str]
   bro: Optional[str]
-  host_workspace: Optional[str]
-  container_workspace: Optional[str]
+  host_tree: Optional[str]
+  container_tree: Optional[str]
   exec_command: Optional[str]
   ride_command: Optional[str]
   recording_problem: Optional[str]
@@ -71,9 +71,9 @@ class SessionFacts:
     repo = os.environ.get('RIDE_REPO') or None
     bro = bro_override if bro_override is not None else (os.environ.get('RIDE_BRO') or None)
     ride_command = os.environ.get('RIDE_COMMAND') or None
-    host_workspace: Optional[str] = os.environ.get('RIDE_HOST_WORKSPACE') or None
-    container_workspace: Optional[str] = (
-      '/workspace' if isolation == 'boxed' and name is not None else None
+    host_tree: Optional[str] = os.environ.get('RIDE_HOST_TREE') or None
+    container_tree: Optional[str] = (
+      str(CONTAINER_TREE) if isolation == 'boxed' and name is not None else None
     )
 
     exec_command = f'ride exec {name}' if isolation == 'boxed' and name is not None else None
@@ -92,8 +92,8 @@ class SessionFacts:
       resolved_recipe=resolved_recipe
       if resolved_recipe is not None
       else ResolvedRecipe.from_environment(),
-      host_workspace=host_workspace,
-      container_workspace=container_workspace,
+      host_tree=host_tree,
+      container_tree=container_tree,
       exec_command=exec_command,
       ride_command=ride_command,
       recording_problem=health.problem(),
@@ -152,21 +152,19 @@ class SessionFacts:
     )
 
     if self.isolation == 'boxed':
-      # /workspace inside, host bind-mount path below — both are useful and
-      # packing them onto one line crowded the eye
-      if self.container_workspace is not None:
-        rows.append(('workspace:', '', self.container_workspace))
+      if self.container_tree is not None:
+        rows.append(('tree:', '', self.container_tree))
       else:
-        rows.append(('workspace:', '', f'{dim}(boxed session without a workspace){reset}'))
-      if self.host_workspace is not None:
-        rows.append(('host path:', '', f'{dim}{self.host_workspace}{reset}'))
-    elif self.isolation == 'unboxed' and self.host_workspace is not None:
+        rows.append(('tree:', '', f'{dim}(boxed session without a workspace){reset}'))
+      if self.host_tree is not None:
+        rows.append(('host path:', '', f'{dim}{self.host_tree}{reset}'))
+    elif self.isolation == 'unboxed' and self.host_tree is not None:
       # an unboxed tree has no container boundary, so keep its launcher path prominent
-      rows.append(('workspace:', '', f'{red}{self.host_workspace}{reset}'))
+      rows.append(('tree:', '', f'{red}{self.host_tree}{reset}'))
     else:
       rows.append(
         (
-          'workspace:',
+          'tree:',
           '',
           f'{dim}(unknown — no RIDE_WORKSPACE / not a registered workspace){reset}',
         )
@@ -233,8 +231,8 @@ class SessionFacts:
       ('name', 'name'),
       ('mission_id', 'mission_id'),
       ('bro', 'bro'),
-      ('host_workspace', 'workspace_host_path'),
-      ('container_workspace', 'workspace_container_path'),
+      ('host_tree', 'tree_host_path'),
+      ('container_tree', 'tree_container_path'),
       ('exec_command', 'docker_shell_command'),
     ]
     if self.ride_command is not None:

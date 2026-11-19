@@ -165,7 +165,7 @@ class TestLiveRecording:
     monkeypatch.setenv('BRO_STORE', str(credential_store))
     monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
     monkeypatch.setenv('RIDE_HOST', 'laptop')
-    monkeypatch.setenv('RIDE_HOST_WORKSPACE', str(workspace))
+    monkeypatch.setenv('RIDE_HOST_TREE', str(workspace))
     monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
     segment = projects / 'seg-1.jsonl'

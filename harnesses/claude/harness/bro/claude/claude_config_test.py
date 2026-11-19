@@ -28,7 +28,7 @@ class TestSeedClaudeJSON:
     claude_dir,
     host_file,
     install_method: Optional[str] = 'global',
-    trusted_paths=('/workspace',),
+    trusted_paths=('/tree',),
   ):
     ride_claude_config._seed_claude_json(
       claude_dir, host_file, install_method=install_method, trusted_paths=list(trusted_paths)
@@ -41,7 +41,7 @@ class TestSeedClaudeJSON:
     data = json.loads(seed.read_text())
     assert data['installMethod'] == 'global'
     assert data['hasCompletedOnboarding'] is True
-    assert data['projects']['/workspace']['hasTrustDialogAccepted'] is True
+    assert data['projects']['/tree']['hasTrustDialogAccepted'] is True
     assert data['oauthAccount'] == {'id': 'acct'}
     assert data['userID'] == 'uid'
     # host machine state must not leak in
@@ -67,7 +67,7 @@ class TestSeedClaudeJSON:
   def test_missing_host_file_seeds_without_account_identity(self, tmp_path):
     seed = self._seed(_seed_dir(tmp_path), tmp_path / 'absent.json')
     data = json.loads(seed.read_text())
-    assert data['projects']['/workspace']['hasTrustDialogAccepted'] is True
+    assert data['projects']['/tree']['hasTrustDialogAccepted'] is True
     assert 'oauthAccount' not in data
     assert 'userID' not in data
 
@@ -170,7 +170,7 @@ class TestWorkspaceProjectsDir:
 
   def test_container_workspace_uses_the_fixed_encoding(self, tmp_path):
     container = Workspace.create('ws', tmp_path / 'project', Isolation.BOXED)
-    expected = self._projects(container, '-workspace')
+    expected = self._projects(container, '-tree')
     assert ride_claude_config.workspace_projects_dir(container) == expected
 
   def test_worktree_workspace_encodes_its_tree_path(self, tmp_path):
@@ -199,7 +199,7 @@ class TestProjectsDir:
     )
 
   def test_container_clone_encodes_to_the_mount_point(self):
-    assert ride_claude_config.encode_project_path(Path('/workspace')) == '-workspace'
+    assert ride_claude_config.encode_project_path(Path('/tree')) == '-tree'
 
   # the expected names below are the directories the pinned Claude Code created
   # for these paths (`project_dir_llm_test.py` holds the rule live)
@@ -220,8 +220,8 @@ class TestProjectsDir:
 
   def test_projects_dir_sits_under_the_active_config_root(self, tmp_path, monkeypatch):
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path / 'session'))
-    assert ride_claude_config.claude_projects_dir(Path('/workspace')) == (
-      tmp_path / 'session' / 'projects' / '-workspace'
+    assert ride_claude_config.claude_projects_dir(Path('/tree')) == (
+      tmp_path / 'session' / 'projects' / '-tree'
     )
 
 

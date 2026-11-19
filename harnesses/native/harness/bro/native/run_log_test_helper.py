@@ -11,7 +11,7 @@ def session_environment(directory: Path) -> dict[str, str]:
     'RIDE_SESSION_DIR': str(directory / 'session'),
     'RIDE_WORKSPACE': 'test-session',
     'RIDE_HOST': 'test-host',
-    'RIDE_HOST_WORKSPACE': str(directory / 'tree'),
+    'RIDE_HOST_TREE': str(directory / 'tree'),
     'RIDE_ISOLATION': 'unboxed',
     'RIDE_COMMAND': 'ride along test-session',
   }
