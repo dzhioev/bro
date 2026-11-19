@@ -121,7 +121,7 @@ def _environment(config: Path, session: Path) -> dict[str, str]:
 def _session(prompt: str, activity_file: Path) -> SessionRun:
   return SessionRun(
     name='mcp-timeout-probe',
-    repo=None,
+    attachments=(),
     harness='claude',
     hold='unattended',
     resolved_recipe={'recipe': Recipe(model='haiku').dump(), 'source': '--llm'},

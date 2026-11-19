@@ -10,13 +10,14 @@ import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
 from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
 from ride.authority_test_helper import mission
+from ride.repo_attachment import repository_attachment
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 
 def _workspace(tmp_path: Path, isolation: Isolation = Isolation.BOXED) -> Workspace:
-  return Workspace.ensure('ws', tmp_path / 'project', isolation)
+  return Workspace.ensure('ws', (repository_attachment(tmp_path / 'project', 'ws'),), isolation)
 
 
 def _scope() -> ScopedSecrets:

@@ -333,7 +333,7 @@ def test_lowering_builds_a_detached_throwaway_launch(monkeypatch, tmp_path):
   )
   workspace = Workspace.open('webview-CH')
   assert workspace.isolation is Isolation.BOXED
-  assert workspace.repo is None
+  assert not workspace.attachments
   assert workspace.metadata.throwaway
   assert artifacts.views == ['webview-CH']
   assert artifacts.shares == [
@@ -414,7 +414,7 @@ async def test_worker_child_prunes_its_empty_artifact_view_after_termination(
   operation, monkeypatch, tmp_path
 ):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
-  workspace = Workspace.create('webview-CH', None, Isolation.BOXED, throwaway=True)
+  workspace = Workspace.create('webview-CH', (), Isolation.BOXED, throwaway=True)
   artifact_view = workspace.tree / 'mounts' / 'artifacts'
   artifact_view.mkdir(parents=True)
   retained = workspace.tree / 'retained'
@@ -455,7 +455,7 @@ async def test_worker_child_prunes_its_empty_artifact_view_after_termination(
 
 def test_artifact_view_mount_cleanup_preserves_content(monkeypatch, tmp_path):
   monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
-  workspace = Workspace.create('webview-CH', None, Isolation.BOXED, throwaway=True)
+  workspace = Workspace.create('webview-CH', (), Isolation.BOXED, throwaway=True)
   artifact_view = workspace.tree / 'artifacts'
   artifact_view.mkdir(parents=True)
   result = artifact_view / 'result.txt'

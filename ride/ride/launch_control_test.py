@@ -621,7 +621,7 @@ def allowance_control(tmp_path, owner):
     artifacts=host.artifacts,
     peers=peers,
     journal=object(),
-    workspace=SimpleNamespace(name='ws', repository=None, metadata=SimpleNamespace(repo=None)),
+    workspace=SimpleNamespace(name='ws', attachments=()),
     summon_spawner=object(),
     session_env={},
   )

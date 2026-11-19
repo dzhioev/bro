@@ -257,7 +257,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if summoned is not None:
     if repo_argument is not None:
       parser.error('--summoned inherits its repository attachment; drop --repo')
-    repo_argument = summoned.repo
+    repo_argument = None
   repository: Optional[Repository] = None
   if repo_argument is None:
     repo = None
@@ -336,7 +336,7 @@ def _start_mode(parser: Parser, args: dict, *, solo: bool) -> int:
   if user_scope_overrides is not None:
     user_cred, user_grant, user_revoke = user_scope_overrides
     spec = spec.with_scope_overrides(cred=user_cred, grant=user_grant, revoke=user_revoke)
-  return start_session(spec, repository, summoned=summoned)
+  return start_session(spec, summoned=summoned)
 
 
 def _peek_summoned(parser: Parser, token: str) -> PendingBro:

@@ -20,6 +20,8 @@ A distribution contributes through these `[project.entry-points]` groups of its 
 - `bro.session_commands` — console scripts exposed on a managed session's PATH
 - `bro.worker_types` — worker classes served through the common `launch` kind;
   each entry's name matches its `bro.worker_types.WorkerType.name`
+- `bro.attachment_types` — typed workspace attachment objects, `<name> = "<module>:<object>"`;
+  each object derives from `ride.attachments.AttachmentType` and its `name` matches the entry ([ride](ride.md#attachments))
 - `bro.harnesses` — one installed driving-harness object per entry, `<name> = "<module>:<object>"`;
   each object derives from `bro.harness.Harness`, its `name` matches the entry, and a managed harness also implements `ride.harness.SessionHarness`
 - `bro.file_types` — file-type declarations, `<name> = "<module>:<object>"`;
@@ -137,7 +139,7 @@ Declare `name`, `description`, and `system_prompt` as class attributes, and the 
   `bro` is refused because the framework already seeds it; an uninstalled type fails an applicable launch.
   The [permission reference](permissions.md) defines type options, configuration layers, and the checks.
 - `provisioning = (provision_hooks,)` declares session-start steps for the session's workspace
-  — each is a `Callable[[Path], None]` applied to the workspace root by whatever starts the session (`do-ride` for a managed one, on either harness).
+  — each is a `Callable[[Path], None]` applied to the clone root by the `repo` attachment at managed session start, on either harness.
   MRO-walked and concatenated like `extra_secrets`.
   Every session start runs them, resumes included, so each step is idempotent.
 - `spells = (fix, when(feature('brog'), open_task))` declares spells:

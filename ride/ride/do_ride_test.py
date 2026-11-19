@@ -1,15 +1,18 @@
 import dataclasses
 import json
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import bro.workspace.session as workspace_session
 import ride.do_ride as do_ride
+import ride.repo_attachment as repo_attachment
 from bro import watches
 from bro.monitor import workspace_session_dir
 from ride.harness import get_harness
+from ride.repo_attachment import repository_attachment
 from ride.session_test import _spec
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -29,7 +32,9 @@ def admitted_recipe(monkeypatch):
 
 
 def _command(spec) -> list[str]:
-  return do_ride.command(spec)
+  return do_ride.command(
+    spec, () if spec.repo is None else (repository_attachment(Path(spec.repo), spec.name),)
+  )
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +61,7 @@ class TestCommand:
       prompt='do it',
     )
     assert _command(spec) == [
-      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(spec.repo),
+      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--attachment', json.dumps(repository_attachment(Path(str(spec.repo)), 'w').dump()),
       '--hold', 'attended', '--', 'dev', 'do it',
     ]  # fmt: skip
 
@@ -64,7 +69,7 @@ class TestCommand:
     spec = _spec(resume=True, bro='dev')
     assert _command(spec) == [
       'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--resume',
-      '--repo', str(spec.repo), '--hold', 'attended', '--', 'dev',
+      '--attachment', json.dumps(repository_attachment(Path(str(spec.repo)), 'w').dump()), '--hold', 'attended', '--', 'dev',
     ]  # fmt: skip
 
   def test_recorded_recipe_crosses_the_launcher_boundary(self, monkeypatch):
@@ -83,7 +88,7 @@ class TestCommand:
   def test_the_bro_harness_uses_the_same_executable(self):
     spec = dataclasses.replace(_spec(solo=True, bro='dev', prompt='go'), harness='bro')
     assert _command(spec) == [
-      'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro', '--repo', str(spec.repo),
+      'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro', '--attachment', json.dumps(repository_attachment(Path(str(spec.repo)), 'w').dump()),
       '--hold', 'attended', '--', 'dev', 'go',
     ]  # fmt: skip
 
@@ -176,11 +181,11 @@ class TestRunSession:
       monkeypatch.delenv('RIDE_PARTY_MEMBER', raising=False)
     monkeypatch.setattr(do_ride, 'bro_git_identity_env', lambda name: {'GIT_AUTHOR_NAME': name})
     monkeypatch.setattr(
-      do_ride, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
+      repo_attachment, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
     )
     declaration = MagicMock()
     declaration.provision_workspace.side_effect = persona_effect
-    monkeypatch.setattr(do_ride, 'create_bro', lambda _name: declaration)
+    monkeypatch.setattr(repo_attachment, 'create_bro', lambda _name: declaration)
     monkeypatch.setattr(do_ride, '_install_credential_hooks', hooks or (lambda: None))
     harness = MagicMock()
     if harness_effect is None:
@@ -189,7 +194,7 @@ class TestRunSession:
       harness.run_session.side_effect = harness_effect
     run = do_ride.SessionRun(
       name='w',
-      repo='/repo' if repo else None,
+      attachments=(repository_attachment(Path('/repo'), 'w'),) if repo else (),
       harness='bro',
       hold='attended',
       resolved_recipe=_spec().resolved_recipe,
@@ -311,8 +316,6 @@ class TestRunSession:
     code, harness, declaration = self._run(monkeypatch, tmp_path, harness_code=7)
     assert code == 7
     assert os.environ['RIDE_WORKSPACE'] == 'w'
-    assert os.environ['RIDE_REPO'] == '/repo'
-    assert os.environ['RIDE_REPO_URL'] == 'https://example.test/repository.git'
     assert os.environ['RIDE_BRO'] == 'dev'
     assert os.environ['GIT_AUTHOR_NAME'] == 'dev'
     assert os.environ['BRO_HOLD'] == 'attended'
@@ -321,11 +324,7 @@ class TestRunSession:
     harness.run_session.assert_called_once()
 
   def test_detached_session_skips_persona_provisioning(self, monkeypatch, tmp_path):
-    os.environ['RIDE_REPO'] = '/ambient'
-    os.environ['RIDE_REPO_URL'] = 'https://ambient.example/repository.git'
     _, _, declaration = self._run(monkeypatch, tmp_path, repo=False)
-    assert 'RIDE_REPO' not in os.environ
-    assert 'RIDE_REPO_URL' not in os.environ
     declaration.provision_workspace.assert_not_called()
 
   def test_party_member_skips_persona_provisioning(self, monkeypatch, tmp_path):
@@ -357,7 +356,7 @@ class TestRunSession:
     assert activity_file.stat().st_mtime > 1000.0
 
   def test_the_harness_marks_where_the_host_reads(self, tmp_path):
-    workspace = Workspace.create('w', None, Isolation.UNBOXED)
+    workspace = Workspace.create('w', (), Isolation.UNBOXED)
     with patch.dict(os.environ, {'RIDE_SESSION_DIR': str(workspace_session_dir(workspace.path))}):
       run = _parsed_run(
         ['do-ride', 'along', '--workspace', 'w', '--harness', 'bro', '--hold', 'attended', 'dev']

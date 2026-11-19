@@ -135,17 +135,24 @@ def _prepare_clone(
 
 
 def ensure_clone(
-  repository: Repository, tree: Path, branch: str, base_ref: Optional[str] = None
+  repository: Repository,
+  tree: Path,
+  branch: str,
+  base_ref: Optional[str] = None,
+  *,
+  staging_parent: Optional[Path] = None,
 ) -> None:
   """Create an attached workspace's independent clone on its first launch."""
   git_directory = tree / '.git'
   if git_directory.is_dir():
     return
-  if tree.exists() and any(tree.iterdir()):
-    raise RuntimeError(f'workspace tree is not empty and has no git clone: {tree}')
+  if tree.exists():
+    raise RuntimeError(f'attachment directory exists and has no git clone: {tree}')
   tree.parent.mkdir(parents=True, exist_ok=True)
   log.info('creating clone %s', tree)
-  with tempfile.TemporaryDirectory(prefix=f'.{tree.name}-', dir=tree.parent) as directory:
+  with tempfile.TemporaryDirectory(
+    prefix=f'.{tree.name}-', dir=staging_parent or tree.parent
+  ) as directory:
     prepared = Path(directory) / 'clone'
     _prepare_clone(repository, prepared, branch, base_ref)
     if tree.exists():

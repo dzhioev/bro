@@ -15,6 +15,7 @@ import pytest
 
 import bro.mcp as mcp
 import bro.native.harness as bro_harness
+import ride.repo_attachment as repo_attachment
 import ride.session as ride_session
 from bro import brash_policy, results
 from bro.brash import REFUSED_STATUS
@@ -37,6 +38,7 @@ from bro.trails.store import default_store
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
 from ride.do_ride import SessionRun, encode_resolved_recipe
+from ride.repo_attachment import repository_attachment
 from ride.runtime_bundle import RuntimeBundle
 from ride.session import ScopedLaunch, SessionSpec
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
@@ -84,7 +86,7 @@ def _run(**overrides) -> SessionRun:
   spec = _spec(**overrides)
   return SessionRun(
     name=spec.name,
-    repo=spec.repo,
+    attachments=() if spec.repo is None else (repository_attachment(Path(spec.repo), spec.name),),
     harness=spec.resolved_harness,
     hold=spec.hold,
     resolved_recipe=spec.resolved_recipe,
@@ -254,8 +256,13 @@ class TestNativeArgv:
 
 
 class TestContainerSession:
+  @pytest.fixture(autouse=True)
+  def prepared_attachment(self, monkeypatch):
+    monkeypatch.setattr(repo_attachment, 'ensure_clone', lambda *args, **kwargs: None)
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda *args: 'abc123')
+
   def test_composes_the_bro_run_launch(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
+    workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
     captured: dict = {}
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
 
@@ -274,7 +281,6 @@ class TestContainerSession:
         workspace,
         'abc123',
         scope,
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -283,14 +289,13 @@ class TestContainerSession:
     launch = captured['launch']
     assert launch.command == [
       'do-ride', 'solo', '--workspace', 'w', '--harness', 'bro',
+      '--attachment', json.dumps(workspace.attachments[0].dump()),
       '--hold', 'unattended', '--', 'dev', 'start here',
     ]  # fmt: skip
     assert launch.env == {
       'RIDE_BRO': 'dev',
-      'RIDE_COMMAND': spec.ride_command,
+      'RIDE_COMMAND': ' '.join(spec.to_command_argv(workspace.attachments)),
       'RIDE_ISOLATION': 'boxed',
-      'RIDE_BRANCH': 'workspace-w',
-      'RIDE_BASE_SHA': 'abc123',
       ride_session.RUNTIME_ENV: str(_runtime_bundle(tmp_path).host_root),
       ride_session.INSTALL_DIRECTORY_ENV: ride_session.CONTAINER_INSTALL_DIRECTORY,
       ride_session.RESOLVED_RECIPE_ENV: ride_session.encode_resolved_recipe(spec.resolved_recipe),
@@ -302,7 +307,7 @@ class TestContainerSession:
     assert captured['mission'] is scope.mission
 
   def test_no_trails_disables_recording_in_the_container_env(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
+    workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
     captured: dict = {}
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
     monkeypatch.setattr(
@@ -317,7 +322,6 @@ class TestContainerSession:
         workspace,
         'abc123',
         _scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -331,14 +335,13 @@ class TestContainerSession:
     )
 
   def test_resume_refuses_without_a_broker_published_pointer(self, caplog, tmp_path):
-    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
+    workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
     assert (
       ride_session._launch_session(
         _spec(resume=True, prompt=None),
         workspace,
         'abc123',
         _scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -347,7 +350,7 @@ class TestContainerSession:
     assert 'no trail pointer was published' in caplog.text
 
   def test_fresh_session_clears_a_stale_pointer(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
+    workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
     pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'stale')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: None)
@@ -358,7 +361,6 @@ class TestContainerSession:
         workspace,
         'abc123',
         _scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -367,7 +369,7 @@ class TestContainerSession:
     assert not pointer.exists()
 
   def test_a_refused_second_launch_leaves_the_active_pointer_alone(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, Isolation.BOXED)
+    workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
     pointer = trail_pointer.session_pointer(workspace.path)
     trail_pointer.write(pointer, 'live')
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'active')
@@ -377,7 +379,6 @@ class TestContainerSession:
         workspace,
         'abc123',
         _scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=_container_runtime(),
       )
@@ -388,24 +389,22 @@ class TestContainerSession:
 
 class TestUnboxedSession:
   def test_builder_prepares_the_native_snapshot_runner(self, monkeypatch, tmp_path):
-    workspace = Workspace.create('w', tmp_path, Isolation.UNBOXED)
+    workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.UNBOXED)
     root = tmp_path / 'runtime-bundle'
     (root / 'host' / 'venv' / 'bin').mkdir(parents=True)
     (root / 'host' / 'bin').mkdir()
     (root / 'host' / '.complete').touch()
     (root / 'host' / 'venv' / 'bin' / 'do-ride').touch()
     runtime_bundle = RuntimeBundle(root, '3.12')
-    monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
-    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
+    monkeypatch.setattr(repo_attachment, 'ensure_clone', lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
 
     launch = ride_session.started_party_launch(
       _spec(isolation=Isolation.UNBOXED, repo=str(tmp_path)),
       workspace,
-      workspace.repository,
       None,
       _scope(),
-      human_env={},
       runtime_bundle=runtime_bundle,
       container_runtime=_container_runtime(),
       env={},
@@ -421,8 +420,8 @@ class TestUnboxedSession:
       'w',
       '--harness',
       'bro',
-      '--repo',
-      str(tmp_path),
+      '--attachment',
+      json.dumps(repository_attachment(Path(str(tmp_path)), 'w').dump()),
       '--hold',
       'attended',
       '--',

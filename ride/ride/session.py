@@ -32,12 +32,10 @@ from bro.monitor import (
   workspace_session_dir,
 )
 from bro.summon import RUNTIME_ENV, summoned_child_env
-from bro.workspace.git import resolve_head, resolve_ref, rev_parse_commit
 from bro.workspace.paths import (
-  BASE_SHA_ENV,
-  BRANCH_ENV,
   CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
+  CONTAINER_TREE,
   ISOLATION_ENV,
   TRAILS_ROOT_ENV,
   ensure_runtime_root,
@@ -45,6 +43,14 @@ from bro.workspace.paths import (
   workspace_dir,
 )
 from ride import pending_launch
+from ride.attachments import (
+  Attachment,
+  AttachmentRequest,
+  ResolvedAttachment,
+  apply_attachment_environment,
+  get_attachment_type,
+  resolve_attachment,
+)
 from ride.authority_launch import credentials_for, hydrate, request as authority_request
 from ride.authority_reading import Reading
 from ride.authority_scope import checked_recipe
@@ -57,12 +63,6 @@ from ride.do_ride import (
   encode_resolved_recipe,
 )
 from ride.harness import SessionHarness, get_harness
-from ride.identity import human_git_identity_env
-from ride.repository import (
-  Repository,
-  hold_repository,
-  recorded_origin_url,
-)
 from ride.root import ProcessLaunch, run_manual_started_party, run_started_party
 from ride.runtime_bundle import (
   RuntimeBundle,
@@ -76,7 +76,6 @@ from ride.scope import (
 )
 from ride.session_env import env_additions
 from ride.trails import local_trails_mounts
-from ride.workspace.clones import ensure_clone
 from ride.workspace.containers import broker_enabled
 from ride.workspace.docker import (
   CONTAINER_BROKER_HOST,
@@ -173,7 +172,7 @@ class SessionSpec:
     """whether the session runs on the launcher's terminal."""
     return not self.solo
 
-  def to_command_argv(self) -> list[str]:
+  def to_command_argv(self, attachments: tuple[Attachment, ...] | None = None) -> list[str]:
     if self.resume:
       return ['ride', 'resume', *([] if self.llm is None else ['--llm', self.llm]), self.name]
     flags = {
@@ -187,7 +186,10 @@ class SessionSpec:
       flags['--keep'] = not self.drop
     verb = 'solo' if self.solo else 'along'
     parts = ['ride', verb, *(flag for flag, enabled in flags.items() if enabled)]
-    if self.repo is not None:
+    if attachments is not None:
+      for attachment in attachments:
+        parts.extend(get_attachment_type(attachment.type).launch_arguments(attachment))
+    elif self.repo is not None:
       parts.extend(['--repo', self.repo])
     if self.tree is not None:
       parts.extend(['--tree', self.tree])
@@ -355,43 +357,6 @@ def _summoned_env(summoned: PendingBro, spec: SessionSpec, address: str) -> dict
   }
 
 
-def _tree_head(tree: Path) -> str:
-  head = rev_parse_commit(tree, 'HEAD')
-  if head is None:
-    raise RuntimeError(f'cannot read HEAD of workspace tree {tree}')
-  return head
-
-
-def _base_commit(workspace: Workspace, base_ref: Optional[str]) -> str:
-  """the commit an attached session's tree starts at: the tree's HEAD where its
-  clone exists (a resume), else the base the clone is about to be made at."""
-  if (workspace.tree / '.git').is_dir():
-    return _tree_head(workspace.tree)
-  if base_ref is None:
-    raise ValueError('attached launch has no base to clone at')
-  return base_ref
-
-
-def _attached_tree_env(workspace: Workspace, base_sha: str) -> dict[str, str]:
-  branch = workspace.metadata.branch
-  if branch is None:
-    raise ValueError('attached workspace has no recorded branch')
-  return {BRANCH_ENV: branch, BASE_SHA_ENV: base_sha}
-
-
-def _attached_session_env(workspace: Workspace, base_sha: str) -> dict[str, str]:
-  if workspace.repo is None:
-    raise ValueError('attached workspace has no repository')
-  environment = {
-    'RIDE_REPO': str(workspace.repo),
-    **_attached_tree_env(workspace, base_sha),
-  }
-  repo_url = recorded_origin_url(workspace.tree)
-  if repo_url is not None:
-    environment['RIDE_REPO_URL'] = repo_url
-  return environment
-
-
 def container_launch(
   harness: SessionHarness,
   spec: SessionSpec,
@@ -399,9 +364,7 @@ def container_launch(
   launch_scope: ScopedLaunch,
   container_runtime: ContainerRuntime,
   *,
-  repo: Optional[Repository | Path],
   base_ref: Optional[str],
-  human_env: Mapping[str, str],
   env: Mapping[str, str],
   mounts: Collection[str],
 ) -> Launch:
@@ -419,16 +382,13 @@ def container_launch(
   extras = harness.container_extras(spec, workspace, scoped)
   launch_env: dict[str, str] = {
     'RIDE_BRO': spec.bro,
-    'RIDE_COMMAND': spec.ride_command,
+    'RIDE_COMMAND': ' '.join(spec.to_command_argv(workspace.attachments)),
     ISOLATION_ENV: Isolation.BOXED.value,
     RESOLVED_RECIPE_ENV: encode_resolved_recipe(spec.resolved_recipe),
     INSTALL_DIRECTORY_ENV: CONTAINER_INSTALL_DIRECTORY,
     SESSION_DIR_ENV: str(CONTAINER_SESSION_DIR),
-    **human_env,
     **extras.env,
   }
-  if workspace.repo is not None:
-    launch_env.update(_attached_tree_env(workspace, _base_commit(workspace, base_ref)))
   if spec.no_trails:
     # a run that records nothing binds no trails root
     launch_env['TRAILS_DISABLED'] = '1'
@@ -436,7 +396,7 @@ def container_launch(
   trails_mounts = () if spec.no_trails else local_trails_mounts(scoped)
   return Launch(
     name=spec.name,
-    command=do_ride_command(spec),
+    command=do_ride_command(spec, workspace.attachments),
     env=launch_env,
     additions=dict(spec.env),
     secrets=scoped.required,
@@ -454,7 +414,7 @@ def container_launch(
       f'{party_dir}:{CONTAINER_PARTY_DIR}',
       *mounts,
     ),
-    repo=repo,
+    attachments=workspace.attachments,
     base_ref=base_ref,
   )
 
@@ -465,7 +425,6 @@ def boxed_member_launch(
   member: str,
   launch_scope: ScopedLaunch,
   *,
-  human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
   env: Mapping[str, str],
 ) -> MemberExec:
@@ -491,6 +450,7 @@ def boxed_member_launch(
     'RIDE_WORKSPACE': workspace.name,
     'RIDE_HOST_TREE': str(workspace.tree),
     'RIDE_HOST': socket.gethostname(),
+    'PWD': str(CONTAINER_TREE / workspace.start_directory.relative_to(workspace.tree)),
     ISOLATION_ENV: Isolation.BOXED.value,
     RESOLVED_RECIPE_ENV: encode_resolved_recipe(spec.resolved_recipe),
     INSTALL_DIRECTORY_ENV: str(member_install_dir(member)),
@@ -499,10 +459,8 @@ def boxed_member_launch(
     # first session's /var/ride/trails bind, which its scope may not have
     TRAILS_ROOT_ENV: str(member_root / 'trails'),
     RUNTIME_ENV: str(runtime_bundle.host_root),
-    **human_env,
   }
-  if workspace.repo is not None:
-    launch_env.update(_attached_session_env(workspace, _tree_head(workspace.tree)))
+  apply_attachment_environment(launch_env, workspace.attachments, workspace.tree)
   if spec.no_trails:
     launch_env['TRAILS_DISABLED'] = '1'
   harness.prepare_boxed_member_env(spec, records, member_root, launch_env)
@@ -510,13 +468,14 @@ def boxed_member_launch(
   return MemberExec(
     container=container_id,
     member=member,
-    command=do_ride_command(spec),
+    command=do_ride_command(spec, workspace.attachments),
     env=launch_env,
     secrets=scoped.required,
     optional_secrets=scoped.optional,
     credential_selection=scoped.selection,
     credential_store=launch_scope.store,
     hydrated_kinds=launch_scope.hydrated_kinds,
+    cwd=str(CONTAINER_TREE / workspace.start_directory.relative_to(workspace.tree)),
   )
 
 
@@ -525,7 +484,6 @@ def prepared_unboxed_session_launch(
   workspace: Workspace,
   launch_scope: ScopedLaunch,
   *,
-  human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
   env: Mapping[str, str],
   credential_directory: Path,
@@ -537,18 +495,18 @@ def prepared_unboxed_session_launch(
   `env` on top."""
   harness = get_harness(spec.resolved_harness)
   tree = workspace.tree
-  session_command = do_ride_command(spec)
+  session_command = do_ride_command(spec, workspace.attachments)
   command = [str(runtime_bundle.host_venv / 'bin' / session_command[0]), *session_command[1:]]
-  runner_env = runtime_bundle.host_session_env(tree, tty=spec.tty, additions=spec.env)
+  runner_env = runtime_bundle.host_session_env(
+    workspace.start_directory, tty=spec.tty, additions=spec.env
+  )
   runner_env['RIDE_BRO'] = spec.bro
-  runner_env['RIDE_COMMAND'] = spec.ride_command
+  runner_env['RIDE_COMMAND'] = ' '.join(spec.to_command_argv(workspace.attachments))
   runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
   runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
   runner_env['RIDE_HOST'] = socket.gethostname()
   runner_env['RIDE_HOST_TREE'] = str(tree)
-  runner_env.update(human_env)
-  if workspace.repo is not None:
-    runner_env.update(_attached_session_env(workspace, _tree_head(tree)))
+  apply_attachment_environment(runner_env, workspace.attachments, tree)
   store_directory = materialize_scoped_store(launch_scope.store, credential_directory)
   runner_env['BRO_STORE'] = str(store_directory)
   runner_env['BRO_INSTALL_KINDS'] = ' '.join(sorted(launch_scope.hydrated_kinds))
@@ -561,11 +519,11 @@ def prepared_unboxed_session_launch(
   else:
     runner_env.pop('TRAILS_DISABLED', None)
     runner_env[TRAILS_ROOT_ENV] = str(ride_trails_dir())
-  harness.prepare_unboxed_env(spec, records_directory, tree, runner_env)
+  harness.prepare_unboxed_env(spec, records_directory, workspace.start_directory, runner_env)
   runner_env.update(env)
   return ProcessLaunch(
     command=command,
-    cwd=str(tree),
+    cwd=str(workspace.start_directory),
     env=runner_env,
     interactive=spec.tty,
   )
@@ -574,11 +532,9 @@ def prepared_unboxed_session_launch(
 def started_party_launch(
   spec: SessionSpec,
   workspace: Workspace,
-  repository: Optional[Repository],
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
   *,
-  human_env: Mapping[str, str],
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
   env: Mapping[str, str],
@@ -600,32 +556,18 @@ def started_party_launch(
       workspace,
       launch_scope,
       container_runtime.resolve(),
-      repo=workspace.repo if isinstance(workspace.repo, Path) else repository,
       base_ref=base_ref,
-      human_env=human_env,
       env={RUNTIME_ENV: str(runtime_bundle.host_root), **env},
       mounts=mounts,
     )
 
   if len(mounts) > 0:
     raise ValueError('an unboxed started party cannot carry container mounts')
-  tree = workspace.tree
-  if repository is None:
-    if workspace.metadata.tree is None:
-      tree.mkdir(parents=True, exist_ok=True)
-    elif not tree.is_dir():
-      raise RuntimeError(f'external workspace tree is gone: {tree}')
-  else:
-    branch = workspace.metadata.branch
-    if branch is None:
-      raise ValueError('attached unboxed workspace has no recorded branch')
-    ensure_clone(repository, tree, branch, base_ref)
-
+  workspace.prepare(base_ref)
   return prepared_unboxed_session_launch(
     spec,
     workspace,
     launch_scope,
-    human_env=human_env,
     runtime_bundle=runtime_bundle,
     env=env,
     credential_directory=credential_directory,
@@ -650,7 +592,6 @@ def _launch_session(
   base_ref: Optional[str],
   launch_scope: ScopedLaunch,
   *,
-  human_env: dict[str, str],
   runtime_bundle: RuntimeBundle,
   container_runtime: ContainerRuntimeResolver,
   summoned: Optional[PendingBro] = None,
@@ -677,10 +618,8 @@ def _launch_session(
       launch = started_party_launch(
         spec,
         workspace,
-        workspace.repository,
         base_ref,
         launch_scope,
-        human_env=human_env,
         runtime_bundle=runtime_bundle,
         container_runtime=container_runtime,
         env=summoned_env,
@@ -735,7 +674,6 @@ def _finish_session(spec: SessionSpec, workspace: Workspace, code: int) -> int:
 
 def start_session(
   spec: SessionSpec,
-  repository: Optional[Repository] = None,
   summoned: Optional[PendingBro] = None,
   reexec_argv: Optional[list[str]] = None,
 ) -> int:
@@ -751,7 +689,7 @@ def start_session(
         runtime_bundle.reference,
         spec.to_command_argv() if reexec_argv is None else reexec_argv,
       )
-      return _start_session(spec, runtime_bundle, repository, summoned)
+      return _start_session(spec, runtime_bundle, summoned)
   except RuntimeBundleError as error:
     log.error('%s', error)
     return 1
@@ -763,7 +701,6 @@ class PreparedSession:
   workspace: Workspace
   base_ref: str | None
   scope: ScopedLaunch
-  human_env: dict[str, str]
   container_runtime: ContainerRuntimeResolver
   commit_id: str | None = None
   summoned: PendingBro | None = None
@@ -772,12 +709,29 @@ class PreparedSession:
 def _start_session(
   spec: SessionSpec,
   runtime_bundle: RuntimeBundle,
-  repository: Repository | None = None,
   summoned: PendingBro | None = None,
 ) -> int:
   ensure_runtime_root()
-  context = contextlib.nullcontext(None) if spec.repo is None else hold_repository(spec.repo)
+  if summoned is not None and not broker_enabled():
+    log.error("a manual summon child needs the summoner's broker channel")
+    return 1
   try:
+    if spec.repo is None and spec.into is not None and summoned is None:
+      raise ValueError('--into requires --repo')
+    request = (
+      None
+      if spec.repo is None
+      else AttachmentRequest('repo', {'repo': spec.repo, 'into': spec.into})
+    )
+    if summoned is not None:
+      request = summoned.attachment
+    if spec.resume:
+      existing = Workspace.open(spec.name)
+      context = contextlib.nullcontext(
+        ResolvedAttachment(existing.attachments[0]) if existing.attachments else None
+      )
+    else:
+      context = resolve_attachment(request, spec.name)
     with context as resolved:
       prepared = _prepare_session(spec, runtime_bundle, resolved, summoned)
   except (RuntimeError, ValueError) as error:
@@ -794,7 +748,6 @@ def _start_session(
         workspace,
         prepared.base_ref,
         prepared.scope,
-        human_env=prepared.human_env,
         runtime_bundle=runtime_bundle,
         container_runtime=prepared.container_runtime,
         summoned=prepared.summoned,
@@ -809,33 +762,16 @@ def _start_session(
 def _prepare_session(
   spec: SessionSpec,
   runtime_bundle: RuntimeBundle,
-  repository: Repository | None,
+  resolved_attachment: ResolvedAttachment | None,
   summoned: PendingBro | None,
 ) -> PreparedSession | int:
   os.environ['RIDE_COMMAND'] = spec.ride_command
   os.environ['RIDE_WORKSPACE'] = spec.name
   os.environ[ISOLATION_ENV] = spec.isolation.value
-  os.environ.pop('RIDE_REPO_URL', None)
-  if spec.repo is None:
-    os.environ.pop('RIDE_REPO', None)
-  else:
-    os.environ['RIDE_REPO'] = spec.repo
-  if repository is not None and repository.identity != spec.repo:
-    raise ValueError(
-      f'resolved attachment {repository.identity!r} does not match session spec {spec.repo!r}'
-    )
-  if summoned is not None and not broker_enabled():
-    log.error("a manual summon child needs the summoner's broker channel")
-    return 1
 
   commit_id = None
   try:
     if summoned is None:
-      if repository is not None and repository.is_url and spec.into is not None:
-        commit = resolve_ref(repository.git_dir, spec.into)
-        if commit is None:
-          raise ValueError(f'existence check: into: cannot resolve {spec.into!r}')
-        repository = replace(repository, tree_ref=commit)
       reading = Reading.take()
       resolved = None
       if spec.authority_request:
@@ -967,46 +903,16 @@ def _prepare_session(
     except RuntimeBundleError as error:
       log.error('%s', error)
       return 1
-  repository_context = contextlib.nullcontext(repository)
   try:
-    with repository_context as resolved_repository:
-      repository = resolved_repository
-      base_ref = None if repository is None else repository.default_base
-      if spec.into is not None:
-        if repository is None:
-          log.error('--into requires --repo')
-          return 1
-        base_ref = resolve_ref(repository.git_dir, spec.into)
-        if base_ref is None:
-          log.error('cannot resolve --into ref: %s', spec.into)
-          return 1
-      if summoned is not None:
-        if summoned.into is not None:
-          if repository is None:
-            log.error('a detached manual summon cannot name an into ref')
-            return 1
-          base_ref = resolve_ref(repository.git_dir, summoned.into)
-          if base_ref is None:
-            log.error('cannot resolve the summon into ref: %s', summoned.into)
-            return 1
-        elif repository is not None:
-          base_ref = resolve_head(repository.git_dir, Path(summoned.owner_tree))
-          if base_ref is None:
-            log.error("cannot read the summoner's HEAD at %s", summoned.owner_tree)
-            return 1
-      if repository is not None and base_ref is None:
-        base_ref = rev_parse_commit(repository.git_dir, 'HEAD')
-        if base_ref is None:
-          log.error('cannot read HEAD of %s', repository.git_dir)
-          return 1
-      container_runtime = ContainerRuntimeResolver(runtime_bundle)
-      human_env = human_git_identity_env(repository)
-      workspace = Workspace.ensure(
-        spec.name,
-        repository,
-        spec.isolation,
-        tree=None if spec.tree is None else Path(spec.tree),
-      )
+    container_runtime = ContainerRuntimeResolver(runtime_bundle)
+    base_ref = None if resolved_attachment is None else resolved_attachment.base
+    attachments = () if resolved_attachment is None else (resolved_attachment.attachment,)
+    workspace = Workspace.ensure(
+      spec.name,
+      attachments,
+      spec.isolation,
+      tree=None if spec.tree is None else Path(spec.tree),
+    )
   except (AttachmentMismatch, IsolationMismatch, RuntimeError, ValueError) as error:
     log.error('%s', error)
     return 1
@@ -1016,9 +922,7 @@ def _prepare_session(
     hydrated_kinds=kinds,
     mission=mission,
   )
-  return PreparedSession(
-    spec, workspace, base_ref, launch, human_env, container_runtime, commit_id, summoned
-  )
+  return PreparedSession(spec, workspace, base_ref, launch, container_runtime, commit_id, summoned)
 
 
 def resume_recipe(spec: SessionSpec, reading: Reading) -> ResolvedRecipe:
