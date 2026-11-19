@@ -36,7 +36,7 @@ def exec_in_workspace(name: str, command: list[str]) -> int:
   docker_command = ['env', '-u', BROKER_CHANNEL, '-u', BROKER_UPSTREAM, *requested_command]
   # run as ride, not the image's default root: docker exec ignores the entrypoint's
   # gosu drop, so without -u every exec'd command runs as root and writes
-  # root-owned files into the bind-mounted /workspace that the host user can't
+  # root-owned files into the bind-mounted /tree that the host user can't
   # later remove. the entrypoint remaps ride to the host uid, so -u ride matches the
   # session user and keeps workspace files host-owned.
   return subprocess.run(

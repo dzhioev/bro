@@ -103,13 +103,13 @@ def _pointer() -> Path:
 @pytest.fixture
 def environment(tmp_path: Path, monkeypatch):
   config = tmp_path / 'config'
-  projects = config / 'projects' / '-workspace'
+  projects = config / 'projects' / '-tree'
   projects.mkdir(parents=True)
   monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(config))
   monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
   monkeypatch.setenv('RIDE_WORKSPACE', 'ws')
   monkeypatch.setenv('RIDE_HOST', 'laptop')
-  monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/home/u/ws/tree')
+  monkeypatch.setenv('RIDE_HOST_TREE', '/home/u/ws/tree')
   monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
   monkeypatch.setenv('RIDE_COMMAND', 'ride along ws')
   monkeypatch.setenv('RIDE_REPO', '/source/bro')

@@ -369,7 +369,7 @@ Home and per-bro overrides live in `~/.bro.json`:
 
 Inside the container, the session finds:
 
-- `/workspace`, a clone on a fresh branch based on the commit the launch names, never your working tree;
+- `/tree`, a clone on a fresh branch based on the commit the launch names, never your working tree;
 - the framework it was launched from, frozen and read-only, so the project need not install it;
 - a credential store holding the selected instances its declaration needs and the stored names their preserved references reach, resolved on the host into memory and copied into the container's writable layer.
   A missing required name fails on the host before the container exists;

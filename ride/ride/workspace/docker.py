@@ -13,7 +13,7 @@ from typing import Optional
 
 from bro.base import credentials, log
 from bro.monitor import PROCESS_FILENAME
-from bro.workspace.paths import runtime_base, workspace_tree
+from bro.workspace.paths import CONTAINER_TREE, runtime_base, workspace_tree
 from ride.repository import Repository, as_repository, recorded_origin_url
 from ride.runtime_bundle import SESSION_TERMINAL_ENV, RuntimeBundle
 from ride.workspace import build_context
@@ -461,7 +461,7 @@ def member_exec_argv(launch: MemberExec, env: Mapping[str, str]) -> list[str]:
     '-u',
     'ride',
     '-w',
-    '/workspace',
+    str(CONTAINER_TREE),
     launch.container,
     'env',
     '-i',
@@ -559,7 +559,7 @@ def _docker_create_argv(
   session_facts = {
     'HOME': '/home/ride',
     'RIDE_WORKSPACE': name,
-    'RIDE_HOST_WORKSPACE': str(tree),
+    'RIDE_HOST_TREE': str(tree),
     'RIDE_HOST': socket.gethostname(),
   }
   argv = ['docker', 'create']
@@ -569,7 +569,7 @@ def _docker_create_argv(
     '--rm',
     '--init',
     '-v',
-    f'{tree}:/workspace',
+    f'{tree}:{CONTAINER_TREE}',
     '-v',
     f'ride-runtime-{runtime_bundle_hash}:{_RUNTIME_MOUNT}:ro',
   ]
@@ -577,7 +577,7 @@ def _docker_create_argv(
     argv += ['-e', f'{key}={value}']
   argv += [
     '-w',
-    '/workspace',
+    str(CONTAINER_TREE),
     '--memory=8g',
     # a daemon on this host resolves it to the bridge gateway; one in a VM
     # already serves the name and answers with its own proxy to host loopback

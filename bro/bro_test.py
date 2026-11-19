@@ -1276,7 +1276,7 @@ class TestProvisioning:
       def __init__(self):
         super().__init__(system_prompt='')
 
-    Plain().provision_workspace(Path('/workspace'))
+    Plain().provision_workspace(Path('/tree'))
 
   def test_steps_run_in_mro_order_against_the_workspace(self):
     applied: list[tuple[str, Path]] = []
@@ -1293,8 +1293,8 @@ class TestProvisioning:
       name = 'derived'
       provisioning = (lambda workspace: applied.append(('derived', workspace)),)
 
-    Derived().provision_workspace(Path('/workspace'))
-    assert applied == [('base', Path('/workspace')), ('derived', Path('/workspace'))]
+    Derived().provision_workspace(Path('/tree'))
+    assert applied == [('base', Path('/tree')), ('derived', Path('/tree'))]
 
 
 async def _collect_tool_names(servers):

@@ -52,7 +52,7 @@ from pathlib import Path
 completed = subprocess.run(['webview', 'open'], capture_output=True, text=True)
 assert completed.returncode == 1, completed
 assert 'use rule: webview:' in completed.stderr, completed.stderr
-Path('/workspace/.webview-denied-report').write_text('denied')
+Path('/tree/.webview-denied-report').write_text('denied')
 """
 
 
@@ -74,7 +74,7 @@ launched = subprocess.run(
 )
 assert launched.returncode == 0, launched.stderr
 assert 'visible-profile-cookie' in launched.stdout, launched.stdout
-Path('/workspace/.give-only-profile-report').write_text(launched.stdout)
+Path('/tree/.give-only-profile-report').write_text(launched.stdout)
 """
 
 
@@ -90,7 +90,7 @@ answer = summon_and_wait(
   harness='bro',
   timeout=300,
 )
-Path('/workspace/.webview-summon-report').write_text(answer)
+Path('/tree/.webview-summon-report').write_text(answer)
 """
 
 
@@ -124,7 +124,7 @@ from bro.artifact import ArtifactError, mint_artifact
 from bro.llm.mcp import Context
 from bro.webview import mcp
 
-workspace = Path('/workspace')
+workspace = Path('/tree')
 report_path = workspace / '.webview-toolset-report.json'
 error_path = workspace / '.webview-toolset-error'
 
@@ -219,10 +219,10 @@ try:
     harness='bro',
     timeout=600,
   )
-  Path('/workspace/.browser-one-shot-report').write_text(answer)
+  Path('/tree/.browser-one-shot-report').write_text(answer)
 except Exception:
   import traceback
-  Path('/workspace/.browser-one-shot-error').write_text(traceback.format_exc())
+  Path('/tree/.browser-one-shot-error').write_text(traceback.format_exc())
   raise
 """
 
@@ -366,7 +366,7 @@ try:
   )
   assert 'order edit section' in clicked.stdout, clicked.stdout
 
-  upload_directory = Path('/workspace/browser-thread-upload')
+  upload_directory = Path('/tree/browser-thread-upload')
   upload_directory.mkdir()
   (upload_directory / 'resume.txt').write_text('browser thread upload')
   upload_ref = mint_artifact('browser-thread-upload', timeout=30).ref
@@ -393,10 +393,10 @@ try:
     'answer': outcome.answer,
     'upload_ref': upload_ref,
   }
-  Path('/workspace/.browser-thread-report.json').write_text(json.dumps(report))
+  Path('/tree/.browser-thread-report.json').write_text(json.dumps(report))
 except Exception:
   import traceback
-  Path('/workspace/.browser-thread-error').write_text(traceback.format_exc())
+  Path('/tree/.browser-thread-error').write_text(traceback.format_exc())
   raise
 """
 
@@ -607,7 +607,7 @@ with client:
   record = query_mission(client, mission, wait_seconds=30, wait_for_settlement=True)
 assert record.get('settled') is True, record
 assert record['result']['outcome'] == 'ok', record
-Path('/workspace/.webview-nested-report').write_text(mission)
+Path('/tree/.webview-nested-report').write_text(mission)
 """
 
 
@@ -643,7 +643,7 @@ import traceback
 import urllib.parse
 from pathlib import Path
 
-workspace = Path('/workspace')
+workspace = Path('/tree')
 report_path = workspace / '.webview-e2e-report.json'
 error_path = workspace / '.webview-e2e-error'
 
@@ -752,7 +752,7 @@ try:
     mission,
     {
       'tool': 'browser_file_upload',
-      'arguments': {'paths': [f'/workspace/artifacts/{upload_ref}']},
+      'arguments': {'paths': [f'/tree/artifacts/{upload_ref}']},
     },
   )
   assert 'error' not in uploaded, uploaded
@@ -855,7 +855,7 @@ import time
 import traceback
 from pathlib import Path
 
-workspace = Path('/workspace')
+workspace = Path('/tree')
 report_path = workspace / '.webview-download-report.json'
 error_path = workspace / '.webview-download-error'
 deadline_seconds = 120
@@ -940,7 +940,7 @@ from pathlib import Path
 
 from bro.base import credentials
 
-workspace = Path('/workspace')
+workspace = Path('/tree')
 report_path = workspace / '.webview-profile-report.json'
 error_path = workspace / '.webview-profile-error'
 
@@ -1024,7 +1024,7 @@ import time
 import traceback
 from pathlib import Path
 
-workspace = Path('/workspace')
+workspace = Path('/tree')
 report_path = workspace / '.webview-vnc-report.json'
 error_path = workspace / '.webview-vnc-error'
 
@@ -1059,7 +1059,7 @@ import subprocess
 import traceback
 from pathlib import Path
 
-workspace = Path('/workspace')
+workspace = Path('/tree')
 report_path = workspace / '.webview-killed-report.json'
 error_path = workspace / '.webview-killed-error'
 

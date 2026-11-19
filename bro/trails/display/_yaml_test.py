@@ -11,8 +11,8 @@ WIDTH = 40
 
 
 def test_flow_drops_the_quotes_json_needs():
-  assert flow({'file_path': '/workspace/bro.py', 'limit': 240}) == (
-    '{file_path: /workspace/bro.py, limit: 240}'
+  assert flow({'file_path': '/tree/bro.py', 'limit': 240}) == (
+    '{file_path: /tree/bro.py, limit: 240}'
   )
 
 
@@ -27,8 +27,8 @@ def test_flow_quotes_what_its_own_punctuation_would_swallow():
 
 
 def test_block_carries_line_breaks_as_literal_scalars():
-  assert block({'command': 'cd /workspace\ngit status\n', 'limit': 300}) == (
-    'command: |\n  cd /workspace\n  git status\nlimit: 300\n'
+  assert block({'command': 'cd /tree\ngit status\n', 'limit': 300}) == (
+    'command: |\n  cd /tree\n  git status\nlimit: 300\n'
   )
 
 
@@ -49,8 +49,8 @@ def test_render_stays_on_one_line_while_it_fits():
 
 
 def test_render_expands_past_the_width():
-  value = {'file_path': '/workspace/bro/trails/display/core.py'}
-  assert render(value, width=WIDTH) == 'file_path: /workspace/bro/trails/display/core.py\n'
+  value = {'file_path': '/tree/bro/trails/display/core.py'}
+  assert render(value, width=WIDTH) == 'file_path: /tree/bro/trails/display/core.py\n'
 
 
 def test_render_expands_for_a_line_break_however_short():

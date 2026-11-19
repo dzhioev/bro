@@ -393,9 +393,9 @@ class TestFetch:
     child = PeerIdentity(
       workspace='broker-CH',
       tree=workspace_tree('broker-CH'),
-      artifact_view=PurePosixPath('/workspace/shared'),
+      artifact_view=PurePosixPath('/tree/shared'),
     )
-    assert store.fetch(child, ref) == f'/workspace/shared/{ref}'
+    assert store.fetch(child, ref) == f'/tree/shared/{ref}'
     assert (ride.artifacts.view_dir('ws', 'broker-CH') / ref).read_bytes() == b'payload'
 
   def test_a_boxed_peer_without_a_view_directory_fails(self, store):
@@ -638,7 +638,7 @@ def _live_mission(
       workspace='webview-CH',
       tree=workspace_tree('ws'),
       expected=expected,
-      artifact_view=PurePosixPath('/workspace/artifacts'),
+      artifact_view=PurePosixPath('/tree/artifacts'),
     ),
   )
   return record

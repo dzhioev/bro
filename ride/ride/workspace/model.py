@@ -438,7 +438,7 @@ class UnboxedWorkspace(Workspace):
 
 
 class BoxedWorkspace(Workspace):
-  """a workspace whose tree is bind-mounted into a container as `/workspace`."""
+  """a workspace whose tree is bind-mounted into a container as `/tree`."""
 
   isolation = Isolation.BOXED
 

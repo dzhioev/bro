@@ -11,7 +11,7 @@ def _publish(monkeypatch, **overrides: Optional[str]) -> None:
     'RIDE_SESSION_DIR': '/var/ride/session',
     'RIDE_WORKSPACE': 'ws',
     'RIDE_HOST': 'laptop',
-    'RIDE_HOST_WORKSPACE': '/home/u/ws/tree',
+    'RIDE_HOST_TREE': '/home/u/ws/tree',
     'RIDE_ISOLATION': 'boxed',
     'RIDE_COMMAND': 'ride along ws',
     **overrides,
@@ -34,7 +34,7 @@ class TestManagedSession:
     assert session == ManagedSession(
       workspace='ws',
       host='laptop',
-      host_workspace='/home/u/ws/tree',
+      host_tree='/home/u/ws/tree',
       boxed=True,
       ride_command='ride along ws',
       repo=None,
@@ -81,7 +81,7 @@ class TestManagedSession:
     }
 
   @pytest.mark.parametrize(
-    'name', ['RIDE_WORKSPACE', 'RIDE_HOST', 'RIDE_HOST_WORKSPACE', 'RIDE_ISOLATION', 'RIDE_COMMAND']
+    'name', ['RIDE_WORKSPACE', 'RIDE_HOST', 'RIDE_HOST_TREE', 'RIDE_ISOLATION', 'RIDE_COMMAND']
   )
   def test_a_managed_session_missing_a_fact_fails(self, monkeypatch, name):
     _publish(monkeypatch, **{name: None})

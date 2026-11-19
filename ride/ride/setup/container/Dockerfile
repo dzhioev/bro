@@ -43,7 +43,7 @@ EOF
 # whatever its interpreters compile at run time dies with it.
 RUN python -m compileall -q -j0 "$(python -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
 
-WORKDIR /workspace
+WORKDIR /tree
 ARG IMAGE_RIDE_IN_CONTAINER
 ARG IMAGE_PATH
 ARG IMAGE_UV_LINK_MODE

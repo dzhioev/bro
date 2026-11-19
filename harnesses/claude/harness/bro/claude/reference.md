@@ -220,7 +220,7 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
 — claude state is launch data the harness's boxed extras put on the neutral `Launch`, so a bro-harness container, which runs no Claude, mounts no claude state at all), while session auth comes from the `claude_code` token (below):
 
 - `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`,
-  `projects["/workspace"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt,
+  `projects["/tree"].hasTrustDialogAccepted: true` so guided sessions skip the folder-trust prompt,
   `officialMarketplaceAutoInstallAttempted: true` and `officialMarketplaceAutoInstalled: true` so claude doesn't fetch the official plugin marketplace at startup,
   and `lspRecommendationDisabled: true` so it doesn't offer a language-server plugin for the files a session opens
   — sessions install no marketplace plugins, only Claude Code's built-in ones load) plus the host's account-identity fields (`oauthAccount`, `userID`) so the session starts logged in.
@@ -258,8 +258,8 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   Per-workspace overlay of everything else.
   It is mounted from the host rather than living in the container because the container is `--rm`'d at exit while the workspace outlives it:
   the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the launcher while the session runs.
-- `claude/projects/-workspace/` — where Claude Code stores the session JSONL for `/workspace`.
-  The encoded path `-workspace` is fixed (just `/` replaced with `-`).
+- `claude/projects/-tree/` — where Claude Code stores the session JSONL for `/tree`.
+  The encoded path `-tree` is fixed (just `/` replaced with `-`).
 
 This means each boxed session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
 non-rotating `claude_code` token (so no session's refresh can blow away another's).

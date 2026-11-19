@@ -32,11 +32,12 @@ from bro.broker.environment import BROKER_MISSION
 from bro.broker.journal import MAX_MESSAGE_BYTES
 from bro.webview.profile import ProfileError, decode_profile
 from bro.webview.worker import vnc_url as format_vnc_url
+from bro.workspace.paths import CONTAINER_TREE
 
-WORKSPACE = Path('/workspace')
-ARTIFACT_VIEW = WORKSPACE / 'artifacts'
+TREE = CONTAINER_TREE
+ARTIFACT_VIEW = TREE / 'artifacts'
 MOUNTINFO = Path('/proc/self/mountinfo')
-OUTPUT_DIRECTORY = WORKSPACE / 'output'
+OUTPUT_DIRECTORY = TREE / 'output'
 OPTIONS_ENV = 'WEBVIEW_OPTIONS'
 PUBLISHED_PORTS_ENV = 'RIDE_PUBLISHED_PORTS'
 PLAYWRIGHT_BROWSERS_PATH_ENV = 'PLAYWRIGHT_BROWSERS_PATH'
@@ -388,7 +389,7 @@ async def _playwright(
   output_directory: Path | None = None,
   diagnostics: IO[bytes] | None = None,
 ) -> AsyncIterator[tuple[ClientSession, subprocess.Popen]]:
-  selected_workspace = WORKSPACE if workspace is None else workspace
+  selected_workspace = TREE if workspace is None else workspace
   async with AsyncExitStack() as stack:
     process = subprocess.Popen(
       (
@@ -486,7 +487,7 @@ def _file_digest(path: Path) -> bytes:
 
 def workspace_files() -> dict[Path, FileState]:
   files: dict[Path, FileState] = {}
-  for directory, directory_names, file_names in os.walk(WORKSPACE, followlinks=False):
+  for directory, directory_names, file_names in os.walk(TREE, followlinks=False):
     root = Path(directory)
     directory_names[:] = [
       name
@@ -505,7 +506,7 @@ def workspace_files() -> dict[Path, FileState]:
       else:
         kind = 'special'
         digest = b''
-      files[path.relative_to(WORKSPACE)] = FileState(
+      files[path.relative_to(TREE)] = FileState(
         kind=kind,
         size=metadata.st_size,
         modified_ns=metadata.st_mtime_ns,
@@ -525,11 +526,11 @@ def discard_changed_files(before: Mapping[Path, FileState]) -> None:
 
 
 def _remove_workspace_file(relative: Path) -> None:
-  path = WORKSPACE / relative
+  path = TREE / relative
   with contextlib.suppress(FileNotFoundError):
     path.unlink()
   parent = path.parent
-  while parent != WORKSPACE and parent != ARTIFACT_VIEW:
+  while parent != TREE and parent != ARTIFACT_VIEW:
     try:
       parent.rmdir()
     except OSError:
@@ -589,14 +590,14 @@ def named_files(text: str) -> NamedFiles:
 
 def _workspace_relative(path: Path) -> Path | None:
   try:
-    return path.relative_to(WORKSPACE)
+    return path.relative_to(TREE)
   except ValueError:
     return None
 
 
 def _is_output(relative: Path) -> bool:
-  return OUTPUT_DIRECTORY.is_relative_to(WORKSPACE) and relative.is_relative_to(
-    OUTPUT_DIRECTORY.relative_to(WORKSPACE)
+  return OUTPUT_DIRECTORY.is_relative_to(TREE) and relative.is_relative_to(
+    OUTPUT_DIRECTORY.relative_to(TREE)
   )
 
 
@@ -687,7 +688,7 @@ def _payload_bytes(payload: dict[str, Any]) -> bytes:
 @contextlib.contextmanager
 def _temporary_workspace_file(content: bytes, suffix: str) -> Iterator[Path]:
   with tempfile.NamedTemporaryFile(
-    dir=WORKSPACE, prefix='.webview-', suffix=suffix, delete=False
+    dir=TREE, prefix='.webview-', suffix=suffix, delete=False
   ) as file:
     file.write(content)
     path = Path(file.name)

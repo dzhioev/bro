@@ -705,7 +705,7 @@ class TestSummonLowering:
       **workspace_docker.MEMBER_BASELINE_ENV,
       'RIDE_BRO': 'dev',
       'RIDE_WORKSPACE': PARENT,
-      'RIDE_HOST_WORKSPACE': str(workspace.tree),
+      'RIDE_HOST_TREE': str(workspace.tree),
       'RIDE_HOST': socket.gethostname(),
       'RIDE_ISOLATION': 'boxed',
       ride.do_ride.RESOLVED_RECIPE_ENV: ride.do_ride.encode_resolved_recipe(resolved.dump()),
@@ -1202,7 +1202,7 @@ class TestClaudeSummonLowering:
     settings = json.loads((records / 'claude' / 'settings.json').read_text())
     assert settings['skipDangerousModePermissionPrompt'] is True
     seeded = json.loads((records / 'claude' / '.claude.json').read_text())
-    assert seeded['projects'] == {'/workspace': {'hasTrustDialogAccepted': True}}
+    assert seeded['projects'] == {'/tree': {'hasTrustDialogAccepted': True}}
     shutil.rmtree(records)
 
   def test_lowers_to_a_ride_solo_claude_launch(self, claude_harness):

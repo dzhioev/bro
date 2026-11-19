@@ -41,7 +41,7 @@ a pinned workspace cannot be combined with `--drop`.
 For an automatically named workspace, `--drop` removes it only after a clean exit and keeps a failed session for inspection.
 
 Both mode verbs start **detached**:
-`/workspace` is an empty writable directory and no repository is cloned.
+`/tree` is an empty writable directory and no repository is cloned.
 `--repo PATH|URL` accepts either an existing path inside a checkout (resolved to its root) or a scheme/scp-shaped git URL.
 A path attachment bases on the checkout's current `HEAD`;
 a URL attachment fetches its managed mirror and bases on the fresh `origin/HEAD`.
@@ -381,7 +381,7 @@ A directory under the store that records no workspace is ignored by enumeration,
 ```
 
 The tree sits in its own subdirectory rather than being the workspace directory itself:
-a container bind-mounts it as `/workspace`, and the records must stay outside that mount.
+a container bind-mounts it as `/tree`, and the records must stay outside that mount.
 Whichever harness ran it, everything a session leaves behind is one of these records, so removing the workspace directory is what reclaims it.
 Of the last three, `session/` is the unconditional one
 — every session records into it, whichever harness runs it.
@@ -672,7 +672,7 @@ an external tree is never removed.
 
 ### Boxed isolation (`ride along --boxed -w <name> <bro>` — the default)
 
-`/workspace` is always the workspace's writable `tree/` bind.
+`/tree` is always the workspace's writable `tree/` bind.
 It starts and stays empty for a detached launch.
 With an attachment, the launcher creates a **plain local clone** before container creation.
 The same clone machinery serves both isolations and leaves no dependency on the attached checkout's git directory.
@@ -681,7 +681,7 @@ it carries no alternates dependency on the attachment.
 The attachment itself is not mounted into the container.
 Layout:
 
-- `<runtime-root>/workspaces/<name>/tree/` (host) → `/workspace` rw.
+- `<runtime-root>/workspaces/<name>/tree/` (host) → `/tree` rw.
   Empty while detached;
   an attached workspace contains the host-prepared clone.
 - `ride-runtime-<bundle-hash>` → `/var/ride/runtime` ro.
@@ -721,7 +721,7 @@ Layout:
   The root under which joined members' records are created later ("Workspaces"), mounted whole at creation so a join needs no mount of its own.
 - `<runtime-root>/trails` (host) → `/var/ride/trails` rw when the scoped trails backend is local.
   In-container readers resolve that fixed absolute path;
-  no state path is relative to `/workspace`.
+  no state path is relative to `/tree`.
 
 On an attached workspace's first launch, `prepare_container` clones from the checkout or managed mirror into a temporary sibling and publishes the completed clone atomically.
 It retargets `origin` to the attachment's upstream URL, spelling a github.com one as `https://github.com/<owner>/<name>` and keeping any other host's verbatim, and ref-refreshes the attachment's `refs/remotes/origin/*` without adding another remote.
@@ -735,9 +735,9 @@ Later launches preserve the clone exactly as the session left it.
 
 Inside the container, the entrypoint (running as root first):
 
-1. Aligns the `ride` user's UID/GID with whoever owns `/workspace` on the launcher,
+1. Aligns the `ride` user's UID/GID with whoever owns `/tree` on the launcher,
    then re-execs as `ride` (skipped on Docker for Mac when the bind mount reports root-owned via virtiofs — remapping to UID 0 would make claude refuse `--dangerously-skip-permissions`).
-2. When attached, marks `/workspace` as a safe git directory.
+2. When attached, marks `/tree` as a safe git directory.
    The host's `~/.gitconfig` is not seeded:
    a session's git configuration is what its own hooks declare later in `do-ride`.
 3. Execs `do-ride`.
@@ -911,7 +911,7 @@ Every harness runs a started child through `do-ride solo …`.
 The started-party lowering emits `DockerLaunchSpec` or `ProcessLaunchSpec` through the common launcher roots use.
 An unboxed join emits a member `ProcessLaunchSpec` in the summoner’s existing tree with an explicit environment snapshot and loopback broker upstream.
 A boxed join emits a member `ExecLaunchSpec`:
-a `docker exec -i -u ride -w /workspace` client into the party’s running container, running `env -i` with an explicit baseline (`HOME`, `PATH`, `TERM`, `LANG`) plus the member env
+a `docker exec -i -u ride -w /tree` client into the party’s running container, running `env -i` with an explicit baseline (`HOME`, `PATH`, `TERM`, `LANG`) plus the member env
 — an exec otherwise inherits the container’s config env, the party’s first session’s entire launch environment
 — with `BROKER_UPSTREAM` under `host.docker.internal` and the member’s records reached through the party mount (`RIDE_SESSION_DIR=/var/ride/party/<member>/session`, and the harness's own state under `/var/ride/party/<member>/`).
 The member’s scoped store is `docker cp`’d into the running container at a per-member path under `/home/ride/.bro-party/` and re-owned the way the entrypoint re-owns the root’s.
@@ -1123,7 +1123,7 @@ Each authorized start records the child’s run as its `broker-<channel>` worksp
 
 Peers pass files by content-addressed reference through the ride's store the launcher owns (`ride/ride/artifacts.py`; the wire contract, ref grammar, and CLI are `bro/artifact.py`):
 
-- `artifact mint <path>` ingests a file or directory named relative to the minting peer's workspace root
+- `artifact mint <path>` ingests a file or directory named relative to the minting peer's tree root
   — a private reflink-or-copy, so nothing the producer writes afterwards changes stored bytes
   — and prints its ref, `<digest>/<name>`.
   The digest is `sha256:` plus the content digest for a file (so `sha256sum` checks it) or the digest of a canonical typed-entry manifest for a directory;
@@ -1135,7 +1135,7 @@ Peers pass files by content-addressed reference through the ride's store the lau
   `artifact list` prints every ref the requesting peer can read, one per line in the order they reached it,
   and `artifact fetch <ref>` materializes one and prints the path it appears at, the ref itself under the peer's artifact root, so the content keeps its name and two refs never collide.
   A boxed peer reads it under its declared artifact-view path
-  — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path, as webview does with `/workspace/artifacts`;
+  — `CONTAINER_ARTIFACTS_ROOT` unless its worker-container declaration chooses another absolute normalized POSIX path, as webview does with `/tree/artifacts`;
   the fetch hardlinks it into the per-peer view directory, which is bind-mounted read-only, so it appears without a remount and writes fail with `EROFS`
   — while an unboxed party, having no mount namespace, gets a private copy under the workspace’s own `artifacts/` directory, shared by its members.
   Either way the path is not for editing in place;
@@ -1232,9 +1232,9 @@ Wrappers and session daemons rely on a small set of env vars:
   The launcher reads it from `workspace.json` and passes it to `do-ride`.
 - `RIDE_BASE_SHA` — the commit the attached workspace's tree starts the session at, set beside `RIDE_BRANCH` and absent with it:
   the resolved base a fresh clone is made at, or the tree's HEAD for a resume and for a joined member.
-- `RIDE_HOST_WORKSPACE` — launcher-side absolute path to the workspace tree, set explicitly in both isolations.
+- `RIDE_HOST_TREE` — launcher-side absolute path to the workspace tree, set explicitly in both isolations.
   It is normally `<runtime-root>/workspaces/<name>/tree`, or the recorded external path for `--tree`;
-  in a container it names the host path bound at `/workspace`.
+  in a container it names the host path bound at `/tree`.
 - `RIDE_HOST` — the launcher's hostname, set explicitly in both isolations.
 - `RIDE_RUNTIME` — launcher-side absolute path to the ride's materialized host runtime.
   Manual-summon surfaces use its `venv/bin/ride` so the child starts from the same runtime.

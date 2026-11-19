@@ -187,7 +187,7 @@ def _recorded_messages(
   session = ManagedSession(
     workspace='input-channels-probe',
     host='test-host',
-    host_workspace=str(repository),
+    host_tree=str(repository),
     boxed=False,
     ride_command='ride solo --harness claude bro',
     repo=None,
