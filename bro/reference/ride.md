@@ -754,6 +754,7 @@ Layout:
 On an attached workspace's first launch, the `repo` type clones from the checkout or managed mirror into a temporary directory beside the tree, then atomically publishes the completed clone at `tree/<attachment name>/`.
 An existing attachment directory without a `.git` directory refuses the launch.
 It retargets `origin` to the attachment's upstream URL, spelling a github.com one as `https://github.com/<owner>/<name>` and keeping any other host's verbatim, and ref-refreshes the attachment's `refs/remotes/origin/*` without adding another remote.
+A checkout without an `origin` remote yields a clone with no remote at all.
 It creates the recorded workspace branch from the resolved base:
 a URL attachment's fresh `origin/HEAD`, an explicit `--into`, or a summon's inherited base;
 a path attachment defaults to its current `HEAD`.

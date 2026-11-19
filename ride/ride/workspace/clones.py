@@ -31,6 +31,12 @@ def _origin_url(repository: Path) -> str:
   return _upstream_url(_git(repository, 'remote', 'get-url', 'origin'))
 
 
+def _optional_origin_url(repository: Path) -> Optional[str]:
+  if 'origin' not in _git(repository, 'remote').split():
+    return None
+  return _origin_url(repository)
+
+
 def _alternates_file(repository: Path) -> Path:
   git_directory = Path(_git(repository, 'rev-parse', '--git-dir'))
   if not git_directory.is_absolute():
@@ -122,13 +128,17 @@ def _prepare_clone(
   )
   if result.returncode != 0:
     raise RuntimeError(f'git clone {repository.git_dir} failed for {tree}: {result.stderr.strip()}')
-  _git(tree, 'remote', 'set-url', 'origin', _origin_url(repository.git_dir))
-  _git(
-    tree,
-    'fetch',
-    str(repository.git_dir),
-    '+refs/remotes/origin/*:refs/remotes/origin/*',
-  )
+  upstream = _optional_origin_url(repository.git_dir)
+  if upstream is None:
+    _git(tree, 'remote', 'remove', 'origin')
+  else:
+    _git(tree, 'remote', 'set-url', 'origin', upstream)
+    _git(
+      tree,
+      'fetch',
+      str(repository.git_dir),
+      '+refs/remotes/origin/*:refs/remotes/origin/*',
+    )
   _git(tree, 'checkout', *quiet, '-B', branch, base_ref if base_ref is not None else 'HEAD')
   _initialize_submodules(repository, tree)
   _detach_alternates(tree)

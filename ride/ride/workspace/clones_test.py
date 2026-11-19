@@ -97,6 +97,20 @@ def test_only_a_github_origin_is_respelled(tmp_path, origin, upstream):
   assert _git('remote', 'get-url', 'origin', cwd=tree).stdout.strip() == upstream
 
 
+def test_clone_of_a_source_without_origin_has_no_remote(tmp_path):
+  source = _source_repository(tmp_path)
+  _git('remote', 'remove', 'origin', cwd=source)
+  head = _git('rev-parse', 'HEAD', cwd=source).stdout.strip()
+  tree = tmp_path / 'workspace' / 'tree'
+
+  ensure_clone(_repository(source), tree, 'worktree-session')
+
+  assert _git('symbolic-ref', '--short', 'HEAD', cwd=tree).stdout.strip() == 'worktree-session'
+  assert _git('rev-parse', 'HEAD', cwd=tree).stdout.strip() == head
+  assert _git('remote', cwd=tree).stdout.split() == []
+  assert _git('for-each-ref', 'refs/remotes', cwd=tree).stdout == ''
+
+
 def test_explicit_base_is_checked_out_only_when_the_clone_is_created(tmp_path):
   source = _source_repository(tmp_path)
   base = _git('rev-parse', 'HEAD', cwd=source).stdout.strip()
@@ -132,12 +146,11 @@ def test_clone_from_an_alternates_source_is_dissociated(tmp_path):
 
 def test_failed_preparation_leaves_no_partial_clone(tmp_path):
   source = _source_repository(tmp_path)
-  _git('remote', 'remove', 'origin', cwd=source)
   tree = tmp_path / 'workspace' / 'tree'
   tree.parent.mkdir(parents=True)
 
-  with pytest.raises(RuntimeError, match='remote get-url origin'):
-    ensure_clone(_repository(source), tree, 'worktree-session')
+  with pytest.raises(RuntimeError, match='git checkout'):
+    ensure_clone(_repository(source), tree, 'worktree-session', '0' * 40)
 
   assert not tree.exists()
   assert list(tree.parent.iterdir()) == []
