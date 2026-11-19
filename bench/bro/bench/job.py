@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Start and inspect raw Harbor jobs through a managed session's broker.
 
-The `benchmark` worker type accepts a workspace-relative config and an optional timeout through `launch`.
+The `benchmark` worker type accepts absolute session-visible config and project paths and an optional timeout through `launch`.
 The host runs `bro.benchmark.job` with Docker access and collects its whole command-job directory as the result artifact.
 
 The `benchmark-job` session command starts that work or reads its retained journal result.
@@ -20,7 +20,14 @@ from bro.authority.rules import Declaration, Option
 from bro.authority.values import IntegerInterval, Integers
 from bro.base import log
 from bro.broker.environment import BROKER_CHANNEL
-from bro.worker_types import Job, LaunchDenied, LaunchRequest, OptionValues, WorkerType, tree_path
+from bro.worker_types import (
+  Job,
+  LaunchDenied,
+  LaunchRequest,
+  OptionValues,
+  WorkerType,
+  resolve_wire_path,
+)
 
 if TYPE_CHECKING:
   from bro.broker.brotocol import Message, Talk
@@ -87,11 +94,11 @@ class BenchmarkType(WorkerType):
 
   @classmethod
   def option_values(cls, fields: Mapping[str, Any], reading: object) -> OptionValues:
-    if fields.keys() - {'timeout', 'config'}:
+    if fields.keys() - {'timeout', 'config', 'project'}:
       raise ValueError('unknown benchmark fields')
     return OptionValues(
       {name: value for name, value in fields.items() if name == 'timeout'},
-      {name: value for name, value in fields.items() if name == 'config'},
+      {name: value for name, value in fields.items() if name in ('config', 'project')},
     )
 
   @override
@@ -102,21 +109,27 @@ class BenchmarkType(WorkerType):
   def launch(self, request: LaunchRequest) -> Job:
     from bro.broker.job import OUTPUT_DIRECTORY, CommandJob
 
-    unknown = sorted(set(request.args) - {'config'})
+    unknown = sorted(set(request.args) - {'config', 'project'})
     if len(unknown) > 0:
       raise LaunchDenied(f'unknown benchmark field(s): {", ".join(unknown)}')
     config = request.args.get('config')
     if not isinstance(config, str) or len(config) == 0:
       raise LaunchDenied("benchmark needs a non-empty string 'config'")
     try:
-      resolved = tree_path(request.owner.tree, config)
+      resolved = resolve_wire_path(request.owner, config)
     except ValueError as error:
       raise LaunchDenied(f'benchmark config: {error}') from error
     if not resolved.is_file():
-      raise LaunchDenied(f'no job config at {config!r} in the workspace')
-    project = request.owner.tree / 'benchmark'
+      raise LaunchDenied(f'no job config at {config!r} in the tree')
+    project_path = request.args.get('project')
+    if not isinstance(project_path, str) or len(project_path) == 0:
+      raise LaunchDenied("benchmark needs a non-empty string 'project'")
+    try:
+      project = resolve_wire_path(request.owner, project_path)
+    except ValueError as error:
+      raise LaunchDenied(f'benchmark project: {error}') from error
     if not (project / 'pyproject.toml').is_file():
-      raise LaunchDenied('the workspace carries no benchmark project')
+      raise LaunchDenied(f'no pyproject.toml at benchmark project {project_path!r}')
     try:
       content = json.loads(resolved.read_text())
     except json.JSONDecodeError as error:
@@ -140,7 +153,7 @@ class BenchmarkType(WorkerType):
         'uv',
         'run',
         '--project',
-        str(project.resolve()),
+        str(project),
         'bro.benchmark.job',
         '-c',
         str(resolved),
@@ -243,37 +256,41 @@ def _relay(await_outcome: Callable[[], str]) -> int:
   return 0
 
 
-def _job_args(config: str, timeout: Optional[int]) -> dict[str, Any]:
-  args: dict[str, Any] = {'type': BENCHMARK, 'config': config}
+def _job_args(config: str, project: str, timeout: Optional[int]) -> dict[str, Any]:
+  args: dict[str, Any] = {
+    'type': BENCHMARK,
+    'config': os.path.abspath(config),
+    'project': os.path.abspath(project),
+  }
   if timeout is not None:
     args['timeout'] = timeout
   return args
 
 
-def run_job(config: str, timeout: Optional[int] = None) -> str:
+def run_job(config: str, project: str, timeout: Optional[int] = None) -> str:
   """start a benchmark job and block until the host answers, returning the ref
   of its collected run. Raises `JobError` with the operator-facing reason."""
   from bro.quest import LAUNCH
 
   with _open_client() as client:
-    request = client.send(LAUNCH, _job_args(config, timeout))
+    request = client.send(LAUNCH, _job_args(config, project, timeout))
     log.info('benchmark job request %s', request.request_id)
     return _await_outcome(client, request, timeout if timeout is not None else DEFAULT_TIMEOUT)
 
 
-def _start(config: str, timeout: Optional[int], detach: bool) -> int:
+def _start(config: str, project: str, timeout: Optional[int], detach: bool) -> int:
   from bro.broker.brotocol import Tag
   from bro.quest import ACCEPT_TIMEOUT, LAUNCH
 
   if not detach:
-    return _relay(lambda: run_job(config, timeout))
+    return _relay(lambda: run_job(config, project, timeout))
   try:
     client = _open_client()
   except JobError as e:
     log.error('%s', e)
     return 1
   with client:
-    request = client.send(LAUNCH, _job_args(config, timeout))
+    request = client.send(LAUNCH, _job_args(config, project, timeout))
     log.info('benchmark job request %s', request.request_id)
     try:
       first = client.await_any(request, ACCEPT_TIMEOUT)
@@ -402,7 +419,10 @@ def main(argv: list[str]) -> Optional[int]:
       'check` to reattach to a request',
     )
     parser.add_argument(
-      '-c', '--config', required=True, help='job config path, relative to the workspace root'
+      '-c', '--config', required=True, help='job config path, relative to cwd or absolute'
+    )
+    parser.add_argument(
+      '--project', required=True, help='benchmark project, relative to cwd or absolute'
     )
     parser.add_argument(
       '--timeout',

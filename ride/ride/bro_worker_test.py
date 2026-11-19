@@ -59,6 +59,7 @@ def _owner(tmp_path: Path, *, type='bro', grant=('@dev',), revoke=(), source=Non
     mission='root',
     workspace='ws',
     tree=tmp_path,
+    tree_view=tmp_path,
     type=type,
     mission_record=mission(grant=grant, revoke=revoke, source=source),
     expected=False,

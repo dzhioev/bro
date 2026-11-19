@@ -160,11 +160,11 @@ def _in_session() -> bool:
   return BROKER_CHANNEL in os.environ or BROKER_UPSTREAM in os.environ
 
 
-def _through_broker(config: str, timeout: Optional[int]) -> tuple[Path, str]:
+def _through_broker(config: Path, project: Path, timeout: Optional[int]) -> tuple[Path, str]:
   """the job started through the session broker: its job directory, and the
   artifact ref retention resolves it from."""
   try:
-    ref = run_job(config, timeout)
+    ref = run_job(str(config), str(project), timeout)
   except JobError as error:
     run = _resolved(error.ref) if error.ref is not None else None
     if run is not None:
@@ -224,7 +224,7 @@ def _run(
     build_bundle(tree)
   try:
     if in_session:
-      job, source = _through_broker(composed.relative_to(tree).as_posix(), timeout)
+      job, source = _through_broker(composed, tree / 'benchmark', timeout)
     else:
       jobs = tree / JOBS_DIRECTORY if jobs_dir is None else Path(jobs_dir).resolve()
       job, source = _on_host(tree, composed, jobs, timeout)

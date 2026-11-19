@@ -1156,7 +1156,7 @@ Each authorized start records the child’s run as its `broker-<channel>` worksp
 
 Peers pass files by content-addressed reference through the ride's store the launcher owns (`ride/ride/artifacts.py`; the wire contract, ref grammar, and CLI are `bro/artifact.py`):
 
-- `artifact mint <path>` ingests a file or directory named relative to the minting peer's tree root
+- `artifact mint <path>` ingests a file or directory inside the minting peer's tree, named relative to its working directory or by an absolute path
   — a private reflink-or-copy, so nothing the producer writes afterwards changes stored bytes
   — and prints its ref, `<digest>/<name>`.
   The digest is `sha256:` plus the content digest for a file (so `sha256sum` checks it) or the digest of a canonical typed-entry manifest for a directory;
@@ -1164,6 +1164,9 @@ Peers pass files by content-addressed reference through the ride's store the lau
   (`artifact digest <path>` computes the same ref locally, which is how a ref is verified end to end).
   The name is not digested, so passing a ref passes its name, and re-minting unchanged content under any name stores nothing new;
   a mint past the ride's byte cap is refused rather than evicted.
+  The client sends an absolute path without resolving symbolic links;
+  the host maps the peer's view to its tree, resolves the path and refuses one outside the resolved tree, including a symbolic link out of it.
+  From a clone at `/tree/bro`, `artifact mint report.md` reads `/tree/bro/report.md`, and `artifact mint /tree/review/round.md` reads a report beside the clone.
 - Reaching a ref materializes nothing, in any placement:
   `artifact list` prints every ref the requesting peer can read, one per line in the order they reached it,
   and `artifact fetch <ref>` materializes one and prints the path it appears at, the ref itself under the peer's artifact root, so the content keeps its name and two refs never collide.

@@ -133,7 +133,7 @@ try:
   upload_directory = workspace / 'upload-directory'
   upload_directory.mkdir()
   (upload_directory / 'resume.txt').write_text('directory upload payload')
-  upload_ref = mint_artifact('upload-directory', timeout=30).ref
+  upload_ref = mint_artifact(str(upload_directory), timeout=30).ref
 
   context = Context(mcp.Webviews())
   opened = mcp.open(context)
@@ -370,7 +370,7 @@ try:
   upload_directory = Path('/tree/browser-thread-upload')
   upload_directory.mkdir()
   (upload_directory / 'resume.txt').write_text('browser thread upload')
-  upload_ref = mint_artifact('browser-thread-upload', timeout=30).ref
+  upload_ref = mint_artifact(str(upload_directory), timeout=30).ref
   quest.share(quest_id, upload_ref)
   uploaded = run(
     'quest',
@@ -691,7 +691,7 @@ try:
   upload = workspace / 'upload.txt'
   upload.write_text('shared upload payload')
   from bro.artifact import mint_artifact
-  upload_ref = mint_artifact('upload.txt', timeout=30).ref
+  upload_ref = mint_artifact(str(upload), timeout=30).ref
 
   opened = json.loads(run('webview', 'open', '--share', upload_ref).stdout)
   mission = opened['mission']

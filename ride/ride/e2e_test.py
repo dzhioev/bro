@@ -253,7 +253,7 @@ assert reply.payload == {'outcome': 'ok', 'value': {'n': 1}}, reply.payload
 print('RIDE_E2E_PING_OK', flush=True)
 
 from bro.artifact import ArtifactError, fetch_artifact, mint_artifact
-Path('/tree/out.bin').write_bytes(b'artifact-payload')
+Path('out.bin').write_bytes(b'artifact-payload')
 try:
   minted = mint_artifact('out.bin', timeout=30)
   path = fetch_artifact(minted.ref, timeout=30)
@@ -308,7 +308,7 @@ channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('benchmark-child')
 try:
-  ref = run_job('benchmark/settings/smoke.json', timeout=60)
+  ref = run_job('settings/smoke.json', '.', timeout=60)
 except JobError as error:
   channel.completed('denied:' + str(error), 'ok')
 else:
@@ -2172,6 +2172,85 @@ def _host_root_route(
       ContainerRuntime(env.image, env.runtime_bundle_hash)
     ),
   )
+
+
+_ARTIFACT_PATHS_PROBE = r"""
+import json
+from pathlib import Path
+from bro.artifact import ArtifactError, fetch_artifact, mint_artifact
+
+clone = Path.cwd()
+assert (clone / '.git').is_dir(), clone
+tree = clone.parent
+(clone / 'relative-report').write_bytes(b'from the clone')
+(tree / 'review-report').write_bytes(b'beside the clone')
+(tree / 'escape').symlink_to('/etc/hosts')
+accepted = []
+for path, expected in [('relative-report', b'from the clone'), (str(tree / 'review-report'), b'beside the clone')]:
+    minted = mint_artifact(path, timeout=30)
+    assert Path(fetch_artifact(minted.ref, timeout=30)).read_bytes() == expected
+    accepted.append(path)
+denied = []
+for path in ['/etc/hosts', str(tree / 'escape')]:
+    try:
+        mint_artifact(path, timeout=30)
+    except ArtifactError as error:
+        assert repr(path) in str(error), error
+        denied.append(path)
+    else:
+        raise AssertionError(f'host accepted an outside path: {path}')
+(tree / '.artifact-paths-report').write_text(json.dumps({'accepted': accepted, 'denied': denied}))
+"""
+
+
+@pytest.mark.parametrize('isolation', ['boxed', 'unboxed'])
+def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, isolation) -> None:
+  from ride.root import run_started_party
+  from ride.runtime_bundle import RuntimeBundle
+  from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
+  from ride.workspace.metadata import Isolation
+  from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
+
+  env = isolated_env
+  repository = _permission_repository(env, f'artifact-paths-{isolation}')
+  name = f'{_NAME_PREFIX}artifact-paths-{isolation}'
+  workspace = Workspace.ensure(
+    name, (repository_attachment(repository, name),), Isolation(isolation)
+  )
+  mission = _root_mission(targets=(), placement=isolation)
+  if workspace.isolation == Isolation.UNBOXED:
+    code = _host_root_route(env, workspace, _ARTIFACT_PATHS_PROBE, mission=mission)
+  else:
+    launch = workspace_docker.Launch(
+      name=name,
+      command=_session_broxy_probe(_ARTIFACT_PATHS_PROBE),
+      env={'RIDE_BRO': 'bro-dev'},
+      secrets=(),
+      tty=False,
+      image=env.image,
+      runtime_bundle_hash=env.runtime_bundle_hash,
+      attachments=workspace.attachments,
+    )
+    bundle = RuntimeBundle(
+      env.runtime_root / 'runtime' / env.runtime_bundle_hash,
+      f'{sys.version_info.major}.{sys.version_info.minor}',
+    )
+    code = run_started_party(
+      launch,
+      workspace,
+      credential_scope=ScopedSecrets(set(), set()),
+      mission=mission,
+      runtime_bundle=bundle,
+      container_runtime=ContainerRuntimeResolver.fixed(
+        ContainerRuntime(env.image, env.runtime_bundle_hash)
+      ),
+    )
+
+  assert code == 0
+  report = json.loads((workspace.tree / '.artifact-paths-report').read_text())
+  assert len(report['accepted']) == 2
+  assert len(report['denied']) == 2
 
 
 def _replace_unboxed_session(monkeypatch: pytest.MonkeyPatch, source: str) -> None:
