@@ -25,7 +25,7 @@ from bro.claude.setup_token import setup_command
 from bro.harness import Harness, OwnedEnvironment, Service, SessionEndReason
 from bro.mcp import Reach
 from bro.run_lifecycle import RunLifecycle
-from bro.workspace.paths import ISOLATION_ENV, workspace_dir
+from bro.workspace.paths import CONTAINER_TREE, ISOLATION_ENV, workspace_dir
 from bro.workspace.session import terminate_session
 from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe, credential_store
@@ -199,7 +199,9 @@ class ClaudeHarness(Harness):
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets
   ) -> ContainerExtras:
     del spec, scoped
-    claude_mounts, claude_env = container_claude_state(workspace.path)
+    claude_mounts, claude_env = container_claude_state(
+      workspace.path, CONTAINER_TREE / workspace.start_directory.relative_to(workspace.tree)
+    )
     return ContainerExtras(env=claude_env, mounts=tuple(claude_mounts))
 
   def prepare_unboxed_env(
@@ -215,7 +217,7 @@ class ClaudeHarness(Harness):
     self, spec: 'SessionSpec', records: Path, member_root: PurePath, env: dict[str, str]
   ) -> None:
     del spec
-    env.update(container_member_claude_state(records, member_root))
+    env.update(container_member_claude_state(records, member_root, Path(env['PWD'])))
 
 
 CLAUDE = ClaudeHarness()

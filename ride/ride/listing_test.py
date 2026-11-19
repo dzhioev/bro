@@ -3,13 +3,14 @@ from unittest.mock import MagicMock
 
 import ride.listing as listing
 from ride.workspace.metadata import Isolation
+from ride.workspace.model import Workspace
 
 
 def _workspace(name: str, isolation: Isolation, active: bool):
-  workspace = MagicMock()
+  workspace = MagicMock(spec=Workspace)
   workspace.name = name
   workspace.isolation = isolation
-  workspace.repo = None
+  workspace.attachments = ()
   workspace.is_active.return_value = active
   workspace.last_active.return_value = None
   return workspace

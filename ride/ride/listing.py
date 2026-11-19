@@ -4,10 +4,12 @@ from typing import Optional
 
 import humanize
 
+from bro.base import log
+from ride.attachments import get_attachment_type
 from ride.session import harness_for_workspace
 from ride.workspace.docker import running_mounts
 from ride.workspace.metadata import Isolation
-from ride.workspace.model import Workspace
+from ride.workspace.model import UnrecognisedWorkspace, Workspace
 
 _BADGES = {
   (Isolation.BOXED, True): '[o]',
@@ -27,7 +29,14 @@ def _truncate(s: str, n: int) -> str:
 
 
 def list_workspaces() -> int:
-  workspaces = Workspace.all()
+  enumerated = Workspace.all()
+  unrecognised = [
+    workspace for workspace in enumerated if isinstance(workspace, UnrecognisedWorkspace)
+  ]
+  workspaces = [workspace for workspace in enumerated if isinstance(workspace, Workspace)]
+  for workspace in unrecognised:
+    log.warning('%s', workspace.error)
+    print(f'[?] {workspace.name}  (unrecognised)  ride clean --force {workspace.name}')
   containers = [workspace for workspace in workspaces if workspace.isolation is Isolation.BOXED]
 
   def _read(workspace: Workspace) -> tuple[Workspace, Optional[str], Optional[float]]:
@@ -54,7 +63,12 @@ def list_workspaces() -> int:
   entries.sort(key=lambda entry: (not entry[0], entry[1].isolation, entry[1].name))
   name_width = max(len(workspace.name) for _, workspace, _, _ in entries)
   attachments = [
-    str(workspace.repo) if workspace.repo is not None else '(detached)'
+    ', '.join(
+      get_attachment_type(attachment.type).summary(attachment)
+      for attachment in workspace.attachments
+    )
+    if workspace.attachments
+    else '(detached)'
     for _, workspace, _, _ in entries
   ]
   attachment_width = max(len(_truncate(attachment, 50)) for attachment in attachments)

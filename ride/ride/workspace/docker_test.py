@@ -8,7 +8,9 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+import ride.repo_attachment as repo_attachment
 import ride.workspace.docker as workspace_docker
+from ride.repo_attachment import repository_attachment
 from ride.repository import Repository
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
@@ -426,12 +428,13 @@ class TestPruneSupersededImages:
 class TestPrepareContainer:
   def test_runs_the_shared_prepare_sequence_from_the_launch(self, monkeypatch, tmp_path):
     project = tmp_path / 'project'
-    workspace = Workspace.create('ws', project, Isolation.BOXED)
+    project.mkdir()
+    workspace = Workspace.create('ws', (repository_attachment(project, 'ws'),), Isolation.BOXED)
     events: list = []
     monkeypatch.setattr(
-      workspace_docker,
+      repo_attachment,
       'ensure_clone',
-      lambda *args: events.append(('clone', args)),
+      lambda *args, **kwargs: events.append(('clone', args, kwargs)),
     )
     monkeypatch.setattr(
       workspace_docker.credentials,
@@ -466,13 +469,14 @@ class TestPrepareContainer:
       credential_store={'creds/openai+work.cred': b'key', 'creds.json': b'{}'},
       hydrated_kinds={'github'},
       extra_mounts=('/host:/container',),
-      repo=project,
+      attachments=(repository_attachment(project, 'ws'),),
       base_ref='base-sha',
     )
     assert workspace_docker.prepare_container(launch) == 'cid'
     assert events[0] == (
       'clone',
-      (Repository(str(project), project), workspace.tree, 'workspace-ws', 'base-sha'),
+      (Repository(str(project), project), workspace.start_directory, 'workspace-ws', 'base-sha'),
+      {'staging_parent': workspace.path},
     )
     argv_event = events[1]
     assert argv_event[0] == 'argv'
@@ -480,7 +484,7 @@ class TestPrepareContainer:
       'runtime-image',
       'bundle-hash',
       'ws',
-      project,
+      workspace.attachments,
       workspace.tree,
       ['claude'],
     )
@@ -515,6 +519,7 @@ class TestMemberExec:
       credential_selection={'github': 'dev'},
       credential_store={'creds/github+dev.cred': b'material'},
       hydrated_kinds={'github'},
+      cwd='/tree',
     )
 
   def test_member_exec_argv_scrubs_with_an_explicit_snapshot(self):
@@ -642,13 +647,34 @@ class TestDockerCreateArgv:
   @pytest.fixture
   def build_argv(self, monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_docker.Path, 'home', lambda: tmp_path)
+    (tmp_path / 'proj').mkdir()
+    directory = tmp_path / 'tree' / 'proj'
+    directory.mkdir(parents=True)
+    subprocess.run(['git', 'init', '-q', directory], check=True)
+    subprocess.run(
+      [
+        'git',
+        '-C',
+        str(directory),
+        '-c',
+        'user.name=Example',
+        '-c',
+        'user.email=example@test',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'initial',
+      ],
+      check=True,
+    )
 
     def build(**kwargs):
       return workspace_docker._docker_create_argv(
         'tag',
         'bundle-hash',
         'ws',
-        tmp_path / 'proj',
+        (repository_attachment(tmp_path / 'proj', 'ws'),),
         tmp_path / 'tree',
         ['claude'],
         **kwargs,
@@ -673,7 +699,7 @@ class TestDockerCreateArgv:
       'tag',
       'bundle-hash',
       'ws',
-      None,
+      (),
       tmp_path / 'tree',
       ['claude'],
     )
@@ -684,17 +710,39 @@ class TestDockerCreateArgv:
     assert not any(value.startswith('RIDE_REPO=') for value in argv)
     assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
 
-  def test_url_attachment_exports_the_url_without_mounting_the_mirror(self, tmp_path):
+  def test_url_attachment_exports_the_url_without_mounting_the_mirror(self, tmp_path, monkeypatch):
     repository = Repository(
       'https://example.test/owner/repository.git', tmp_path / 'mirror.git', 'abc'
     )
     tree = tmp_path / 'tree'
-    subprocess.run(['git', 'init', '-q', tree], check=True)
+    directory = tree / 'repository'
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(
+      repo_attachment, 'open_repository', lambda identity: Repository(identity, directory)
+    )
+    subprocess.run(['git', 'init', '-q', directory], check=True)
     subprocess.run(
       [
         'git',
         '-C',
-        str(tree),
+        str(directory),
+        '-c',
+        'user.name=Example',
+        '-c',
+        'user.email=example@test',
+        'commit',
+        '--quiet',
+        '--allow-empty',
+        '-m',
+        'initial',
+      ],
+      check=True,
+    )
+    subprocess.run(
+      [
+        'git',
+        '-C',
+        str(directory),
         'remote',
         'add',
         'origin',
@@ -706,7 +754,7 @@ class TestDockerCreateArgv:
       'tag',
       'bundle-hash',
       'ws',
-      repository,
+      (repository_attachment(repository, 'ws'),),
       tree,
       ['claude'],
     )
@@ -721,7 +769,6 @@ class TestDockerCreateArgv:
 
   def test_attached_launch_exports_no_clone_control_environment(self, build_argv):
     argv = build_argv()
-    assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
     assert not any(value.startswith('RIDE_BASE_REF=') for value in argv)
 
   def test_no_bro_mount(self, build_argv):

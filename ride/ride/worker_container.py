@@ -228,7 +228,7 @@ def _lower_worker_container(
   ports = _published_ports(launch.spec.published_ports)
   workspace = Workspace.ensure(
     workspace_name,
-    None,
+    (),
     Isolation.BOXED,
     throwaway=True,
   )

@@ -37,6 +37,7 @@ from ride.e2e_test import (
   isolated_env as isolated_env,
   route_environment as route_environment,
 )
+from ride.repo_attachment import repository_attachment
 from ride.runtime_bundle import RuntimeBundle
 from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver, find_container_id
 from ride.workspace.metadata import Isolation
@@ -1133,7 +1134,7 @@ def _run_route(
   import ride.broker_root as broker_root
 
   name = f'ride-e2e-webview-{suffix}'
-  workspace = Workspace.ensure(name, env.project, Isolation.BOXED)
+  workspace = Workspace.ensure(name, (repository_attachment(env.project, name),), Isolation.BOXED)
   runtime_bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
@@ -1158,7 +1159,7 @@ def _run_route(
           PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
         ),
       ),
-      repo=env.project,
+      attachments=(repository_attachment(env.project, name),),
     )
   )
   with _route_observer(workspace, observer):
@@ -1861,7 +1862,9 @@ def test_plain_clean_reclaims_a_cancelled_webview_workspace(
   assert list(worker.tree.iterdir()) == []
   assert _live_containers(workspace) == []
 
-  monkeypatch.setattr(ride_clean, 'clean_managed_mirrors', lambda *_args, **_kwargs: (0, 0))
+  monkeypatch.setattr(
+    'ride.repo_attachment.clean_managed_mirrors', lambda *_args, **_kwargs: (0, 0)
+  )
   monkeypatch.setattr(ride_clean, 'clean_runtime_bundles', lambda **_kwargs: (0, 0))
   assert ride_clean.clean_workspaces(names=[worker.name]) == 0
   assert not worker.path.exists()

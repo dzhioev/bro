@@ -15,6 +15,7 @@ import pytest
 
 import bro.claude.harness as claude_harness
 import ride.bro_worker
+import ride.repo_attachment as repo_attachment
 import ride.root
 import ride.runtime_bundle as runtime_bundle_module
 import ride.scope
@@ -34,8 +35,10 @@ from bro.workspace.paths import (
 )
 from bro.workspace.settings import HomeSettings
 from ride import pending_launch
+from ride.attachments import AttachmentRequest
 from ride.authority_test_helper import mission, reading
 from ride.bro_worker import pending_bro
+from ride.repo_attachment import repository_attachment
 from ride.repository import Repository
 from ride.runtime_bundle import RuntimeBundle, RuntimeBundleError
 from ride.scope import ScopedSecrets
@@ -160,7 +163,21 @@ def _launch_scope(**overrides) -> ride_session.ScopedLaunch:
 
 
 def _workspace(tmp_path, kind: Isolation = Isolation.BOXED) -> Workspace:
-  return Workspace.ensure('w', tmp_path, kind)
+  return Workspace.ensure('w', (repository_attachment(tmp_path, 'w'),), kind)
+
+
+def _prepared_container_environment(launch) -> dict[str, str]:
+  from ride.workspace.docker import prepare_container
+
+  with patch('ride.workspace.docker._create_container', return_value='container') as create:
+    assert prepare_container(launch) == 'container'
+  argv = create.call_args.args[0]
+  environment = {}
+  for index, argument in enumerate(argv[:-1]):
+    if argument == '-e':
+      key, separator, value = argv[index + 1].partition('=')
+      environment[key] = value if separator else os.environ[key]
+  return environment
 
 
 def _runtime_bundle(tmp_path) -> RuntimeBundle:
@@ -280,7 +297,8 @@ class _ContainerHarness:
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
         return_value=ContainerRuntime('runtime-image', 'bundle-hash'),
       ),
-      patch('ride.session.rev_parse_commit', return_value='headsha'),
+      patch('ride.repo_attachment.rev_parse_commit', return_value='headsha'),
+      patch('ride.repo_attachment.ensure_clone'),
       patch('ride.operator.commit_launch', side_effect=self._commit),
       patch(
         'ride.operator.claim_launch',
@@ -479,17 +497,17 @@ class TestHumanIdentity:
     _configure_human(tmp_path)
     with _ContainerHarness() as harness:
       assert ride_session.start_session(_spec(drop=True)) == 0
-    launch = harness.run_started_party.call_args.args[0]
-    assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
-    assert launch.env[HUMAN_EMAIL_ENV] == 'ada@example.com'
+      environment = _prepared_container_environment(harness.run_started_party.call_args.args[0])
+    assert environment[HUMAN_NAME_ENV] == 'Ada Lovelace'
+    assert environment[HUMAN_EMAIL_ENV] == 'ada@example.com'
 
   def test_a_detached_launch_carries_no_human(self, tmp_path):
     _configure_human(tmp_path)
     with _ContainerHarness() as harness:
       assert ride_session.start_session(replace(_spec(drop=True), repo=None)) == 0
-    launch = harness.run_started_party.call_args.args[0]
-    assert HUMAN_NAME_ENV not in launch.env
-    assert HUMAN_EMAIL_ENV not in launch.env
+      environment = _prepared_container_environment(harness.run_started_party.call_args.args[0])
+    assert HUMAN_NAME_ENV not in environment
+    assert HUMAN_EMAIL_ENV not in environment
 
 
 class TestDetachedSession:
@@ -500,8 +518,7 @@ class TestDetachedSession:
       assert 'RIDE_REPO' not in os.environ
       assert '--repo' not in os.environ['RIDE_COMMAND']
     workspace = Workspace.open('w')
-    assert workspace.repo is None
-    assert workspace.metadata.branch is None
+    assert not workspace.attachments
     launch = harness.run_started_party.call_args.args[0]
     assert '--repo' not in launch.command
     assert launch.base_ref is None
@@ -515,20 +532,18 @@ class TestDetachedSession:
 
   def test_unboxed_launch_uses_a_plain_directory_and_skips_project_setup(self, tmp_path):
     spec = replace(_spec(isolation=Isolation.UNBOXED), repo=None)
-    workspace = Workspace.create('detached-host', None, Isolation.UNBOXED)
+    workspace = Workspace.create('detached-host', (), Isolation.UNBOXED)
     harness = MagicMock()
     with (
       patch('ride.session.get_harness', return_value=harness),
-      patch('ride.session.ensure_clone') as ensure_worktree,
+      patch('ride.repo_attachment.ensure_clone') as ensure_worktree,
       patch('ride.session.materialize_scoped_store', new=_materialize_store),
     ):
       launch = ride_session.started_party_launch(
         spec,
         workspace,
         None,
-        None,
         _launch_scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
         env={},
@@ -556,7 +571,7 @@ class TestContainerCommand:
     assert rc == 0
     command = h.run_started_party.call_args.args[0].command
     assert command == [
-      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
+      'do-ride', 'along', '--workspace', 'w', '--harness', 'claude', '--attachment', json.dumps(repository_attachment(Path(str(Path.cwd())), 'w').dump()),
       '--hold', 'attended', '--', 'dev', 'go',
     ]  # fmt: skip
 
@@ -573,8 +588,8 @@ class TestContainerCommand:
       'w',
       '--harness',
       'claude',
-      '--repo',
-      str(Path.cwd()),
+      '--attachment',
+      json.dumps(repository_attachment(Path(str(Path.cwd())), 'w').dump()),
       '--hold',
       'attended',
       '--',
@@ -585,8 +600,8 @@ class TestContainerCommand:
     launch = h.run_started_party.call_args.args[0]
     assert launch.env['RIDE_BRO'] == 'dev'
     assert launch.env['RIDE_ISOLATION'] == 'boxed'
-    assert launch.env['RIDE_BRANCH'] == 'workspace-w'
-    assert launch.env['RIDE_BASE_SHA'] == 'headsha'
+    assert launch.attachments[0].fields['branch'] == 'workspace-w'
+    assert launch.base_ref == 'headsha'
     assert launch.env['RIDE_COMMAND'] == spec.ride_command
 
   def test_env_additions_are_the_containers_own_lowest_layer(self):
@@ -629,7 +644,7 @@ class TestContainerCommand:
     launch = harness.run_started_party.call_args.args[0]
     assert not launch.tty
     assert launch.command == [
-      'do-ride', 'solo', '--workspace', 'w', '--harness', 'claude', '--repo', str(Path.cwd()),
+      'do-ride', 'solo', '--workspace', 'w', '--harness', 'claude', '--attachment', json.dumps(repository_attachment(Path(str(Path.cwd())), 'w').dump()),
       '--hold', 'unattended', '--', 'bro-dev', 'go',
     ]  # fmt: skip
 
@@ -646,11 +661,10 @@ class TestContainerCommand:
     assert rc == 0
     launch = h.run_started_party.call_args.args[0]
     assert launch.base_ref == 'headsha'
-    assert launch.env['RIDE_BASE_SHA'] == 'headsha'
 
   def test_an_unreadable_source_head_fails_launch(self, caplog):
     with _ContainerHarness() as h:
-      with patch('ride.session.rev_parse_commit', return_value=None):
+      with patch('ride.repo_attachment.rev_parse_commit', return_value=None):
         rc = ride_session.start_session(_spec(drop=True))
     assert rc == 1
     assert 'cannot read HEAD' in caplog.text
@@ -663,19 +677,21 @@ class TestContainerCommand:
     spec = replace(_spec(drop=True), repo=repository.identity)
     with _ContainerHarness() as harness:
       with (
-        patch('ride.session.hold_repository', return_value=contextlib.nullcontext(repository)),
-        patch('ride.workspace.model.open_repository', return_value=repository),
+        patch(
+          'ride.repo_attachment.hold_repository', return_value=contextlib.nullcontext(repository)
+        ),
+        patch('ride.repo_attachment.open_repository', return_value=repository),
       ):
-        rc = ride_session.start_session(spec, repository)
+        rc = ride_session.start_session(spec)
     assert rc == 0
     launch = harness.run_started_party.call_args.args[0]
     assert launch.base_ref == 'urlsha'
-    assert launch.repo == repository
-    assert Workspace.open('w').metadata.repo == repository.identity
+    assert launch.attachments == (repository_attachment(repository, 'w'),)
+    assert Workspace.open('w').attachments[0].fields['repo'] == repository.identity
 
   def test_into_threads_the_resolved_base_into_the_container_launch(self):
     with _ContainerHarness() as h:
-      with patch('ride.session.resolve_ref', return_value='intosha') as resolve:
+      with patch('ride.repo_attachment.resolve_ref', return_value='intosha') as resolve:
         rc = ride_session.start_session(_spec(drop=True, into='feature'))
     assert rc == 0
     assert resolve.call_args[0][1] == 'feature'
@@ -684,7 +700,7 @@ class TestContainerCommand:
 
   def test_unresolvable_into_fails_launch(self):
     with _ContainerHarness() as h:
-      with patch('ride.session.resolve_ref', return_value=None):
+      with patch('ride.repo_attachment.resolve_ref', return_value=None):
         rc = ride_session.start_session(_spec(drop=True, into='nope'))
     assert rc == 1
     assert h.run_started_party.call_count == 0
@@ -698,6 +714,7 @@ class TestContainerCommand:
     assert h.run_started_party.call_count == 0
 
   def test_resume_carried_as_bare_flag_the_runner_resolves(self, tmp_path):
+    _workspace(tmp_path)
     projects_dir = tmp_path / 'projects'
     projects_dir.mkdir()
     (projects_dir / 'abc.jsonl').write_text('{}')
@@ -715,8 +732,8 @@ class TestContainerCommand:
       '--harness',
       'claude',
       '--resume',
-      '--repo',
-      str(Path.cwd()),
+      '--attachment',
+      json.dumps(repository_attachment(Path(str(Path.cwd())), 'w').dump()),
       '--hold',
       'attended',
       '--',
@@ -1031,7 +1048,7 @@ class TestConcurrentSessionGuard:
     )
     # the shared active-container refusal probes docker ahead of the launch body
     monkeypatch.setattr(ride_session, 'find_container_id', lambda tree: None)
-    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda root, ref: 'headsha')
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda root, ref: 'headsha')
 
   def test_second_launch_is_refused_while_the_lock_is_held(self, tmp_path, caplog):
     workspace = _workspace(tmp_path)
@@ -1069,14 +1086,14 @@ class TestUnboxedSession:
   def _workspace(self, monkeypatch, tmp_path, *, attached: bool = True):
     workspace = Workspace.ensure(
       'w',
-      tmp_path if attached else None,
+      (repository_attachment(tmp_path, 'w'),) if attached else (),
       Isolation.UNBOXED,
     )
-    monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
-    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
+    monkeypatch.setattr(repo_attachment, 'ensure_clone', lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(
-      ride_session, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
+      repo_attachment, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
     )
     monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_kwargs: None)
     monkeypatch.setattr(
@@ -1095,7 +1112,11 @@ class TestUnboxedSession:
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', '/parent/claude')
     monkeypatch.setenv('PWD', '/parent/tree')
     monkeypatch.setenv('TERM', 'xterm-kitty')
-    human = {HUMAN_NAME_ENV: 'Ada Lovelace', HUMAN_EMAIL_ENV: 'ada@example.com'}
+    monkeypatch.setattr(
+      repo_attachment,
+      'human_git_identity_env',
+      lambda repository: {HUMAN_NAME_ENV: 'Ada Lovelace', HUMAN_EMAIL_ENV: 'ada@example.com'},
+    )
     spec = _spec(
       isolation=Isolation.UNBOXED,
       hold='attended',
@@ -1106,10 +1127,8 @@ class TestUnboxedSession:
     launch = ride_session.started_party_launch(
       spec,
       workspace,
-      workspace.repository,
       None,
       _launch_scope(hydrated_kinds=frozenset({'github', 'trails'})),
-      human_env=human,
       runtime_bundle=runtime_bundle,
       container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       env={},
@@ -1125,8 +1144,8 @@ class TestUnboxedSession:
       'w',
       '--harness',
       'claude',
-      '--repo',
-      str(Path.cwd()),
+      '--attachment',
+      json.dumps(repository_attachment(Path(str(Path.cwd())), 'w').dump()),
       '--hold',
       'attended',
       '--',
@@ -1143,7 +1162,7 @@ class TestUnboxedSession:
     assert launch.env['BRO_INSTALL_KINDS'] == 'github trails'
     assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
-    assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['PWD'] == str(workspace.start_directory)
     assert launch.env['RIDE_HOST_TREE'] == str(workspace.tree)
     assert launch.env['TERM'] == 'xterm-kitty'
     assert 'RIDE_SUMMONED' not in launch.env
@@ -1170,10 +1189,8 @@ class TestUnboxedSession:
     launch = ride_session.started_party_launch(
       spec,
       workspace,
-      workspace.repository,
       None,
       _launch_scope(),
-      human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
       container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       env={},
@@ -1184,7 +1201,7 @@ class TestUnboxedSession:
     assert launch.env['IS_SANDBOX'] == '1'
     assert launch.env['LANG'] == 'C.UTF-8'
     assert launch.env['PATH'].startswith(str(_runtime_bundle(tmp_path).host_bin))
-    assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['PWD'] == str(workspace.start_directory)
     assert launch.env['RIDE_HOST_TREE'] == str(workspace.tree)
     assert launch.env['RIDE_BRO'] == 'bro-dev'
     assert launch.env['RIDE_COMMAND'] == spec.ride_command
@@ -1209,9 +1226,7 @@ class TestUnboxedSession:
       replace(_spec(isolation=Isolation.UNBOXED, solo=True), repo=None),
       workspace,
       None,
-      None,
       _launch_scope(),
-      human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
       container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       env={'MARKER': 'child'},
@@ -1230,7 +1245,7 @@ class TestUnboxedSession:
     assert 'TERM' not in launch.env
     assert 'RIDE_IN_CONTAINER' not in launch.env
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
-    assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['PWD'] == str(workspace.start_directory)
     assert launch.env['RIDE_HOST_TREE'] == str(workspace.tree)
     assert launch.env['MARKER'] == 'child'
 
@@ -1241,7 +1256,7 @@ class TestUnboxedSession:
     external_tree = tmp_path / 'task' if external else None
     if external_tree is not None:
       external_tree.mkdir()
-    workspace = Workspace.ensure('detached', None, Isolation.UNBOXED, tree=external_tree)
+    workspace = Workspace.ensure('detached', (), Isolation.UNBOXED, tree=external_tree)
     tree = workspace.tree
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_kwargs: None)
@@ -1288,9 +1303,7 @@ class TestUnboxedSession:
       spec,
       workspace,
       None,
-      None,
       _launch_scope(),
-      human_env={},
       runtime_bundle=runtime_bundle,
       container_runtime=ContainerRuntimeResolver(runtime_bundle),
       env={},
@@ -1322,7 +1335,6 @@ class TestUnboxedSession:
         workspace,
         None,
         _launch_scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
@@ -1350,7 +1362,6 @@ class TestUnboxedSession:
         workspace,
         None,
         scope,
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
@@ -1368,7 +1379,7 @@ class TestUnboxedSession:
       lambda workspace: tmp_path / 'absent-projects',
     )
     ensure_clone = MagicMock()
-    monkeypatch.setattr(ride_session, 'ensure_clone', ensure_clone)
+    monkeypatch.setattr(repo_attachment, 'ensure_clone', ensure_clone)
 
     assert (
       ride_session._launch_session(
@@ -1376,7 +1387,6 @@ class TestUnboxedSession:
         workspace,
         None,
         _launch_scope(),
-        human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
         container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
@@ -1393,9 +1403,9 @@ class TestBoxedMemberSession:
     harness = MagicMock()
     monkeypatch.setattr(ride_session, 'get_harness', lambda _name: harness)
     monkeypatch.setattr(ride_session, 'find_container_id', lambda _tree: 'container-id')
-    monkeypatch.setattr(ride_session, '_tree_head', lambda _tree: 'treehead')
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda _tree, _ref: 'treehead')
     monkeypatch.setattr(
-      ride_session, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
+      repo_attachment, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
     )
 
     launch = ride_session.boxed_member_launch(
@@ -1403,7 +1413,6 @@ class TestBoxedMemberSession:
       workspace,
       'broker-member',
       _launch_scope(),
-      human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
       env={},
     )
@@ -1430,7 +1439,7 @@ class TestHostBrokerPingRoundTrip:
     # the identity fields _seed_claude_json requires from the host ~/.claude.json
     (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'u'}))
     monkeypatch.setenv('HOME', str(home))
-    workspace = Workspace.create('w', root, Isolation.UNBOXED)
+    workspace = Workspace.create('w', (repository_attachment(root, 'w'),), Isolation.UNBOXED)
     workspace.tree.mkdir(parents=True)
     runtime_bundle = _runtime_bundle(root)
     session_binary = runtime_bundle.host_venv / 'bin' / 'do-ride'
@@ -1446,8 +1455,12 @@ class TestHostBrokerPingRoundTrip:
     session_binary.chmod(0o755)
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
-    monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
-    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
+    monkeypatch.setattr(
+      repo_attachment,
+      'ensure_clone',
+      lambda repository, directory, *args, **kwargs: directory.mkdir(parents=True, exist_ok=True),
+    )
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1464,7 +1477,6 @@ class TestHostBrokerPingRoundTrip:
         workspace,
         None,
         _launch_scope(),
-        human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
           ContainerRuntime('runtime-image', 'bundle-hash')
@@ -1526,7 +1538,7 @@ client.close(confirm=True)
     home.mkdir()
     (home / '.claude.json').write_text(json.dumps({'oauthAccount': {'id': 'acct'}, 'userID': 'u'}))
     monkeypatch.setenv('HOME', str(home))
-    workspace = Workspace.create('w', root, Isolation.UNBOXED)
+    workspace = Workspace.create('w', (repository_attachment(root, 'w'),), Isolation.UNBOXED)
     workspace.tree.mkdir(parents=True)
     answer_child = root / 'answer_child.py'
     answer_child.write_text(self._ANSWER_CHILD)
@@ -1544,8 +1556,12 @@ client.close(confirm=True)
     session_binary.chmod(0o755)
 
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
-    monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
-    monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
+    monkeypatch.setattr(
+      repo_attachment,
+      'ensure_clone',
+      lambda repository, directory, *args, **kwargs: directory.mkdir(parents=True, exist_ok=True),
+    )
+    monkeypatch.setattr(repo_attachment, 'rev_parse_commit', lambda tree, ref: 'treehead')
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1562,7 +1578,6 @@ client.close(confirm=True)
         workspace,
         None,
         _launch_scope(mission=mission(grant=['@bro-dev'])),
-        human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
           ContainerRuntime('runtime-image', 'bundle-hash')
@@ -1600,8 +1615,14 @@ def _pending_record(tmp_path, **overrides):
     'request': dump_request(Request('bro', {'target': 'bro-dev'}), Descriptor('bro', {})),
     'root': 'root',
     'summoner': {'trail_id': 'T1'},
-    'repo': None,
-    'into': None,
+    'attachment': {
+      'type': 'repo',
+      'fields': {
+        'repo': str(tmp_path),
+        'owner': str(tmp_path / 'parent-tree' / tmp_path.name),
+        'into': overrides.pop('into', None),
+      },
+    },
   }
   extension.update(overrides.pop('extension', {}))
   for key in tuple(extension):
@@ -1629,13 +1650,13 @@ class TestSummonedSession:
       _ContainerHarness() as h,
       patch('ride.session.run_manual_started_party', return_value=0) as run,
       patch('ride.session.broker_enabled', return_value=True),
-      patch('ride.session.resolve_head', return_value='parentsha') as head,
+      patch('ride.repo_attachment.resolve_head', return_value='parentsha') as head,
     ):
       spec = _spec(prompt='pair on this')
       rc = ride_session.start_session(spec, summoned=record)
     assert rc == 0
     assert h.run_started_party.call_count == 0  # no broker of its own
-    assert head.call_args.args == (tmp_path, ride_session.Path(record.owner_tree))
+    assert head.call_args.args == (tmp_path, ride_session.Path(record.owner_tree) / tmp_path.name)
     launch = run.call_args.args[0]
     assert launch.env['BROKER_UPSTREAM'] == 'tcp://tk@host.docker.internal:7321'
     assert launch.env['RIDE_SUMMONED'] == '1'
@@ -1643,7 +1664,7 @@ class TestSummonedSession:
     assert launch.env['RIDE_WORKSPACE'] == 'w'
     assert json.loads(launch.env['RIDE_SUMMONER']) == {'trail_id': 'T1'}
     assert launch.base_ref == 'parentsha'
-    assert launch.env['RIDE_BASE_SHA'] == 'parentsha'
+    assert launch.base_ref == 'parentsha'
     # the child forwards no ambient env, so the launch line reaches it explicitly
     assert launch.env['RIDE_COMMAND'] == spec.ride_command
     assert launch.tty
@@ -1658,7 +1679,7 @@ class TestSummonedSession:
       _ContainerHarness(),
       patch('ride.session.run_manual_started_party', return_value=0) as run,
       patch('ride.session.broker_enabled', return_value=True),
-      patch('ride.session.resolve_head', return_value='parentsha'),
+      patch('ride.repo_attachment.resolve_head', return_value='parentsha'),
     ):
       code = ride_session.start_session(_spec(solo=True, prompt='finish this'), summoned=record)
 
@@ -1678,7 +1699,7 @@ class TestSummonedSession:
       _ContainerHarness(),
       patch('ride.session.run_manual_started_party', side_effect=claim),
       patch('ride.session.broker_enabled', return_value=True),
-      patch('ride.session.resolve_head', return_value='parentsha'),
+      patch('ride.repo_attachment.resolve_head', return_value='parentsha'),
     ):
       code = ride_session.start_session(_spec(), summoned=record)
 
@@ -1691,7 +1712,7 @@ class TestSummonedSession:
       _ContainerHarness(),
       patch('ride.session.run_manual_started_party', return_value=0) as run,
       patch('ride.session.broker_enabled', return_value=True),
-      patch('ride.session.resolve_ref', return_value='intosha') as ref,
+      patch('ride.repo_attachment.resolve_ref', return_value='intosha') as ref,
     ):
       rc = ride_session.start_session(_spec(), summoned=record)
     assert rc == 0
@@ -1714,7 +1735,7 @@ class TestSummonedSession:
     with (
       _ContainerHarness() as h,
       patch('ride.session.broker_enabled', return_value=True),
-      patch('ride.session.resolve_head', return_value=None),
+      patch('ride.repo_attachment.resolve_head', return_value=None),
     ):
       rc = ride_session.start_session(_spec(), summoned=record)
     assert rc == 1
@@ -1729,7 +1750,8 @@ class TestReadingAdmission:
     position = arguments.index('--limit')
     assert arguments[position + 1] == spec.limit[0]
 
-  def test_a_resume_runs_the_hold_its_operator_admitted(self, monkeypatch):
+  def test_a_resume_runs_the_hold_its_operator_admitted(self, monkeypatch, tmp_path):
+    _workspace(tmp_path)
     source = reading(config={'operator': {'limit': ['bro.hold=* for bro{hold=unattended}']}})
     with _ContainerHarness() as harness:
       harness.take_reading.side_effect = lambda: source
@@ -1744,15 +1766,16 @@ class TestReadingAdmission:
     repository = Repository('https://example.test/repository.git', tmp_path, 'remote-head')
     with _ContainerHarness() as harness:
       monkeypatch.setattr(
-        ride_session, 'hold_repository', lambda identity: contextlib.nullcontext(repository)
+        repo_attachment, 'hold_repository', lambda identity: contextlib.nullcontext(repository)
       )
-      monkeypatch.setattr(ride_session, 'resolve_ref', lambda directory, ref: 'selected-commit')
+      monkeypatch.setattr(repo_attachment, 'resolve_ref', lambda directory, ref: 'selected-commit')
       spec = replace(_spec(), repo=repository.identity, into=into)
       with patch('ride.session._launch_session', return_value=0):
         assert ride_session.start_session(spec) == 0
     harness.take_reading.assert_called_once_with()
 
-  def test_resumed_child_keeps_its_recorded_harness(self, monkeypatch):
+  def test_resumed_child_keeps_its_recorded_harness(self, monkeypatch, tmp_path):
+    _workspace(tmp_path)
     source = reading()
     source = replace(source, settings=HomeSettings(summon_harness='bro'))
     requested = Request('bro', {'target': 'bro-dev'})
@@ -1853,8 +1876,7 @@ def test_manual_claim_rejects_a_superseded_launcher_before_execution(monkeypatch
         'request': dump_request(requested, Descriptor('bro', {})),
         'root': 'root',
         'summoner': None,
-        'repo': None,
-        'into': None,
+        'attachment': None,
       },
     )
   )
@@ -2218,7 +2240,12 @@ def test_resumed_child_enters_the_broker_with_a_fresh_root_allowance(cap, tmp_pa
   child = mission(target='bro', source=original, values={'harness': 'claude', 'timeout': None})
   assert original.child_allowance(original.root_allowance('bro'), child.descriptor).value == 1
   launch = SummonLaunchSpec(
-    record=child, prompt='work', parent='parent', parent_tree=tmp_path, summoner=None, repo=tmp_path
+    record=child,
+    prompt='work',
+    parent='parent',
+    parent_tree=tmp_path,
+    summoner=None,
+    attachment=AttachmentRequest('repo', {'repo': str(tmp_path)}),
   )
   workspace = _workspace(tmp_path)
   spec = _child_session_spec(launch, workspace.name, '/runtime')

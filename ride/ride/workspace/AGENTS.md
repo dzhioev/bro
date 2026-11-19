@@ -2,7 +2,7 @@
 
 `ride.workspace` is the containerization and workspace layer beneath every managed launch.
 A workspace is `<runtime-base>/workspaces/<name>/`:
-a globally named tree plus its recorded optional repository attachment, lock, exit record, resume record, and host log.
+a globally named tree plus its recorded typed attachments, lock, exit record, resume record, and host log.
 
 ## Design
 
@@ -12,7 +12,7 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   `ride.session.started_party_launch` prepares either isolation before supervision starts `do-ride`, which owns the per-session setup.
 - **Isolation is recorded.**
   `workspace.json` fixes boxed or unboxed isolation at creation.
-  Every attached tree is an independent clone.
+  Attachment behavior is reached through `ride.attachments`; the workspace model and container layer run no git operations.
   A detached unboxed workspace may record an externally owned tree.
 - **Core contracts point downward.**
   Runtime paths, project configuration, and git helpers remain in `bro.workspace`;
@@ -32,9 +32,9 @@ a globally named tree plus its recorded optional repository attachment, lock, ex
   broker-free launch descriptions, root-bounded bind validation, loopback-only published ports, container creation, scoped-store copy, member-exec preparation and checked in-container kills,
   attach suspension, Docker inspection, and the bridge gateway a container reaches its launcher through
 - `image_locks.py` — the stable host-wide lock paths and process-lifetime reservation, build, and removal protocol shared by runtime and worker images
-- `metadata.py` — strict `workspace.json` records, boxed/unboxed isolation, and optional external-tree identity
-- `model.py` — workspace factories, namespace/session locking, external-tree ownership, inspection, clean-exit records, and isolation-specific teardown
-- `clones.py` — clone creation for every attached tree, upstream retargeting, base checkout, and submodule initialization
+- `metadata.py` — strict `workspace.json` records, typed attachments, boxed/unboxed isolation, optional external-tree identity and read errors
+- `model.py` — workspace factories, namespace/session locking, external-tree ownership, attachment preparation and start-directory selection, marked unreadable records in enumeration, inspection, clean-exit records, and isolation-specific teardown
+- `clones.py` — the repo type's clone creation, upstream retargeting, base checkout, and submodule initialization
 - `containers.py` — boxed execution and attachment plus the broker availability gate
 - `spawn.py` — boxed, unboxed-process, and member-exec broker spawner adapters, each selected by the launch that owns it.
   They add the mission id and talk environment, bound child output, handle process-group and record-checked exec kills, and share the party-member registry.

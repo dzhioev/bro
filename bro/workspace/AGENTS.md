@@ -10,7 +10,7 @@ Workspace creation, provisioning, containers, credential hydration, and teardown
 - `paths.py` — explicit repository-root resolution, the flat global runtime paths, fixed in-container mount paths, workspace naming, venv environment helpers, and `RuntimeLocationError`
 - `installation.py` — the environment's installation-home marker and home-name grammar
 - `settings.py` — the installed home's packaged launch settings
-- `repository.py` — repository provisioning configuration and uninterpreted owner tables
+- `repository.py` — repository provisioning configuration and uninterpreted owner tables, read at a repo attachment's clone root
 - `banner.py` — typed session facts plus visual and LLM renderings, consumed by launch surfaces and the `bro::banner` service tool
 - `session.py` — in-session termination through `RIDE_RUNNER_PID`, carrying the status the session is to report
 - `human.py` — the human a session works for: the environment carrying their git identity, the checkout read that resolves it, and the session read back

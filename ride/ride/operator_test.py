@@ -91,7 +91,7 @@ def test_root_provisions_operator_channel_before_spawning_and_removes_it(
   tmp_path, monkeypatch, exit_code
 ):
   monkeypatch.setattr('ride.broker_root.broker_bind_hosts', lambda: ['127.0.0.1'])
-  workspace = Workspace.ensure('root', None, Isolation.UNBOXED)
+  workspace = Workspace.ensure('root', (), Isolation.UNBOXED)
   output = tmp_path / 'observed.json'
   script = textwrap.dedent("""
     import json
@@ -290,7 +290,7 @@ def test_mission_id_resolves_through_the_operator_listing(monkeypatch):
 
 def test_live_override_replays_before_watch_arm_and_changes_authority(tmp_path, monkeypatch):
   monkeypatch.setattr('ride.broker_root.broker_bind_hosts', lambda: ['127.0.0.1'])
-  workspace = Workspace.ensure('root', None, Isolation.UNBOXED)
+  workspace = Workspace.ensure('root', (), Isolation.UNBOXED)
   output = tmp_path / 'override-live.json'
   script = textwrap.dedent("""
     import contextlib
@@ -353,7 +353,7 @@ def test_startup_snapshot_survives_override_before_harness_process_starts(
   tmp_path, monkeypatch, initial_grant
 ):
   monkeypatch.setattr('ride.broker_root.broker_bind_hosts', lambda: ['127.0.0.1'])
-  workspace = Workspace.ensure('root', None, Isolation.UNBOXED)
+  workspace = Workspace.ensure('root', (), Isolation.UNBOXED)
   output = tmp_path / 'snapshot-result.json'
   session = tmp_path / 'snapshot-session'
   session.mkdir()

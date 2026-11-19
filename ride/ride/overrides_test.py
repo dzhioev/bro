@@ -21,7 +21,7 @@ from ride.workspace.model import Workspace
 
 @pytest.fixture
 def running():
-  workspace = Workspace.ensure('root', None, Isolation.UNBOXED)
+  workspace = Workspace.ensure('root', (), Isolation.UNBOXED)
   source = reading()
   original = mission(source=source, revoke=['@bro'])
   facts = WorkerFacts('bro', workspace.name, record=original, extension=BroFacts('bro'))

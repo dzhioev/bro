@@ -5,7 +5,6 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import threading
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
@@ -20,14 +19,12 @@ from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import Recipe
 from bro.llm.resolved import RESOLVED_RECIPE_ENV, ResolvedRecipe
 from bro.monitor import PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
-from bro.registry import create_bro
 from bro.summon import party_member
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
-from bro.workspace.repository import repository_config
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
+from ride.attachments import Attachment, get_attachment_type
 from ride.errors import reports_runtime_errors
 from ride.identity import bro_git_identity_env
-from ride.repository import recorded_origin_url
 from ride.workspace.model import ACTIVITY_FILENAME
 
 if TYPE_CHECKING:
@@ -52,7 +49,7 @@ class SessionRun:
   """The session fields consumed inside a prepared workspace."""
 
   name: str
-  repo: Optional[str]
+  attachments: tuple[Attachment, ...]
   harness: str
   hold: str
   resolved_recipe: dict
@@ -67,7 +64,7 @@ class SessionRun:
     return ResolvedRecipe.from_dict(self.resolved_recipe).recipe
 
 
-def command(spec: 'SessionSpec') -> list[str]:
+def command(spec: 'SessionSpec', attachments: tuple[Attachment, ...]) -> list[str]:
   """Build the do-ride argv for a launcher's session spec."""
   verb = 'solo' if spec.solo else 'along'
   parts = [
@@ -79,8 +76,8 @@ def command(spec: 'SessionSpec') -> list[str]:
     spec.resolved_harness,
     *(['--resume'] if spec.resume else []),
   ]
-  if spec.repo is not None:
-    parts.extend(['--repo', spec.repo])
+  for attachment in attachments:
+    parts.extend(['--attachment', json.dumps(attachment.dump())])
   parts.extend(['--hold', spec.hold, '--', spec.bro])
   if spec.prompt is not None:
     parts.append(spec.prompt)
@@ -96,7 +93,7 @@ def _configure_mode_parser(parser: Parser, *, solo: bool) -> None:
   parser.add_argument(
     '--resume', action='store_true', env=False, help='resume the recorded session'
   )
-  parser.add_argument('--repo', default=None, metavar='PATH|URL', help='repository attachment')
+  parser.add_argument('--attachment', action='append', default=[], help='recorded attachment JSON')
   parser.add_argument('--hold', required=True, choices=HOLDS, help='session user-involvement level')
   parser.add_argument('bro', help='bro personality to run the harness as')
   parser.add_argument(
@@ -138,8 +135,12 @@ def _session_run(args: dict) -> tuple['SessionHarness', SessionRun]:
   harness_name = args.pop('harness')
   harness = get_harness(harness_name)
   name = args.pop('workspace')
+  attachments = tuple(Attachment.load(json.loads(value)) for value in args.pop('attachment'))
+  if len(attachments) > 1:
+    raise ValueError('a session supports at most one attachment')
   run = SessionRun(
     name=name,
+    attachments=attachments,
     harness=harness_name,
     solo=mode == 'solo',
     resolved_recipe=_resolved_recipe(),
@@ -262,43 +263,18 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
   """Run the session in this process's prepared working directory."""
   os.environ.update(bro_git_identity_env(run.bro))
   os.environ['RIDE_WORKSPACE'] = run.name
-  if run.repo is None:
-    os.environ.pop('RIDE_REPO', None)
-    os.environ.pop('RIDE_REPO_URL', None)
-  else:
-    os.environ['RIDE_REPO'] = run.repo
-    repo_url = recorded_origin_url(Path.cwd())
-    if repo_url is None:
-      os.environ.pop('RIDE_REPO_URL', None)
-    else:
-      os.environ['RIDE_REPO_URL'] = repo_url
   os.environ['RIDE_BRO'] = run.bro
   os.environ[HOLD_VARIABLE] = run.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
   clear_requested_exit_status()
   _install_credential_hooks()
-  if run.repo is not None and party_member() is None:
+  if party_member() is None:
     try:
-      provision_command = repository_config(Path.cwd()).provision_command
-    except (OSError, ValueError) as error:
+      for attachment in run.attachments:
+        get_attachment_type(attachment.type).start_session(attachment, Path.cwd(), run.bro)
+    except (OSError, ValueError, RuntimeError) as error:
       log.error('%s', error)
       return 1
-    if provision_command is not None:
-      result = subprocess.run(
-        ['sh', '-c', provision_command],
-        cwd=Path.cwd(),
-        stdin=subprocess.DEVNULL,
-        stdout=sys.stderr,
-        stderr=sys.stderr,
-      )
-      if result.returncode != 0:
-        log.error(
-          'provisioning command failed with exit status %s: %s',
-          result.returncode,
-          provision_command,
-        )
-        return 1
-    create_bro(run.bro).provision_workspace(Path.cwd())
   harness.prepare_session(run)
   with (
     _process_record(),

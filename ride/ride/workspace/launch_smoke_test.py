@@ -12,6 +12,7 @@ import pytest
 
 import ride.workspace.docker as workspace_docker
 import ride.workspace.host_docker_test_helper as host_docker
+from ride.repo_attachment import repository_attachment
 from ride.runtime_bundle import resolve_runtime_bundle
 from ride.workspace.docker import Launch
 from ride.workspace.metadata import Isolation
@@ -25,7 +26,11 @@ _READY_MARKER = '.launch-smoke-ready'
 # already `Running` while its entrypoint executes — only the command's own signal
 # says the entrypoint handed over. then it outlives the observation, bounded so a
 # container left behind by a crashed teardown still goes away on its own
-_SESSION_COMMAND = ['bash', '-c', f'touch /tree/{_READY_MARKER}; sleep 300']
+_SESSION_COMMAND = [
+  'bash',
+  '-c',
+  f'pwd > /tree/start-directory; touch ../beside-clone; touch /tree/{_READY_MARKER}; sleep 300',
+]
 _RUNNING_TIMEOUT = 120.0
 
 
@@ -44,7 +49,7 @@ class Launched:
   image_before: bool
   image_after: bool
   running: bool
-  workspace: Path
+  clone: Path
   output: str
   runtime_bundle_hash: str
 
@@ -148,9 +153,13 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
           tty=False,
           image=runtime.image,
           runtime_bundle_hash=runtime.bundle_hash,
-          repo=isolated.project,
+          attachments=(repository_attachment(isolated.project, _WORKSPACE_NAME),),
         )
-        recorded = Workspace.create(_WORKSPACE_NAME, isolated.project, Isolation.BOXED)
+        recorded = Workspace.create(
+          _WORKSPACE_NAME,
+          (repository_attachment(isolated.project, _WORKSPACE_NAME),),
+          Isolation.BOXED,
+        )
         container_id = workspace_docker.prepare_container(launch)
         running, output = _start_and_observe(container_id, recorded.tree)
         yield Launched(
@@ -158,7 +167,7 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
           image_before=image_before,
           image_after=_image_present(runtime_tag),
           running=running,
-          workspace=recorded.tree,
+          clone=recorded.start_directory,
           output=output,
           runtime_bundle_hash=runtime.bundle_hash,
         )
@@ -173,15 +182,20 @@ def test_the_prepared_container_reaches_running_state(launched: Launched) -> Non
   assert launched.running is True, launched.output
 
 
+def test_attached_launch_starts_in_the_clone_with_writable_tree_beside_it(launched):
+  assert (
+    launched.clone.parent / 'start-directory'
+  ).read_text().strip() == f'/tree/{launched.clone.name}'
+  assert (launched.clone.parent / 'beside-clone').is_file()
+
+
 def test_the_workspace_mount_carries_an_independent_clone(launched: Launched) -> None:
-  assert (launched.workspace / '.git').is_dir(), launched.output
-  assert not (launched.workspace / '.git' / 'objects' / 'info' / 'alternates').exists(), (
-    launched.output
-  )
+  assert (launched.clone / '.git').is_dir(), launched.output
+  assert not (launched.clone / '.git' / 'objects' / 'info' / 'alternates').exists(), launched.output
 
 
 def test_detached_launch_starts_in_the_writable_tree(launched):
-  workspace = Workspace.create('detached-launch-smoke', None, Isolation.BOXED)
+  workspace = Workspace.create('detached-launch-smoke', (), Isolation.BOXED)
   command = """
 import json
 import os
@@ -199,7 +213,7 @@ Path('started.json').write_text(json.dumps({
     tty=False,
     image=launched.tag,
     runtime_bundle_hash=launched.runtime_bundle_hash,
-    repo=None,
+    attachments=(),
   )
   container_id = workspace_docker.prepare_container(launch)
   with _running_container(container_id) as attached:
@@ -252,8 +266,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from bro.base import credentials
 from ride import do_ride
+import ride.repo_attachment as repository_attachment
+from ride.attachments import Attachment
 
-root = Path('/tree')
+root = Path('/tree') / 'repository'
 state = Path('/home/ride/session')
 state.mkdir()
 os.chdir(root)
@@ -282,12 +298,12 @@ def harness(run):
   print('session reply', flush=True)
   return 0
 
-do_ride.create_bro = lambda name: SimpleNamespace(provision_workspace=persona)
+repository_attachment.create_bro = lambda name: SimpleNamespace(provision_workspace=persona)
 starts = []
 for resume in (False, True):
   starts.append(resume)
   run = do_ride.SessionRun(
-    name='provision-smoke', repo='/host/repo', harness='bro', hold='unattended',
+    name='provision-smoke', attachments=(Attachment('repo', 'repository', {'repo': '/host/repo', 'branch': 'work'}),), harness='bro', hold='unattended',
     resolved_recipe={}, solo=True, resume=resume, bro='bro', prompt='probe',
     activity_file=state / 'activity',
   )
@@ -299,7 +315,9 @@ for resume in (False, True):
 
 @pytest.mark.parametrize('scenario', ['declared', 'undeclared', 'failed', 'unknown'])
 def test_boxed_session_provisioning_at_launch_and_resume(launched, isolated, scenario):
-  directory = isolated.project.parent / f'provision-{scenario}'
+  tree = isolated.project.parent / f'provision-{scenario}'
+  tree.mkdir()
+  directory = tree / 'repository'
   directory.mkdir()
   config = directory / '.bro' / 'config.toml'
   config.parent.mkdir()
@@ -325,7 +343,7 @@ def test_boxed_session_provisioning_at_launch_and_resume(launched, isolated, sce
       'run',
       '--rm',
       '-v',
-      f'{directory}:/tree',
+      f'{tree}:/tree',
       '-v',
       f'ride-runtime-{launched.runtime_bundle_hash}:/var/ride/runtime:ro',
       '-e',

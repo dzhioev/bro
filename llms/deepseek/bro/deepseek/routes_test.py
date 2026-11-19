@@ -351,7 +351,7 @@ def summoned_stage(
     (directory / name).write_bytes(content)
   run = SessionRun(
     name='stage',
-    repo=None,
+    attachments=(),
     harness='bro',
     hold='unattended',
     resolved_recipe=session_spec.resolved_recipe,

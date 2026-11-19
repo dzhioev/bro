@@ -13,13 +13,11 @@ from typing import Optional
 
 from bro.base import credentials, log
 from bro.monitor import PROCESS_FILENAME
-from bro.workspace.paths import CONTAINER_TREE, runtime_base, workspace_tree
-from ride.repository import Repository, as_repository, recorded_origin_url
+from bro.workspace.paths import CONTAINER_TREE, runtime_base
+from ride.attachments import Attachment, attachment_environment
 from ride.runtime_bundle import SESSION_TERMINAL_ENV, RuntimeBundle
 from ride.workspace import build_context
-from ride.workspace.clones import ensure_clone
 from ride.workspace.image_locks import ensure_image, image_removal_lock
-from ride.workspace.metadata import read_metadata
 from ride.workspace.store import store_tarball
 
 _RUNTIME_IMAGE_REPOSITORY = 'bro/ride-runtime'
@@ -144,7 +142,7 @@ class Launch:
   hydrated_kinds: Collection[str] = ()
   extra_mounts: Collection[str] = ()
   published_ports: Collection[tuple[int, int]] = ()
-  repo: Optional[Repository | Path] = None
+  attachments: tuple[Attachment, ...] = ()
   base_ref: Optional[str] = None
   additions: Mapping[str, str] = field(default_factory=dict)
 
@@ -340,23 +338,13 @@ def _create_container(argv: list[str], store_tarball: bytes, name: str) -> str:
 def prepare_container(launch: Launch) -> str:
   """create the unstarted container described entirely by `launch`."""
   log.info('creating boxed workspace %s', launch.name)
-  metadata = read_metadata(launch.name)
-  repository = None if launch.repo is None else as_repository(launch.repo)
-  launched_repo = None if repository is None else repository.identity
-  if launched_repo != metadata.repo:
-    raise ValueError(
-      f'launch attachment {launched_repo or "none"} does not match workspace attachment '
-      f'{metadata.repo or "none"}'
-    )
-  tree = workspace_tree(launch.name)
-  if repository is None:
-    if launch.base_ref is not None:
-      raise ValueError('detached container launch has a base ref')
-    tree.mkdir(parents=True, exist_ok=True)
-  else:
-    if metadata.branch is None:
-      raise ValueError('attached boxed workspace has no recorded branch')
-    ensure_clone(repository, tree, metadata.branch, launch.base_ref)
+  from ride.workspace.model import Workspace
+
+  workspace = Workspace.open(launch.name)
+  if launch.attachments != workspace.attachments:
+    raise ValueError('launch attachments do not match workspace attachments')
+  workspace.prepare(launch.base_ref)
+  tree = workspace.tree
   if launch.credential_store is None:
     log.verbose('hydrating the scoped credential store')
     source_store = credentials.Store(
@@ -377,7 +365,7 @@ def prepare_container(launch: Launch) -> str:
     launch.image,
     launch.runtime_bundle_hash,
     launch.name,
-    launch.repo,
+    launch.attachments,
     tree,
     launch.command,
     extra_env=launch_env,
@@ -443,6 +431,7 @@ class MemberExec:
   command: list[str]
   env: Mapping[str, str]
   secrets: Collection[str]
+  cwd: str
   optional_secrets: Collection[str] = ()
   credential_selection: Mapping[str, str] = field(default_factory=dict)
   credential_store: Optional[Mapping[str, bytes]] = None
@@ -461,7 +450,7 @@ def member_exec_argv(launch: MemberExec, env: Mapping[str, str]) -> list[str]:
     '-u',
     'ride',
     '-w',
-    str(CONTAINER_TREE),
+    launch.cwd,
     launch.container,
     'env',
     '-i',
@@ -539,7 +528,7 @@ def _docker_create_argv(
   tag: str,
   runtime_bundle_hash: str,
   name: str,
-  repo: Optional[Repository | Path],
+  attachments: tuple[Attachment, ...],
   tree: Path,
   command: list[str],
   *,
@@ -552,7 +541,6 @@ def _docker_create_argv(
   """The create half of create/copy/start, before scoped-store injection.
 
   `additions` reach the container only under names nothing else here sets."""
-  repository = None if repo is None else as_repository(repo)
   _assert_bind_source(tree)
   for mount in extra_mounts or []:
     _assert_bind_source(Path(mount.split(':', 1)[0]))
@@ -577,7 +565,7 @@ def _docker_create_argv(
     argv += ['-e', f'{key}={value}']
   argv += [
     '-w',
-    str(CONTAINER_TREE),
+    str(CONTAINER_TREE / attachments[0].name if attachments else CONTAINER_TREE),
     '--memory=8g',
     # a daemon on this host resolves it to the bridge gateway; one in a VM
     # already serves the name and answers with its own proxy to host loopback
@@ -585,12 +573,10 @@ def _docker_create_argv(
     f'{CONTAINER_BROKER_HOST}:host-gateway',
   ]
   owned = {*IMAGE_ENV, *session_facts}
-  if repository is not None:
-    argv += ['-e', f'RIDE_REPO={repository.identity}']
-    owned.update({'RIDE_REPO', 'RIDE_REPO_URL'})
-    repo_url = recorded_origin_url(tree)
-    if repo_url is not None:
-      argv += ['-e', f'RIDE_REPO_URL={repo_url}']
+  for key, value in attachment_environment(attachments, tree).items():
+    owned.add(key)
+    if value is not None:
+      argv += ['-e', f'{key}={value}']
   # a tty is the launcher's own terminal, whose identity crosses with it
   if tty:
     for variable in SESSION_TERMINAL_ENV:
