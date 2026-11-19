@@ -69,7 +69,7 @@ async def test_a_listed_trigger_resolves_with_its_argument(cast):
 # interpretation shows up as a minority outcome across the attempts
 _ATTEMPTS = 10
 _LONG_PATH = (
-  '/var/ride/session/claude/tmp/claude-1001/-workspace/a6116b5c-203a-4a78-bde0-b05e69828be9'
+  '/var/ride/session/claude/tmp/claude-1001/-tree/a6116b5c-203a-4a78-bde0-b05e69828be9'
   '/scratchpad/seed/sol-2/test_a_session_waiting_on_a_wa0/tree/emit-line'
 )
 _PIPELINE = "tail -n +1 -f /var/log/app/server.log | grep --line-buffered -E 'ERROR|WARN'"

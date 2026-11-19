@@ -65,7 +65,7 @@ a denial, failed launch, or startup silence exits non-zero, with startup expiry 
 It seeds an existing profile unless `--fresh`, keeps IndexedDB when the seed contains it or `--indexed-db` requests it, and accepts `--url` and a fixed `--port`.
 It holds the stored name's lock for the run, writes only while the starting material is unchanged, and reports counts and bytes without values.
 Commands between `open` and `close` use `mission ask <id> '<json>' --wait`, with `mission history <id>` retaining their full payloads.
-`mission share <id> <ref>` makes a later-minted upload available under `/workspace/artifacts/<ref>` without reopening the webview;
+`mission share <id> <ref>` makes a later-minted upload available under `/tree/artifacts/<ref>` without reopening the webview;
 the daemon fetches each artifact a `browser_file_upload` names there, shared at launch or since, before Playwright reads it.
 
 ## Browser profile
@@ -86,11 +86,11 @@ Capture runs the display, noVNC, and Playwright startup shared with serve in a p
 
 A webview mission has talk `{owner.question, worker.say}` and carries JSON objects as its chat payloads.
 An owner question is either one Playwright MCP call as `{tool, arguments?}` or `{webview: tools|close}`.
-The daemon answers a tool call with `{text, files}`, where each file names its workspace-relative path and artifact ref or mint error, and answers a malformed or failed call with `{error}`.
+The daemon answers a tool call with `{text, files}`, where each file names its tree-relative path and artifact ref or mint error, and answers a malformed or failed call with `{error}`.
 An oversized reply names the artifact holding its text or its whole object instead.
 The `ready` say is `{event: ready, vnc}`, and a close ends the mission with the number of successful tool calls.
 
-The daemon mints the files a tool result names — link lines in its `Result` and `Snapshot` sections and download lines in its `Events` section — when the call wrote them anywhere under `/workspace` outside the read-only artifact view;
+The daemon mints the files a tool result names — link lines in its `Result` and `Snapshot` sections and download lines in its `Events` section — when the call wrote them anywhere under `/tree` outside the read-only artifact view;
 a named file the call did not write is reported as an error entry, and every other file the call wrote outside the output directory is removed unminted.
 A finished download is named by the first reply after it finishes, so it is minted from the output directory whenever a reply names it, and unnamed files in the output directory are left in place.
 `named_files` owns the result format, and `serve_test.py` pins it case by case, so a Playwright MCP bump that changes the layout fails there and in `webview_e2e` instead of silently dropping files.

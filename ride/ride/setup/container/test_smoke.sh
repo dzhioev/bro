@@ -9,7 +9,7 @@ cleanup() {
   rm -rf "$SMOKE_TMP"
 }
 trap cleanup EXIT
-mkdir -p "$SMOKE_TMP/claude" "$SMOKE_TMP/bro/creds" "$SMOKE_TMP/detached-workspace"
+mkdir -p "$SMOKE_TMP/claude" "$SMOKE_TMP/bro/creds" "$SMOKE_TMP/detached-tree"
 echo '{}' > "$SMOKE_TMP/bro/creds.json"
 
 log INFO 'building the runtime image'
@@ -34,7 +34,7 @@ HOST_REPO="$SMOKE_TMP/host-repo"
 git clone --quiet "$PROJECT" "$HOST_REPO"
 git -C "$HOST_REPO" remote set-url origin "$(git -C "$PROJECT" remote get-url origin)"
 git -C "$HOST_REPO" update-ref refs/remotes/origin/master HEAD
-python - "$HOST_REPO" "$SMOKE_TMP/workspace" <<'PY'
+python - "$HOST_REPO" "$SMOKE_TMP/tree" <<'PY'
 import sys
 from pathlib import Path
 from ride.repository import Repository
@@ -45,17 +45,17 @@ ensure_clone(Repository(str(source), source), Path(sys.argv[2]), 'workspace-smok
 PY
 EXPECTED_HEAD="$(git -C "$HOST_REPO" rev-parse HEAD)"
 EXPECTED_ORIGIN_MASTER="$(git -C "$HOST_REPO" rev-parse refs/remotes/origin/master)"
-printf '#!/bin/sh\nexit 99\n' > "$SMOKE_TMP/workspace/setup.sh"
-chmod +x "$SMOKE_TMP/workspace/setup.sh"
-ln -s /missing-environment "$SMOKE_TMP/workspace/.venv"
+printf '#!/bin/sh\nexit 99\n' > "$SMOKE_TMP/tree/setup.sh"
+chmod +x "$SMOKE_TMP/tree/setup.sh"
+ln -s /missing-environment "$SMOKE_TMP/tree/.venv"
 
-echo '{"projects":{"/workspace":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
+echo '{"projects":{"/tree":{"smoke_seed":true}}}' > "$SMOKE_TMP/claude/.claude.json"
 echo '{"host_marker":"untouched"}' > "$SMOKE_TMP/host_claude.json"
 HOST_CLAUDE_SHA="$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)"
 
 log INFO 'running the attached entrypoint'
 docker run --rm -i \
-  -v "$SMOKE_TMP/workspace:/workspace" \
+  -v "$SMOKE_TMP/tree:/tree" \
   -v "$SMOKE_TMP/claude:/home/ride/.claude" \
   -v "$SMOKE_TMP/bro:/home/ride/.bro" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
@@ -67,7 +67,7 @@ docker run --rm -i \
   -e "EXPECTED_ORIGIN_MASTER=$EXPECTED_ORIGIN_MASTER" \
   "$RUNTIME_TAG" bash -s >&2 <<'SMOKE'
     set -e
-    cd /workspace
+    test "$PWD" = /tree
     test -d .git
     test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
     test "$(git rev-parse refs/remotes/origin/master)" = "$EXPECTED_ORIGIN_MASTER"
@@ -88,10 +88,10 @@ test "$(sha256sum "$SMOKE_TMP/host_claude.json" | cut -d' ' -f1)" = "$HOST_CLAUD
 
 log INFO 'running the detached entrypoint'
 docker run --rm \
-  -v "$SMOKE_TMP/detached-workspace:/workspace" \
+  -v "$SMOKE_TMP/detached-tree:/tree" \
   -v "ride-runtime-$BUNDLE_HASH:/var/ride/runtime:ro" \
   -e 'HOME=/home/ride' \
   -e 'RIDE_WORKSPACE=detached-smoke-test' \
-  "$RUNTIME_TAG" bash -c 'test -z "$(find /workspace -mindepth 1 -print -quit)"' >&2
+  "$RUNTIME_TAG" bash -c 'test "$PWD" = /tree && test -z "$(find /tree -mindepth 1 -print -quit)"' >&2
 
 log INFO 'smoke test passed'

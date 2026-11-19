@@ -20,7 +20,7 @@ from bro.broker.brotocol import Talk
 from bro.broker.spawn import ChildHandle, LaunchSpec, Spawner
 from bro.broker.transport import Provisioned
 from bro.worker_types import WorkerContainer
-from bro.workspace.paths import workspace_tree
+from bro.workspace.paths import CONTAINER_TREE, workspace_tree
 from ride.artifacts import ArtifactStore, view_mount
 from ride.peer_facts import PeerFacts
 from ride.runtime_bundle import resolve_runtime_bundle
@@ -260,12 +260,9 @@ def _lower_worker_container(
   return lowered
 
 
-_CONTAINER_WORKSPACE = PurePosixPath('/workspace')
-
-
 def _remove_empty_artifact_view_mount(workspace_name: str, artifact_view: PurePosixPath) -> None:
   try:
-    relative_view = artifact_view.relative_to(_CONTAINER_WORKSPACE)
+    relative_view = artifact_view.relative_to(CONTAINER_TREE)
   except ValueError:
     return
   if not relative_view.parts:

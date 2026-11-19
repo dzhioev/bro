@@ -6,17 +6,17 @@ Do not produce any visible output
 
 Call the `bro::banner` tool once.
 It returns the structured session facts as `key: value` lines:
-`isolation`, `repo`, `name`, `mission_id`, `bro`, `llm`, `workspace_host_path`, `workspace_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `talk`, `permits`, and `trail_id`.
+`isolation`, `repo`, `name`, `mission_id`, `bro`, `llm`, `tree_host_path`, `tree_container_path`, `docker_shell_command`, `ride_command`, `party`, `summoned`, `may_summon`, `talk`, `permits`, and `trail_id`.
 The `llm` row names the admitted recipe in canonical text and its source.
 Interpret them as follows:
 
 1. `isolation: boxed` means the workspace runs in its own container.
-   A boxed session reports `name`, `workspace_container_path`, and `docker_shell_command`:
+   A boxed session reports `name`, `tree_container_path`, and `docker_shell_command`:
    - It has no direct filesystem access beyond its mounts.
    - When `repo` names an attachment, git over HTTPS and the `gh` CLI are pre-authenticated.
      Push changes from the managed session because an outside checkout cannot see uncommitted workspace work.
    - `repo: none (detached)` means no repository is attached.
-     `/workspace` is a plain writable directory, not a checkout, so do not infer git state from cwd.
+     `/tree` is a plain writable directory, not a checkout, so do not infer git state from cwd.
    - `docker_shell_command` (`ride exec <name>`) is what the user runs from the launcher to enter the box.
    - Bare commands resolve from the root's pinned runtime;
      the repository's own guide says how its tools are reached.

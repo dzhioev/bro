@@ -5,8 +5,8 @@ source /usr/local/lib/bro-shell/prelude.sh
 
 # root phase: align container user with host uid/gid, then re-exec as ride
 if [ "$(id -u)" = "0" ] && [ -z "${RIDE_ENTRYPOINT_REEXEC:-}" ]; then
-  TARGET_UID="$(stat -c '%u' /workspace)"
-  TARGET_GID="$(stat -c '%g' /workspace)"
+  TARGET_UID="$(stat -c '%u' /tree)"
+  TARGET_GID="$(stat -c '%g' /tree)"
   # Docker for Mac reports root-owned mounts but handles permissions transparently.
   if [ "$TARGET_UID" != "0" ]; then
     if [ "$(id -u ride)" != "$TARGET_UID" ] || [ "$(id -g ride)" != "$TARGET_GID" ]; then
@@ -30,10 +30,10 @@ fi
 # --- running as ride from here ---
 
 if [ -n "${RIDE_REPO:-}" ]; then
-# mark /workspace safe for git. on Docker for Mac, virtiofs reports the bind
+# mark /tree safe for git. on Docker for Mac, virtiofs reports the bind
 # mount as root-owned even though ride can read/write it (see uid-remap skip in
 # the root phase); without this, git refuses with "dubious ownership"
-git config --global --add safe.directory /workspace
+git config --global --add safe.directory /tree
 fi
 
 exec "$@"

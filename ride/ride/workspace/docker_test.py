@@ -519,7 +519,7 @@ class TestMemberExec:
 
   def test_member_exec_argv_scrubs_with_an_explicit_snapshot(self):
     argv = workspace_docker.member_exec_argv(self._launch(), {'B': '2', 'A': '1'})
-    assert argv[:8] == ['docker', 'exec', '-i', '-u', 'ride', '-w', '/workspace', 'cid-party']
+    assert argv[:8] == ['docker', 'exec', '-i', '-u', 'ride', '-w', '/tree', 'cid-party']
     assert argv[8:12] == ['env', '-i', 'A=1', 'B=2']
     assert argv[12:14] == ['sh', '-c']
     assert argv[14] == workspace_docker._MEMBER_WRAPPER
@@ -668,7 +668,7 @@ class TestDockerCreateArgv:
     argv = build_argv()
     assert argv[argv.index('--add-host') + 1] == f'{workspace_docker.CONTAINER_BROKER_HOST}:host-gateway'  # fmt: skip
 
-  def test_detached_launch_mounts_only_the_empty_workspace(self, tmp_path):
+  def test_detached_launch_mounts_and_starts_in_the_tree(self, tmp_path):
     argv = workspace_docker._docker_create_argv(
       'tag',
       'bundle-hash',
@@ -677,6 +677,9 @@ class TestDockerCreateArgv:
       tmp_path / 'tree',
       ['claude'],
     )
+    assert f'{tmp_path / "tree"}:/tree' in argv
+    assert argv[argv.index('-w') + 1] == '/tree'
+    assert f'RIDE_HOST_TREE={tmp_path / "tree"}' in argv
     assert not any('/host-repo' in value for value in argv)
     assert not any(value.startswith('RIDE_REPO=') for value in argv)
     assert not any(value.startswith('RIDE_BRANCH=') for value in argv)
