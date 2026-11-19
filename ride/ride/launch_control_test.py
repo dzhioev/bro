@@ -210,6 +210,7 @@ def owner(tmp_path):
     mission='root',
     workspace='ws',
     tree=tmp_path,
+    tree_view=tmp_path,
     type='bro',
     mission_record=mission(top=True),
     expected=False,

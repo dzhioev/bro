@@ -50,6 +50,7 @@ class PeerDescription:
   mission: str
   workspace: str
   tree: Path
+  tree_view: Path
   type: str
   expected: bool
   artifact_view: PurePosixPath | None
@@ -348,11 +349,19 @@ def installed_types() -> dict[str, type[WorkerType]]:
   return types
 
 
-def tree_path(tree: Path, relative: str) -> Path:
-  """Resolve a workspace-relative path and reject absolute or escaping paths."""
-  if Path(relative).is_absolute():
-    raise ValueError(f'{relative!r} must be a path relative to the workspace root')
-  resolved = (tree / relative).resolve()
-  if not resolved.is_relative_to(tree.resolve()):
-    raise ValueError(f'{relative!r} escapes the workspace')
+def resolve_wire_path(peer: PeerDescription, path: str) -> Path:
+  """Map an absolute peer-visible path to its resolved location inside the tree."""
+  source = Path(path)
+  if not source.is_absolute():
+    raise ValueError(f'{path!r} must be an absolute path')
+  if peer.tree_view != peer.tree:
+    if not source.is_relative_to(peer.tree_view):
+      raise ValueError(f'{path!r} is outside the tree at {peer.tree_view}')
+    source = peer.tree / source.relative_to(peer.tree_view)
+  try:
+    resolved = source.resolve()
+  except (OSError, RuntimeError, ValueError) as error:
+    raise ValueError(f'cannot resolve {path!r}: {error}') from error
+  if not resolved.is_relative_to(peer.tree.resolve()):
+    raise ValueError(f'{path!r} escapes the tree')
   return resolved

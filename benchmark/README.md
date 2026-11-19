@@ -99,7 +99,9 @@ the host runs `bro.benchmark.job` with its own Docker access through the registe
 and the finished run comes back as an artifact whose `output/` holds the job directory beside `stdout`, `stderr`, and `status.json`.
 `benchmark-run` prints `results <path>  artifact <ref>`;
 `artifact fetch <ref>` makes the run readable wherever the ref reaches, and the artifact store dies with the ride, so retain the ref before the ride ends when the run must become durable.
-`benchmark-job start -c <config> --detach` and `benchmark-job check <request-id>` drive the same worker type through `launch`, for a composed config already in the tree.
+`benchmark-job start -c <config> --project <project> --detach` and `benchmark-job check <request-id>` drive the same worker type through `launch`, for a composed config already in the tree.
+Both paths are relative to the working directory or absolute;
+`<project>` names the benchmark project directory holding `pyproject.toml`.
 Outside a session, Harbor runs right here into `jobs/<id>` (`--jobs-dir` moves it), the same command from the benchmark project's own environment:
 
 ```

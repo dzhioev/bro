@@ -160,7 +160,7 @@ The browser's navigation filter does not block all top-level redirects.
 ### Benchmark
 
 `timeout` is open, positive whole seconds, defaulting to 12 hours.
-The workspace-relative `config` path is ungoverned content.
+The absolute session-visible `config` and `project` paths are ungoverned content.
 The base is empty and no option is overridable.
 
 ## Readings, bases, and configuration

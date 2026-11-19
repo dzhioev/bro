@@ -167,8 +167,8 @@ def test_a_session_run_starts_the_composed_config_over_the_broker(tree, monkeypa
   job = _write_job(artifact / 'output' / 'job')
   captured = {}
 
-  def run_job(config, timeout):
-    captured.update(config=config, timeout=timeout)
+  def run_job(config, project, timeout):
+    captured.update(config=config, project=project, timeout=timeout)
     return ARTIFACT_REF
 
   monkeypatch.setattr('bro.bench.run.run_job', run_job)
@@ -176,7 +176,7 @@ def test_a_session_run_starts_the_composed_config_over_the_broker(tree, monkeypa
 
   assert main([*RUN, '--tasks', 'few', '--timeout', '60']) == 0
   composed = _composed(tree)
-  assert captured == {'config': composed.relative_to(tree).as_posix(), 'timeout': 60}
+  assert captured == {'config': str(composed), 'project': str(tree / 'benchmark'), 'timeout': 60}
   assert type(captured['timeout']) is int
   config = json.loads(composed.read_text())
   assert config[PRESETS_KEY] == {'agents': 'one', 'settings': 'quick', 'tasks': 'few'}
@@ -192,7 +192,7 @@ def test_a_session_run_names_the_run_a_failed_job_left(tree, monkeypatch, capsys
   artifact = tree / 'artifact'
   artifact.mkdir()
 
-  def run_job(config, timeout):
+  def run_job(config, project, timeout):
     raise JobError('benchmark job failed (exit)', ref=ARTIFACT_REF)
 
   monkeypatch.setattr('bro.bench.run.run_job', run_job)

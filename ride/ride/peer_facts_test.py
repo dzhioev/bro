@@ -10,7 +10,12 @@ from bro.broker.dispatcher import Dispatcher
 from bro.broker.journal import Journal
 from bro.monitor import party_member_dir
 from bro.worker_types import PeerDescription, UnattributablePeer
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir, workspace_tree
+from bro.workspace.paths import (
+  CONTAINER_ARTIFACTS_ROOT,
+  CONTAINER_TREE,
+  workspace_dir,
+  workspace_tree,
+)
 from ride import pending_launch
 from ride.authority_test_helper import mission, reading
 from ride.bro_worker import BroFacts, Placement
@@ -60,6 +65,8 @@ def facts(tmp_path, monkeypatch):
 
 
 def _spawned(facts, context, peer, mission, parent, *, expected=False):
+  if not expected:
+    Workspace.ensure(f'broker-{peer}', (), Isolation.BOXED)
   facts.add(
     mission,
     WorkerFacts(
@@ -89,6 +96,7 @@ def test_root_row_is_seeded_by_the_host_anchored_mission(facts):
     mission='root-mission',
     workspace='ws',
     tree=workspace.tree,
+    tree_view=CONTAINER_TREE,
     type='bro',
     mission_record=table.for_mission('root-mission').record,
     expected=False,
@@ -107,6 +115,7 @@ def test_spawned_peer_resolves_through_worker_binding(facts):
   Workspace.ensure(f'broker-{CHILD}', (), Isolation.BOXED)
   description = table.resolve(context, CHILD)
   assert description.workspace == f'broker-{CHILD}'
+  assert description.tree_view == CONTAINER_TREE
   assert description.tree == workspace_tree(f'broker-{CHILD}')
   assert description.depth == 1
 
@@ -141,6 +150,27 @@ def test_joined_peer_uses_the_party_tree_and_its_own_trail_pointer(facts):
   }
 
 
+@pytest.mark.parametrize('isolation', [Isolation.BOXED, Isolation.UNBOXED])
+def test_joined_peer_tree_view_follows_its_party(tmp_path, isolation):
+  workspace = Workspace.ensure('party', (), isolation)
+  table = PeerFacts(
+    WorkerFacts('bro', workspace.name), root_tree=workspace.tree, root_path=workspace.path
+  )
+  journal = Journal()
+  table.bind_journal(journal)
+  journal.subscribe(table.observe_journal)
+  journal.open('root', 'root', None, None, {}, type='bro')
+  table.add('member', WorkerFacts('bro', workspace.name))
+  journal.open('member', 'launch', 'root', ROOT, {}, type='bro')
+
+  description = table.describe('member')
+
+  assert description.tree == workspace.tree
+  assert description.tree_view == (
+    CONTAINER_TREE if isolation == Isolation.BOXED else workspace.tree
+  )
+
+
 def test_unknown_and_unrecorded_peers_are_unattributable(facts):
   table, context, _ = facts
   with pytest.raises(UnattributablePeer, match='undertaken mission'):
@@ -161,6 +191,7 @@ def test_expected_workspace_is_filled_from_its_claim(facts, monkeypatch, tmp_pat
   Workspace.ensure('manual-workspace', (), Isolation.UNBOXED, tree=external_tree)
   description = table.resolve(context, CHILD)
   assert description.workspace == 'manual-workspace'
+  assert description.tree_view == external_tree
   assert description.tree == external_tree
   assert description.expected
   assert table.for_mission('child-mission').workspace == 'manual-workspace'
