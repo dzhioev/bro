@@ -87,7 +87,7 @@ Terms this design introduces or redefines:
   the provisioning command, then the persona's provisioning steps (§7).
 - **Toolset** — the installed distributions that plug into bro, the **toolset roots**, together with everything they depend on (§9).
 - **Active extra** — an optional-dependency group of an installed distribution whose requirements the installation satisfies (§9.1).
-- **Staged pin** — a one-commit bare git repository the launcher fetches for a git pin before it materializes a bundle, for the host or for a container (§10).
+- **Staged pin** — a bare git repository holding a git pin's commit with its history, which the launcher fetches before it materializes a bundle, for the host or for a container (§10).
 - **Wire path** — a path a session names to its host in a request, absolute as the session sees it (§11.1).
 
 ## 3. Workspace layout
@@ -414,7 +414,12 @@ The manifest's format, host materialization, the re-execution, `--runtime-bundle
 ### 10.1 Staging
 
 Before it materializes a bundle, for the host or for a container, the launcher stages the bundle's git pins, holding the bundle's materialization lock as the materialization does.
-For each distinct URL among the bundle's git pins, it creates a bare repository under `<bundle root>/git-pins/`, fetches each commit the bundle pins from that URL with `git fetch --depth 1 <url> <commit>`, and places a ref at it.
+For each distinct URL among the bundle's git pins, it creates a bare repository under `<bundle root>/git-pins/`
+and fetches into it each commit the bundle pins from that URL, with `git fetch <url> +<commit>:refs/commit/<commit>`.
+That is the fetch the installer itself makes for such a pin:
+it brings the commit with its whole history and the tags that point into it.
+A build that derives a distribution's version from those tags therefore yields from the staged pin the version the invoking installation holds,
+which a copy of the one commit would not (§17).
 The fetch runs under the launcher's ambient git authentication with prompts disabled, as mirror fetches do.
 
 The URL is the pin's, without its `git+` prefix, its `@<commit>` and its fragment, which is how uv hands it to git.
@@ -444,7 +449,7 @@ the host's, and the container's for session containers, worker containers and fo
 
 ### 10.3 Limits
 
-Inside the materializer, staging covers each git pin's own commit and nothing it needs beyond:
+Inside the materializer, staging covers each git pin's own commit and history, and nothing it needs beyond:
 
 - a staged pin's submodules are fetched from their own URLs, without credentials;
 - a distribution from a private package index, and a remote-archive pin behind authentication, are downloaded without credentials.
@@ -544,8 +549,9 @@ While their revisions are mixed:
 - **Attached workspaces** — each launcher works with those of its own layout.
   A launcher of this design passes over the others in an enumeration and reports them by name (§4.2).
   A launcher from before it fails `ride list`, a `ride clean` that names no workspace and a `--tree` launch on the first attached record this design wrote, naming that workspace,
-  until its installation moves or that workspace is removed;
-  its launches, its resumes and its `ride clean <name>` are unaffected.
+  until its installation moves or that workspace is removed.
+  Its `ride clean <name>` removes the named workspace and then fails the same way, before it reaches the mirrors, the operator control files and the bundles,
+  while its launches and its resumes are unaffected.
 - **Detached workspaces** — either launcher opens them, with the consequence §4.2 states for a boxed one.
 - **Managed mirrors** — shared, in an unchanged format;
   a `ride clean` of this design keeps them all while an unrecognised record exists (§4.2).
@@ -592,6 +598,7 @@ Each route below needs automated coverage, the boxed ones in the host-only Docke
 - a freeze leaves out a distribution no root reaches, keeps an active extra's requirements, and its bundle reproduces itself;
 - a bundle with a git pin whose URL neither the host nor the container can reach materializes for both through its staged pin,
   the container's install running as root over a staged copy the launching user owns, and leaves nothing staged;
+- a git pin whose build takes its version from a tag on an earlier commit materializes at the version the invoking installation holds;
 - a command naming a workspace whose attached record is in today's layout refuses it by name,
   while `ride list` and a `ride clean` naming no workspace pass over it and report it.
 
@@ -605,7 +612,7 @@ A private dependency fetched through a real `github` credential is verified live
 
 ## 16. Decision record
 
-The owner settled decisions 1 to 15 on 2026-11-18, and decisions 16 to 18, which the review of this design raised, on 2026-11-19.
+The owner settled decisions 1 to 15 on 2026-11-18, and decisions 16 to 19, which the review of this design raised, on 2026-11-19.
 
 | # | Decision | Applied in |
 |---|---|---|
@@ -615,7 +622,7 @@ The owner settled decisions 1 to 15 on 2026-11-18, and decisions 16 to 18, which
 | 4 | Provisioning stays declared and automatic: it runs in `do-ride` after the credential hooks, in both isolations, and fails the start | §7 |
 | 5 | The project image and the `setup.sh` filename hook go | §7.5, §8.1 |
 | 6 | Boxed workspaces share no package cache | §8.3 |
-| 7 | Every materialization, host and container, reaches git pins through launcher-staged one-commit copies, the redirect layered over the git configuration through `GIT_CONFIG_COUNT` | §10 |
+| 7 | Every materialization, host and container, reaches git pins through copies the launcher stages, the redirect layered over the git configuration through `GIT_CONFIG_COUNT` | §10 |
 | 8 | A runtime bundle carries the bro toolset rather than the whole invoking installation | §9 |
 | 9 | Workspaces recorded in today's layout are refused, not migrated | §4.2, §13 |
 | 10 | Every session, boxed or unboxed, runs its root's one bundle | §1, §2 |
@@ -627,6 +634,7 @@ The owner settled decisions 1 to 15 on 2026-11-18, and decisions 16 to 18, which
 | 16 | The materializer names the staged repositories in the `safe.directory` of its own system git configuration before the install | §10.2 |
 | 17 | An enumeration of workspaces passes over a record outside the current shape and reports it by name | §4.2, §13.2 |
 | 18 | The detached record keeps its shape, and a boxed detached workspace's Claude session does not survive the move to `/tree` | §4.2 |
+| 19 | A staged pin holds its commit's whole history and the tags within it, where decision 7 first had one commit, so a version derived from tags survives | §10.1 |
 
 ## 17. Assumptions and evidence
 
@@ -650,8 +658,15 @@ The owner settled decisions 1 to 15 on 2026-11-18, and decisions 16 to 18, which
   fails the same way with a `safe.directory` entry for that repository among the `GIT_CONFIG_COUNT` variables,
   and succeeds with the entry in a global configuration file.
   A plain `git fetch` from the staged repository succeeds likewise with the entry in a system configuration file.
+- **Staged history** — verified on 2026-11-18 with uv 0.13.1 on a two-commit package that takes its version from setuptools-scm, tagged `v1.0.0` at the parent of the pinned commit:
+  installed from the original repository its version is `1.0.1.dev1+g<commit>`, from a copy of the one commit `0.1.dev1+g<commit>`,
+  and from a copy fetched as §10.1 says `1.0.1.dev1+g<commit>` again, each install recording the original URL and commit.
+  uv itself fetches such a pin as `git fetch --force --update-head-ok <url> +<commit>:refs/commit/<commit>`.
+  For this repository at `6f175d19` the staged pin is 11 MB, where a copy of the one commit is 2.6 MB.
+  A copy holding the history's commits without their files is 1.2 MB larger than the one commit,
+  but git refuses to serve it to the ordinary fetch the installer makes.
 - **Fetch by commit id** — verified with git 2.47.3 against a `file://` remote:
-  `git fetch --depth 1 <url> <commit>` of a commit no ref names succeeds under protocol version 2,
+  `git fetch <url> +<commit>:refs/commit/<commit>` of a commit no ref names succeeds under protocol version 2,
   and fails under version 0 with `Server does not allow request for unadvertised object`.
 - **Installations** — read on 2026-11-18: the owner's host holds this checkout and three consumer repositories that pin the framework from git, all four sharing one runtime root.
 - **Unverified** — the materializer's `safe.directory` step has not run on a Docker daemon, where root really reads a repository another user owns;
