@@ -29,9 +29,10 @@ from bro.worker_types import (
   WorkerContainer,
   WorkerType,
 )
+from bro.workspace.paths import CONTAINER_TREE
 
 WEBVIEW = 'webview'
-ARTIFACT_VIEW = PurePosixPath('/workspace/artifacts')
+ARTIFACT_VIEW = PurePosixPath(CONTAINER_TREE) / 'artifacts'
 VNC_PORT = 6080
 
 

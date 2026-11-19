@@ -34,7 +34,7 @@ runtime image before the scenarios start; the runtime volume serves the
 `broker`/`bro` code to in-container probes.
 
 Scenario containers synchronize with the harness through files on the shared
-`/workspace` mount (`.e2e-ready` / `.e2e-continue` / `.e2e-report.json`) —
+`/tree` mount (`.e2e-ready` / `.e2e-continue` / `.e2e-report.json`) —
 no tty parsing on the critical path.
 """
 
@@ -231,9 +231,9 @@ channel = RunLifecycle.from_env()
 assert channel is not None
 channel.close()
 
-Path('/workspace/.e2e-ready').touch()
+Path('/tree/.e2e-ready').touch()
 deadline = time.monotonic() + 60
-while not Path('/workspace/.e2e-continue').exists():
+while not Path('/tree/.e2e-continue').exists():
   if time.monotonic() > deadline:
     sys.exit(7)
   time.sleep(0.2)
@@ -251,7 +251,7 @@ assert reply.payload == {'outcome': 'ok', 'value': {'n': 1}}, reply.payload
 print('RIDE_E2E_PING_OK', flush=True)
 
 from bro.artifact import ArtifactError, fetch_artifact, mint_artifact
-Path('/workspace/out.bin').write_bytes(b'artifact-payload')
+Path('/tree/out.bin').write_bytes(b'artifact-payload')
 try:
   minted = mint_artifact('out.bin', timeout=30)
   path = fetch_artifact(minted.ref, timeout=30)
@@ -285,12 +285,12 @@ try:
     harness='bro',
     timeout=120,
   )
-  Path('/workspace/.benchmark-type-report').write_text(
+  Path('/tree/.benchmark-type-report').write_text(
     json.dumps({'denied': denied, 'accepted': accepted})
   )
 except Exception:
   import traceback
-  Path('/workspace/.benchmark-type-error').write_text(traceback.format_exc())
+  Path('/tree/.benchmark-type-error').write_text(traceback.format_exc())
   raise
 """
 
@@ -342,7 +342,7 @@ with client:
       report['result'] = message.payload
       break
 
-Path('/workspace/.worker-container-report').write_text(json.dumps(report))
+Path('/tree/.worker-container-report').write_text(json.dumps(report))
 """
 
 _WORKER_CONTAINER_SCRIPT = b"""#!/var/ride/runtime/venv/bin/python
@@ -352,7 +352,7 @@ from pathlib import Path
 from bro.artifact import mint_artifact
 from bro.broker.client import Client
 
-Path('/workspace/worker-output').write_text('worker-container-e2e')
+Path('/tree/worker-output').write_text('worker-container-e2e')
 artifact = mint_artifact('worker-output', timeout=30)
 ports = dict(
   pair.split('=', 1)
@@ -422,7 +422,7 @@ try:
 except BaseException:
   report['error'] = traceback.format_exc()
 finally:
-  Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+  Path('/tree/.e2e-report.json').write_text(json.dumps(report))
 sys.exit(1 if 'error' in report else 0)
 """
 
@@ -480,7 +480,7 @@ def _handle(signum, frame):
   sys.exit(0)
 
 signal.signal(signal.SIGINT, _handle)
-Path('/workspace/.e2e-ready').touch()
+Path('/tree/.e2e-ready').touch()
 time.sleep(90)
 sys.exit(5)
 """
@@ -506,7 +506,7 @@ settings = {}
 if '--settings' in argv:
   settings = json.loads(argv[argv.index('--settings') + 1])
   report['settings'] = settings
-Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+Path('/tree/.e2e-report.json').write_text(json.dumps(report))
 quest_route = os.environ.get('RIDE_E2E_QUEST_ROUTE')
 if quest_route is not None:
   from bro.quest import ask, check, history, say
@@ -529,7 +529,7 @@ if quest_route is not None:
       check=False,
     )
     report.setdefault('deliveries', []).append(completed.stderr)
-    Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+    Path('/tree/.e2e-report.json').write_text(json.dumps(report))
     emit(
       type='system',
       subtype='hook_response',
@@ -571,7 +571,7 @@ if quest_route is not None:
     report['model_actions'].append('quest_check')
     report['quest_id'] = quest_id
     report['answer'] = outcome.answer
-    Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+    Path('/tree/.e2e-report.json').write_text(json.dumps(report))
     turn('collected the answer')
   elif quest_route == 'asker':
     ask('self', 'approve the change?')
@@ -584,7 +584,7 @@ if quest_route is not None:
   sys.exit(0)
 if os.environ.get('RIDE_E2E_LINGER') == '1':
   signal.signal(signal.SIGINT, lambda signum, frame: sys.exit(7))
-  Path('/workspace/.e2e-ready').touch()
+  Path('/tree/.e2e-ready').touch()
   signal.pause()
   sys.exit(8)
 sys.exit(12)
@@ -600,7 +600,7 @@ status=$?
 set -e
 headers=(/var/ride/trails/trails/*/header.json)
 [ "${#headers[@]}" -eq 1 ]
-cp "${headers[0]}" /workspace/.e2e-trail-header.json
+cp "${headers[0]}" /tree/.e2e-trail-header.json
 exit "$status"
 """
 
@@ -1656,21 +1656,21 @@ def main():
   # member's own exit and settle run before teardown; the teardown case exits
   # here with the member still live, on purpose
   if exit_after == 'ok':
-    Path('/workspace/.member-reported').touch()
-    _wait_for('/workspace/.party-release')
+    Path('/tree/.member-reported').touch()
+    _wait_for('/tree/.party-release')
 
 # ready before continue before the spawn, so the joined member sees the shared
 # tree the party's first session already touched
-Path('/workspace/.e2e-ready').touch()
-_wait_for('/workspace/.e2e-continue')
+Path('/tree/.e2e-ready').touch()
+_wait_for('/tree/.e2e-continue')
 try:
   main()
 finally:
-  Path('/workspace/.e2e-report.json').write_text(json.dumps(report))
+  Path('/tree/.e2e-report.json').write_text(json.dumps(report))
 """
 
 # the joined member, exec'd into the party's running container: prove it runs
-# inside that container beside the first session (the shared /workspace tree and
+# inside that container beside the first session (the shared /tree tree and
 # the party mount), that its process record landed under the party mount (the
 # started handshake reads it host-side), then emit the real lifecycle.
 _MEMBER_CLEAN = """
@@ -1678,7 +1678,7 @@ import os, sys
 from pathlib import Path
 
 assert os.environ.get('BROKER_UPSTREAM') is None, 'the broxy did not consume its upstream'
-assert Path('/workspace/.e2e-ready').is_file(), 'the member does not share the party tree'
+assert Path('/tree/.e2e-ready').is_file(), 'the member does not share the party tree'
 session = Path(os.environ['RIDE_SESSION_DIR'])
 assert session == Path('/var/ride/party/ride-e2e-member/session'), session
 assert (session / 'runner.pid').is_file(), 'the exec wrapper wrote no process record'
@@ -2049,7 +2049,7 @@ answer = summon_and_wait(
   placement={child_placement!r},
   timeout=120,
 )
-Path('/workspace/.summon-credential-report').write_text(answer)
+Path('/tree/.summon-credential-report').write_text(answer)
 """
   launch = DockerLaunchSpec(
     workspace_docker.Launch(
@@ -2415,7 +2415,7 @@ answer = summon_and_wait(
   timeout=120,
 )
 assert not credentials.available('github')
-Path('/workspace/.cross-isolation-report').write_text(answer)
+Path('/tree/.cross-isolation-report').write_text(answer)
 time.sleep(2)
 """
   launch = DockerLaunchSpec(
@@ -2495,7 +2495,7 @@ with Runner(WatchBro(), EchoSpec(model='echo')) as runner:
     batch = runner.inbox.drain()
     if batch is not None:
       notifications.append(batch.text)
-Path('/workspace/.native-root-watch-report').write_text(json.dumps({
+Path('/tree/.native-root-watch-report').write_text(json.dumps({
   'quest_id': quest_id,
   'elapsed': time.monotonic() - started,
   'notifications': notifications,
@@ -2594,7 +2594,7 @@ while True:
   if time.monotonic() >= deadline:
     raise TimeoutError('the steered child did not finish')
   time.sleep(0.1)
-Path('/workspace/.native-child-watch-report').write_text(outcome.answer)
+Path('/tree/.native-child-watch-report').write_text(outcome.answer)
 """
 
 
@@ -2726,7 +2726,7 @@ while len(conversation.awaiting) == 0:
 say(quest_id, 'approved', reply_to=question.id)
 outcome = check(quest_id, wait=True, timeout=max(deadline - time.monotonic(), 1))
 assert outcome.state == 'completed', outcome
-Path('/workspace/.asking-child-report').write_text(outcome.answer)
+Path('/tree/.asking-child-report').write_text(outcome.answer)
 """
 
 
@@ -2968,7 +2968,7 @@ while True:
   if time.monotonic() >= deadline:
     raise TimeoutError('the reminded child did not deliver')
   time.sleep(0.5)
-Path('/workspace/.native-remind-report').write_text(json.dumps({
+Path('/tree/.native-remind-report').write_text(json.dumps({
   'quest_id': quest_id,
   'answer': outcome.answer,
 }))
@@ -3121,7 +3121,7 @@ say(quest_id, 'run the focused tests')
 say(quest_id, 'approved', reply_to=question.id)
 outcome = check(quest_id, wait=True, timeout=120)
 assert outcome.state == 'completed', outcome
-Path('/workspace/.quest-chat-report').write_text(outcome.answer)
+Path('/tree/.quest-chat-report').write_text(outcome.answer)
 """
   launch = DockerLaunchSpec(
     workspace_docker.Launch(
@@ -3211,7 +3211,7 @@ client = Client.from_env()
 assert client is not None
 with client:
   quest = client.call('query', {'id': quest_id}, 30).payload['value']['mission']
-Path('/workspace/.quest-cancel-report').write_text(json.dumps({
+Path('/tree/.quest-cancel-report').write_text(json.dumps({
   'state': ended.state,
   'outcome': ended.outcome,
   'reason': ended.reason,
@@ -3692,14 +3692,14 @@ with tempfile.TemporaryDirectory() as directory:
   save_deferred_contract(harness=get_harness('bro'), hold='unattended')
   with watches.Owner.for_session(), Runner(OverrideBro(), EchoSpec(model='echo')) as runner:
     runner.watch_store.start(watches.SESSION_WATCH_COMMAND)
-    Path('/workspace/.override-ready').touch()
+    Path('/tree/.override-ready').touch()
     receive(runner, '# Summoning session')
     assert 'bro::quest_watch' not in '\n'.join(notifications)
     assert '# One-shot turn end' in '\n'.join(notifications)
     assert 'bro' in authority_view.read()['may_summon']
     assert 'may_summon: @bro' in render_banner(plain=True)
     assert summon_and_wait('bro', 'answer', harness='bro', llm='echo:echo', timeout=120) == 'granted child'
-    Path('/workspace/.override-summoned').touch()
+    Path('/tree/.override-summoned').touch()
     receive(runner, '--revoke @bro')
     assert authority_view.read()['may_summon'] == []
     try:
@@ -3708,11 +3708,11 @@ with tempfile.TemporaryDirectory() as directory:
       assert 'use rule: @bro:' in str(error), error
     else:
       raise AssertionError('a revoked target was summoned')
-    Path('/workspace/.override-revoked').touch()
+    Path('/tree/.override-revoked').touch()
     receive(runner, '--grant @browser')
     assert 'browser' in authority_view.read()['may_summon']
 assert sum(text.count('# Summoning session') for text in notifications) == 1
-Path('/workspace/.override-report').write_text(json.dumps(notifications))
+Path('/tree/.override-report').write_text(json.dumps(notifications))
 """
 
 

@@ -163,7 +163,7 @@ def test_worker_container_copies_its_mappings_and_has_a_stable_image_hash():
   )
   assert container.artifact_view == PurePosixPath(CONTAINER_ARTIFACTS_ROOT)
   assert (
-    _worker_container(artifact_view=PurePosixPath('/workspace/artifacts')).image_hash(
+    _worker_container(artifact_view=PurePosixPath('/tree/artifacts')).image_hash(
       'bro/ride-runtime:one'
     )
     == expected
@@ -174,12 +174,12 @@ def test_worker_container_copies_its_mappings_and_has_a_stable_image_hash():
   'artifact_view',
   [
     PurePosixPath('artifacts'),
-    '/workspace/../artifacts',
-    '/workspace//artifacts',
-    '/workspace/artifacts/',
-    '//workspace/artifacts',
-    '/workspace/./artifacts',
-    '/workspace/artifacts\0hidden',
+    '/tree/../artifacts',
+    '/tree//artifacts',
+    '/tree/artifacts/',
+    '//tree/artifacts',
+    '/tree/./artifacts',
+    '/tree/artifacts\0hidden',
   ],
 )
 def test_worker_container_refuses_non_normalized_artifact_views(artifact_view):

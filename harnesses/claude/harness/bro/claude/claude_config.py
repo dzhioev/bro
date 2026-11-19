@@ -18,6 +18,7 @@ from typing import Optional
 
 from bro.base import log
 from bro.base.args import CLIError
+from bro.workspace.paths import CONTAINER_TREE
 from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 
@@ -105,7 +106,7 @@ def workspace_projects_dir(workspace: Workspace) -> Path:
   """the host-side claude projects dir of a workspace's sessions."""
   session_dir = workspace_claude_dir(workspace.path)
   if workspace.isolation is Isolation.BOXED:
-    return session_dir / 'projects' / '-workspace'
+    return session_dir / 'projects' / encode_project_path(CONTAINER_TREE)
   return session_dir / 'projects' / encode_project_path(workspace.tree)
 
 
@@ -264,7 +265,7 @@ def container_claude_state(workspace: Path) -> tuple[list[str], dict[str, str]]:
   claude_dir = _provision_session_claude_dir(
     workspace,
     install_method='global',
-    trusted_paths=['/workspace'],
+    trusted_paths=[str(CONTAINER_TREE)],
     preaccept_bypass_dialog=True,
   )
   mounts = [f'{claude_dir}:{_CONTAINER_CLAUDE_DIR}']
@@ -283,7 +284,7 @@ def container_member_claude_state(records: Path, member_root: PurePath) -> dict[
   claude_dir = _provision_session_claude_dir(
     records,
     install_method='global',
-    trusted_paths=['/workspace'],
+    trusted_paths=[str(CONTAINER_TREE)],
     preaccept_bypass_dialog=True,
   )
   return {

@@ -267,7 +267,7 @@ def test_share_returns_upload_path_and_directory_entries(monkeypatch, tmp_path) 
 
   assert shared == [('webview-1', REF)]
   assert result == {
-    'path': f'/workspace/artifacts/{REF}',
+    'path': f'/tree/artifacts/{REF}',
     'entries': ['nested/', 'nested/notes.txt', 'resume.txt'],
   }
   assert context.state.get('webview-1').shares == [REF]

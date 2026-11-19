@@ -13,7 +13,7 @@ def _record(**overrides) -> pending_launch.PendingLaunch:
     'channel_token': 'channel-token',
     'type': 'bro',
     'talk': ('worker.say',),
-    'owner_tree': '/workspace',
+    'owner_tree': '/tree',
     'env': {'ONE': '1'},
     'extension': {'target': 'dev'},
   }

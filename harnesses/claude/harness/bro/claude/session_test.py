@@ -116,7 +116,7 @@ def test_managed_claude_launch_hooks_recording_and_resume(
     'RIDE_ISOLATION': 'unboxed',
     'RIDE_WORKSPACE': 'session-route',
     'RIDE_HOST': 'test-host',
-    'RIDE_HOST_WORKSPACE': str(tmp_path),
+    'RIDE_HOST_TREE': str(tmp_path),
     'RIDE_COMMAND': 'ride solo --harness claude bro',
   }.items():
     monkeypatch.setenv(name, value)

@@ -489,7 +489,7 @@ def boxed_member_launch(
     **MEMBER_BASELINE_ENV,
     'RIDE_BRO': spec.bro,
     'RIDE_WORKSPACE': workspace.name,
-    'RIDE_HOST_WORKSPACE': str(workspace.tree),
+    'RIDE_HOST_TREE': str(workspace.tree),
     'RIDE_HOST': socket.gethostname(),
     ISOLATION_ENV: Isolation.BOXED.value,
     RESOLVED_RECIPE_ENV: encode_resolved_recipe(spec.resolved_recipe),
@@ -545,7 +545,7 @@ def prepared_unboxed_session_launch(
   runner_env[RUNTIME_ENV] = str(runtime_bundle.host_root)
   runner_env[ISOLATION_ENV] = Isolation.UNBOXED.value
   runner_env['RIDE_HOST'] = socket.gethostname()
-  runner_env['RIDE_HOST_WORKSPACE'] = str(tree)
+  runner_env['RIDE_HOST_TREE'] = str(tree)
   runner_env.update(human_env)
   if workspace.repo is not None:
     runner_env.update(_attached_session_env(workspace, _tree_head(tree)))

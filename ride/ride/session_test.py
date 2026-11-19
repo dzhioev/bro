@@ -1144,6 +1144,7 @@ class TestUnboxedSession:
     assert launch.env[HUMAN_NAME_ENV] == 'Ada Lovelace'
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
     assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['RIDE_HOST_TREE'] == str(workspace.tree)
     assert launch.env['TERM'] == 'xterm-kitty'
     assert 'RIDE_SUMMONED' not in launch.env
     assert 'RIDE_IN_CONTAINER' not in launch.env
@@ -1184,6 +1185,7 @@ class TestUnboxedSession:
     assert launch.env['LANG'] == 'C.UTF-8'
     assert launch.env['PATH'].startswith(str(_runtime_bundle(tmp_path).host_bin))
     assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['RIDE_HOST_TREE'] == str(workspace.tree)
     assert launch.env['RIDE_BRO'] == 'bro-dev'
     assert launch.env['RIDE_COMMAND'] == spec.ride_command
 
@@ -1229,12 +1231,18 @@ class TestUnboxedSession:
     assert 'RIDE_IN_CONTAINER' not in launch.env
     assert launch.env['CLAUDE_CONFIG_DIR'] == str(tmp_path / 'claude-config')
     assert launch.env['PWD'] == str(workspace.tree)
+    assert launch.env['RIDE_HOST_TREE'] == str(workspace.tree)
     assert launch.env['MARKER'] == 'child'
 
-  def test_external_tree_runs_from_a_given_runtime(self, monkeypatch, tmp_path):
-    tree = tmp_path / 'task'
-    tree.mkdir()
-    workspace = Workspace.ensure('external', None, Isolation.UNBOXED, tree=tree)
+  @pytest.mark.parametrize('external', [False, True])
+  def test_detached_session_starts_in_its_tree_from_a_given_runtime(
+    self, monkeypatch, tmp_path, external
+  ):
+    external_tree = tmp_path / 'task' if external else None
+    if external_tree is not None:
+      external_tree.mkdir()
+    workspace = Workspace.ensure('detached', None, Isolation.UNBOXED, tree=external_tree)
+    tree = workspace.tree
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(claude_harness, 'apply_claude_auth', lambda env, **_kwargs: None)
     monkeypatch.setattr(
@@ -1270,9 +1278,9 @@ class TestUnboxedSession:
     runtime_bundle = RuntimeBundle(runtime_root, '3.12', materialized=True)
     spec = replace(
       _spec(isolation=Isolation.UNBOXED, solo=True),
-      name='external',
+      name='detached',
       repo=None,
-      tree=str(tree),
+      tree=str(external_tree) if external_tree is not None else None,
       runtime_bundle=str(runtime_root),
     )
 

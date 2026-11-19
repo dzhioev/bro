@@ -21,7 +21,7 @@ class TestSessionFacts:
       'RIDE_ISOLATION',
       'RIDE_BRO',
       'RIDE_COMMAND',
-      'RIDE_HOST_WORKSPACE',
+      'RIDE_HOST_TREE',
       'RIDE_REPO',
       summon.PARTY_MEMBER_ENV,
       summon.SUMMONED_ENV,
@@ -37,14 +37,14 @@ class TestSessionFacts:
     monkeypatch.setenv('RIDE_ISOLATION', 'boxed')
     monkeypatch.setenv('RIDE_WORKSPACE', 'my-task')
     monkeypatch.setenv('RIDE_BRO', 'dev')
-    monkeypatch.setenv('RIDE_HOST_WORKSPACE', '/var/ride/0123456789abcdef/workspaces/my-task/tree')
+    monkeypatch.setenv('RIDE_HOST_TREE', '/var/ride/0123456789abcdef/workspaces/my-task/tree')
     monkeypatch.setenv('RIDE_COMMAND', 'ride along --hold attended my-task')
     facts = SessionFacts.collect()
     assert facts.isolation == 'boxed'
     assert facts.name == 'my-task'
     assert facts.bro == 'dev'
-    assert facts.host_workspace == '/var/ride/0123456789abcdef/workspaces/my-task/tree'
-    assert facts.container_workspace == '/workspace'
+    assert facts.host_tree == '/var/ride/0123456789abcdef/workspaces/my-task/tree'
+    assert facts.container_tree == '/tree'
     assert facts.exec_command == 'ride exec my-task'
     assert facts.ride_command == 'ride along --hold attended my-task'
 
@@ -53,16 +53,16 @@ class TestSessionFacts:
     facts = SessionFacts.collect()
     assert facts.isolation == 'boxed'
     assert facts.name is None
-    assert facts.container_workspace is None
+    assert facts.container_tree is None
     assert facts.exec_command is None
-    assert 'workspace_container_path' not in facts.render_plain()
+    assert 'tree_container_path' not in facts.render_plain()
     assert '(boxed session without a workspace)' in facts.render_visual()
 
   def test_host_worktree_reads_paths_from_the_session_environment(self, monkeypatch, tmp_path):
     worktree = tmp_path / 'tree'
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
     monkeypatch.setenv('RIDE_ISOLATION', 'unboxed')
-    monkeypatch.setenv('RIDE_HOST_WORKSPACE', str(worktree))
+    monkeypatch.setenv('RIDE_HOST_TREE', str(worktree))
     monkeypatch.setenv('RIDE_REPO', str(tmp_path / 'project'))
     monkeypatch.setenv('RIDE_COMMAND', 'ride along feature')
     facts = SessionFacts.collect()
@@ -70,21 +70,21 @@ class TestSessionFacts:
     assert facts.name == 'feature'
     assert facts.repo == str(tmp_path / 'project')
     assert facts.bro is None
-    assert facts.host_workspace == str(worktree)
-    assert facts.container_workspace is None
+    assert facts.host_tree == str(worktree)
+    assert facts.container_tree is None
     assert facts.exec_command is None
     assert facts.ride_command == 'ride along feature'
 
   def test_a_missing_host_path_is_not_derived_from_cwd(self, monkeypatch):
     monkeypatch.setenv('RIDE_WORKSPACE', 'feature')
-    assert SessionFacts.collect().host_workspace is None
+    assert SessionFacts.collect().host_tree is None
 
   def test_no_session_context(self):
     facts = SessionFacts.collect()
     assert facts.isolation is None
     assert facts.name is None
     assert facts.bro is None
-    assert facts.host_workspace is None
+    assert facts.host_tree is None
     assert facts.exec_command is None
     assert facts.ride_command is None
     assert facts.may_summon is None
@@ -157,8 +157,8 @@ def _facts(**overrides) -> SessionFacts:
     'isolation': 'boxed',
     'name': 'task',
     'bro': None,
-    'host_workspace': '/h/ws',
-    'container_workspace': '/workspace',
+    'host_tree': '/h/ws',
+    'container_tree': '/tree',
     'exec_command': 'ride exec task',
     'ride_command': None,
     'recording_problem': None,
@@ -181,8 +181,8 @@ class TestRenderBanner:
     assert 'isolation: boxed' in out
     assert 'name: task' in out
     assert 'bro: dev' in out
-    assert 'workspace_host_path: /h/ws' in out
-    assert 'workspace_container_path: /workspace' in out
+    assert 'tree_host_path: /h/ws' in out
+    assert 'tree_container_path: /tree' in out
     assert 'docker_shell_command: ride exec task' in out
     assert 'ride_command: ride along --bro bro task' in out
     assert 'launch_command:' not in out
@@ -196,8 +196,8 @@ class TestRenderBanner:
     out = _facts(
       isolation='unboxed',
       name=None,
-      host_workspace=None,
-      container_workspace=None,
+      host_tree=None,
+      container_tree=None,
       exec_command=None,
     ).render_plain()
     assert (
@@ -298,9 +298,9 @@ class TestRenderBanner:
     out = _facts(name='task').render_visual()
     assert 'ride session: \033[1mtask\033[0m' in out
 
-  def test_visual_container_shows_workspace_and_host_path_on_separate_lines(self):
-    out = _facts(host_workspace='/var/ride/0123456789abcdef/workspaces/task/tree').render_visual()
-    assert 'workspace:    /workspace' in out
+  def test_visual_container_shows_tree_and_host_path_on_separate_lines(self):
+    out = _facts(host_tree='/var/ride/0123456789abcdef/workspaces/task/tree').render_visual()
+    assert 'tree:         /tree' in out
     assert 'host path:    \033[2m/var/ride/0123456789abcdef/workspaces/task/tree\033[0m' in out
 
   def test_visual_uses_docker_shell_label(self):
@@ -312,8 +312,8 @@ class TestRenderBanner:
     out = _facts(
       isolation='unboxed',
       name='feature',
-      host_workspace='/var/ride/fedcba9876543210/workspaces/feature/tree',
-      container_workspace=None,
+      host_tree='/var/ride/fedcba9876543210/workspaces/feature/tree',
+      container_tree=None,
       exec_command=None,
     ).render_visual()
     # in worktree mode there's no `docker shell:` row, so the widest label is
@@ -328,22 +328,22 @@ class TestRenderBanner:
     out = _facts(
       isolation='unboxed',
       name='feature',
-      host_workspace='/var/ride/fedcba9876543210/workspaces/feature/tree',
-      container_workspace=None,
+      host_tree='/var/ride/fedcba9876543210/workspaces/feature/tree',
+      container_tree=None,
       exec_command=None,
     ).render_visual()
     assert '\033[31m/var/ride/fedcba9876543210/workspaces/feature/tree\033[0m' in out
 
   def test_visual_does_not_paint_container_path_red(self):
-    out = _facts(host_workspace='/var/ride/0123456789abcdef/workspaces/task/tree').render_visual()
+    out = _facts(host_tree='/var/ride/0123456789abcdef/workspaces/task/tree').render_visual()
     assert '\033[31m' not in out
 
   def test_visual_handles_missing_host_path_in_worktree(self):
     out = _facts(
       isolation='unboxed',
       name=None,
-      host_workspace=None,
-      container_workspace=None,
+      host_tree=None,
+      container_tree=None,
       exec_command=None,
     ).render_visual()
     assert '(unknown' in out

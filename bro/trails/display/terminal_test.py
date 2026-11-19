@@ -288,7 +288,7 @@ def test_rewind_lays_a_wide_tool_call_out_under_its_name():
           timestamp='2026-01-01T00:00:01Z',
           call_id='call',
           tool_name='edit_file',
-          arguments={'path': '/workspace/bro.py', 'text': 'def main():\n  return 1\n'},
+          arguments={'path': '/tree/bro.py', 'text': 'def main():\n  return 1\n'},
         ),
         ToolResult(
           key='result',
@@ -303,7 +303,7 @@ def test_rewind_lays_a_wide_tool_call_out_under_its_name():
   assert renderer.document() == (
     '\n#1 ASSISTANT 2026-01-01 00:00:01\n'
     '  → edit_file\n'
-    '      path: /workspace/bro.py\n'
+    '      path: /tree/bro.py\n'
     '      text: |\n'
     '        def main():\n'
     '          return 1\n'

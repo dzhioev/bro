@@ -25,7 +25,7 @@ _READY_MARKER = '.launch-smoke-ready'
 # already `Running` while its entrypoint executes — only the command's own signal
 # says the entrypoint handed over. then it outlives the observation, bounded so a
 # container left behind by a crashed teardown still goes away on its own
-_SESSION_COMMAND = ['bash', '-c', f'touch /workspace/{_READY_MARKER}; sleep 300']
+_SESSION_COMMAND = ['bash', '-c', f'touch /tree/{_READY_MARKER}; sleep 300']
 _RUNNING_TIMEOUT = 120.0
 
 
@@ -180,6 +180,36 @@ def test_the_workspace_mount_carries_an_independent_clone(launched: Launched) ->
   )
 
 
+def test_detached_launch_starts_in_the_writable_tree(launched):
+  workspace = Workspace.create('detached-launch-smoke', None, Isolation.BOXED)
+  command = """
+import json
+import os
+from pathlib import Path
+Path('started.json').write_text(json.dumps({
+  'directory': os.getcwd(),
+  'host_tree': os.environ['RIDE_HOST_TREE'],
+}))
+"""
+  launch = Launch(
+    name=workspace.name,
+    command=['/var/ride/runtime/venv/bin/python', '-c', command],
+    env={},
+    secrets=(),
+    tty=False,
+    image=launched.tag,
+    runtime_bundle_hash=launched.runtime_bundle_hash,
+    repo=None,
+  )
+  container_id = workspace_docker.prepare_container(launch)
+  with _running_container(container_id) as attached:
+    output = attached.communicate(timeout=30)[0]
+    assert attached.returncode == 0, output
+  report = json.loads((workspace.tree / 'started.json').read_text())
+  assert report == {'directory': '/tree', 'host_tree': str(workspace.tree)}
+  assert list(workspace.tree.iterdir()) == [workspace.tree / 'started.json']
+
+
 @pytest.mark.parametrize('name', ['bro', 'claude'])
 def test_single_harness_image_starts_its_runtime(name, monkeypatch):
   import bro.harness as registry
@@ -223,7 +253,7 @@ from types import SimpleNamespace
 from bro.base import credentials
 from ride import do_ride
 
-root = Path('/workspace')
+root = Path('/tree')
 state = Path('/home/ride/session')
 state.mkdir()
 os.chdir(root)
@@ -295,7 +325,7 @@ def test_boxed_session_provisioning_at_launch_and_resume(launched, isolated, sce
       'run',
       '--rm',
       '-v',
-      f'{directory}:/workspace',
+      f'{directory}:/tree',
       '-v',
       f'ride-runtime-{launched.runtime_bundle_hash}:/var/ride/runtime:ro',
       '-e',

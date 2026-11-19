@@ -19,11 +19,11 @@ class _Session:
   file outside them."""
 
   def __init__(self, root: Path) -> None:
-    project = root / 'config' / 'projects' / '-workspace'
+    project = root / 'config' / 'projects' / '-tree'
     self.transcript = project / f'{_SESSION}.jsonl'
     self.temp_root = root / 'tmp'
     self.background = (
-      self.temp_root / f'claude-{os.getuid()}' / '-workspace' / _SESSION / 'tasks' / 'b1.output'
+      self.temp_root / f'claude-{os.getuid()}' / '-tree' / _SESSION / 'tasks' / 'b1.output'
     )
     self.oversized = project / _SESSION / 'tool-results' / 'r1.txt'
     self.workspace_file = root / 'workspace' / 'README.md'
@@ -126,7 +126,7 @@ class TestFailClosed:
       {'session_id': 'a/b'},
       {'session_id': ''},
       {'session_id': None},
-      {'transcript_path': 'projects/-workspace/session.jsonl'},
+      {'transcript_path': 'projects/-tree/session.jsonl'},
       {'tool_input': {}},
       {'tool_input': {'file_path': 7}},
     ],
