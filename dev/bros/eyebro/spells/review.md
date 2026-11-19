@@ -256,7 +256,7 @@ Recognise a joined session by the banner's `party: joined` line.
   Start **every turn** by checking `git --no-optional-locks status --porcelain` prints nothing and `git rev-parse HEAD` is the delivered head.
   Ask the author to fix either mismatch before reviewing.
   Never stage, commit, stash or reset.
-  Keep scratch outside the shared tree and write nothing inside it except the oversized-round report staging below.
+  Keep scratch outside the shared clone; the oversized-round report staging below also stays outside it.
   Narrow checks may write repository-ignored files, but must not change the reviewed tree.
 
 If the named head or base cannot be obtained, or the obtained SHA differs, ask the author and review nothing until corrected.
@@ -290,33 +290,29 @@ For each round:
 ### Oversized rounds
 
 Ordinary scratch stays outside the repository.
-Only to mint an oversized round, copy its report into a unique temporary directory under workspace-contained `.git/review-rounds/`, mint that report by its workspace-relative path, then remove **only that temporary directory**.
-This exception also applies when joined; it never permits writes to the index, refs, config or worktree files.
+Only to mint an oversized round, copy its report into a unique temporary directory directly in the tree, outside the clone, mint that report by its absolute path, then remove **only that temporary directory**.
+Use the banner's `tree_container_path` when boxed and `tree_host_path` when unboxed.
+A joined reviewer follows the same rule and writes nothing in the shared clone.
 
-From the workspace root, with the report already written outside the tree:
+With the report already written outside the tree:
 
 ```bash
-python - <outside-tree-report-path> <<'PYTHON'
+python - <tree-path-from-banner> <outside-tree-report-path> <<'PYTHON'
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-workspace = Path.cwd().resolve()
-staging_directory = workspace / '.git' / 'review-rounds'
-if not (workspace / '.git').is_dir() or not staging_directory.resolve().is_relative_to(workspace):
-    raise RuntimeError('report staging requires a workspace-contained .git directory')
-staging_directory.mkdir(exist_ok=True)
-with TemporaryDirectory(prefix='round-', dir=staging_directory) as directory:
+with TemporaryDirectory(prefix='review-round-', dir=sys.argv[1]) as directory:
     report = Path(directory) / 'report.md'
-    shutil.copyfile(sys.argv[1], report)
-    subprocess.run(['artifact', 'mint', str(report.relative_to(workspace))], check=True)
+    shutil.copyfile(sys.argv[2], report)
+    subprocess.run(['artifact', 'mint', str(report)], check=True)
 PYTHON
 ```
 
 The printed ref is the round's delivery; the outside-tree report remains ordinary scratch.
-Do not move the source report, mint the whole `.git` directory or remove the shared staging parent.
+Do not move the source report or remove the tree itself.
 
 ## 4. Wait for the landing fold and reconfirm
 

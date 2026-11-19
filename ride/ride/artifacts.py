@@ -75,7 +75,7 @@ from bro.artifact import (
 )
 from bro.base import log
 from bro.base.lulid import lulid
-from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer, tree_path
+from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer, resolve_wire_path
 from bro.workspace.paths import artifacts_dir, workspace_dir
 from ride.peer_facts import PeerFacts
 from ride.workspace.model import Workspace
@@ -296,21 +296,21 @@ class ArtifactStore:
     self,
     identity: PeerDescription,
     ancestors: Sequence[str],
-    relative: str,
+    path: str,
     name: Optional[str] = None,
   ) -> tuple[str, int]:
-    """ingest the file or directory at `relative` in the minting peer's tree
+    """ingest the file or directory at the minting peer's wire `path`
     as `name` (by default the path's last component) and return its ref and
     size, shared with the minter and its ancestors. Raises `ArtifactDenied` on
     any refusal; heavy, called off-loop."""
     try:
-      source = tree_path(identity.tree, relative)
-      name = path_name(relative) if name is None else name
+      source = resolve_wire_path(identity, path)
+      name = path_name(path) if name is None else name
     except ValueError as e:
       raise ArtifactDenied(str(e)) from None
     if not source.is_file() and not source.is_dir():
-      raise ArtifactDenied(f'no file or directory at {relative!r} in the workspace')
-    return self.adopt(source, name, identity.workspace, ancestors, event='mint', origin=relative)
+      raise ArtifactDenied(f'no file or directory at {path!r} in the tree')
+    return self.adopt(source, name, identity.workspace, ancestors, event='mint', origin=path)
 
   def adopt(
     self,

@@ -14,6 +14,8 @@ Run `sync-scripts --project bench` after adding or removing a CLI, and build the
 
 - `bro/bench/credentials.py` — the `harbor` and `benchmark_retention` credential-kind declarations.
 - `bro/bench/job.py` (`benchmark-job`) — the registered `BenchmarkType`, its timeout option declaration, and the session client that starts or checks a raw Harbor run through `launch`.
+  Config and project travel as absolute session-visible wire paths, mapped and confined to the owner's tree by the host;
+  the project must hold `pyproject.toml`, and the job's environment lives at `<workspace>/benchmark-venv`.
   A launch is denied when its config's environment is Harbor's docker one and the host lacks the compose plugin that environment drives.
 - `bro/bench/presets.py` — the presets under `benchmark/` (agents, settings, datasets, tasks): their shapes, and their composition into a Harbor job config carrying the names it came from.
 - `bro/bench/run.py` (`benchmark-run`) — the operator loop around one run:

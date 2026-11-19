@@ -6,7 +6,7 @@ The ride's host-side store answers them (`ride/ride/artifacts.py`).
 This module owns their kinds, argument keys, and ref grammar for the library clients and CLI/session commands.
 
 - `artifact.mint` with args `{path, name?}` — `path` names a file or directory
-  relative to the requesting peer's workspace root, and `name` the artifact,
+  at an absolute path as the requesting peer sees it, and `name` the artifact,
   defaulting to the path's last component.
   The host ingests a private copy into the ride store and answers `ok{ref, size}`.
 - `artifact.fetch` with args `{ref, checked?}` — the host materializes the ref for the requesting peer
@@ -263,9 +263,9 @@ def _call(kind: str, args: dict[str, Any], timeout: Optional[float]) -> dict[str
 def mint_artifact(
   path: str, *, name: Optional[str] = None, timeout: Optional[float] = None
 ) -> Minted:
-  """mint the file or directory at workspace-relative `path` as `name` (by
-  default the path's last component) and return its ref and size. Raises
-  `ArtifactError` on any failure."""
+  """mint a relative-to-cwd or absolute `path` as `name` (by default the path's
+  last component) and return its ref and size. Raises `ArtifactError` on any failure."""
+  path = os.path.abspath(path)
   args = {'path': path} if name is None else {'path': path, 'name': name}
   value = _call(MINT, args, timeout)
   ref = value.get('ref')
@@ -389,7 +389,9 @@ def main(argv: list[str]) -> Optional[int]:
       'store and print its content-addressed ref; the ref is readable by this '
       'peer and its summoners, and a summon request can share it down',
     )
-    parser.add_argument('path', help='file or directory, relative to the workspace root')
+    parser.add_argument(
+      'path', help='file or directory inside the tree, relative to cwd or absolute'
+    )
     parser.add_argument('--name', help=_NAME_HELP)
     parser.add_argument('--timeout', type=float, metavar='SECONDS', help=_TIMEOUT_HELP)
     return _mint(**parser.parse(argv[1:]))
