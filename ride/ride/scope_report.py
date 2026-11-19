@@ -1,7 +1,6 @@
 """Render a prospective descriptor, base authority, and credential presence."""
 
 import json
-from pathlib import Path
 from typing import cast
 
 from bro.authority.records import dump_values
@@ -11,18 +10,15 @@ from ride.authority_launch import mission_view, request
 from ride.authority_reading import Reading
 from ride.authority_scope import existence
 from ride.bro_worker import BroType
-from ride.repository import Repository, as_repository
 
 
 def report_scope(
-  repo: Repository | Path | None,
   bro: str | None,
   harness: str | None,
   llm: str | None = None,
 ) -> int:
   try:
-    repository = None if repo is None else as_repository(repo)
-    reading = Reading.take(repository)
+    reading = Reading.take()
     if bro is None:
       bro = reading.default_bro
     harness = reading.resolve_harness(harness, target=bro)

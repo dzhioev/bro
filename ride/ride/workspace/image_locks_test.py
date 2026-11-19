@@ -47,7 +47,7 @@ def test_lock_paths_pin_the_cross_version_disk_contract(monkeypatch, tmp_path):
   assert image_locks.image_lock_path('bro/a:b') != image_locks.image_lock_path('bro-a:b')
 
 
-def test_lock_paths_support_a_long_valid_project_image_tag(monkeypatch, tmp_path):
+def test_lock_paths_support_a_long_valid_image_tag(monkeypatch, tmp_path):
   monkeypatch.setattr(image_locks, 'runtime_base', lambda: tmp_path)
   repository = '/'.join(['a' * 60] * 3)
   tag = f'{repository}:{"b" * 12}'

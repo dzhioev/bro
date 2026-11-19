@@ -7,7 +7,6 @@ import pytest
 _PROJECT = Path(__file__).resolve().parents[1]
 _SHIPPED_SETUP_FILES = {
   'ride/setup/container/Dockerfile',
-  'ride/setup/container/project.Dockerfile',
   'ride/setup/container/entrypoint.sh',
 }
 _NOT_SHIPPED = {

@@ -126,7 +126,7 @@ For each finding, name the one surface whose edit prevents the recurrence:
   A tool's behavior is code and outside this loop;
   a tool the run lacked is mounted when it exists, and the text that leaned on it is edited to name the gap when it does not
 - **the launch scope** — what a launch adds to the declaration:
-  the `--cred` / `--grant` / `--revoke` / `--limit` layer of the launch line or of the summon that started the run, the repository's `[tool.bro]` policy lists, the host config's pinned reading, and any operator overrides;
+  the `--cred` / `--grant` / `--revoke` / `--limit` layer of the launch line or of the summon that started the run, the host config's pinned reading, and any operator overrides;
   a spell that composes a launch line or a summon for the user owns the grants it names
 - **the bro's system prompt**
   — the class-level `system_prompt` of the bro or of the ancestor that owns the rule;
@@ -139,7 +139,7 @@ Weigh the finding's generality honestly
 — both directions fail:
 a local lesson hoisted into an ancestor or shared text taxes every session for one workflow's problem, while a general lesson patched into the one spell where it happened to surface leaves the recurrence alive everywhere else.
 Aim for the narrowest surface that still covers everywhere the situation can recur:
-for scope, the class declaration when every run of that bro needs it, the repository's `[tool.bro]` when every session of that repository does, and the launch line or the spell that composes it when one workflow does.
+for scope, the class declaration when every run of that bro needs it, the installation home's settings or its host layer when every session of that home does, and the launch line or the spell that composes it when one workflow does.
 
 ## Write the next version
 

@@ -1,13 +1,7 @@
-"""live check of the container launch path: a cold image tag must build, and the
-container prepared from it must reach running state.
-
-Drives the real host docker daemon through the production entry points: runtime
-bundle resolution, runtime/project image builds, volume materialization,
-`prepare_container`, and `docker start`. The images use a test runtime repository and a standalone attachment, and both
-tags are removed before resolution, forcing the cold-build path.
-"""
+"""Live runtime-image launch and session provisioning checks."""
 
 import contextlib
+import json
 import subprocess
 import time
 from collections.abc import Iterator
@@ -52,6 +46,7 @@ class Launched:
   running: bool
   workspace: Path
   output: str
+  runtime_bundle_hash: str
 
 
 def _image_present(tag: str) -> bool:
@@ -141,13 +136,10 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
     monkeypatch.setattr(workspace_docker, '_RUNTIME_IMAGE_REPOSITORY', 'bro/launch-smoke-runtime')
     with resolve_runtime_bundle() as bundle:
       runtime_tag = workspace_docker.runtime_image_tag(bundle.python_version)
-      project_tag = workspace_docker.project_image_tag(runtime_tag, isolated.project)
-      assert project_tag is not None
       with contextlib.ExitStack() as stack:
         stack.enter_context(_cold_image(runtime_tag))
-        stack.enter_context(_cold_image(project_tag))
-        image_before = _image_present(project_tag)
-        runtime = workspace_docker.ContainerRuntimeResolver(bundle, isolated.project).resolve()
+        image_before = _image_present(runtime_tag)
+        runtime = workspace_docker.ContainerRuntimeResolver(bundle).resolve()
         launch = Launch(
           name=_WORKSPACE_NAME,
           command=_SESSION_COMMAND,
@@ -162,16 +154,17 @@ def launched(isolated: Isolated) -> Iterator[Launched]:
         container_id = workspace_docker.prepare_container(launch)
         running, output = _start_and_observe(container_id, recorded.tree)
         yield Launched(
-          tag=project_tag,
+          tag=runtime_tag,
           image_before=image_before,
-          image_after=_image_present(project_tag),
+          image_after=_image_present(runtime_tag),
           running=running,
           workspace=recorded.tree,
           output=output,
+          runtime_bundle_hash=runtime.bundle_hash,
         )
 
 
-def test_cold_project_image_is_built(launched: Launched) -> None:
+def test_cold_runtime_image_is_built(launched: Launched) -> None:
   assert launched.image_before is False, f'{launched.tag} survived removal, so nothing was built'
   assert launched.image_after is True
 
@@ -221,3 +214,113 @@ def test_single_harness_image_starts_its_runtime(name, monkeypatch):
           ],
           check=True,
         )
+
+
+_PROVISIONING_SESSION = """
+import os
+from pathlib import Path
+from types import SimpleNamespace
+from bro.base import credentials
+from ride import do_ride
+
+root = Path('/workspace')
+state = Path('/home/ride/session')
+state.mkdir()
+os.chdir(root)
+os.environ.update(RIDE_ISOLATION='boxed', RIDE_SESSION_DIR=str(state))
+store_directory = Path('/home/ride/provision-store')
+(store_directory / 'creds').mkdir(parents=True)
+(store_directory / 'creds' / 'probe.cred').write_text('selected-session')
+registry = {'probe': credentials.CredentialKind('probe', 'probe identity', install={
+  'files': {'token': {'secret': 'probe'}},
+  'env': {'TOKEN_FILE': {'path': 'token'}},
+  'commands': {'printenv': {'env': {'PROBE_PATH': {'path': 'token'}}}},
+})}
+store = credentials.Store(registry, store_directory, {})
+credentials.default_store = lambda: store
+os.environ.update(BRO_STORE=str(store_directory), BRO_INSTALL_KINDS='probe')
+
+def persona(path):
+  if os.environ['SCENARIO'] == 'declared':
+    assert (path / 'provisioned').read_text() == ('selected-session\\n' * len(starts))
+  (path / 'persona').touch()
+
+def prepare(run):
+  assert (root / 'persona').is_file()
+
+def harness(run):
+  print('session reply', flush=True)
+  return 0
+
+do_ride.create_bro = lambda name: SimpleNamespace(provision_workspace=persona)
+starts = []
+for resume in (False, True):
+  starts.append(resume)
+  run = do_ride.SessionRun(
+    name='provision-smoke', repo='/host/repo', harness='bro', hold='unattended',
+    resolved_recipe={}, solo=True, resume=resume, bro='bro', prompt='probe',
+    activity_file=state / 'activity',
+  )
+  code = do_ride.run_session(SimpleNamespace(prepare_session=prepare, run_session=harness), run)
+  if code:
+    raise SystemExit(code)
+"""
+
+
+@pytest.mark.parametrize('scenario', ['declared', 'undeclared', 'failed', 'unknown'])
+def test_boxed_session_provisioning_at_launch_and_resume(launched, isolated, scenario):
+  directory = isolated.project.parent / f'provision-{scenario}'
+  directory.mkdir()
+  config = directory / '.bro' / 'config.toml'
+  config.parent.mkdir()
+  command = (
+    'test -n "$RIDE_RUNNER_PID" && test "$BRO_HOLD" = unattended && '
+    '! read -r answer && '
+    'test "$(printenv PROBE_PATH)" = "$TOKEN_FILE" && '
+    'cat "$TOKEN_FILE" >> provisioned && printf "\\n" >> provisioned && '
+    'printf "provision output\\n" && printf "provision error\\n" >&2'
+  )
+  if scenario == 'declared':
+    config.write_text(f'provision-command = {json.dumps(command)}\n')
+  elif scenario == 'failed':
+    config.write_text('provision-command = "exit 23"\n')
+  elif scenario == 'unknown':
+    config.write_text('unknown = true\n')
+  script = directory / 'setup.sh'
+  script.write_text('#!/bin/sh\ntouch filename-hook-ran\nexit 99\n')
+  script.chmod(0o755)
+  result = subprocess.run(
+    [
+      'docker',
+      'run',
+      '--rm',
+      '-v',
+      f'{directory}:/workspace',
+      '-v',
+      f'ride-runtime-{launched.runtime_bundle_hash}:/var/ride/runtime:ro',
+      '-e',
+      f'SCENARIO={scenario}',
+      launched.tag,
+      '/var/ride/runtime/venv/bin/python',
+      '-c',
+      _PROVISIONING_SESSION,
+    ],
+    capture_output=True,
+    text=True,
+  )
+  assert not (directory / 'filename-hook-ran').exists()
+  if scenario in ('failed', 'unknown'):
+    assert result.returncode == 1, result.stderr
+    assert result.stdout == ''
+    assert not (directory / 'persona').exists()
+    if scenario == 'failed':
+      assert 'provisioning command failed with exit status 23: exit 23' in result.stderr
+    else:
+      assert '.bro/config.toml' in result.stderr and 'unknown' in result.stderr
+  else:
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'session reply\nsession reply\n'
+    if scenario == 'declared':
+      assert (directory / 'provisioned').read_text() == 'selected-session\nselected-session\n'
+      assert result.stderr.count('provision output') == 2
+      assert result.stderr.count('provision error') == 2

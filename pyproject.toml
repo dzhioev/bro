@@ -132,9 +132,6 @@ artifact = "bro.artifact_mcp:toolset"
 brog = "bro.brog.mcp:toolset"
 file = "bro.files.mcp:toolset"
 
-[tool.bro.devoops]
-target-registry = "oops.deploy_targets:registry"
-
 [tool.deptry.package_module_name_map]
 python_ulid = ["ulid"]
 

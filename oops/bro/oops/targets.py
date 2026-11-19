@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from bro.workspace.paths import find_project_root
-from bro.workspace.project import project_sections_at
+from bro.workspace.repository import repository_config
 
 _TARGET_NAME = re.compile(r'[a-z0-9][a-z0-9-]*')
 _REGISTRY_KEY = 'target-registry'
@@ -135,20 +135,24 @@ def load_project_registry(root: Optional[Path] = None) -> Optional[TargetRegistr
   project_root = find_project_root() if root is None else root
   if project_root is None:
     return None
-  section = project_sections_at(project_root).get('devoops')
+  section = repository_config(project_root).sections.get('devoops')
   if section is None:
     return None
   unknown = set(section) - {_REGISTRY_KEY}
   if len(unknown) > 0:
-    raise ValueError(f'[tool.bro.devoops] has unknown fields: {", ".join(sorted(unknown))}')
+    raise ValueError(
+      f'[devoops] in .bro/config.toml has unknown fields: {", ".join(sorted(unknown))}'
+    )
   reference = section.get(_REGISTRY_KEY)
   if reference is None:
     return None
   if not isinstance(reference, str) or reference.count(':') != 1:
-    raise ValueError(f'[tool.bro.devoops] {_REGISTRY_KEY} must be a module:attribute reference')
+    raise ValueError(
+      f'[devoops] in .bro/config.toml {_REGISTRY_KEY} must be a module:attribute reference'
+    )
   module_name, attribute_name = reference.split(':')
-  _non_empty(module_name, f'[tool.bro.devoops] {_REGISTRY_KEY} module')
-  _non_empty(attribute_name, f'[tool.bro.devoops] {_REGISTRY_KEY} attribute')
+  _non_empty(module_name, f'[devoops] in .bro/config.toml {_REGISTRY_KEY} module')
+  _non_empty(attribute_name, f'[devoops] in .bro/config.toml {_REGISTRY_KEY} attribute')
   with _project_import_path(project_root):
     registry = getattr(importlib.import_module(module_name), attribute_name)
   if not isinstance(registry, TargetRegistry):

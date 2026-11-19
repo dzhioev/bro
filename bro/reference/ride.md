@@ -95,9 +95,9 @@ the launcher's own `--log` never reaches the session.
 - `ride check-host [--install]` probes the host prerequisites a launch needs and prints each with the fix for its macOS or Ubuntu host, exiting nonzero while any fails;
   `--install` first runs the fixes that need no root.
   It refuses inside a managed session, which is not the host it would check.
-- `ride scope [--repo PATH|URL] [--bro BRO] [--harness HARNESS] [--llm RECIPE]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
+- `ride scope [--bro BRO] [--harness HARNESS] [--llm RECIPE]` prints the prospective descriptor, base authority, credential picks, and name-presence states.
   `PRESENT` means the selected name has material or a typed-source entry, `SKIPPED` is an unpicked optional empty instance that is absent, and `MISSING` would fail the launch.
-  Omitting `--bro` uses the installation's `default-bro`, whether attached or detached.
+  Omitting `--bro` uses the installation's `default-bro`.
   It prints `llm: <canonical text> (<source>)`, or the refusal with a nonzero exit status.
 - `ride banner [--plain]` renders the session facts, including `llm: <canonical text> (<source>)`;
   `--plain` selects plain `key: value` lines instead of the visual banner.
@@ -582,27 +582,38 @@ Unrelated home sections are never read.
 A root freezes this reading for all its descendants and manual commits;
 configuration edits affect later roots only.
 
-### Attached-tree configuration
+### Repository configuration
 
 Only `--repo PATH|URL` attaches a repository to `ride solo|along`; cwd is never an implicit attachment.
-Of the attached tree's `[tool.bro]`, ride reads only `build-context-command` and sub-tables:
+The clone's root may carry `.bro/config.toml`:
 
 ```toml
-[tool.bro]
-build-context-command = "list-files"
+provision-command = "./setup.sh"
 
-[tool.bro.devoops]
+[devoops]
 target-registry = "acme.targets:registry"
 ```
 
-`build-context-command` optionally replaces `git ls-files` for the project image's context file list.
-A URL attachment evaluates it in a temporary extraction of the committed base tree and reads the named files back from that commit.
-Sub-tables are carried verbatim and interpreted by their owners.
-No other key is read or validated: a tree from another home or an older commit attaches without changing the installation's launch defaults.
-A missing pyproject or table means no tree configuration.
-
-Credential picks live in host home and bro entries, independent of attachment identities.
+`provision-command` is an optional non-empty string.
+Every other top-level entry must be an owner table, carried verbatim and interpreted by its owner;
+`bro-oops`, for example, reads `[devoops]` from the repository it runs in.
+An unknown top-level value refuses the file, naming the file and key.
+A missing file means no repository configuration.
+Repository configuration changes no launch policy:
+that reading depends only on the installation and host configuration, not its attachment.
+Credential picks live in host home and bro entries;
 `--cred` overrides the pick for one launch.
+
+At every attached session start, including resumes and started or manual children in either isolation,
+`do-ride` reads the clone's current configuration and runs its declared command after the scoped credential hooks and before the persona's provisioning steps.
+A detached session or joined member runs neither repository nor persona provisioning.
+The command runs as `sh -c <provision-command>` in the clone's root, with the session environment overlaid by the credential hooks, including their PATH-front tools.
+Its stdin is empty and both output streams go to `do-ride`'s stderr, outside a one-shot reply.
+A nonzero status logs `provisioning command failed with exit status <n>: <command>` and ends the start with status 1 before the harness starts;
+a refused configuration ends it with the reader's message and the same status.
+The command has no time limit of its own, but a child's summon timeout includes it.
+Because it runs on every start, its idempotency is the repository's contract.
+A repository without a declaration sets itself up as its own instructions say, such as its `AGENTS.md` or a uv project's first `uv run`.
 
 ## The outer layer
 
@@ -646,11 +657,11 @@ The lock releases with the session, so re-entry and `ride resume` afterwards are
 An unboxed workspace runs its tree directly on the launcher's filesystem.
 With an attachment, the first launch creates the same independent clone a boxed workspace uses and checks out the workspace's recorded branch at the resolved base.
 Later launches preserve that clone exactly as the session left it.
-After clone preparation, `ride` runs the tree's `setup.sh` when present and starts the runtime bundle's absolute `do-ride` with the tree as cwd.
+After clone preparation, `ride` starts the runtime bundle's absolute `do-ride` with the tree as cwd.
 Every unboxed session's store and install-hook output live under one private temporary root that its supervisor removes after exit, so a retained workspace contains no credential material.
 `BRO_STORE` and `BRO_INSTALL_DIR` point at those directories.
 The harness's `prepare_unboxed_env` hook supplies launch-time state;
-`do-ride` installs credential hooks before starting the selected harness.
+`do-ride` owns credential hooks and provisioning as described in "Repository configuration".
 The launch removes the invoking environment's active-venv marker and PATH entry, so the workspace's own `.venv` is never activated implicitly.
 
 A detached unboxed launch normally creates a plain empty `tree/`, skips repository and persona provisioning, and runs the same pinned `do-ride` there.
@@ -729,15 +740,10 @@ Inside the container, the entrypoint (running as root first):
 2. When attached, marks `/workspace` as a safe git directory.
    The host's `~/.gitconfig` is not seeded:
    a session's git configuration is what its own hooks declare later in `do-ride`.
-3. When attached and the optional project image carries `/opt/project-venv`, links it at `/workspace/.venv` and exports `RIDE_VENV_MANIFEST=/opt/project-venv-manifest`.
-   A dangling symlink left by an older image is replaced;
-   a real existing workspace environment is preserved.
-   The repository's `setup.sh` owns manifest reuse and resync from there.
-4. When attached, runs `setup.sh` when present, or logs that project provisioning was skipped.
+3. Execs `do-ride`.
+   Provisioning, credential hooks and the optional session broxy are per-session work owned by that executable.
    The workspace venv is not activated:
    PATH remains the pinned runtime shim farm plus system paths.
-5. Execs `do-ride`.
-   Credential hooks and the optional session broxy are per-session work owned by that executable rather than this per-workspace entrypoint.
 
 Every root and spawned child goes through `ride.session.started_party_launch` with a `SessionSpec`, workspace, hydrated scope, runtime bundle, and requested isolation.
 The boxed result is one broker-free `ride.workspace.docker.Launch` carrying the full launch:
@@ -748,27 +754,24 @@ The unboxed result is a `ProcessLaunch` carrying the absolute snapshot command, 
 broker supervision adapts it to `ProcessLaunchSpec` without reading ambient process state.
 An unboxed root defers image and volume resolution until its first boxed summon.
 
-Container images are split:
+Every boxed session runs the runtime image (`bro/ride-runtime:<hash>`):
+Python-minor-matched Debian, system CLIs, the ride user, entrypoint, shell helpers, and each installed harness's runtime contributions.
+Its hash covers the Python minor, installed harness roster, Docker instructions, contributed files and build arguments.
+It contains no Python distribution from the ride installation.
+`ride.workspace.build_context` streams a normalized context containing only runtime assets to `docker build -`.
 
-- **Runtime image** (`bro/ride-runtime:<hash>`) — Python-minor-matched Debian, system CLIs, the ride user, entrypoint, shell helpers, and each installed harness’s runtime contributions.
-  Its identity includes the installed harness roster, Docker instructions, contributed files and build arguments.
-  Its hash covers those assets and the Python minor.
-  It contains no Python distribution from the ride installation.
-- **Project image** (`bro/ride-project:<hash>`)
-  — attached launches may add this layer `FROM` the runtime image, with `/opt/project-venv` and the staged uv manifest set.
-  Its hash covers the runtime tag, manifests and attachment's normalized path or URL.
-  It carries `ride-attachment=<identity>`, so attachments with identical manifests keep separate images.
-  A repository with no `pyproject.toml`/`uv.lock` pair skips this layer and runs the runtime image directly.
+Provisioning builds the project's own environment in the clone, where it persists across later sessions and resumes.
+A new workspace builds its own environment.
+The uv cache stays in the container's own layer and is never shared between boxes;
+the image sets `UV_LINK_MODE=copy` because that cache and the clone are on different filesystems.
+Private project dependencies are installed under the session's own identity, so a session without access cannot install them.
 
-`ride.workspace.build_context` streams separate normalized contexts to `docker build -`:
-the runtime context contains only runtime assets;
-the project context carries tracked project files, its Dockerfile, and the staged manifests under the reserved `.bro-container/` prefix.
-Each process holds a host-wide shared file lock on every runtime or project tag it resolves until that process exits.
+Each process holds a host-wide shared file lock on every runtime tag it resolves until that process exits.
 A missing tag is built under a host-wide per-tag build lock.
-Superseded runtime tags are pruned per image repository, and project tags per `ride-attachment` label, only when a non-blocking exclusive lock proves that no current process holds the tag;
-cleanup of root-owned files finds an attachment's present project image by the same label.
+Superseded runtime tags are pruned per image repository only when a non-blocking exclusive lock proves that no current process holds the tag.
 The removal keeps that lock until `docker image rm` finishes.
 A process reaching for a tag during its removal waits and rebuilds it when the removal succeeds.
+Cleanup of root-owned workspace files uses a present runtime image.
 
 Network is not restricted by design.
 
@@ -866,7 +869,7 @@ A `null` host port asks the host to select an available one;
 a requested host port must be distinct and at least 1024.
 The environment cannot claim host-owned `BROKER_*`, `RIDE_*`, `BRO_*`, `HOME`, or `PATH` names.
 The runtime image tag and sorted build-context files determine the worker image tag `bro/<type>:<hash>`.
-Ride builds a missing tag lazily under the same host-wide image-lock protocol as runtime and project images and prunes only unlocked predecessors from that type's image repository.
+Ride builds a missing tag lazily under the same host-wide image-lock protocol as runtime images and prunes only unlocked predecessors from that type's image repository.
 The root process holds each worker tag it reaches for until it exits, so no other ride prunes an image its worker may use.
 A failed build reports the captured output tail with its exit status.
 
@@ -1191,8 +1194,9 @@ The distribution declares `do-ride` as both a console script and a session comma
 
 `do-ride` receives `RIDE_ISOLATION`, the admitted recipe in `RIDE_RESOLVED_RECIPE`, and the attached tree's `RIDE_BRANCH` / `RIDE_BASE_SHA`.
 It then exports the bro git identity, `RIDE_WORKSPACE`, `RIDE_REPO`, `RIDE_REPO_URL`, `RIDE_BRO`, and the `BRO_HOLD` / `RIDE_RUNNER_PID` pair (see "Forwarded env vars").
-It applies the persona's declared workspace provisioning when attached (`BaseBro.provision_workspace`), installs the scoped credential hooks, asks the selected harness to prepare its session state, and owns the optional session broxy.
-Each step is idempotent, so a launcher may pre-provision state before invoking it.
+It installs the scoped credential hooks, runs repository provisioning followed by the persona's steps (`BaseBro.provision_workspace`) when attached and not joined, then asks the selected harness to prepare its session state.
+The provisioning contract is in "Repository configuration".
+It owns the optional session broxy.
 While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the executable's pid and operating-system start-time identity as JSON;
 `do-ride` removes only the record it owns when the session exits.
 Harness-specific preparation lives in `SessionHarness.prepare_session`, followed by `run_session`, so the neutral executable compares no harness names.

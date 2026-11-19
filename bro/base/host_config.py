@@ -20,28 +20,11 @@ from typing import Optional
 from bro.authority.syntax import Layer, parse_layer
 from bro.base import configs, credentials
 from bro.base.args import CLIError
-from bro.base.git_url import is_git_url
 from bro.llm.providers import parse_recipe
 
 HOST_CONFIG_FILE = configs.DEFAULT_HOST_CONFIG
 USER_LAYER = 'user'
 TOOL_LAYER = 'user.tools'
-
-
-@dataclass(frozen=True)
-class Attachment:
-  """An attached repository's checkout path, git URL, or both."""
-
-  path: Optional[str] = None
-  url: Optional[str] = None
-
-  def __post_init__(self) -> None:
-    if self.path is None and self.url is None:
-      raise ValueError('an attachment names a checkout path, a git URL, or both')
-    if self.path is not None and (self.path == '' or is_git_url(self.path)):
-      raise ValueError(f'attachment path must be a filesystem path, not {self.path!r}')
-    if self.url is not None and not is_git_url(self.url):
-      raise ValueError(f'attachment url must be a git URL, not {self.url!r}')
 
 
 @dataclass(frozen=True)

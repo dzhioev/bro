@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import threading
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from bro import watches
-from bro.base import credentials
+from bro.base import credentials, log
 from bro.base.args import Parser
 from bro.launch.broxy import session_broxy
 from bro.launch.hold import HOLD_VARIABLE
@@ -22,6 +23,7 @@ from bro.monitor import PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
 from bro.registry import create_bro
 from bro.summon import party_member
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
+from bro.workspace.repository import repository_config
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.errors import reports_runtime_errors
 from ride.identity import bro_git_identity_env
@@ -273,10 +275,30 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
   os.environ['RIDE_BRO'] = run.bro
   os.environ[HOLD_VARIABLE] = run.hold
   os.environ['RIDE_RUNNER_PID'] = str(os.getpid())
-  if run.repo is not None and party_member() is None:
-    create_bro(run.bro).provision_workspace(Path.cwd())
   clear_requested_exit_status()
   _install_credential_hooks()
+  if run.repo is not None and party_member() is None:
+    try:
+      provision_command = repository_config(Path.cwd()).provision_command
+    except (OSError, ValueError) as error:
+      log.error('%s', error)
+      return 1
+    if provision_command is not None:
+      result = subprocess.run(
+        ['sh', '-c', provision_command],
+        cwd=Path.cwd(),
+        stdin=subprocess.DEVNULL,
+        stdout=sys.stderr,
+        stderr=sys.stderr,
+      )
+      if result.returncode != 0:
+        log.error(
+          'provisioning command failed with exit status %s: %s',
+          result.returncode,
+          provision_command,
+        )
+        return 1
+    create_bro(run.bro).provision_workspace(Path.cwd())
   harness.prepare_session(run)
   with (
     _process_record(),

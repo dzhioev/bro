@@ -274,11 +274,11 @@ class _ContainerHarness:
       patch('bro.claude.harness.container_claude_state', return_value=([], {})),
       patch('ride.workspace.model.BoxedWorkspace.remove'),
       patch('ride.session._print_resume_hint'),
-      patch('ride.session.Reading.take', side_effect=lambda repository: reading()),
+      patch('ride.session.Reading.take', side_effect=lambda: reading()),
       patch('ride.session.local_trails_mounts', return_value=()),
       patch(
         'ride.workspace.docker.ContainerRuntimeResolver.resolve',
-        return_value=ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image'),
+        return_value=ContainerRuntime('runtime-image', 'bundle-hash'),
       ),
       patch('ride.session.rev_parse_commit', return_value='headsha'),
       patch('ride.operator.commit_launch', side_effect=self._commit),
@@ -520,7 +520,6 @@ class TestDetachedSession:
     with (
       patch('ride.session.get_harness', return_value=harness),
       patch('ride.session.ensure_clone') as ensure_worktree,
-      patch('ride.session.provision_workspace') as provision_worktree,
       patch('ride.session.materialize_scoped_store', new=_materialize_store),
     ):
       launch = ride_session.started_party_launch(
@@ -531,9 +530,7 @@ class TestDetachedSession:
         _launch_scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime', 'hash', 'runtime')
-        ),
+        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
         env={},
         credential_directory=workspace.path / 'credentials',
         install_directory=workspace.path / 'environment',
@@ -541,7 +538,6 @@ class TestDetachedSession:
     assert isinstance(launch, ride_session.ProcessLaunch)
     assert workspace.tree.is_dir()
     ensure_worktree.assert_not_called()
-    provision_worktree.assert_not_called()
 
 
 class TestContainerCommand:
@@ -1078,7 +1074,6 @@ class TestUnboxedSession:
     )
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
-    monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_args: True)
     monkeypatch.setattr(ride_session, 'materialize_scoped_store', _materialize_store)
     monkeypatch.setattr(
       ride_session, 'recorded_origin_url', lambda _tree: 'https://example.test/repository.git'
@@ -1116,9 +1111,7 @@ class TestUnboxedSession:
       _launch_scope(hydrated_kinds=frozenset({'github', 'trails'})),
       human_env=human,
       runtime_bundle=runtime_bundle,
-      container_runtime=ContainerRuntimeResolver.fixed(
-        ContainerRuntime('runtime', 'hash', 'runtime')
-      ),
+      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1181,9 +1174,7 @@ class TestUnboxedSession:
       _launch_scope(),
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
-      container_runtime=ContainerRuntimeResolver.fixed(
-        ContainerRuntime('runtime', 'hash', 'runtime')
-      ),
+      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       env={},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1220,9 +1211,7 @@ class TestUnboxedSession:
       _launch_scope(),
       human_env={},
       runtime_bundle=_runtime_bundle(tmp_path),
-      container_runtime=ContainerRuntimeResolver.fixed(
-        ContainerRuntime('runtime', 'hash', 'runtime')
-      ),
+      container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       env={'MARKER': 'child'},
       credential_directory=workspace.path / 'credentials',
       install_directory=workspace.path / 'environment',
@@ -1295,7 +1284,7 @@ class TestUnboxedSession:
       _launch_scope(),
       human_env={},
       runtime_bundle=runtime_bundle,
-      container_runtime=ContainerRuntimeResolver(runtime_bundle, None),
+      container_runtime=ContainerRuntimeResolver(runtime_bundle),
       env={},
       credential_directory=tmp_path / 'private' / 'store',
       install_directory=tmp_path / 'private' / 'environment',
@@ -1327,9 +1316,7 @@ class TestUnboxedSession:
         _launch_scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime', 'hash', 'runtime')
-        ),
+        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
       == 0
     )
@@ -1357,9 +1344,7 @@ class TestUnboxedSession:
         scope,
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime', 'hash', 'runtime')
-        ),
+        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
       == 5
     )
@@ -1385,9 +1370,7 @@ class TestUnboxedSession:
         _launch_scope(),
         human_env={},
         runtime_bundle=_runtime_bundle(tmp_path),
-        container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime', 'hash', 'runtime')
-        ),
+        container_runtime=ContainerRuntimeResolver.fixed(ContainerRuntime('runtime', 'hash')),
       )
       == 1
     )
@@ -1457,7 +1440,6 @@ class TestHostBrokerPingRoundTrip:
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
-    monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1477,7 +1459,7 @@ class TestHostBrokerPingRoundTrip:
         human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
+          ContainerRuntime('runtime-image', 'bundle-hash')
         ),
       )
       == 0
@@ -1556,7 +1538,6 @@ client.close(confirm=True)
     monkeypatch.setattr(ride_session.os, 'chdir', lambda p: None)
     monkeypatch.setattr(ride_session, 'ensure_clone', lambda *_a: True)
     monkeypatch.setattr(ride_session, 'rev_parse_commit', lambda tree, ref: 'treehead')
-    monkeypatch.setattr(ride_session, 'provision_workspace', lambda *_a: True)
     monkeypatch.setattr(claude_harness.CLAUDE, 'preflight_auth', lambda spec, store: None)
     monkeypatch.setattr(
       ride_session, 'credentials_for', lambda *_a, **_k: ScopedSecrets(set(), set())
@@ -1576,7 +1557,7 @@ client.close(confirm=True)
         human_env={},
         runtime_bundle=runtime_bundle,
         container_runtime=ContainerRuntimeResolver.fixed(
-          ContainerRuntime('runtime-image', 'bundle-hash', 'runtime-image')
+          ContainerRuntime('runtime-image', 'bundle-hash')
         ),
       )
       == 0
@@ -1743,7 +1724,7 @@ class TestReadingAdmission:
   def test_a_resume_runs_the_hold_its_operator_admitted(self, monkeypatch):
     source = reading(config={'operator': {'limit': ['bro.hold=* for bro{hold=unattended}']}})
     with _ContainerHarness() as harness:
-      harness.take_reading.side_effect = lambda repository: source
+      harness.take_reading.side_effect = lambda: source
       monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
       assert ride_session.start_session(_spec(solo=True, hold='unattended').resume_variant()) == 0
     launched = harness.run_started_party.call_args.args[0]
@@ -1751,21 +1732,17 @@ class TestReadingAdmission:
     assert launched.command[launched.command.index('--hold') + 1] == descriptor.values['hold']
 
   @pytest.mark.parametrize('into', [None, 'feature'])
-  def test_url_reading_uses_the_resolved_attachment_commit(self, monkeypatch, tmp_path, into):
+  def test_url_attachment_is_not_an_input_to_the_reading(self, monkeypatch, tmp_path, into):
     repository = Repository('https://example.test/repository.git', tmp_path, 'remote-head')
-    seen = []
     with _ContainerHarness() as harness:
       monkeypatch.setattr(
         ride_session, 'hold_repository', lambda identity: contextlib.nullcontext(repository)
       )
       monkeypatch.setattr(ride_session, 'resolve_ref', lambda directory, ref: 'selected-commit')
-      harness.take_reading.side_effect = lambda selected: seen.append(selected) or reading()
       spec = replace(_spec(), repo=repository.identity, into=into)
       with patch('ride.session._launch_session', return_value=0):
         assert ride_session.start_session(spec) == 0
-    assert len(seen) == 1
-    assert seen[0].identity == repository.identity
-    assert seen[0].tree_ref == ('remote-head' if into is None else 'selected-commit')
+    harness.take_reading.assert_called_once_with()
 
   def test_resumed_child_keeps_its_recorded_harness(self, monkeypatch):
     source = reading()
@@ -1775,7 +1752,7 @@ class TestReadingAdmission:
       _spec(resume=True), authority_request=dump_request(requested, Descriptor('bro', {}))
     )
     with _ContainerHarness() as harness:
-      harness.take_reading.side_effect = lambda repository: source
+      harness.take_reading.side_effect = lambda: source
       monkeypatch.setattr(claude_harness.CLAUDE, 'session_exists', lambda workspace: True)
       assert ride_session.start_session(spec) == 0
     launched = harness.run_started_party.call_args.args[0]
@@ -2101,7 +2078,7 @@ def test_resume_keeps_the_recorded_recipe_unless_replaced(
   monkeypatch.setattr(ride_session.get_harness(harness), 'session_exists', lambda workspace: True)
   changed = 'openai:gpt-5.6-terra' if harness == 'bro' else 'anthropic:claude-opus-5'
   with _ContainerHarness() as host:
-    host.take_reading.side_effect = lambda repository: source
+    host.take_reading.side_effect = lambda: source
     assert (
       ride_session.resume_session(
         'w', cred=[], grant=[], revoke=[], llm=changed if replacement else None
@@ -2259,7 +2236,7 @@ def test_resumed_child_enters_the_broker_with_a_fresh_root_allowance(cap, tmp_pa
 
   monkeypatch.setattr('ride.broker_root.PeerFacts', record_root)
   with _ContainerHarness() as host:
-    host.take_reading.side_effect = lambda repository: current
+    host.take_reading.side_effect = lambda: current
     host.run_started_party.side_effect = run
     with pytest.raises(RootRecorded):
       ride_session.resume_session('w', cred=[], grant=[], revoke=[])

@@ -17,21 +17,6 @@ def config_file(tmp_path, monkeypatch):
   return write
 
 
-class TestAttachment:
-  @pytest.mark.parametrize(
-    'fields, message',
-    [
-      ({}, 'names a checkout path, a git URL, or both'),
-      ({'path': 'https://github.com/foo/api.git'}, 'path must be a filesystem path'),
-      ({'path': ''}, 'path must be a filesystem path'),
-      ({'url': '/home/foo/api'}, 'url must be a git URL'),
-    ],
-  )
-  def test_a_malformed_attachment_is_rejected(self, fields, message):
-    with pytest.raises(ValueError, match=message):
-      host_config.Attachment(**fields)
-
-
 class TestToolSelection:
   def test_the_tool_layer_overrides_the_user_layer(self, config_file, tmp_path):
     config_file(

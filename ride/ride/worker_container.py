@@ -138,7 +138,7 @@ def foreground_worker_run(
     runtime = ContainerRuntimeResolver(bundle, prune_images=False).resolve()
     image = ensure_worker_image(
       worker_type,
-      runtime.runtime_image,
+      runtime.image,
       spec,
       prune=False,
     )
@@ -356,7 +356,7 @@ class WorkerContainerSpawner(Spawner):
     image = await asyncio.to_thread(
       ensure_worker_image,
       launch.type,
-      runtime.runtime_image,
+      runtime.image,
       launch.spec,
     )
     lowered = await asyncio.to_thread(
