@@ -165,6 +165,7 @@ class _StreamSession:
     self._work: tuple[turn_end.BackgroundWork, ...] = ()
     self._first_seen: dict[str, float] = {}
     self._rewakes_seen = 0
+    self._tool_calls = 0
     self._silence_clock = turn_end.SilenceClock()
     self._write_lock = threading.Lock()
     self._awaiting_input = threading.Event()
@@ -200,6 +201,8 @@ class _StreamSession:
   def observe(self, event: dict) -> None:
     if event.get('type') in ('assistant', 'user'):
       self._awaiting_input.clear()
+    if event.get('type') == 'assistant':
+      self._tool_calls += _tool_use_count(event)
     if event.get('type') != 'system':
       return
     if event.get('subtype') == 'background_tasks_changed':
@@ -247,6 +250,9 @@ class _StreamSession:
 
   def background_work(self) -> tuple[turn_end.BackgroundWork, ...]:
     return self._work
+
+  def tool_calls_made(self) -> int:
+    return self._tool_calls
 
   def raise_timer_failure(self) -> None:
     if self._timer_error is not None:
@@ -318,6 +324,14 @@ def _stream_event(line: str) -> dict | None:
   if not isinstance(event, dict):
     raise RuntimeError(f'claude wrote a stream-json line that is not an event: {line!r}')
   return event
+
+
+def _tool_use_count(event: dict) -> int:
+  message = event.get('message')
+  content = message.get('content') if isinstance(message, dict) else None
+  if not isinstance(content, list) or not all(isinstance(block, dict) for block in content):
+    raise RuntimeError(f'an assistant event carries malformed content: {message!r}')
+  return sum(1 for block in content if block.get('type') == 'tool_use')
 
 
 def _task_list(event: dict) -> tuple[dict, ...]:

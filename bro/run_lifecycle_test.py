@@ -9,7 +9,7 @@ from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION
 from bro.broker.transport import ClientTransport
 from bro.llm.tracker import EndReason
 from bro.monitor import SESSION_DIR_ENV, trail_pointer
-from bro.run_lifecycle import MAX_ANSWER_BYTES, RunLifecycle
+from bro.run_lifecycle import MAX_ANSWER_BYTES, UNANSWERED, RunLifecycle
 
 
 class FakeClientTransport(ClientTransport):
@@ -129,6 +129,12 @@ class TestRunLifecycle:
     channel, transport = _make_channel()
     channel.completed(None, 'error')
     assert transport.sent[0].payload == {'outcome': 'failed', 'detail': {'reason': 'error'}}
+
+  def test_unanswered_fails_the_mission_with_its_own_reason(self):
+    channel, transport = _make_channel()
+    channel.unanswered()
+    payload = transport.sent[0].payload
+    assert (payload['outcome'], payload['detail']) == ('failed', {'reason': UNANSWERED})
 
   def test_close_closes_client(self):
     channel, transport = _make_channel()

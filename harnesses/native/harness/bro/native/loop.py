@@ -135,6 +135,7 @@ class Loop(LLM):
   async def _execute_tool_calls(self, leg: Leg, *, turn_index: int, call_index: int) -> list[Input]:
     results: list[Input] = []
     calls = leg.calls
+    self.tool_call_count += len(calls)
     try:
       for item in calls:
         assert item.call_id is not None and item.name is not None

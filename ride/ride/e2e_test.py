@@ -494,7 +494,7 @@ sys.exit(5)
 # the report file, proving the argv was built in-container by the frozen runtime;
 # under RIDE_E2E_QUEST_ROUTE it plays a model moving quests through the session
 # watch: `summoner` summons a child and answers its question, `asker` asks its
-# own summoner and ends its turn until the reply wakes it;
+# own summoner, ends its turn until the reply wakes it, and answers;
 # under RIDE_E2E_LINGER it waits for the print-mode interrupt, SIGINT (exit 7),
 # so the harness can assert `docker stop` reaches claude through tini → runner.
 _FAKE_CLAUDE = (
@@ -576,10 +576,18 @@ if quest_route is not None:
     Path('/tree/.e2e-report.json').write_text(json.dumps(report))
     turn('collected the answer')
   elif quest_route == 'asker':
+    from bro.run_lifecycle import RunLifecycle
+    from bro.workspace.session import terminate_session
+
     ask('self', 'approve the change?')
     turn('asked the summoner')
     deliver()
-    turn(json.dumps(report['deliveries']))
+    # what the `answer` tool does: deliver, then end the session at this turn
+    channel = RunLifecycle.from_env()
+    channel.completed(json.dumps(report['deliveries']), 'ok')
+    channel.close()
+    terminate_session(status=0)
+    turn('answered')
   else:
     sys.exit(f'unknown quest route {quest_route!r}')
   sys.stdin.read()
@@ -2854,7 +2862,7 @@ class ScriptedLLM(LLM):
     reply = f'summoner replies approved (to {self.question_id})'
     if not any(reply in text for text in self.notices):
       return 'the summoner has not replied yet'
-    return json.dumps(self.notices)
+    return await self.tools.call('bro__answer', {'answer': json.dumps(self.notices)})
 
 class ScriptedRunner(Runner):
   @contextmanager
@@ -2903,7 +2911,7 @@ def test_a_summoned_native_child_waits_on_its_own_question_and_wakes_on_the_repl
   assert code == 0
   notices = json.loads(answer)
   assert any('summoner replies approved' in text for text in notices)
-  assert all('turn ended with work still live' not in text for text in notices)
+  assert all('[notification: the turn ended' not in text for text in notices)
   assert isolated_env.live_containers() == []
 
 
@@ -3016,11 +3024,16 @@ class ScriptedLLM(LLM):
     self.actions.append('bro__quest_check')
     outcome = await self.tools.call('bro__quest_check', {'quest_id': self.quest_id})
     assert outcome['state'] == 'completed', outcome
-    return json.dumps({
-      'notices': self.notices,
-      'answer': outcome['answer'],
-      'actions': self.actions,
-    })
+    return await self.tools.call(
+      'bro__answer',
+      {
+        'answer': json.dumps({
+          'notices': self.notices,
+          'answer': outcome['answer'],
+          'actions': self.actions,
+        })
+      },
+    )
 
 class ScriptedRunner(Runner):
   @contextmanager

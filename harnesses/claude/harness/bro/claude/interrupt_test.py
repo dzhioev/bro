@@ -198,6 +198,24 @@ class TestRunStreaming:
     started, notice, done = run.results
     assert 'is alive but has stopped beating' in notice
 
+  def test_a_summoned_session_working_after_its_notice_is_noticed_again_before_it_ends(
+    self, tmp_path, store, waiters, monkeypatch
+  ):
+    monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+    monkeypatch.setattr(turn_end.summon, 'talk', lambda: ())
+    script = (
+      'result("report")\nnotice = next_message()\n'
+      'emit(type="assistant", message={"content": [{"type": "tool_use", "name": "Read"}]})\n'
+      'result(notice)\nresult(next_message())\nresult("after the end: " + repr(next_message()))\n'
+    )
+
+    run = _stream(tmp_path, script, store, waiters)
+
+    report, first, second, after = run.results
+    assert first.startswith('[notification: the turn ended without a result]')
+    assert second == first
+    assert after == 'after the end: None'
+
   def test_ambient_tasks_are_no_background_work(self, tmp_path, store, waiters):
     script = 'tasks(ambient=("housekeeping",))\nresult("idle")\nresult(repr(next_message()))\n'
 

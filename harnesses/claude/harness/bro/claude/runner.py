@@ -154,13 +154,13 @@ def _trail_watch() -> Generator[threading.Event]:
     thread.join()
 
 
-def _complete_run(emitted: threading.Event, result: str | None) -> None:
+def _close_quest(emitted: threading.Event, report: Callable[[RunLifecycle], None]) -> None:
   # a run short enough to end inside the recorder's adoption cadence announces
   # here or not at all; the result must not wait on recording
   _announce_trail(emitted)
   channel = RunLifecycle.from_env()
   if channel is not None:
-    channel.completed(result, 'ok')
+    report(channel)
     channel.close()
 
 
@@ -170,24 +170,25 @@ def _run_claude_root_solo(binary: Path, argv: list[str], env: dict[str, str], pr
   with _trail_watch() as emitted:
     run = _stream_claude(binary, argv, env, prompt, lambda reply: print(reply, flush=True))
   if run.code == 0 and not run.stopped:
-    _complete_run(emitted, None)
+    _close_quest(emitted, lambda channel: channel.completed(None, 'ok'))
   return run.code
 
 
 def _run_claude_summoned(binary: Path, argv: list[str], env: dict[str, str], prompt: str) -> int:
   """run a summoned print-mode Claude and emit its broker lifecycle.
 
-  A clean exit answers with the last turn's reply. A non-zero exit or a stopped
-  run emits no result: the broker synthesizes `result{failed}` from reap for the
-  former, and a `raise`- or `answer`-ended session already sent its own. The
-  reply is echoed to stdout either way, so the output tail still carries it."""
+  A clean exit, which no `answer` ended, fails the quest as unanswered. A
+  non-zero exit or a stopped run emits no result: the broker synthesizes
+  `result{failed}` from reap for the former, and a `raise`- or `answer`-ended
+  session already sent its own. The last turn's reply is echoed to stdout
+  either way, so the output tail still carries it."""
   with _trail_watch() as emitted:
     run = _stream_claude(binary, argv, env, prompt)
   reply = run.results[-1] if len(run.results) > 0 else ''
   print(reply, flush=True)
   if run.code != 0 or run.stopped:
     return run.code
-  _complete_run(emitted, reply)
+  _close_quest(emitted, lambda channel: channel.unanswered())
   return run.code
 
 

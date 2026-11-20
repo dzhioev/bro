@@ -42,7 +42,7 @@ from bro.native.llm import LLM
 from bro.native.runner import Runner
 from bro.openai.declaration import Recipe as OpenAISpec
 from bro.quest_test_helper import TIMEOUT, running_live_broker
-from bro.run_lifecycle import MAX_ANSWER_BYTES, RunLifecycle
+from bro.run_lifecycle import MAX_ANSWER_BYTES, UNANSWERED, RunLifecycle
 
 
 class MockLLM(LLM):
@@ -696,6 +696,14 @@ def _kill_and_end(job):
   return action
 
 
+def _reply(text: str, *, tool_calls: int = 0):
+  async def action(llm: MockLLM) -> str:
+    llm.tool_call_count += tool_calls
+    return text
+
+  return action
+
+
 class TestNativeTurnEnd:
   @pytest.mark.asyncio
   async def test_background_work_waits_silently_until_it_falls_silent(self):
@@ -897,6 +905,23 @@ class TestNativeTurnEnd:
     assert result == 'the answer'
     assert runner.inbox.drain() is None
     assert job.process.wait(timeout=10) == -9
+
+  @pytest.mark.asyncio
+  async def test_a_summoned_run_working_after_its_notice_is_noticed_again_before_it_ends(
+    self, monkeypatch
+  ):
+    monkeypatch.setenv(summon.SUMMONED_ENV, '1')
+    monkeypatch.setenv(BROKER_TALK, 'worker.say')
+    llm = _ScriptedLLM([_reply('worked', tool_calls=2), _reply('done')])
+    runner = StubRunner(llm)
+
+    result = await runner.run('go', surface='test')
+
+    assert result == 'done'
+    assert len(llm.drained) == 2
+    assert all(
+      notice.startswith('[notification: the turn ended without a result]') for notice in llm.drained
+    )
 
   @pytest.mark.asyncio
   async def test_nothing_live_ends_as_before(self):
@@ -1111,6 +1136,22 @@ class TestRunLifecycle:
     assert transport.sent[0].payload == {'outcome': 'ok', 'value': 'the answer'}
 
   @pytest.mark.asyncio
+  async def test_a_summoned_run_ending_without_an_answer_fails_unanswered(self, monkeypatch):
+    monkeypatch.setenv(summon.SUMMONED_ENV, '1')
+    monkeypatch.setenv(BROKER_TALK, 'owner.say')
+    channel, transport = _make_channel()
+    llm = _ScriptedLLM([_reply('still no answer')], response='the report')
+    runner = _ChannelRunner(channel, llm)
+
+    result = await runner.run('input', tracker=NullTracker(), surface='test')
+
+    assert result == 'still no answer'
+    [notice] = llm.drained
+    assert notice.startswith('[notification: the turn ended without a result]')
+    assert [message.payload['detail'] for message in transport.sent] == [{'reason': UNANSWERED}]
+    assert transport.closed is True
+
+  @pytest.mark.asyncio
   async def test_summoned_send_emits_no_trail_mark(self, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONED', '1')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
@@ -1148,7 +1189,7 @@ class TestAgentIdentity:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('explicit_answer', [False, True])
-async def test_summoner_receives_bounded_results_from_the_run(
+async def test_summoner_receives_the_bounded_answer_or_the_missing_one(
   monkeypatch, tmp_path, explicit_answer
 ):
   oversized = 'é' * (MAX_ANSWER_BYTES // 2) + 'x'
@@ -1160,7 +1201,7 @@ async def test_summoner_receives_bounded_results_from_the_run(
     exchanges += 1
     trail_pointer.publish('session-trail')
     if not explicit_answer:
-      part = Reply(0, oversized)
+      part = Reply(0, 'findings in plain text')
     else:
       assert any(tool.name == 'bro__answer' for tool in tools)
       if exchanges == 1:
@@ -1195,22 +1236,18 @@ async def test_summoner_receives_bounded_results_from_the_run(
     runner = Runner(Declared(), EchoSpec(model='echo'))
     with session_broxy():
       result = await runner.run('findings', surface='test', tracker=NullTracker())
-    assert result == (shorter if explicit_answer else oversized)
+    assert result == (shorter if explicit_answer else 'findings in plain text')
+    assert exchanges == 2
 
     monkeypatch.setenv(BROKER_CHANNEL, summoner_address)
     monkeypatch.setenv(BROKER_MISSION, summoner.quest)
-    answer = await asyncio.to_thread(quest.check, child_id, wait=True, timeout=TIMEOUT)
-    child.handle.finish(0)
-    assert answer.state == 'completed'
     if explicit_answer:
-      assert exchanges == 2
-      assert answer.answer == shorter
+      answer = await asyncio.to_thread(quest.check, child_id, wait=True, timeout=TIMEOUT)
+      assert (answer.state, answer.answer) == ('completed', shorter)
     else:
-      assert answer.answer is not None
-      marker = '\n\n[answer truncated; full response in trail session-trail]'
-      assert answer.answer.endswith(marker)
-      assert oversized.startswith(answer.answer.removesuffix(marker))
-      assert len(answer.answer.encode()) <= MAX_ANSWER_BYTES
+      with pytest.raises(quest.QuestError, match=r'summon failed \(unanswered\)'):
+        await asyncio.to_thread(quest.check, child_id, wait=True, timeout=TIMEOUT)
+    child.handle.finish(0)
 
 
 @pytest.mark.asyncio

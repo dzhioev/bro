@@ -275,8 +275,8 @@ A claude-harness child is scoped through the claude recipe
 — `claude_code` required, no LLM key
 — and the seam's auth preflight runs in the lowering, so an unresolvable setup token fails the spawn with the preflight's remedy as the correlated launch failure.
 Its lifecycle comes from the `do-ride` session executable rather than a native runner:
-the runner takes the last turn's reply, announces the trail mark once the session recorder publishes the workspace's current-trail pointer, and sends the quest's ok result on a clean exit
-— a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while an unattended abort is the `raise` service tool's own `result{failed, reason: raised}`.
+the runner echoes the last turn's reply, announces the trail mark once the session recorder publishes the workspace's current-trail pointer, and on a clean exit no `answer` ended sends the quest's `result{failed, reason: unanswered}`
+— a non-zero exit emits no result and surfaces as the synthesized `result{failed, reason: exit}` (the echoed reply lands in its output tail), while the `answer` and `raise` service tools send their own ok and `result{failed, reason: raised}`.
 A manual child's runner announces the trail mark from its trail watch the same way.
 The recorder stamps the child trail's `summoned_by` from the summoner attribution, and the child's recorded resume spec is a claude spec, so a kept workspace resumes into the claude conversation.
 

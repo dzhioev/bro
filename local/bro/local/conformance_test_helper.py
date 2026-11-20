@@ -9,6 +9,7 @@ trail locally, and the probe reads its verdict off that trail."""
 
 import os
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 from unittest import mock
@@ -54,6 +55,12 @@ def harness_matrix() -> pytest.MarkDecorator:
   )
 
 
+@dataclass(frozen=True)
+class Trail:
+  header: dict
+  messages: list[dict]
+
+
 def run_unattended(
   *,
   harness: str,
@@ -69,6 +76,32 @@ def run_unattended(
   return the messages of the trail it recorded. `workspace` names the session's
   workspace, which keeps it past the session; an unnamed one is dropped after a
   clean exit."""
+  trails = run_session_tree(
+    harness=harness,
+    recipe=recipe,
+    bro=bro,
+    prompt=prompt,
+    tree=tree,
+    data=data,
+    workspace=workspace,
+  )
+  assert len(trails) == 1, [trail.header['id'] for trail in trails]
+  return trails[0].messages
+
+
+def run_session_tree(
+  *,
+  harness: str,
+  recipe: str,
+  bro: str,
+  prompt: str,
+  tree: Path,
+  data: Path,
+  workspace: Optional[str] = None,
+  grants: tuple[str, ...] = (),
+) -> list[Trail]:
+  """`run_unattended` with `grants` added to the session's scope, returning every
+  trail the session and the sessions it summoned recorded, in id order."""
   environment = {**os.environ, 'XDG_DATA_HOME': str(data), 'BRO_STORE': str(configs.STORE_DIR)}
   with mock.patch.dict(os.environ, {'XDG_DATA_HOME': str(data)}):
     trails = LocalStore(ride_trails_dir())
@@ -88,6 +121,7 @@ def run_unattended(
     'unattended',
     '--revoke',
     'trails',
+    *(argument for grant in grants for argument in ('--grant', grant)),
     bro,
     prompt,
   ]
@@ -100,5 +134,8 @@ def run_unattended(
   )
   assert completed.returncode == 0, completed.stderr
   recorded = sorted(set(trails.stored_trail_ids()) - before)
-  assert len(recorded) == 1, (recorded, completed.stderr)
-  return list(trails.iter_messages(recorded[0]))
+  assert len(recorded) > 0, completed.stderr
+  return [
+    Trail(trails.stored_header(trail_id), list(trails.iter_messages(trail_id)))
+    for trail_id in recorded
+  ]

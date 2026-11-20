@@ -32,6 +32,7 @@ class LLM(ABC):
     self.tracker: Tracker = tracker if tracker is not None else NullTracker()
     self.agent = agent
     self.activity_file = activity_file
+    self.tool_call_count = 0
 
   @abstractmethod
   async def send(

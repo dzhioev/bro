@@ -4,11 +4,13 @@ Whenever nothing else remains, end the turn:
 the run idles until work completes or new traffic wakes it.
 The runtime judges each kind of work on its own at a turn end:
 
-- A mission carried by the session watch, a live model watch, pending watch lines, an awaited reply, background work, or a summoner who can still speak keeps the run waiting silently.
+- A mission carried by the session watch, a live model watch, pending watch lines, an awaited reply, or background work keeps the run waiting silently.
 - A failed waiter gets one notice, whatever else is live:
   an uncovered mission, a watch that is alive but has stopped beating, or a failed session watch.
   The next unchanged turn end ends the run if no live work remains, and orphans the uncovered work.
-- No live work ends the run immediately.
+- No live work ends the run immediately, except in a summoned run, whose reply reaches no summoner:
+  its turn end with no live work gets a notice instead, naming the calls that deliver the result or wait for the summoner,
+  and ending the next turn without a tool call fails the run without an answer.
 
 Ending the run kills its watchers and host-supervised workers and detaches expected workers.
 
