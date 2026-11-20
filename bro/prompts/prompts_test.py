@@ -77,6 +77,21 @@ class TestHoldFragment:
     fragment = hold_fragment('unattended', harness=get_harness('claude'))
     assert '# Interaction policy' not in fragment
 
+  def test_the_interaction_policy_treats_open_questions_per_level(self):
+    report = 'final report carries every question'
+    live_exchange = ('A question is asked once', 'Work one problem at a time')
+
+    detached = hold_fragment('detached', harness=get_harness('claude'))
+    assert report in detached
+    for marker in live_exchange:
+      assert marker not in detached
+
+    for hold in ('attended', 'guided'):
+      fragment = hold_fragment(hold, harness=get_harness('claude'))
+      assert report not in fragment
+      for marker in live_exchange:
+        assert marker in fragment
+
   @pytest.mark.parametrize('hold', ['detached', 'attended'])
   def test_skipped_permission_notice_comes_from_the_harness(self, hold):
     native = hold_fragment(hold, harness=get_harness('bro'))

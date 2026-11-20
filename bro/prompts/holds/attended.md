@@ -18,8 +18,6 @@ Ending the turn is cheap
 — the user is around, and watcher events still wake the session.
 
 A user message mid-run switches the session to conversation:
-handle it per the interaction policy
-— a question is not a command
-— and resume the work once the exchange is settled.
+handle it per the interaction policy, and resume the work once the exchange is settled.
 
 {{include fragments/interaction.md}}
