@@ -483,7 +483,7 @@ async def test_the_sessions_own_question_waits_silently_until_the_summoner_repli
     assert (port.notifications, port.ends) == ([], 0)
 
     _stand_as(monkeypatch, summoner)
-    await asyncio.to_thread(quest.say, session.quest, 'yes', reply_to=asked.question_id)
+    await asyncio.to_thread(quest.reply, session.quest, asked.question_id, 'yes')
     _stand_as(monkeypatch, session)
     await asyncio.to_thread(_chat_past, session.quest, asked_at)
 
@@ -516,7 +516,7 @@ async def test_a_reply_landing_after_the_journal_head_read_keeps_the_turn_waitin
 
     def head_read_before_the_reply() -> int:
       _stand_as(monkeypatch, summoner)
-      quest.say(session.quest, 'yes', reply_to=asked.question_id)
+      quest.reply(session.quest, asked.question_id, 'yes')
       _stand_as(monkeypatch, session)
       _chat_past(session.quest, asked_at)
       return 0

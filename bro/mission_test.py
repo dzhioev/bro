@@ -35,6 +35,7 @@ def _typed_entry(
     'at': 'now',
     'transition': 'message',
     'from': sender,
+    'role': 'question' if question_id is not None else 'reply' if reply_to is not None else 'memo',
     'head': payload,
   }
   if question_id is not None:
@@ -51,7 +52,18 @@ def test_help_lists_every_verb(capsys):
     mission.main(['mission', '--help'])
 
   output = capsys.readouterr().out
-  for verb in ('check', 'history', 'say', 'ask', 'share', 'list', 'watch', 'cancel'):
+  for verb in (
+    'check',
+    'history',
+    'memo',
+    'notice',
+    'reply',
+    'ask',
+    'share',
+    'list',
+    'watch',
+    'cancel',
+  ):
     assert f'  {verb}' in output
 
 
@@ -64,12 +76,13 @@ def test_payload_argument_requires_strict_json_objects():
 
 
 @pytest.mark.asyncio
-async def test_say_sends_the_json_object_it_is_given(monkeypatch):
+@pytest.mark.parametrize('role', ['memo', 'notice'])
+async def test_say_sends_the_json_object_it_is_given_under_its_role(monkeypatch, role):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
       asyncio.to_thread(
         mission.main,
-        ['mission', 'say', 'WEB-1', '{"tool":"snapshot","arguments":{}}'],
+        ['mission', role, 'WEB-1', '{"tool":"snapshot","arguments":{}}'],
       )
     )
     channel, query = await next_message(server)
@@ -86,16 +99,36 @@ async def test_say_sends_the_json_object_it_is_given(monkeypatch):
     )
     _, message = await next_message(server)
 
+    assert message.role == role
     assert message.payload == {'tool': 'snapshot', 'arguments': {}}
     assert await task == 0
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('verb', ['say', 'ask'])
-async def test_talk_refuses_a_typed_move_before_it_is_sent(monkeypatch, caplog, verb):
+async def test_reply_answers_the_question_it_names(monkeypatch):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(mission.main, ['mission', verb, 'WEB-1', '{"step":1}'])
+      asyncio.to_thread(mission.main, ['mission', 'reply', 'WEB-1', 'Q1', '{"step":1}'])
+    )
+    channel, query = await next_message(server)
+    live = quest_record('WEB-1', 'started', type='webview', talk=['worker.question'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
+    _, message = await next_message(server)
+
+    assert (message.role, message.reply_to, message.payload) == ('reply', 'Q1', {'step': 1})
+    assert await task == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'arguments',
+  [['memo', 'WEB-1'], ['notice', 'WEB-1'], ['reply', 'WEB-1', 'Q1'], ['ask', 'WEB-1']],
+  ids=lambda value: value[0],
+)
+async def test_talk_refuses_a_typed_move_before_it_is_sent(monkeypatch, caplog, arguments):
+  async with running_server(monkeypatch) as server:
+    task = asyncio.create_task(
+      asyncio.to_thread(mission.main, ['mission', *arguments, '{"step":1}'])
     )
     channel, query = await next_message(server)
     await reply(
@@ -271,6 +304,7 @@ async def test_history_sequence_reads_the_full_event(monkeypatch, capsys):
       'args': {'type': 'webview'},
       'transition': 'message',
       'from': 'worker',
+      'role': 'memo',
       'head': {'snapshot': {'title': 'Example'}},
     }
     await reply(server, channel, events, outcome='ok', value={'head': 12, 'events': [event]})
@@ -393,6 +427,7 @@ async def test_watch_renders_both_types_and_cuts_an_oversized_chat_line(monkeypa
         'args': {'type': 'webview'},
         'transition': 'message',
         'from': 'worker',
+        'role': 'memo',
         'head': {'snapshot': 'x' * 1500},
       },
     ]
@@ -401,7 +436,7 @@ async def test_watch_renders_both_types_and_cuts_an_oversized_chat_line(monkeypa
     assert await first_line == watches.quiet('mission BRO-1 (bro to dev) started')
     cut = await asyncio.to_thread(next, watch)
     assert len(cut.removeprefix(watches.quiet('')).encode()) == mission.WATCH_LINE_BYTES
-    assert cut.endswith('[1544 bytes, cut; seq 2 in mission history WEB-1]')
+    assert cut.endswith('[1550 bytes, cut; seq 2 in mission history WEB-1]')
     watch.close()
 
 
@@ -537,7 +572,7 @@ def test_payload_at_the_message_bound_is_checked_before_a_channel_opens(monkeypa
   monkeypatch.delenv('BROKER_CHANNEL', raising=False)
   payload = {'value': 'x' * 20_000}
 
-  assert mission.main(['mission', 'say', 'M1', json.dumps(payload)]) == 1
+  assert mission.main(['mission', 'memo', 'M1', json.dumps(payload)]) == 1
 
 
 def test_watch_type_filter_is_available_as_a_library_argument():

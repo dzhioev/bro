@@ -599,8 +599,8 @@ def test_message_routes_by_its_named_quest_in_both_directions():
   dispatcher, runtime = _dispatcher()
   record = _live_chat(dispatcher, talk={'owner.say', 'worker.say'})
 
-  requester_message = brotocol.message(record.mission_id, {'text': 'start'})
-  worker_message = brotocol.message(record.mission_id, {'text': 'working'})
+  requester_message = brotocol.message(record.mission_id, 'notice', {'text': 'start'})
+  worker_message = brotocol.message(record.mission_id, 'memo', {'text': 'working'})
   dispatcher.on_message('requester', requester_message)
   dispatcher.on_message('child-worker', worker_message)
 
@@ -608,7 +608,10 @@ def test_message_routes_by_its_named_quest_in_both_directions():
     ('child-worker', requester_message),
     ('requester', worker_message),
   ]
-  assert [entry['from'] for entry in record.messages] == ['owner', 'worker']
+  assert [(entry['from'], entry['role']) for entry in record.messages] == [
+    ('owner', 'notice'),
+    ('worker', 'memo'),
+  ]
 
 
 def test_message_from_a_stranger_is_dropped_without_journaling(caplog):
@@ -616,7 +619,7 @@ def test_message_from_a_stranger_is_dropped_without_journaling(caplog):
   record = _live_chat(dispatcher, talk={'worker.say'})
   before = dispatcher.journal.head
 
-  dispatcher.on_message('stranger', brotocol.message(record.mission_id, {'text': 'forged'}))
+  dispatcher.on_message('stranger', brotocol.message(record.mission_id, 'memo', {'text': 'forged'}))
 
   assert runtime.sent == []
   assert dispatcher.journal.head == before
@@ -628,6 +631,7 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
   record = _live_chat(dispatcher, talk={'worker.say'})
   candidate = brotocol.message(
     record.mission_id,
+    'question',
     {'text': 'may I?'},
     id='Q1',
     reply_to='Q0',
@@ -645,7 +649,7 @@ def test_disallowed_message_is_journaled_as_a_correlated_refusal(caplog):
 def test_a_message_at_the_bound_is_routed_whole():
   dispatcher, runtime = _dispatcher()
   record = _live_chat(dispatcher, talk={'worker.say'})
-  message = brotocol.message(record.mission_id, {'text': text_at_the_message_bound()})
+  message = brotocol.message(record.mission_id, 'memo', {'text': text_at_the_message_bound()})
 
   dispatcher.on_message('child-worker', message)
 
@@ -657,7 +661,7 @@ def test_oversized_message_is_journaled_as_a_correlated_refusal(caplog):
   dispatcher, runtime = _dispatcher()
   record = _live_chat(dispatcher, talk={'worker.say', 'worker.question'})
   candidate = brotocol.message(
-    record.mission_id, {'text': text_at_the_message_bound() + 'x'}, id='Q1'
+    record.mission_id, 'question', {'text': text_at_the_message_bound() + 'x'}, id='Q1'
   )
 
   dispatcher.on_message('child-worker', candidate)
@@ -693,7 +697,7 @@ def test_listening_is_worker_born_set_once_and_repeats_are_silent():
 
 def test_message_on_a_non_live_mission_is_dropped(caplog):
   dispatcher, runtime = _dispatcher()
-  dispatcher.on_message('requester', brotocol.message('ended', {'text': 'late'}))
+  dispatcher.on_message('requester', brotocol.message('ended', 'memo', {'text': 'late'}))
   assert runtime.sent == []
   assert 'no live mission' in caplog.text
 
@@ -785,7 +789,10 @@ def test_query_trims_the_oldest_chat_tail_entries_but_keeps_every_pending_questi
       child,
       'worker',
       brotocol.message(
-        child.mission_id, {'text': text_at_the_message_bound()}, id=f'Q{index:02d}' + padding
+        child.mission_id,
+        'question',
+        {'text': text_at_the_message_bound()},
+        id=f'Q{index:02d}' + padding,
       ),
     )
   for _ in range(MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS):
@@ -793,7 +800,7 @@ def test_query_trims_the_oldest_chat_tail_entries_but_keeps_every_pending_questi
       child,
       'worker',
       brotocol.message(
-        child.mission_id, {'text': text_at_the_message_bound()}, reply_to='R' + padding
+        child.mission_id, 'reply', {'text': text_at_the_message_bound()}, reply_to='R' + padding
       ),
     )
   assert len(child.pending) == MAX_PENDING_QUESTIONS
@@ -839,6 +846,7 @@ def test_the_largest_pending_set_fits_both_query_projections():
       'worker',
       brotocol.message(
         child.mission_id,
+        'question',
         {'text': text_at_the_message_bound()},
         id=f'{index:04d}' + '\x00' * ((brotocol.MAX_IDENTIFIER_BYTES - 4) // 6),
         reply_to=expanding,
@@ -846,7 +854,9 @@ def test_the_largest_pending_set_fits_both_query_projections():
     )
   for _ in range(MAX_RECORD_MESSAGES - MAX_PENDING_QUESTIONS):
     dispatcher.journal.message(
-      child, 'worker', brotocol.message(child.mission_id, {'text': text_at_the_message_bound()})
+      child,
+      'worker',
+      brotocol.message(child.mission_id, 'memo', {'text': text_at_the_message_bound()}),
     )
   assert len(child.pending) == MAX_PENDING_QUESTIONS
   request = '\x01' * (brotocol.MAX_IDENTIFIER_BYTES // 6)
@@ -874,7 +884,7 @@ def test_query_trims_chat_before_evicting_a_retained_result():
     dispatcher.journal.message(
       child,
       'worker',
-      brotocol.message(child.mission_id, {'text': text_at_the_message_bound()}),
+      brotocol.message(child.mission_id, 'memo', {'text': text_at_the_message_bound()}),
     )
   dispatcher.journal.end(
     child, {'outcome': 'ok', 'value': 'answer' * (brotocol.MAX_FRAME_BYTES // 10)}
@@ -951,7 +961,9 @@ async def test_query_since_returns_when_the_quests_chat_sequence_advances():
   )
   assert runtime.sent == []
 
-  dispatcher.on_message('child-worker', brotocol.message(child.mission_id, {'text': 'working'}))
+  dispatcher.on_message(
+    'child-worker', brotocol.message(child.mission_id, 'memo', {'text': 'working'})
+  )
   await _settle()
 
   response = runtime.sent[-1][1].payload['value']['mission']

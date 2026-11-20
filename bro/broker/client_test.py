@@ -130,7 +130,7 @@ async def test_request_correlates_and_sets_unrelated_aside():
 
     channel, request_message = await _next(server.sink.messages)
     assert request_message.kind == 'ping'
-    unrelated = brotocol.message('some-other-quest', {'note': 'unrelated'})
+    unrelated = brotocol.message('some-other-quest', 'memo', {'note': 'unrelated'})
     await server.transport.send(channel, unrelated)
     await server.transport.send(
       channel, brotocol.result(request_message.id, 'ok', value={'pong': 1})
@@ -186,8 +186,10 @@ async def test_call_surfaces_marks_and_message_then_returns_the_result():
     channel, request_message = await _next(server.sink.messages)
     assert request_message.kind == 'summon'
     await server.transport.send(channel, brotocol.mark(request_message.id, 'accepted'))
-    await server.transport.send(channel, brotocol.message(request_message.id, {'note': 'working'}))
-    unrelated = brotocol.message('some-other-quest', {'note': 'unrelated'})
+    await server.transport.send(
+      channel, brotocol.message(request_message.id, 'memo', {'note': 'working'})
+    )
+    unrelated = brotocol.message('some-other-quest', 'memo', {'note': 'unrelated'})
     await server.transport.send(channel, unrelated)
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
@@ -218,8 +220,10 @@ async def test_call_rides_every_message_while_await_any_returns_the_first():
       asyncio.to_thread(client.call, 'summon', {}, TIMEOUT, on_interim=interims.append)
     )
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.message(request_message.id, {}))
-    await server.transport.send(channel, brotocol.message(request_message.id, {'trail_id': 't1'}))
+    await server.transport.send(channel, brotocol.message(request_message.id, 'memo', {}))
+    await server.transport.send(
+      channel, brotocol.message(request_message.id, 'memo', {'trail_id': 't1'})
+    )
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
     result = await asyncio.wait_for(call_task, TIMEOUT)
     assert result.type == 'result'
@@ -242,7 +246,9 @@ async def test_call_without_callback_skips_message_and_returns_failed():
     call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, TIMEOUT))
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.message(request_message.id, {'trail_id': 't'}))
+    await server.transport.send(
+      channel, brotocol.message(request_message.id, 'memo', {'trail_id': 't'})
+    )
     await server.transport.send(
       channel, brotocol.result(request_message.id, 'failed', detail={'reason': 'exit'})
     )
@@ -262,7 +268,7 @@ async def test_call_deadline_spans_interim_message():
     call_task = asyncio.create_task(asyncio.to_thread(client.call, 'summon', {}, 0.3))
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.message(request_message.id, {}))
+    await server.transport.send(channel, brotocol.message(request_message.id, 'memo', {}))
     with pytest.raises(TimeoutError):
       await asyncio.wait_for(call_task, TIMEOUT)
     client.close()
@@ -295,7 +301,9 @@ async def test_await_reply_reattaches_to_a_sent_request():
     )
 
     channel, request_message = await _next(server.sink.messages)
-    await server.transport.send(channel, brotocol.message(request_message.id, {'trail_id': 't1'}))
+    await server.transport.send(
+      channel, brotocol.message(request_message.id, 'memo', {'trail_id': 't1'})
+    )
     await server.transport.send(channel, brotocol.result(request_message.id, 'ok', value='r'))
 
     result = await asyncio.wait_for(await_task, TIMEOUT)
@@ -308,7 +316,7 @@ def test_reply_deadline_rearms_on_an_interim():
   deadline = ReplyDeadline(1.0, 100.0, after_interim=10.0)
   assert deadline.remaining(100.5) == 0.5
 
-  deadline.observe(brotocol.message('quest', {}), 100.25)
+  deadline.observe(brotocol.message('quest', 'memo', {}), 100.25)
 
   assert deadline.remaining(100.5) == 9.75
   assert deadline.timeout == 10.0
@@ -331,7 +339,7 @@ def test_reply_deadline_rearms_only_on_the_interims_it_is_told_to():
 def test_reply_deadline_rearm_shortens_a_longer_bound():
   deadline = ReplyDeadline(20.0, 100.0, after_interim=0.25)
 
-  deadline.observe(brotocol.message('quest', {}), 100.5)
+  deadline.observe(brotocol.message('quest', 'memo', {}), 100.5)
 
   assert deadline.remaining(100.5) == 0.25
   assert deadline.timeout == 0.25
@@ -344,7 +352,7 @@ def test_reply_deadline_is_unbounded_without_a_timeout_until_an_interim():
   assert deadline.remaining(1e9) is None
   assert not deadline.expired(1e9)
 
-  deadline.observe(brotocol.message('quest', {}), 100.5)
+  deadline.observe(brotocol.message('quest', 'memo', {}), 100.5)
 
   assert deadline.remaining(100.5) == 5.0
 
@@ -352,7 +360,7 @@ def test_reply_deadline_is_unbounded_without_a_timeout_until_an_interim():
 def test_await_reply_bounds_the_read_by_the_rearmed_deadline():
   request = brotocol.request('summon', {})
   transport = FakeClientTransport(
-    [brotocol.message(request.request_id, {}), brotocol.result(request.request_id, 'ok')]
+    [brotocol.message(request.request_id, 'memo', {}), brotocol.result(request.request_id, 'ok')]
   )
   client = Client(transport)
 
@@ -436,9 +444,9 @@ async def test_message_mints_question_id_and_carries_reply_correlation():
     sent = await asyncio.to_thread(
       client.message,
       'quest',
+      'question',
       {'text': 'answer?'},
       reply_to='earlier',
-      question=True,
     )
     _, received = await _next(server.sink.messages)
 
@@ -467,12 +475,12 @@ async def test_await_reply_to_correlates_on_message_id_and_sets_other_traffic_as
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
-    question = await asyncio.to_thread(client.message, 'quest', {}, question=True)
+    question = await asyncio.to_thread(client.message, 'quest', 'question', {})
     await _next(server.sink.messages)
     wait = asyncio.create_task(asyncio.to_thread(client.await_reply_to, question, TIMEOUT))
 
-    unrelated = brotocol.message('quest', {'text': 'other'}, reply_to='other-question')
-    reply = brotocol.message('quest', {'text': 'answer'}, reply_to=question.id)
+    unrelated = brotocol.message('quest', 'reply', {'text': 'other'}, reply_to='other-question')
+    reply = brotocol.message('quest', 'reply', {'text': 'answer'}, reply_to=question.id)
     await server.transport.send(provisioned.channel, unrelated)
     await server.transport.send(provisioned.channel, reply)
 
@@ -486,7 +494,7 @@ async def test_await_reply_to_recovers_a_reply_set_aside_during_a_journal_query(
   async with running_server() as server:
     provisioned = await server.transport.provision()
     client = Client(await _transport(provisioned))
-    question = await asyncio.to_thread(client.message, 'quest', {}, question=True)
+    question = await asyncio.to_thread(client.message, 'quest', 'question', {})
     assert question.id is not None
     await _next(server.sink.messages)
     query_task = asyncio.create_task(
@@ -494,7 +502,7 @@ async def test_await_reply_to_recovers_a_reply_set_aside_during_a_journal_query(
     )
     channel, query = await _next(server.sink.messages)
 
-    reply = brotocol.message('quest', {'text': 'answer'}, reply_to=question.id)
+    reply = brotocol.message('quest', 'reply', {'text': 'answer'}, reply_to=question.id)
     await server.transport.send(channel, reply)
     await server.transport.send(
       channel,
@@ -522,7 +530,7 @@ async def test_await_reply_until_returns_the_matching_interim():
       )
     )
 
-    question = brotocol.message(request.request_id, {'text': 'approve?'}, id='question')
+    question = brotocol.message(request.request_id, 'question', {'text': 'approve?'}, id='question')
     await server.transport.send(provisioned.channel, question)
 
     assert await asyncio.wait_for(wait, TIMEOUT) == question
@@ -545,15 +553,16 @@ def test_talk_from_env_rejects_an_unknown_right(monkeypatch):
 
 
 @pytest.mark.parametrize(
-  ('talk', 'reply_to', 'question', 'missing_right'),
+  ('talk', 'role', 'reply_to', 'missing_right'),
   [
-    ('worker.question', None, False, 'worker.say'),
-    ('worker.say', None, True, 'worker.question'),
-    ('worker.say', 'owner-question', False, 'owner.question'),
+    ('worker.question', 'memo', None, 'worker.say'),
+    ('worker.question', 'notice', None, 'worker.say'),
+    ('worker.say', 'question', None, 'worker.question'),
+    ('worker.say', 'reply', 'owner-question', 'owner.question'),
   ],
 )
 def test_message_refuses_a_move_missing_from_the_own_quest_talk(
-  monkeypatch, talk, reply_to, question, missing_right
+  monkeypatch, talk, role, reply_to, missing_right
 ):
   transport = FakeClientTransport()
   client = Client(transport)
@@ -561,7 +570,7 @@ def test_message_refuses_a_move_missing_from_the_own_quest_talk(
   monkeypatch.setenv(BROKER_TALK, talk)
 
   with pytest.raises(PermissionError, match=missing_right):
-    client.message('own-quest', {}, reply_to=reply_to, question=question)
+    client.message('own-quest', role, {}, reply_to=reply_to)
 
   assert transport.sent == []
 
@@ -572,7 +581,7 @@ def test_message_does_not_apply_the_own_talk_to_a_child_quest(monkeypatch):
   monkeypatch.setenv(BROKER_MISSION, 'own-quest')
   monkeypatch.setenv(BROKER_TALK, '')
 
-  sent = client.message('child-quest', {})
+  sent = client.message('child-quest', 'memo', {})
 
   assert transport.sent == [sent]
 

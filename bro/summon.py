@@ -277,7 +277,8 @@ def _await_answer(
   def _interim(message: 'Message') -> None:
     nonlocal trail_id
     if message.type == Tag.MESSAGE:
-      log.info('summon says %s', mission._single_line(quest._text_from_payload(message.payload)))
+      text = mission._single_line(quest._text_from_payload(message.payload))
+      log.info('summon sends %s %s', message.role, text)
       return
     if message.type != Tag.MARK or message.payload.get('transition') != 'trail':
       return
@@ -556,7 +557,7 @@ def _relay(await_answer: Callable[[], str | quest.Question]) -> int:
   if isinstance(result, quest.Question):
     print(result.text)
     log.info(
-      "quest question %s; reply with `quest say %s '<text>' --reply-to %s`",
+      "quest question %s; reply with `quest reply %s %s '<text>'`",
       result.id,
       result.quest_id,
       result.id,

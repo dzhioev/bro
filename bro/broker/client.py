@@ -13,7 +13,7 @@ Uncorrelated arrivals are set aside and handed out by later `receive` calls rath
 No reader thread — concurrent in-flight requests are a consumer need that has not arisen.
 
 `send` returns the sent request (ids are minted client-side); `await_reply` is `call`'s wait detached from its send and `await_any` is `request`'s, so a consumer can expose the request id the moment it is on the wire and block — or reattach — separately.
-`message` sends chat traffic, `await_reply_to` correlates a reply by message id, and `listen` registers the connection for unsolicited request messages.
+`message` sends chat traffic under its role, minting a question's id, `await_reply_to` correlates a reply by message id, and `listen` registers the connection for unsolicited request messages.
 `mark` and `result` are the answering-side lifecycle calls;
 a worker peer emits them against the request id its launch carried (`BROKER_MISSION`), with its fixed chat rights in `BROKER_TALK`.
 """
@@ -27,7 +27,7 @@ from typing import Any, Optional
 
 from bro.base.lulid import lulid
 from bro.broker import brotocol
-from bro.broker.brotocol import Message, Tag, Talk
+from bro.broker.brotocol import Message, Role, Tag, Talk
 from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK, BROKER_UPSTREAM
 from bro.broker.transport import ClientTransport, connect
 
@@ -110,16 +110,17 @@ class Client:
   def message(
     self,
     request_id: str,
+    role: Role,
     payload: dict[str, Any],
     *,
     reply_to: Optional[str] = None,
-    question: bool = False,
   ) -> Message:
     """Send chat traffic on a request and return the sent envelope."""
     message = brotocol.message(
       request_id,
+      role,
       payload,
-      id=lulid() if question else None,
+      id=lulid() if role == 'question' else None,
       reply_to=reply_to,
     )
     self._require_own_mission_talk(message)

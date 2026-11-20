@@ -193,7 +193,7 @@ async def test_unbounded_blocking_summon_relays_the_answer(monkeypatch, capsys):
 
 
 @pytest.mark.asyncio
-async def test_blocking_summon_returns_at_a_child_question_and_rides_through_says(
+async def test_blocking_summon_returns_at_a_child_question_and_rides_through_memos_and_notices(
   monkeypatch, capsys, caplog
 ):
   async with running_server(monkeypatch) as server:
@@ -204,16 +204,21 @@ async def test_blocking_summon_returns_at_a_child_question_and_rides_through_say
     assert request.args['talk'] == ['worker.question']
     await server.transport.send(channel, brotocol.mark(message_id(request), 'accepted'))
     await server.transport.send(
-      channel, brotocol.message(message_id(request), {'text': 'still working'})
+      channel, brotocol.message(message_id(request), 'memo', {'text': 'still working'})
     )
     await server.transport.send(
-      channel, brotocol.message(message_id(request), {'text': 'approve?'}, id='QUESTION-1')
+      channel, brotocol.message(message_id(request), 'notice', {'text': 'ready at https://x'})
+    )
+    await server.transport.send(
+      channel,
+      brotocol.message(message_id(request), 'question', {'text': 'approve?'}, id='QUESTION-1'),
     )
 
     assert await task == quest.QUESTION_EXIT_CODE
     assert capsys.readouterr().out == 'approve?\n'
-    assert 'still working' in caplog.text
-    assert f"quest say {request.id} '<text>' --reply-to QUESTION-1" in caplog.text
+    assert 'summon sends memo still working' in caplog.text
+    assert 'summon sends notice ready at https://x' in caplog.text
+    assert f"quest reply {request.id} QUESTION-1 '<text>'" in caplog.text
 
 
 @pytest.mark.asyncio

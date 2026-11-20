@@ -295,7 +295,7 @@ async def _ask(
   identifier: str = 'question',
 ) -> dict[str, Any]:
   assert sink.transport is not None
-  await sink.transport.send(channel, brotocol.message(MISSION, payload, id=identifier))
+  await sink.transport.send(channel, brotocol.message(MISSION, 'question', payload, id=identifier))
   _, reply = await sink.next(
     lambda message: message.type == Tag.MESSAGE and message.reply_to == identifier
   )
@@ -810,7 +810,7 @@ async def test_playwright_exit_mid_command_names_the_process(daemon_files, monke
     assert sink.transport is not None
     await sink.transport.send(
       channel,
-      brotocol.message(MISSION, {'tool': 'die'}, id='die'),
+      brotocol.message(MISSION, 'question', {'tool': 'die'}, id='die'),
     )
 
     with pytest.raises(serve.DaemonError, match='Playwright MCP.*status 17'):
@@ -885,7 +885,7 @@ async def test_stuck_command_ends_the_daemon_naming_the_command(daemon_files, mo
     assert sink.transport is not None
     await sink.transport.send(
       channel,
-      brotocol.message(MISSION, {'tool': 'hang'}, id='hang'),
+      brotocol.message(MISSION, 'question', {'tool': 'hang'}, id='hang'),
     )
 
     with pytest.raises(serve.DaemonError, match="command 'hang' exceeded"):

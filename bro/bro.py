@@ -225,7 +225,7 @@ _SUMMON_DESCRIPTION = (
 _QUEST_CHECK_DESCRIPTION = (
   'read the outcome of a child quest by `quest_id` through the host journal, without '
   'blocking: a running state with its trail id, a question state with the open questions the '
-  'child is stalled on (they wait on your reply, sent with `quest_say`), or the completed '
+  'child is stalled on (they wait on your reply, sent with `quest_reply`), or the completed '
   'state with the answer. the end arrives through the session watch. unknown ids, evicted '
   'results, and failed or denied quests raise with their reason; `self` is refused, since the '
   'outcome of your own quest is yours to give.'
@@ -236,24 +236,46 @@ _QUEST_HISTORY_DESCRIPTION = (
   "read a quest's conversation by `quest_id` — `self` for your own — through the host "
   'journal, without blocking: its talk rights and the retained message tail, oldest first, '
   'with every open question marked `pending: true` in place, and `truncated: true` when older '
-  'entries were dropped. answer each marked question from the other end with `quest_say` and '
-  'its id as `reply_to`; new messages arrive through the session watch.'
+  'entries were dropped. answer each marked question from the other end with `quest_reply`; '
+  'new messages arrive through the session watch.'
 )
 
 
-_QUEST_SAY_DESCRIPTION = (
-  'send a message that expects no reply on a quest by `quest_id` — a child quest, or `self` '
-  "to your own summoner — or, with `reply_to`, the reply to a question. the quest's talk must "
-  'permit the move. text over the message bound is refused with its size; mint an artifact '
-  'and send the ref instead.'
+_MESSAGE_BOUND = (
+  'text over the message bound is refused with its size; mint an artifact and send the ref instead.'
+)
+
+
+_QUEST_MEMO_DESCRIPTION = (
+  'send a memo on a quest by `quest_id` — a child quest, or `self` to your own summoner. a memo '
+  'expects no reply and wakes no one: the receiver reads it beside its next line that wakes it, '
+  'and one that ends first never reads it. send a memo for what informs the receiver but can '
+  'wait, such as progress or background context; what it should act on before its current wait '
+  "ends goes in a notice. the quest's talk must give your end its say right. " + _MESSAGE_BOUND
+)
+
+
+_QUEST_NOTICE_DESCRIPTION = (
+  'send a notice on a quest by `quest_id` — a child quest, or `self` to your own summoner. a '
+  'notice expects no reply and wakes the receiver at once, the way a question does. send a '
+  'notice for what the receiver should act on before its current wait ends: output it asked to '
+  'get mid-run, such as a link or a ready signal, or a correction that changes the work in '
+  'hand; what can wait goes in a memo, and what needs an answer is a question. the '
+  "quest's talk must give your end its say right. " + _MESSAGE_BOUND
+)
+
+
+_QUEST_REPLY_DESCRIPTION = (
+  'reply to the question `question_id` on a quest by `quest_id` — a child quest, or `self` to '
+  "your own summoner; the reply wakes the asker. the quest's talk must give the asking end its "
+  'question right. ' + _MESSAGE_BOUND
 )
 
 
 _QUEST_ASK_DESCRIPTION = (
   'ask a question on a quest by `quest_id` — a child quest, or `self` to your own summoner — '
   'and return its id; `reply_to` makes it a counter-question to the question named. the reply '
-  'arrives through the session watch and remains readable with `quest_history`. text over the '
-  'message bound is refused with its size; mint an artifact and send the ref instead.'
+  'arrives through the session watch and remains readable with `quest_history`. ' + _MESSAGE_BOUND
 )
 
 
@@ -273,9 +295,9 @@ _QUEST_CANCEL_DESCRIPTION = (
 
 
 _QUEST_WATCH_DESCRIPTION = (
-  'set whether the session watch wakes this session on its quiet lines or holds them '
-  'until the next line that does wake it, which is the default. use it to follow a child live; '
-  'returns the setting now in force.'
+  'set whether the session watch wakes this session on its quiet lines, the service marks and '
+  'memos, or holds them until the next line that does wake it, which is the default. use it to '
+  'follow a child live; returns the setting now in force.'
 )
 
 
@@ -468,16 +490,35 @@ def _quest_history_tool(variables: Variables) -> llm_mcp.Tool:
   )
 
 
-def _quest_say_tool(variables: Variables) -> llm_mcp.Tool:
+def _quest_say_tools(variables: Variables) -> list[llm_mcp.Tool]:
   from bro import quest as quest_client
 
-  async def _quest_say(quest_id: str, text: str, reply_to: Optional[str] = None) -> dict[str, Any]:
-    sent_on = await off_loop(quest_client.say, quest_id, text, reply_to=reply_to)
+  async def _quest_memo(quest_id: str, text: str) -> dict[str, Any]:
+    sent_on = await off_loop(quest_client.say, quest_id, 'memo', text)
     return {'state': 'sent', 'quest_id': sent_on}
 
-  return llm_mcp.FunctionTool(
-    _quest_say, name='quest_say', description=_QUEST_SAY_DESCRIPTION, variables=variables
-  )
+  async def _quest_notice(quest_id: str, text: str) -> dict[str, Any]:
+    sent_on = await off_loop(quest_client.say, quest_id, 'notice', text)
+    return {'state': 'sent', 'quest_id': sent_on}
+
+  async def _quest_reply(quest_id: str, question_id: str, text: str) -> dict[str, Any]:
+    sent_on = await off_loop(quest_client.reply, quest_id, question_id, text)
+    return {'state': 'sent', 'quest_id': sent_on}
+
+  return [
+    llm_mcp.FunctionTool(
+      _quest_memo, name='quest_memo', description=_QUEST_MEMO_DESCRIPTION, variables=variables
+    ),
+    llm_mcp.FunctionTool(
+      _quest_notice,
+      name='quest_notice',
+      description=_QUEST_NOTICE_DESCRIPTION,
+      variables=variables,
+    ),
+    llm_mcp.FunctionTool(
+      _quest_reply, name='quest_reply', description=_QUEST_REPLY_DESCRIPTION, variables=variables
+    ),
+  ]
 
 
 def _quest_ask_tool(variables: Variables) -> llm_mcp.Tool:
@@ -600,7 +641,9 @@ _CORE_SERVICE_TOOL_NAMES = (
   'summon',
   'quest_check',
   'quest_history',
-  'quest_say',
+  'quest_memo',
+  'quest_notice',
+  'quest_reply',
   'quest_ask',
   'quest_share',
   'quest_list',
@@ -667,7 +710,9 @@ def _build_service_server(
         'summon',
         'quest_check',
         'quest_history',
-        'quest_say',
+        'quest_memo',
+        'quest_notice',
+        'quest_reply',
         'quest_ask',
         'quest_share',
         'quest_list',
@@ -699,7 +744,7 @@ def _build_service_server(
     tools.append(_summon_tool(variables, live_run))
     tools.append(_quest_check_tool(variables))
     tools.append(_quest_history_tool(variables))
-    tools.append(_quest_say_tool(variables))
+    tools.extend(_quest_say_tools(variables))
     tools.append(_quest_ask_tool(variables))
     tools.append(_quest_share_tool(variables))
     tools.append(_quest_list_tool(variables))

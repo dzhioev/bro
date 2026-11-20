@@ -25,7 +25,7 @@ def test_help_lists_every_verb(capsys):
   with pytest.raises(SystemExit):
     quest.main(['quest', '--help'])
   output = capsys.readouterr().out
-  for verb in ('check', 'history', 'say', 'ask', 'list', 'cancel'):
+  for verb in ('check', 'history', 'memo', 'notice', 'reply', 'ask', 'list', 'cancel'):
     assert f'\n    {verb} ' in output or f' {verb} ' in output
 
   with pytest.raises(SystemExit):
@@ -40,21 +40,23 @@ def test_a_missing_verb_prints_help_and_fails(capsys):
   assert 'check' in capsys.readouterr().err
 
 
-def test_say_takes_no_question_flags():
+@pytest.mark.parametrize('verb', ['memo', 'notice'])
+def test_a_say_takes_no_question_flags(verb):
   with pytest.raises(SystemExit):
-    quest.main(['quest', 'say', 'REQ-1', 'text', '--wait'])
+    quest.main(['quest', verb, 'REQ-1', 'text', '--wait'])
   with pytest.raises(SystemExit):
-    quest.main(['quest', 'say', 'REQ-1', 'text', '--question'])
+    quest.main(['quest', verb, 'REQ-1', 'text', '--reply-to', 'Q1'])
 
 
-# --- say and ask ------------------------------------------------------------------
+# --- say, reply and ask -----------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_say_to_a_child_checks_talk_then_sends(monkeypatch):
+@pytest.mark.parametrize('role', ['memo', 'notice'])
+async def test_say_to_a_child_checks_talk_then_sends_under_its_role(monkeypatch, role):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(quest.main, ['quest', 'say', 'REQ-1', 'steer left'])
+      asyncio.to_thread(quest.main, ['quest', role, 'REQ-1', 'steer left'])
     )
     channel, query = await next_message(server)
     assert query.args == {'id': 'REQ-1'}
@@ -67,6 +69,7 @@ async def test_say_to_a_child_checks_talk_then_sends(monkeypatch):
     )
     _, message = await next_message(server)
     assert message.type == brotocol.Tag.MESSAGE
+    assert message.role == role
     assert message.request_id == 'REQ-1'
     assert message.payload == {'text': 'steer left'}
     assert message.id is None
@@ -78,7 +81,9 @@ async def test_say_on_self_uses_the_session_quest_and_published_talk(monkeypatch
   async with running_server(monkeypatch) as server:
     monkeypatch.setenv(BROKER_MISSION, 'OWN-QUEST')
     monkeypatch.setenv(BROKER_TALK, 'worker.say')
-    task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'say', 'self', 'progress']))
+    task = asyncio.create_task(
+      asyncio.to_thread(quest.main, ['quest', 'notice', 'self', 'ready at https://x'])
+    )
     channel, query = await next_message(server)
     assert query.args == {'id': 'OWN-QUEST'}
     await reply(
@@ -90,7 +95,24 @@ async def test_say_on_self_uses_the_session_quest_and_published_talk(monkeypatch
     )
     _, message = await next_message(server)
     assert message.request_id == 'OWN-QUEST'
-    assert message.payload == {'text': 'progress'}
+    assert message.role == 'notice'
+    assert message.payload == {'text': 'ready at https://x'}
+    assert await task == 0
+
+
+@pytest.mark.asyncio
+async def test_reply_on_self_answers_the_question_it_names(monkeypatch):
+  async with running_server(monkeypatch) as server:
+    monkeypatch.setenv(BROKER_MISSION, 'OWN-QUEST')
+    monkeypatch.setenv(BROKER_TALK, 'owner.question,worker.say')
+    task = asyncio.create_task(
+      asyncio.to_thread(quest.main, ['quest', 'reply', 'self', 'Q1', 'master'])
+    )
+    channel, query = await next_message(server)
+    live = quest_record('OWN-QUEST', 'started', talk=['owner.question', 'worker.say'])
+    await reply(server, channel, query, outcome='ok', value={'mission': live})
+    _, message = await next_message(server)
+    assert (message.role, message.reply_to, message.payload) == ('reply', 'Q1', {'text': 'master'})
     assert await task == 0
 
 
@@ -300,7 +322,9 @@ async def test_waiting_question_fails_when_the_quest_ends_without_a_reply(monkey
 @pytest.mark.asyncio
 async def test_say_refuses_an_ended_quest_before_sending(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'say', 'REQ-1', 'too late']))
+    task = asyncio.create_task(
+      asyncio.to_thread(quest.main, ['quest', 'memo', 'REQ-1', 'too late'])
+    )
     channel, query = await next_message(server)
     await reply(
       server,
@@ -322,19 +346,12 @@ async def test_say_refuses_an_ended_quest_before_sending(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_say_reports_an_oversized_reply_id_as_a_cli_error(monkeypatch, caplog):
+async def test_reply_reports_an_oversized_question_id_as_a_cli_error(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
       asyncio.to_thread(
         quest.main,
-        [
-          'quest',
-          'say',
-          'REQ-1',
-          'reply',
-          '--reply-to',
-          'x' * (brotocol.MAX_IDENTIFIER_BYTES + 1),
-        ],
+        ['quest', 'reply', 'REQ-1', 'x' * (brotocol.MAX_IDENTIFIER_BYTES + 1), 'reply'],
       )
     )
     channel, query = await next_message(server)
@@ -354,7 +371,7 @@ async def test_say_reports_an_oversized_reply_id_as_a_cli_error(monkeypatch, cap
 async def test_say_refuses_a_quest_this_session_did_not_summon(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(quest.main, ['quest', 'say', 'GRANDCHILD', 'skip a level'])
+      asyncio.to_thread(quest.main, ['quest', 'memo', 'GRANDCHILD', 'skip a level'])
     )
     channel, query = await next_message(server)
     await reply(
@@ -377,7 +394,7 @@ async def test_say_refuses_a_quest_this_session_did_not_summon(monkeypatch, capl
 async def test_say_refuses_a_move_the_child_quest_talk_forbids(monkeypatch, caplog):
   async with running_server(monkeypatch) as server:
     task = asyncio.create_task(
-      asyncio.to_thread(quest.main, ['quest', 'say', 'REQ-1', 'not allowed'])
+      asyncio.to_thread(quest.main, ['quest', 'notice', 'REQ-1', 'not allowed'])
     )
     channel, query = await next_message(server)
     await reply(
@@ -395,7 +412,7 @@ async def test_say_refuses_a_move_the_child_quest_talk_forbids(monkeypatch, capl
 async def test_say_sends_text_at_the_message_bound_whole(monkeypatch):
   text = text_at_the_message_bound()
   async with running_server(monkeypatch) as server:
-    task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'say', 'REQ-1', text]))
+    task = asyncio.create_task(asyncio.to_thread(quest.main, ['quest', 'memo', 'REQ-1', text]))
     channel, query = await next_message(server)
     await reply(
       server,
@@ -409,14 +426,18 @@ async def test_say_sends_text_at_the_message_bound_whole(monkeypatch):
     assert await task == 0
 
 
-@pytest.mark.parametrize('verb', ['say', 'ask'])
+@pytest.mark.parametrize(
+  'arguments',
+  [['memo', 'REQ-1'], ['notice', 'REQ-1'], ['reply', 'REQ-1', 'Q1'], ['ask', 'REQ-1']],
+  ids=lambda value: value[0],
+)
 def test_text_over_the_message_bound_is_refused_before_any_broker_traffic(
-  monkeypatch, caplog, verb
+  monkeypatch, caplog, arguments
 ):
   monkeypatch.delenv(BROKER_CHANNEL, raising=False)
   text = text_at_the_message_bound() + 'x'
 
-  assert quest.main(['quest', verb, 'REQ-1', text]) == 1
+  assert quest.main(['quest', *arguments, text]) == 1
 
   assert f'{MAX_MESSAGE_BYTES + 1} bytes' in caplog.text
   assert 'mint an artifact' in caplog.text
@@ -747,7 +768,7 @@ async def test_history_surfaces_a_message_sent_past_the_local_guard_and_refused_
 
     def send_anyway() -> None:
       with quest.open_client() as client:
-        client.message('REQ-1', {'text': 'blocked'})
+        client.message('REQ-1', 'memo', {'text': 'blocked'})
 
     sending = asyncio.create_task(asyncio.to_thread(send_anyway))
     _, message = await next_message(server)
@@ -940,7 +961,9 @@ async def test_cancel_timeout_keeps_the_quest_recoverable(monkeypatch, caplog):
   [
     ('check', []),
     ('history', []),
-    ('say', ['text']),
+    ('memo', ['text']),
+    ('notice', ['text']),
+    ('reply', ['Q1', 'text']),
     ('ask', ['question']),
   ],
 )

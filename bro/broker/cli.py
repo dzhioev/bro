@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 import bro.base.args as base_args
 from bro.base import log
+from bro.broker.brotocol import ROLES, Role
 from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL
 
@@ -56,16 +57,16 @@ def _request(kind: str, args: dict[str, Any], timeout: Optional[float]) -> int:
 
 def _message(
   request_id: str,
+  role: Role,
   payload: dict[str, Any],
   reply_to: Optional[str],
-  question: bool,
 ) -> int:
   client = Client.from_env()
   if client is None:
     log.info(f'broker: {BROKER_CHANNEL} unset, message not sent')
     return 0
   with client:
-    sent = client.message(request_id, payload, reply_to=reply_to, question=question)
+    sent = client.message(request_id, role, payload, reply_to=reply_to)
   sys.stdout.write(sent.to_bytes().decode('utf-8') + '\n')
   return 0
 
@@ -126,10 +127,12 @@ def main(argv: list[str]) -> Optional[int]:
     'message', help='send a chat message and print its wire envelope'
   )
   message_parser.add_argument('request_id', help='the request the message belongs to')
-  message_parser.add_argument('payload', type=_args, help='JSON object message payload')
-  message_parser.add_argument('--reply-to', help='the question id this message answers')
   message_parser.add_argument(
-    '--question', action='store_true', help='mint an id so the message can receive a reply'
+    'role', choices=sorted(ROLES), help='the chat role; a question gets a minted id'
+  )
+  message_parser.add_argument('payload', type=_args, help='JSON object message payload')
+  message_parser.add_argument(
+    '--reply-to', help='the question id a reply or counter-question answers'
   )
   message_parser.set_handler(_message)
 

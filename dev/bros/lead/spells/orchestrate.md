@@ -14,7 +14,7 @@ It never designs or implements itself.
 For work that fits one session this is overkill — summon a single bro on the task ([[ask]]) and let it run [[fix]] itself.
 
 parameters: {"task?": "ref of an existing root task to resume", "new?": "seed text for a new piece of work"}
-version: 2.23.0
+version: 2.23.1
 ---
 
 # orchestrate
@@ -131,14 +131,14 @@ this spell only says how a phase differs from a one-shot ask.
 
 - **Never wait inline.** No phase is short enough for a blocking wait:
   collect every one's result through the session watch.
-  When it reports a child's question, answer that quest with `bro::quest_say(reply_to=…)`, then end the turn when nothing else remains.
+  When it reports a child's question, answer that quest with `bro::quest_reply`, then end the turn when nothing else remains.
   The watch wakes the run on the next transition;
   read the retained answer with `bro::quest_check` after the terminal line.
   Never launch a replacement phase to answer it.
 - **Talk.** Open every phase with `talk` `owner.say`, `owner.question`, `worker.question`.
   Speak up only with what the phase must answer or act on:
   relay the user's question to it with `bro::quest_ask`,
-  and send it an amendment to its task or a problem seen from outside, such as a hung gate run, with `bro::quest_say`.
+  and send it an amendment to its task or a problem seen from outside, such as a hung gate run, with `bro::quest_notice`.
   Record an amendment as a comment on the task the phase works from before sending it, so a retry carries it too.
   Never message a phase to check on its progress or to do its work for it.
 - **Hold and effort.** Leave both at the summon defaults.

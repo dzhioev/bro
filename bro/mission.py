@@ -31,7 +31,7 @@ from bro import watches
 from bro.base import log
 
 if TYPE_CHECKING:
-  from bro.broker.brotocol import End, Message, Talk
+  from bro.broker.brotocol import End, Message, Role, SayRole, Talk
   from bro.broker.client import Client
 
 __cli_name__ = 'mission'
@@ -50,6 +50,10 @@ RUNNING_EXIT_CODE = 3
 QUESTION_EXIT_CODE = 4
 WATCH_LINE_BYTES = 1024
 MISSION_ID_HELP = f"mission id; `{SELF}` names this session's own mission"
+SAY_HELP: dict['SayRole', str] = {
+  'memo': "it waits for the receiver's next waking line",
+  'notice': 'it wakes the receiver at once',
+}
 
 
 class MissionError(Exception):
@@ -428,16 +432,16 @@ def history_view(history: History) -> dict[str, Any]:
   return view
 
 
-# --- say and ask ----------------------------------------------------------------
+# --- say, reply and ask ---------------------------------------------------------
 
 
 def _send(
   client: 'Client',
   mission_id: str,
+  role: 'Role',
   payload: dict[str, Any],
   *,
-  reply_to: Optional[str],
-  question: bool,
+  reply_to: Optional[str] = None,
   validate: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> tuple[str, 'Message']:
   """Send one chat move after validating the mission and its talk rights."""
@@ -453,8 +457,9 @@ def _send(
   try:
     candidate = brotocol.message(
       resolved,
+      role,
       payload,
-      id='question' if question else None,
+      id='question' if role == 'question' else None,
       reply_to=reply_to,
     )
   except brotocol.ProtocolError as error:
@@ -471,7 +476,7 @@ def _send(
     source = BROKER_TALK if sender == 'worker' else f'query {resolved}'
     raise MissionError(f'{source} forbids this mission chat move')
   try:
-    sent = client.message(resolved, candidate.payload, reply_to=reply_to, question=question)
+    sent = client.message(resolved, role, candidate.payload, reply_to=reply_to)
   except (PermissionError, brotocol.ProtocolError) as error:
     raise MissionError(str(error)) from error
   return resolved, sent
@@ -479,15 +484,29 @@ def _send(
 
 def say(
   mission_id: str,
+  role: 'SayRole',
   payload: dict[str, Any],
   *,
-  reply_to: Optional[str] = None,
   client: Optional['Client'] = None,
 ) -> str:
-  """Send a typed message or reply on a mission and return its resolved id."""
+  """Send a typed memo or notice on a mission and return its resolved id."""
   checked_payload = chat_payload(payload)
   with connection(client) as connected:
-    resolved, _ = _send(connected, mission_id, checked_payload, reply_to=reply_to, question=False)
+    resolved, _ = _send(connected, mission_id, role, checked_payload)
+  return resolved
+
+
+def reply(
+  mission_id: str,
+  question_id: str,
+  payload: dict[str, Any],
+  *,
+  client: Optional['Client'] = None,
+) -> str:
+  """Send the typed reply to a question on a mission and return its resolved id."""
+  checked_payload = chat_payload(payload)
+  with connection(client) as connected:
+    resolved, _ = _send(connected, mission_id, 'reply', checked_payload, reply_to=question_id)
   return resolved
 
 
@@ -549,7 +568,7 @@ def ask(
     raise ValueError('wait must be a positive number of seconds')
   checked_payload = chat_payload(payload)
   with connection(client) as connected:
-    resolved, sent = _send(connected, mission_id, checked_payload, reply_to=reply_to, question=True)
+    resolved, sent = _send(connected, mission_id, 'question', checked_payload, reply_to=reply_to)
     question_id = sent.id
     assert question_id is not None
     if wait is None:
@@ -830,8 +849,8 @@ def _bounded_chat_line(line: str, event: dict[str, Any]) -> str:
 
 
 def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
-  """A child's chat as `mission … says|asks|replies|refused …`, and the session's
-  own mission's other end as `summoner …`; None for an event that is neither."""
+  """A child's chat as `mission … sends memo|sends notice|asks|replies|refused …`, and
+  the session's own mission's other end as `summoner …`; None for an event that is neither."""
   transition = event.get('transition')
   is_own = event.get('mission') == own
   if transition not in ('message', 'refused'):
@@ -847,15 +866,17 @@ def _chat_event_line(event: dict[str, Any], own: str) -> Optional[str]:
     rendered = f'{subject} refused {reason}'
     if not (isinstance(head, dict) and head.get('truncated') is True):
       rendered += f': {_payload_text(head)}'
-  elif event.get('id') is not None:
+  elif (role := event.get('role')) == 'question':
     correlation = f'question {event["id"]}'
     if event.get('reply_to') is not None:
       correlation += f', to {event["reply_to"]}'
     rendered = f'{subject} asks {_payload_text(head)} ({correlation})'
-  elif event.get('reply_to') is not None:
+  elif role == 'reply':
     rendered = f'{subject} replies {_payload_text(head)} (to {event["reply_to"]})'
+  elif role in ('memo', 'notice'):
+    rendered = f'{subject} sends {role} {_payload_text(head)}'
   else:
-    rendered = f'{subject} says {_payload_text(head)}'
+    raise MissionError(f'mission chat event carried no known role: {role!r}')
   return _bounded_chat_line(_single_line(rendered), event)
 
 
@@ -970,12 +991,26 @@ def _replay_events(
     _chat_entry_event(record, entry) for entry in _entries(record) if entry.get('from') == 'owner'
   )
   for record in _query_listing(client, worker_type):
-    if record.get('parent') != own or _ended(record):
+    if record.get('parent') != own:
       continue
-    pending = record.get('pending')
-    if not isinstance(pending, list) or not all(isinstance(entry, dict) for entry in pending):
-      raise MissionError('mission listing returned malformed pending questions')
-    events.extend(_chat_entry_event(record, entry) for entry in pending)
+    if not _ended(record):
+      pending = record.get('pending')
+      if not isinstance(pending, list) or not all(isinstance(entry, dict) for entry in pending):
+        raise MissionError('mission listing returned malformed pending questions')
+      events.extend(_chat_entry_event(record, entry) for entry in pending)
+    if _chat_seq(record) <= after:
+      continue
+    child = query_mission(client, _mission_id(record))
+    # retention may evict a child that ends after the listing, taking its conversation with it
+    if child.get('state') == 'evicted':
+      continue
+    events.extend(
+      _chat_entry_event(child, entry)
+      for entry in _entries(child)
+      if entry.get('transition') == 'message'
+      and entry.get('from') == 'worker'
+      and entry.get('role') == 'notice'
+    )
 
   replay: dict[int, dict[str, Any]] = {}
   for event in events:
@@ -1106,21 +1141,18 @@ def _follow(
 
 
 def _quiet(event: dict[str, Any]) -> bool:
-  """Whether the event is a service mark or a plain say of a child, which never wakes a session alone."""
+  """Whether the event is a service mark or a memo, which never wakes a session alone."""
   from bro.broker.brotocol import MARK_TRANSITIONS
 
   transition = event.get('transition')
-  is_say = event.get('id') is None and event.get('reply_to') is None
-  return transition in MARK_TRANSITIONS or (
-    transition == 'message' and event.get('from') == 'worker' and is_say
-  )
+  return transition in MARK_TRANSITIONS or (transition == 'message' and event.get('role') == 'memo')
 
 
 def watch(
   worker_type: Optional[str] = None, wait_seconds: float = READ_WAIT_SECONDS
 ) -> Generator[str]:
   """Yield retained pending chat, then ordered lifecycle and chat events;
-  a child's service marks and says are quiet lines."""
+  a child's service marks and either end's memos are quiet lines."""
   if worker_type == '':
     raise ValueError('mission type must be non-empty')
   if wait_seconds <= 0:
@@ -1187,9 +1219,18 @@ def _history(mission_id: str, sequence: Optional[int]) -> int:
   return 0
 
 
-def _say(mission_id: str, payload: dict[str, Any], reply_to: Optional[str]) -> int:
+def _say(mission_id: str, role: 'SayRole', payload: dict[str, Any]) -> int:
   try:
-    say(mission_id, payload, reply_to=reply_to)
+    say(mission_id, role, payload)
+  except (MissionError, ValueError) as error:
+    log.error('%s', error)
+    return 1
+  return 0
+
+
+def _reply(mission_id: str, question_id: str, payload: dict[str, Any]) -> int:
+  try:
+    reply(mission_id, question_id, payload)
   except (MissionError, ValueError) as error:
     log.error('%s', error)
     return 1
@@ -1294,11 +1335,18 @@ def main(argv: list[str]) -> Optional[int]:
   )
   history_parser.set_handler(_history)
 
-  say_parser = verbs.add_parser('say', help='send a typed message or reply')
-  say_parser.add_argument('mission_id', metavar='<mission-id>', help=MISSION_ID_HELP)
-  say_parser.add_argument('payload', type=payload_argument, help='JSON object to send')
-  say_parser.add_argument('--reply-to', metavar='<question-id>', help='question this answers')
-  say_parser.set_handler(_say)
+  for role, role_help in SAY_HELP.items():
+    say_parser = verbs.add_parser(role, help=f'send a typed {role}: {role_help}')
+    say_parser.add_argument('mission_id', metavar='<mission-id>', help=MISSION_ID_HELP)
+    say_parser.add_argument('payload', type=payload_argument, help='JSON object to send')
+    say_parser.set_defaults(role=role)
+    say_parser.set_handler(_say)
+
+  reply_parser = verbs.add_parser('reply', help='send the typed reply to a question')
+  reply_parser.add_argument('mission_id', metavar='<mission-id>', help=MISSION_ID_HELP)
+  reply_parser.add_argument('question_id', metavar='<question-id>', help='question this answers')
+  reply_parser.add_argument('payload', type=payload_argument, help='JSON object to send')
+  reply_parser.set_handler(_reply)
 
   ask_parser = verbs.add_parser(
     'ask',

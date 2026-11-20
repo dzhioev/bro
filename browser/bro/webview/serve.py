@@ -864,7 +864,7 @@ async def _command_loop(
     if payload == {'webview': 'tools'}:
       reply = {'text': _tools_text(await _live_tools(session, supervisor)), 'files': []}
     elif payload == {'webview': 'close'}:
-      client.message(mission, {'closed': True}, reply_to=question)
+      client.message(mission, 'reply', {'closed': True}, reply_to=question)
       client.result(mission, {'outcome': 'ok', 'value': {'commands': commands}})
       return
     elif 'webview' in payload:
@@ -873,7 +873,7 @@ async def _command_loop(
       reply = await _tool_reply(session, supervisor, payload)
       if 'text' in reply:
         commands += 1
-    client.message(mission, await bound_reply(reply), reply_to=question)
+    client.message(mission, 'reply', await bound_reply(reply), reply_to=question)
 
 
 def _profile_storage_state() -> dict[str, Any] | None:
@@ -923,5 +923,5 @@ async def serve() -> None:
           raise DaemonError('no broker channel')
         with client:
           client.listen(mission)
-          client.message(mission, {'event': 'ready', 'vnc': vnc_url})
+          client.message(mission, 'memo', {'event': 'ready', 'vnc': vnc_url})
           await _command_loop(client, mission, session, supervisor)

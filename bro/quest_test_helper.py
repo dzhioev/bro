@@ -173,16 +173,21 @@ def entry(
   *,
   id: str | None = None,
   reply_to: str | None = None,
+  role: str | None = None,
   pending: bool = False,
   transition: str = 'message',
   reason: str | None = None,
 ) -> dict:
-  """one retained conversation entry as the by-id view carries it."""
+  """one retained conversation entry as the by-id view carries it; the role defaults
+  to the one its correlation fields imply, a memo for neither."""
+  if role is None:
+    role = 'question' if id is not None else 'reply' if reply_to is not None else 'memo'
   record: dict = {
     'seq': seq,
     'at': 'now',
     'transition': transition,
     'from': sender,
+    'role': role,
     'head': {'text': text},
   }
   if id is not None:

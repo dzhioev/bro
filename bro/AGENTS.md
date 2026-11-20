@@ -44,9 +44,9 @@ A subpackage with a map of its own is pointed at, not described here.
   identity, features, credential manifest and optional tier, LLM key when a recipe is declared, and roster.
 - `summon.py` (`summon`) — the bro wrapper over `launch {type: bro, …}` (the manual variant included), the facts a summoned run reads off its environment, and the summoning surfaces: blocking, detached, and manual;
   common admission lives in `ride/ride/launch_control.py`, and bro lowering in `ride/ride/bro_worker.py`
-- `mission.py` (`mission`) — the universal typed outcome and conversation reads, say, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and the ordered journal stream for every worker mission.
+- `mission.py` (`mission`) — the universal typed outcome and conversation reads, memo, notice, reply, ask, live artifact sharing, caller-scoped listing, cancellation surfaces, and the ordered journal stream for every worker mission.
   `mission watch` renders it for the session watch:
-  the missions the session launched, its own mission's owner chat, overrides and artifact shares, and quiet lines for a child's service marks and says.
+  the missions the session launched, its own mission's owner chat, overrides and artifact shares, and quiet lines for a child's service marks and either end's memos.
   The stream arms at the journal head, replays retained chat, follows events, and re-arms across a gap without repeating an entry it already yielded.
   A timed-out read reconnects from the stream's cursor, and a restarted producer resumes from the journal head its predecessor published.
 - `quest.py` (`quest`) — the bro-only view over the mission surface, preserving the summon-shaped answers, text chat, verbs, functions, and service tools
@@ -217,7 +217,8 @@ the spell tools and `cast` render spell bodies under that hold and the call's ch
   `unwatch` stops the named producer without checking the command list and refuses the runtime-owned session watch.
 - the bro harness's own tools:
   `job`, `poll`, `kill`, and `jobs` over its run's registry and inbox wherever the declaration carries a `brash` command list, plus `skill` on every bro-harness run.
-- `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_say`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`) when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
+- `summon` and the quest verbs (`quest_check`, `quest_history`, `quest_memo`, `quest_notice`, `quest_reply`, `quest_ask`, `quest_share`, `quest_list`, `quest_cancel`)
+  when the process has broker intent (`BROKER_CHANNEL`, or `BROKER_UPSTREAM` left by a failed proxy launch),
   forwarding to `bro.summon` and `bro.quest` off-loop.
 
 The quest tools have one shape on every harness and return at once:

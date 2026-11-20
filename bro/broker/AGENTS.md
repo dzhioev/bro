@@ -16,14 +16,15 @@ A mission's parent is the mission its owner undertakes.
 
 - `request {id, payload: {kind, args}}` asks the host to do work.
 - `mark {request, payload}` carries `accepted`, `started`, `trail`, or `listening` for that request.
-- `message {request, payload, id?, reply_to?}` carries chat traffic between a mission's ends.
+- `message {request, role, payload, id?, reply_to?}` carries chat traffic between a mission's ends.
 - `result {request, payload}` answers a request exactly once.
   Its optional error and detail reason are strings.
 
 `Message.request_id` is the request id for every envelope shape.
-A chat message with neither role field is a say, one with `id` is a question, and one with `reply_to` is a reply;
-a reply may carry both fields to ask a counter-question.
+A chat message's `role` is `memo`, `notice`, `question`, or `reply`, and the codec holds each role to its fields:
+a question carries its `id`, a reply the `reply_to` it answers, a counter-question is a question carrying both, and a memo or notice carries neither.
 Every mission fixes a subset of `owner.say`, `owner.question`, `worker.say`, and `worker.question` as its talk when it opens.
+An end's say right covers its memos and notices.
 A reply needs the other end's question right, and a counter-question also needs the sender's question right.
 Mark origin is structural:
 `accepted` is dispatcher-born, `started` is supervisor-born, and a worker process may send `trail` or `listening`.

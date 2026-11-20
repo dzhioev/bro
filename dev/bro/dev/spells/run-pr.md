@@ -10,7 +10,7 @@ Human approval is required by default; omitting it requires an explicit plan.
 Hands cleared gates to [[land]] or to the chosen lander, and stays until landing or a terminal result.
 
 parameters: {"base?": "base ref as remote/branch or refs/heads/branch; default origin/<default-branch>; bare names only without remotes", "channel?": {"description": "review conversation and code delivery channel", "choices": ["github", "talk", "local"], "default": "github"}, "reviewer?": "summon, coordinator or others; default summon where an eyebro is granted, otherwise others", "approver?": "human (default) or summoner", "lander?": "self (default), summon, coordinator or others", "landing?": {"description": "landing method", "choices": ["merge", "push"], "default": "merge"}, "gates?": "replacement subset of verdict, checks, tests, approval; an empty list selects none", "placement?": "boxed (default), unboxed or join, for summoned reviewer and lander", "trust?": "GitHub logins explicitly trusted for feedback and approvals"}
-version: 10.0.0
+version: 10.0.1
 ---
 
 # run-pr
@@ -147,7 +147,7 @@ Only named accounts, engaged reviewers and repository owners or accounts with wr
 - `reviewer=summon`: {{iff #may_summon contains eyebro}}use `bro::summon` targeting the eyebro your banner grants, with timeout `14400`, the plan's placement, and talk `worker.say` and `worker.question`.
   Its self-contained prompt casts `[[review <pr-url> on github]]` and carries the Delivery line, selected gates, named trust, base URL, current full head, and any predecessor evidence.
   Keep its quest id; its **answer**, not its GitHub approval, is the verdict.
-  When it asks `reviewing <pr> as <login>`, append that login to your trust file before acknowledging with `bro::quest_say` and the question id.
+  When it asks `reviewing <pr> as <login>`, append that login to your trust file before acknowledging with `bro::quest_reply` and the question id.
   The watch rereads the file and releases held events.{{else}}refuse unless a reviewer target is granted; `reviewer=others` is the explicit GitHub alternative.{{end}}
 - `reviewer=coordinator`: ask the summoner `review requested: <pr> at <head>`.
   It arranges the reviewer and replies with its announced login; append it to the trust file.
@@ -213,7 +213,7 @@ Handle all pending feedback as **one batch**, the body and every inline comment 
    Do not run the full gate for each finding; selected whole tests belong on the landing head.
 4. Deliver the exact new full SHA through the rendered channel, or name an unchanged SHA alone without a push or bundle.
    Reply to the batch with each fix/answer and the SHA; talk/local also reports the head's checks as far as they have run.
-   Use `bro::quest_say` with the round question's id as `reply_to` on talk/local; the reply gives the reviewer its turn.
+   Use `bro::quest_reply` with the round question's id on talk/local; the reply gives the reviewer its turn.
 
 On GitHub reply in the PR's threads (inline replies use the thread root id), or a conversation comment for general points; bind calls to the base repository.
 Use a quoted HEREDOC or body file for Markdown, never backticks or `$()` inside a double-quoted shell argument.

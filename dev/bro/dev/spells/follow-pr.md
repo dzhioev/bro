@@ -9,7 +9,7 @@ Handles comments, reviews, checks, conflicts, outside pushes and terminal events
 The delivery plan and review rounds belong to run-pr; resuming a lost author session uses [[resume pr]].
 
 parameters: {"pr": "pull request URL or number to follow"}
-version: 1.4.0
+version: 1.4.1
 ---
 
 # follow-pr
@@ -22,7 +22,7 @@ If that context is missing, report that the PR needs resuming through [[resume p
 ## Arm replay and reconcile
 
 Keep one scratch trust file **outside the repository**, with the plan's named logins and engaged reviewers, one per line.
-A summoned reviewer announces `reviewing <pr> as <login>` in a quest question before posting; append it before acknowledging with `bro::quest_say` and its question id.
+A summoned reviewer announces `reviewing <pr> as <login>` in a quest question before posting; append it before acknowledging with `bro::quest_reply` and its question id.
 A coordinator relays its own reviewer's login in reply to the author's review-request question.
 The watch rereads the file each cycle and releases held feedback once an account becomes trusted.
 Only explicitly named accounts, engaged reviewers and accounts GitHub marks OWNER or grants write/admin access qualify; maintain reads as write.

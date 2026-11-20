@@ -1,8 +1,8 @@
 """quest — read, talk to, and end a quest through the session broker.
 
 A quest is what a summon opens: another session working a request until it
-answers. This module owns the outcome read, conversation read, say, ask, and
-caller-scoped listing, and cancellation for bro quests,
+answers. This module owns the outcome read, conversation read, memo, notice,
+reply, ask, caller-scoped listing, and cancellation for bro quests,
 as a library and as the ``quest`` CLI. ``self`` names the
 session's own quest, the one it answers.
 
@@ -28,7 +28,7 @@ from bro import mission as mission_client
 from bro.base import log
 
 if TYPE_CHECKING:
-  from bro.broker.brotocol import End, Message
+  from bro.broker.brotocol import End, Message, Role, SayRole
   from bro.broker.client import Client
 
 __cli_name__ = 'quest'
@@ -41,6 +41,7 @@ READ_WAIT_SECONDS = mission_client.READ_WAIT_SECONDS
 RUNNING_EXIT_CODE = mission_client.RUNNING_EXIT_CODE
 QUESTION_EXIT_CODE = mission_client.QUESTION_EXIT_CODE
 QUEST_ID_HELP = f"quest id; `{SELF}` names this session's own quest"
+TEXT_BOUND_HELP = 'over the message bound it is refused, and an artifact ref goes instead'
 
 
 QuestError = mission_client.MissionError
@@ -335,39 +336,47 @@ def history_view(history: History) -> dict[str, Any]:
   return view
 
 
-# --- say and ask ----------------------------------------------------------------
+# --- say, reply and ask ---------------------------------------------------------
 
 
 def _send(
   client: 'Client',
   quest_id: str,
+  role: 'Role',
   payload: dict[str, Any],
   *,
-  reply_to: Optional[str],
-  question: bool,
+  reply_to: Optional[str] = None,
 ) -> tuple[str, 'Message']:
   return mission_client._send(
-    client,
-    quest_id,
-    payload,
-    reply_to=reply_to,
-    question=question,
-    validate=_require_bro,
+    client, quest_id, role, payload, reply_to=reply_to, validate=_require_bro
   )
 
 
 def say(
   quest_id: str,
+  role: 'SayRole',
   text: str,
   *,
-  reply_to: Optional[str] = None,
   client: Optional['Client'] = None,
 ) -> str:
-  """Send a message that expects no reply — or, with `reply_to`, a reply — on a
-  quest; returns the id it was sent under."""
+  """Send a memo or a notice on a quest; returns the id it was sent under."""
   payload = chat_payload(text)
   with connection(client) as connected:
-    resolved, _ = _send(connected, quest_id, payload, reply_to=reply_to, question=False)
+    resolved, _ = _send(connected, quest_id, role, payload)
+  return resolved
+
+
+def reply(
+  quest_id: str,
+  question_id: str,
+  text: str,
+  *,
+  client: Optional['Client'] = None,
+) -> str:
+  """Send the reply to a question on a quest; returns the id it was sent under."""
+  payload = chat_payload(text)
+  with connection(client) as connected:
+    resolved, _ = _send(connected, quest_id, 'reply', payload, reply_to=question_id)
   return resolved
 
 
@@ -424,7 +433,7 @@ def ask(
     raise ValueError('wait must be a positive number of seconds')
   payload = chat_payload(text)
   with connection(client) as connected:
-    resolved, sent = _send(connected, quest_id, payload, reply_to=reply_to, question=True)
+    resolved, sent = _send(connected, quest_id, 'question', payload, reply_to=reply_to)
     question_id = sent.id
     assert question_id is not None
     if wait is None:
@@ -586,9 +595,18 @@ def _history(quest_id: str, wait: bool, timeout: Optional[float]) -> int:
   return QUESTION_EXIT_CODE if len(conversation.awaiting) > 0 else 0
 
 
-def _say(quest_id: str, text: str, reply_to: Optional[str]) -> int:
+def _say(quest_id: str, role: 'SayRole', text: str) -> int:
   try:
-    say(quest_id, text, reply_to=reply_to)
+    say(quest_id, role, text)
+  except (QuestError, ValueError) as error:
+    log.error('%s', error)
+    return 1
+  return 0
+
+
+def _reply(quest_id: str, question_id: str, text: str) -> int:
+  try:
+    reply(quest_id, question_id, text)
   except (QuestError, ValueError) as error:
     log.error('%s', error)
     return 1
@@ -694,18 +712,18 @@ def main(argv: list[str]) -> Optional[int]:
   _add_wait(history_parser, until='the next message or the end')
   history_parser.set_handler(_history)
 
-  say_parser = verbs.add_parser(
-    'say',
-    help='send a message that expects no reply, or a reply',
-    description='send a message on a quest: a say, or with --reply-to a reply to a question',
-  )
-  say_parser.add_argument('quest_id', metavar='<quest-id>', help=QUEST_ID_HELP)
-  say_parser.add_argument(
-    'text',
-    help='message text; over the message bound it is refused, and an artifact ref goes instead',
-  )
-  say_parser.add_argument('--reply-to', metavar='<question-id>', help='question this answers')
-  say_parser.set_handler(_say)
+  for role, role_help in mission_client.SAY_HELP.items():
+    say_parser = verbs.add_parser(role, help=f'send a {role} that expects no reply: {role_help}')
+    say_parser.add_argument('quest_id', metavar='<quest-id>', help=QUEST_ID_HELP)
+    say_parser.add_argument('text', help=f'{role} text; {TEXT_BOUND_HELP}')
+    say_parser.set_defaults(role=role)
+    say_parser.set_handler(_say)
+
+  reply_parser = verbs.add_parser('reply', help='send the reply to a question')
+  reply_parser.add_argument('quest_id', metavar='<quest-id>', help=QUEST_ID_HELP)
+  reply_parser.add_argument('question_id', metavar='<question-id>', help='question this answers')
+  reply_parser.add_argument('text', help=f'reply text; {TEXT_BOUND_HELP}')
+  reply_parser.set_handler(_reply)
 
   ask_parser = verbs.add_parser(
     'ask',
@@ -716,10 +734,7 @@ def main(argv: list[str]) -> Optional[int]:
     f'question id and exits {RUNNING_EXIT_CODE}, the question still live',
   )
   ask_parser.add_argument('quest_id', metavar='<quest-id>', help=QUEST_ID_HELP)
-  ask_parser.add_argument(
-    'text',
-    help='question text; over the message bound it is refused, and an artifact ref goes instead',
-  )
+  ask_parser.add_argument('text', help=f'question text; {TEXT_BOUND_HELP}')
   ask_parser.add_argument(
     '--reply-to', metavar='<question-id>', help='question this counter-question answers'
   )
