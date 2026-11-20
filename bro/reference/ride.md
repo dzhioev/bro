@@ -237,6 +237,8 @@ a silent piece of work notices after `PATIENCE_SECONDS`, then after waits that d
 A watch producer may promise its next beat with `watches.beat(within_seconds)` (shell: `watch-beat <within_seconds>`), from the loop that does its work;
 a producer that has beaten and then goes `BEAT_MISSES_ALLOWED` promises without another is stalled, which is a failed waiter, and a producer that never beats is judged by its process alone.
 An idle run wakes for a stall as it falls due, and the stall is reported once per beat.
+A summoned run left with nothing to wait on gets a turn-end notice too, naming the calls that deliver its result or wait for the summoner;
+ending the next turn without a tool call ends the run without an answer.
 
 ## Boxed launches and Docker daemons
 
@@ -1073,7 +1075,7 @@ An interactive child calls it once when the work is done, a step its hold treats
 — confirmed first only under a hold that confirms each significant step
 — and the session ends with the quest's ok result delivered to the waiting summoner.
 A one-shot child follows the same lifecycle as a spawned child:
-a clean exit delivers its printed reply, while `answer` remains available when the run needs to end by delivering explicitly.
+only `answer` delivers its result, and a run that ends without calling it fails its quest as `unanswered`.
 An interactive session the user quits without answering produces no result, and the channel's EOF surfaces to the summoner as the synthesized `result{failed, reason: disconnected}` (channel EOF is an expected peer's death signal:
 there is no process for the host to reap, and the session's broxy holds one upstream connection per run).
 Root exit *detaches* an in-flight manual child rather than killing it

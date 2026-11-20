@@ -7,6 +7,7 @@ from typing import Protocol
 
 from bro import mission, quest, summon, watches
 from bro.broker.environment import BROKER_CHANNEL
+from bro.launch.hold import UNATTENDED, session_hold
 
 PATIENCE_SECONDS = 15 * 60.0
 PATIENCE_CAP_SECONDS = 4 * 60 * 60.0
@@ -88,6 +89,10 @@ class TurnEnd(Protocol):
 
   def background_work(self) -> tuple[BackgroundWork, ...]: ...
 
+  def tool_calls_made(self) -> int:
+    """How many tool calls the run's model has made so far."""
+    ...
+
   def notify(self, text: str) -> None: ...
 
   def end(self) -> None: ...
@@ -101,7 +106,6 @@ class LiveWork:
   stalled_watches: tuple[tuple[str, watches.BeatSnapshot], ...]
   waking_lines: bool
   background_work: tuple[BackgroundWork, ...]
-  summoner_can_speak: bool
   reply_awaited: bool
   session_journal_head: int | None
   session_watch_lagging: bool
@@ -123,7 +127,6 @@ class LiveWork:
       len(self.covered_missions) > 0
       or len(self.model_watches) > 0
       or len(self.background_work) > 0
-      or self.summoner_can_speak
       or self.reply_awaited
     )
 
@@ -192,12 +195,6 @@ def _live_work(port: TurnEnd) -> LiveWork:
 
   session_watch_expected = watches.session_watch_admitted()
   session_watch_down = session_watch_expected and not session_watch_alive
-  talk = summon.talk() or ()
-  summoner_can_speak = (
-    session_watch_alive
-    and summon.summoned()
-    and any(right in talk for right in ('owner.say', 'owner.question'))
-  )
   return LiveWork(
     missions,
     frozenset(covered),
@@ -205,7 +202,6 @@ def _live_work(port: TurnEnd) -> LiveWork:
     tuple(stalled_watches),
     store.has_waking_lines(),
     port.background_work(),
-    summoner_can_speak,
     reply_awaited,
     journal_head,
     session_watch_lagging,
@@ -250,8 +246,29 @@ def next_silence_expiry(port: TurnEnd) -> float | None:
   return port.silence_clock.next_expiry(port.background_work())
 
 
-def _failure_notice(work: LiveWork) -> str:
-  lines = ['[notification: the turn ended with failed work]']
+def _unanswered_key(port: TurnEnd, work: LiveWork) -> str | None:
+  """The notice key of a summoned run left with nothing to wait on, or None;
+  every tool call the run makes keys a new notice."""
+  if not summon.summoned() or work.live:
+    return None
+  return f'unanswered:{port.tool_calls_made()}'
+
+
+def _exits() -> list[str]:
+  lines = ['Deliver the result of your task through `bro::answer` once the whole task is done.']
+  if session_hold() == UNATTENDED:
+    lines.append('End the run through `bro::raise` with the reason when the request cannot be met.')
+  if 'worker.question' in (summon.talk() or ()):
+    lines.append(
+      'Ask the summoner through `bro::quest_ask` on `self` when the work needs its input.'
+    )
+  return lines
+
+
+def _failure_notice(work: LiveWork, *, unanswered: bool) -> str:
+  failed = len(work.failure_key()) > 0
+  header = 'the turn ended with failed work' if failed else 'the turn ended without a result'
+  lines = [f'[notification: {header}]']
   lines.extend(mission.live_mission_line(item) for item in work.uncovered_missions)
   lines.extend(
     f'the watch `{command}` is alive but has stopped beating;'
@@ -267,12 +284,15 @@ def _failure_notice(work: LiveWork) -> str:
     lines.append(f'the session watch `{watches.SESSION_WATCH_COMMAND}` is down{detail}')
   if any(item.type == mission.BRO for item in work.uncovered_missions):
     lines.append('Use `bro::quest_cancel` to cancel an uncovered quest.')
-  if not work.live:
-    lines.append('Ending the turn again ends the run and orphans the uncovered work.')
   if summon.summoned():
+    lines.extend(_exits())
+  orphans = ' and orphans the uncovered work' if failed else ''
+  if unanswered:
     lines.append(
-      'Deliver the result of your task through `bro::answer` once the whole task is done.'
+      f'Ending the turn again without a tool call fails the run without an answer{orphans}.'
     )
+  elif not work.live:
+    lines.append(f'Ending the turn again ends the run{orphans}.')
   return '\n'.join(lines)
 
 
@@ -281,10 +301,11 @@ def _unnoticed_failure(port: TurnEnd, work: LiveWork) -> str | None:
     port.watch_store.mark_stall_reported(command, beat)
   if work.session_watch_stall is not None:
     port.watch_store.mark_stall_reported(watches.SESSION_WATCH_COMMAND, work.session_watch_stall)
-  failure = work.failure_key()
+  unanswered = _unanswered_key(port, work)
+  failure = work.failure_key() | ({unanswered} if unanswered is not None else set())
   if work.waking_lines or len(failure) == 0 or not port.watch_store.mark_notified(failure):
     return None
-  return _failure_notice(work)
+  return _failure_notice(work, unanswered=unanswered is not None)
 
 
 def failure_notice(port: TurnEnd) -> str | None:
@@ -302,8 +323,9 @@ def next_liveness_expiry(port: TurnEnd) -> float | None:
 
 
 def settle(port: TurnEnd) -> None:
-  """Apply the verdict to the current live work: end the run when none can
-  report, notify once of failed work, and otherwise keep waiting."""
+  """Apply the verdict to the current live work: notify once of failed work or
+  of a summoned run's missing result, end the run when no live work remains,
+  and otherwise keep waiting."""
   work = _live_work(port)
   while work.session_watch_lagging:
     assert work.session_journal_head is not None

@@ -500,6 +500,9 @@ class _RecordingChannel:
   def completed(self, result, end_reason) -> None:
     self._events.append(('completed', result, end_reason))
 
+  def unanswered(self) -> None:
+    self._events.append(('unanswered',))
+
   def close(self) -> None:
     self._events.append(('close',))
 
@@ -566,7 +569,7 @@ class TestRunClaudeSummoned:
     monkeypatch.setattr(ride_runner, 'RunLifecycle', FakeChannel)
     return events
 
-  def test_clean_exit_relays_the_reply_and_lifecycle(
+  def test_a_clean_exit_without_an_answer_fails_unanswered_and_echoes_the_reply(
     self, tmp_path, session_state, channel_events, capfd
   ):
     trail_pointer.write(session_state / trail_pointer.FILENAME, 't-child')
@@ -575,7 +578,7 @@ class TestRunClaudeSummoned:
     assert channel_events == [
       ('trail', 't-child'),
       ('close',),
-      ('completed', 'THE REPLY', 'ok'),
+      ('unanswered',),
       ('close',),
     ]
     # the reply is echoed so the child's captured output tail carries it too
@@ -591,7 +594,7 @@ class TestRunClaudeSummoned:
     assert channel_events == [
       ('trail', 't-child'),
       ('close',),
-      ('completed', 'LATE', 'ok'),
+      ('unanswered',),
       ('close',),
     ]
 
@@ -600,7 +603,7 @@ class TestRunClaudeSummoned:
   ):
     env = fake_claude_env(tmp_path, 'result("DONE")\nsys.stdin.read()\n')
     assert ride_runner._run_claude_summoned(_fake_claude(env), [], env, 'go') == 0
-    assert channel_events == [('completed', 'DONE', 'ok'), ('close',)]
+    assert channel_events == [('unanswered',), ('close',)]
 
   def test_failed_exit_emits_no_terminal_but_echoes(
     self, tmp_path, session_state, channel_events, capfd

@@ -65,7 +65,8 @@ A subpackage with a map of its own is pointed at, not described here.
   and the `SilenceClock` that times background work's silence notices.
   Settlement blocks on the store's journal signal until the session watch has emitted through the newest event the session can see in the snapshot it reads.
   A distinct set of failed waiters receives at most one notice;
-  live work keeps the run waiting silently, and a run with none ends.
+  live work keeps the run waiting silently, and a run with none ends,
+  except that a summoned run first gets a notice, which each tool call it makes re-arms.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.fetch`, `artifact.locate`, `artifact.list`, `artifact.share`, and `artifact.export` kinds,
   the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   minting sends a relative-to-cwd or absolute path as an absolute peer-visible wire path;
@@ -88,11 +89,12 @@ A subpackage with a map of its own is pointed at, not described here.
   `authority_declaration` and `option_values` declare governed options and map wire fields to option values and ungoverned content.
   Installed types register through `bro.worker_types`, with ride contributing `bro`, bench contributing `benchmark`, and webview contributing `webview`.
 - `run_lifecycle.py` — `RunLifecycle`, the worker-process emitter over `bro.broker.client.Client`:
-  it undertakes the broker mission named in `BROKER_MISSION`, carries the session's set-once `trail` mark and sends the closing result.
+  it undertakes the broker mission named in `BROKER_MISSION`, carries the session's set-once `trail` mark and sends the closing result,
+  or the `unanswered` failure of a summoned run that ended without calling `answer`.
   `Runner.run()` uses it for result delivery;
   the native session recorder emits the trail mark.
   The shared answer bound is enforced at the `answer` tool while the run can react;
-  terminal fallback output is truncated with a marker naming the session pointer's trail at completion, or `unavailable` without one.
+  any other result or failure text over it is truncated with a marker naming the session pointer's trail at completion, or `unavailable` without one.
   `close()` confirms delivery through `ClientTransport.close(confirm=True)`.
 - `authority_view.py` — live and session-initial authority views over a mission’s own broker channel.
 - `authority/` — the pure symbolic use/give algebra and authorization transitions;

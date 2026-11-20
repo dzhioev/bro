@@ -13,6 +13,7 @@ from bro.broker.client import Client
 from bro.broker.environment import BROKER_CHANNEL, BROKER_MISSION, BROKER_TALK
 from bro.broker.transport import connect
 from bro.broker.transports.tcp import LOCAL_HOST
+from bro.launch.hold import HOLD_VARIABLE
 from bro.quest_test_helper import TIMEOUT, SpawnedEndpoint, running_live_broker
 from bro.run_lifecycle import RunLifecycle
 from bro.watches import BeatSnapshot
@@ -92,11 +93,15 @@ class FakePort:
     self.watch_store = cast(watches.Store, store)
     self.silence_clock = turn_end.SilenceClock(patience=60.0, cap=240.0)
     self.background = background
+    self.tool_calls = 0
     self.notifications: list[str] = []
     self.ends = 0
 
   def background_work(self) -> tuple[turn_end.BackgroundWork, ...]:
     return self.background
+
+  def tool_calls_made(self) -> int:
+    return self.tool_calls
 
   def notify(self, text: str) -> None:
     self.notifications.append(text)
@@ -155,19 +160,67 @@ def test_settlement_waits_for_the_session_watch_journal_head(monkeypatch):
   assert cast(FakeStore, port.watch_store).waited_for == [7]
 
 
-def test_background_work_and_a_speaking_summoner_keep_the_run_waiting_silently(monkeypatch):
+def test_background_work_keeps_a_summoned_run_waiting_silently(monkeypatch):
   _with_broker(monkeypatch)
   monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
-  monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say',))
-  store = FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)])
-  working = FakePort(store, (_work('job-1'),))
-  speaking = FakePort(store)
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]), (_work('job-1'),))
 
-  turn_end.settle(working)
-  turn_end.settle(speaking)
+  turn_end.settle(port)
 
-  assert (working.notifications, working.ends) == ([], 0)
-  assert (speaking.notifications, speaking.ends) == ([], 0)
+  assert (port.notifications, port.ends) == ([], 0)
+
+
+def test_a_summoner_free_to_speak_does_not_hold_a_summoned_run(monkeypatch):
+  _with_broker(monkeypatch)
+  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+  monkeypatch.setattr(turn_end.summon, 'talk', lambda: ('owner.say', 'owner.question'))
+  port = FakePort(FakeStore([FakeWatch(watches.SESSION_WATCH_COMMAND)]))
+
+  turn_end.settle(port)
+  turn_end.settle(port)
+
+  [notice] = port.notifications
+  assert notice.startswith('[notification: the turn ended without a result]')
+  assert port.ends == 1
+
+
+@pytest.mark.parametrize(
+  'hold,talk,offered,withheld',
+  [
+    ('unattended', ('worker.question',), ('bro::raise', 'bro::quest_ask'), ()),
+    ('unattended', ('worker.say',), ('bro::raise',), ('bro::quest_ask',)),
+    ('attended', ('worker.question',), ('bro::quest_ask',), ('bro::raise',)),
+    ('attended', (), (), ('bro::raise', 'bro::quest_ask')),
+  ],
+)
+def test_a_summoned_run_left_with_nothing_live_is_told_the_exits_it_has(
+  monkeypatch, hold, talk, offered, withheld
+):
+  monkeypatch.setenv(HOLD_VARIABLE, hold)
+  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+  monkeypatch.setattr(turn_end.summon, 'talk', lambda: talk)
+  port = FakePort(FakeStore())
+
+  turn_end.settle(port)
+
+  [notice] = port.notifications
+  assert all(f'`{tool}`' in notice for tool in ('bro::answer', *offered))
+  assert not any(f'`{tool}`' in notice for tool in withheld)
+  assert 'fails the run without an answer' in notice
+  assert port.ends == 0
+
+
+def test_a_tool_call_after_the_notice_earns_the_next_turn_end_a_notice_of_its_own(monkeypatch):
+  monkeypatch.setattr(turn_end.summon, 'summoned', lambda: True)
+  port = FakePort(FakeStore())
+
+  turn_end.settle(port)
+  port.tool_calls = 3
+  turn_end.settle(port)
+  turn_end.settle(port)
+
+  assert len(port.notifications) == 2
+  assert port.ends == 1
 
 
 def test_a_failed_waiter_notices_even_beside_live_work(monkeypatch):
@@ -435,7 +488,8 @@ async def test_the_sessions_own_question_waits_silently_until_the_summoner_repli
     await asyncio.to_thread(_chat_past, session.quest, asked_at)
 
     await asyncio.to_thread(turn_end.settle, port)
-    assert (port.notifications, port.ends) == ([], 1)
+    [notice] = port.notifications
+    assert notice.startswith('[notification: the turn ended without a result]')
 
 
 @pytest.mark.asyncio
@@ -449,7 +503,8 @@ async def test_a_question_the_session_owes_its_summoner_is_no_reply_it_awaits(mo
 
     await asyncio.to_thread(turn_end.settle, port)
 
-  assert (port.notifications, port.ends) == ([], 0)
+  [notice] = port.notifications
+  assert notice.startswith('[notification: the turn ended without a result]')
 
 
 @pytest.mark.asyncio
@@ -504,4 +559,3 @@ async def test_the_sessions_own_end_is_no_event_its_turn_end_waits_for(monkeypat
     await asyncio.to_thread(turn_end.settle, port)
 
   assert cast(FakeStore, port.watch_store).waited_for == []
-  assert port.ends == 1

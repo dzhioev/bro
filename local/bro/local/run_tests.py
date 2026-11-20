@@ -541,6 +541,7 @@ CONFORMANCE_PYTEST_FILES = [
   'local/bro/local/session_activity_conformance_test.py',
   'local/bro/local/watch_wait_conformance_test.py',
   'local/bro/local/files_conformance_test.py',
+  'local/bro/local/summoned_answer_conformance_test.py',
 ]
 
 

@@ -10,6 +10,7 @@ if TYPE_CHECKING:
   from bro.broker.client import Client
 
 MAX_ANSWER_BYTES = 64 << 10
+UNANSWERED = 'unanswered'
 
 
 class RunLifecycle:
@@ -61,6 +62,17 @@ class RunLifecycle:
       if bounded is not None:
         payload['error'] = bounded
     self._client.result(self._mission, payload)
+
+  def unanswered(self) -> None:
+    """Fail the mission of a run that ended without delivering its answer."""
+    self._client.result(
+      self._mission,
+      {
+        'outcome': 'failed',
+        'detail': {'reason': UNANSWERED},
+        'error': 'the run ended without calling `answer`',
+      },
+    )
 
   def close(self) -> None:
     self._client.close(confirm=True)

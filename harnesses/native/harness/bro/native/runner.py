@@ -11,7 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Optional, Self
 
-from bro import brash_policy, results, turn_end, watch_delivery, watches
+from bro import brash_policy, results, summon, turn_end, watch_delivery, watches
 from bro.base import log
 from bro.base.offload import off_loop
 from bro.bro import AnswerDelivered, BaseBro, BroRaised
@@ -82,6 +82,7 @@ class Runner:
     self._silence_clock = turn_end.SilenceClock()
     self._watchdog_gate = threading.Lock()
     self._llm: Optional[LLM] = None
+    self._conversation: Optional[LLM] = None
     # a bro renders only through an observer its caller passes: an embedding
     # application must not get terminal output, or a display session, it never
     # asked for.
@@ -174,6 +175,11 @@ class Runner:
         )
     return tuple(result)
 
+  def tool_calls_made(self) -> int:
+    if self._conversation is None:
+      raise RuntimeError('no conversation has started')
+    return self._conversation.tool_call_count
+
   def notify(self, text: str) -> None:
     self.inbox.post(text)
 
@@ -220,6 +226,7 @@ class Runner:
     self.run_log = None
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
+    self._conversation = llm
     system_prompt = self.bro.system_prompt_for(hold=hold, harness=BRO)
     self._tracker.start(
       bro=self.bro.name,
@@ -327,6 +334,7 @@ class Runner:
       log.info('run started%s', f' (run log {self.run_log})' if self.run_log is not None else '')
       channel = self._make_channel()
       result: Optional[str] = None
+      answered = False
       try:
         with self:
           try:
@@ -334,6 +342,7 @@ class Runner:
           except AnswerDelivered as delivered:
             # the `answer` service tool's explicit end: the answer is the result
             result = delivered.answer
+            answered = True
           except Exception as error:
             effective_observer.on_event(TurnFailedEvent(str(error)))
             raise
@@ -343,8 +352,11 @@ class Runner:
         if channel is not None:
           if self._last_end_reason is None:
             raise RuntimeError('run lifetime ended without an outcome')
-          channel_result = result if self._last_end_reason == 'ok' else self._last_end_detail
-          channel.completed(channel_result, self._last_end_reason)
+          if self._last_end_reason == 'ok' and summon.summoned() and not answered:
+            channel.unanswered()
+          else:
+            channel_result = result if self._last_end_reason == 'ok' else self._last_end_detail
+            channel.completed(channel_result, self._last_end_reason)
           channel.close()
 
   async def send(
