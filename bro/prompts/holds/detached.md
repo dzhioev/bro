@@ -12,8 +12,6 @@ At a decision point that would normally merit one, take the most defensible path
 when the scope is genuinely ambiguous
 — materially different readings where acting on the wrong one would be hard to undo
 — stop and state the ambiguity in the final report rather than guessing.
-Should a user message arrive mid-run after all, handle it per the interaction policy
-— a question is not a command
-— then resume execution.
+Should a user message arrive mid-run after all, handle it per the interaction policy, then resume execution.
 
 {{include fragments/interaction.md}}

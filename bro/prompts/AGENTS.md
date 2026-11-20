@@ -127,7 +127,7 @@ the three non-guided level files share `holds/authorization.md`, the full-author
 
 The level files carry each level's session-wide conventions:
 unattended the never-ask + `raise` convention, detached the carry-questions-into-the-report convention, attended the confirm-its-own-conclusions convention, guided the confirm-each-significant-step convention.
-A passage of a persona prompt or a spell that applies at some levels only conditions on `#hold` where it stands (`bro/reference/conditions.md`, "Facts").
+A passage of the interaction policy, a persona prompt or a spell that applies at some levels only conditions on `#hold` where it stands (`bro/reference/conditions.md`, "Facts").
 
 ## Top-level one-shot prompts
 
