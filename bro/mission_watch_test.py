@@ -40,7 +40,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       )
       summon._await_acceptance(root, child_request)
       child_endpoint = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
-      root.message(child_endpoint.quest, {'text': 'start with docs'})
+      root.message(child_endpoint.quest, 'notice', {'text': 'start with docs'})
 
       child = clients.enter_context(
         Client(connect(child_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
@@ -51,7 +51,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       before_race = own['chat_seq']
       grandchild_request = child.send(
         quest.LAUNCH,
-        {'target': 'reviewer', 'prompt': 'review', 'talk': ['worker.question']},
+        {'target': 'reviewer', 'prompt': 'review', 'talk': ['worker.question', 'worker.say']},
       )
       summon._await_acceptance(child, grandchild_request)
       grandchild_endpoint = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
@@ -61,8 +61,28 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       monkeypatch.setenv(BROKER_MISSION, grandchild_endpoint.quest)
       monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(grandchild_endpoint.talk))
       grandchild_question = grandchild.message(
-        grandchild_endpoint.quest, {'text': 'ship this?'}, question=True
+        grandchild_endpoint.quest, 'question', {'text': 'ship this?'}
       )
+      grandchild.message(grandchild_endpoint.quest, 'notice', {'text': 'ready at https://x'})
+      grandchild.message(grandchild_endpoint.quest, 'memo', {'text': 'halfway'})
+
+      monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
+      monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
+      finisher_request = child.send(
+        quest.LAUNCH, {'target': 'reviewer', 'prompt': 'preview', 'talk': ['worker.say']}
+      )
+      summon._await_acceptance(child, finisher_request)
+      finisher_endpoint = await asyncio.to_thread(spawner.spawned.get, True, TIMEOUT)
+      finisher = clients.enter_context(
+        Client(connect(finisher_endpoint.channel.host_endpoint.address(LOCAL_HOST)))
+      )
+      monkeypatch.setenv(BROKER_MISSION, finisher_endpoint.quest)
+      monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(finisher_endpoint.talk))
+      finisher.message(finisher_endpoint.quest, 'notice', {'text': 'preview at https://done'})
+      finisher.result(finisher_endpoint.quest, {'outcome': 'ok', 'value': 'done'})
+      monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
+      finished = quest.query_quest(child, finisher_endpoint.quest, wait_seconds=TIMEOUT)
+      assert finished['state'] == 'ended', finished
 
       monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
       monkeypatch.setenv(BROKER_CHANNEL, child_endpoint.channel.host_endpoint.address(LOCAL_HOST))
@@ -78,7 +98,7 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
           raced = True
           monkeypatch.setenv(BROKER_MISSION, root_endpoint.quest)
           monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(root_endpoint.talk))
-          root.message(child_endpoint.quest, {'text': 'also run lint'})
+          root.message(child_endpoint.quest, 'notice', {'text': 'also run lint'})
           quest.query_quest(root, child_endpoint.quest, wait_seconds=1, since=before_race)
           monkeypatch.setenv(BROKER_MISSION, child_endpoint.quest)
           monkeypatch.setenv(BROKER_TALK, brotocol.encode_talk(child_endpoint.talk))
@@ -87,13 +107,21 @@ async def test_watch_arm_replays_live_broker_chat_and_streams_a_racing_message_o
       monkeypatch.setattr(mission, '_read_value', inject_racing_message)
       with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
         assert await asyncio.to_thread(next, watch) == (
-          'before the watch: summoner says start with docs'
+          'before the watch: summoner sends notice start with docs'
         )
         assert await asyncio.to_thread(next, watch) == (
           f'before the watch: mission {grandchild_endpoint.quest} (bro to reviewer) '
           f'asks ship this? (question {grandchild_question.id})'
         )
-        assert await asyncio.to_thread(next, watch) == 'summoner says also run lint'
+        assert await asyncio.to_thread(next, watch) == (
+          f'before the watch: mission {grandchild_endpoint.quest} (bro to reviewer) '
+          'sends notice ready at https://x'
+        )
+        assert await asyncio.to_thread(next, watch) == (
+          f'before the watch: mission {finisher_endpoint.quest} (bro to reviewer) '
+          'sends notice preview at https://done'
+        )
+        assert await asyncio.to_thread(next, watch) == 'summoner sends notice also run lint'
 
 
 @pytest.mark.asyncio
@@ -105,9 +133,9 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
     channel, arm = await next_message(server)
     await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
 
-    before = entry(5, 'owner', 'start with docs')
+    before = entry(5, 'owner', 'start with docs', role='notice')
     own_question = entry(6, 'owner', 'which branch?', id='OWN-QUESTION', pending=True)
-    racing = entry(11, 'owner', 'also run lint')
+    racing = entry(11, 'owner', 'also run lint', role='notice')
     channel, own_query = await next_message(server)
     await reply(
       server,
@@ -125,25 +153,55 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
       },
     )
     child_question = entry(8, 'worker', 'ship this?', id='CHILD-QUESTION')
+    child_notice = entry(7, 'worker', 'ready at https://x', role='notice')
+    child_memo = entry(9, 'worker', 'halfway')
     channel, listing = await next_message(server)
+    done = quest_record('DONE', 'ended', talk=['worker.say'], chat_seq=4)
+    child = quest_record('CHILD', 'started', talk=['worker.question', 'worker.say'], chat_seq=9)
     await reply(
       server,
       channel,
       listing,
       outcome='ok',
+      value={'missions': [{**done, 'pending': []}, {**child, 'pending': [child_question]}]},
+    )
+    channel, done_query = await next_message(server)
+    assert done_query.args == {'id': 'DONE'}
+    done_notice = entry(4, 'worker', 'preview at https://done', role='notice')
+    await reply(
+      server,
+      channel,
+      done_query,
+      outcome='ok',
+      value={'mission': {**done, 'messages': [done_notice]}},
+    )
+    channel, child_query = await next_message(server)
+    assert child_query.args == {'id': 'CHILD'}
+    await reply(
+      server,
+      channel,
+      child_query,
+      outcome='ok',
       value={
-        'missions': [
-          {
-            **quest_record('CHILD', 'started', talk=['worker.question']),
-            'pending': [child_question],
-          }
-        ]
+        'mission': {
+          **child,
+          'messages': [child_notice, {**child_question, 'pending': True}, child_memo],
+          'chat_seq': 9,
+        }
       },
     )
 
-    assert await first_line == 'before the watch: summoner says start with docs'
+    assert await first_line == (
+      'before the watch: mission DONE (bro to dev) sends notice preview at https://done'
+    )
+    assert await asyncio.to_thread(next, watch) == (
+      'before the watch: summoner sends notice start with docs'
+    )
     assert await asyncio.to_thread(next, watch) == (
       'before the watch: summoner asks which branch? (question OWN-QUESTION)'
+    )
+    assert await asyncio.to_thread(next, watch) == (
+      'before the watch: mission CHILD (bro to dev) sends notice ready at https://x'
     )
     assert await asyncio.to_thread(next, watch) == (
       'before the watch: mission CHILD (bro to dev) asks ship this? (question CHILD-QUESTION)'
@@ -171,7 +229,7 @@ async def test_watch_replays_retained_chat_at_arm_without_repeating_a_racing_mes
         ],
       },
     )
-    assert await racing_line == 'summoner says also run lint'
+    assert await racing_line == 'summoner sends notice also run lint'
     watch.close()
 
 
@@ -184,7 +242,7 @@ async def test_watch_arm_replays_an_open_question_older_than_the_tail(monkeypatc
     channel, arm = await next_message(server)
     await reply(server, channel, arm, outcome='ok', value={'head': 40, 'events': []})
     old_question = entry(3, 'owner', 'which branch?', id='OLD-QUESTION', pending=True)
-    recent = entry(39, 'owner', 'nearly there?')
+    recent = entry(39, 'owner', 'nearly there?', role='notice')
     channel, own_query = await next_message(server)
     await reply(
       server,
@@ -208,7 +266,10 @@ async def test_watch_arm_replays_an_open_question_older_than_the_tail(monkeypatc
     assert await first_line == (
       'before the watch: summoner asks which branch? (question OLD-QUESTION)'
     )
-    assert await asyncio.to_thread(next, watch) == 'before the watch: summoner says nearly there?'
+    assert (
+      await asyncio.to_thread(next, watch)
+      == 'before the watch: summoner sends notice nearly there?'
+    )
     watch.close()
 
 
@@ -334,6 +395,7 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
             'args': {'target': 'dev'},
             'transition': 'refused',
             'from': 'owner',
+            'role': 'notice',
             'reason': 'quest talk lacks owner.say',
             'head': {'text': 'blocked'},
           }
@@ -347,11 +409,11 @@ async def test_watch_arms_at_head_and_prints_ordered_summon_transitions(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_watch_quiets_service_marks_and_a_childs_says(monkeypatch):
+async def test_watch_quiets_service_marks_and_either_ends_memos(monkeypatch):
   async with running_server(monkeypatch) as server:
     monkeypatch.setenv(BROKER_MISSION, 'ROOT')
     watch = mission.watch(wait_seconds=0.05)
-    lines = asyncio.create_task(asyncio.to_thread(lambda: [next(watch) for _ in range(7)]))
+    lines = asyncio.create_task(asyncio.to_thread(lambda: [next(watch) for _ in range(10)]))
     channel, arm = await next_message(server)
     await reply(server, channel, arm, outcome='ok', value={'head': 0, 'events': []})
     await reply_empty_watch_replay(server)
@@ -364,22 +426,26 @@ async def test_watch_quiets_service_marks_and_a_childs_says(monkeypatch):
       'args': {'target': 'dev'},
     }
     message = {**child, 'transition': 'message', 'from': 'worker'}
+    summoner = {**child, 'mission': 'ROOT', 'parent': 'PARENT', 'transition': 'message'}
     await reply(
       server,
       channel,
       poll,
       outcome='ok',
       value={
-        'head': 8,
+        'head': 11,
         'events': [
           {**child, 'seq': 1, 'transition': 'accepted'},
           {**child, 'seq': 2, 'transition': 'started'},
           {**child, 'seq': 3, 'transition': 'trail', 'trail_id': 'T9'},
           {**child, 'seq': 4, 'transition': 'listening'},
           {**child, 'mission': 'ROOT', 'parent': 'PARENT', 'seq': 5, 'transition': 'listening'},
-          {**message, 'seq': 6, 'head': {'text': 'halfway'}},
-          {**message, 'seq': 7, 'id': 'Q1', 'head': {'text': 'approve?'}},
-          {**child, 'seq': 8, 'transition': 'ended', 'outcome': 'ok'},
+          {**message, 'seq': 6, 'role': 'memo', 'head': {'text': 'halfway'}},
+          {**message, 'seq': 7, 'role': 'notice', 'head': {'text': 'ready at https://x'}},
+          {**summoner, 'seq': 8, 'from': 'owner', 'role': 'memo', 'head': {'text': 'fyi'}},
+          {**summoner, 'seq': 9, 'from': 'owner', 'role': 'notice', 'head': {'text': 'stop'}},
+          {**message, 'seq': 10, 'role': 'question', 'id': 'Q1', 'head': {'text': 'approve?'}},
+          {**child, 'seq': 11, 'transition': 'ended', 'outcome': 'ok'},
         ],
       },
     )
@@ -389,7 +455,10 @@ async def test_watch_quiets_service_marks_and_a_childs_says(monkeypatch):
       watches.quiet('mission S1 (bro to dev) started'),
       watches.quiet('mission S1 (bro to dev) trail T9'),
       watches.quiet('mission S1 (bro to dev) listening'),
-      watches.quiet('mission S1 (bro to dev) says halfway'),
+      watches.quiet('mission S1 (bro to dev) sends memo halfway'),
+      'mission S1 (bro to dev) sends notice ready at https://x',
+      watches.quiet('summoner sends memo fyi'),
+      'summoner sends notice stop',
       'mission S1 (bro to dev) asks approve? (question Q1)',
       'mission S1 (bro to dev) ended ok',
     ]
@@ -400,7 +469,7 @@ async def test_watch_quiets_service_marks_and_a_childs_says(monkeypatch):
 async def test_watch_rearm_replays_only_chat_past_the_last_yielded_entry(monkeypatch):
   async with running_server(monkeypatch) as server:
     with contextlib.closing(mission.watch(wait_seconds=0.05)) as watch:
-      before_gap = entry(8, 'owner', 'already delivered')
+      before_gap = entry(8, 'owner', 'already delivered', role='notice')
       first_line = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, arm = await next_message(server)
       await reply(server, channel, arm, outcome='ok', value={'head': 10, 'events': []})
@@ -416,7 +485,7 @@ async def test_watch_rearm_replays_only_chat_past_the_last_yielded_entry(monkeyp
       )
       channel, listing = await next_message(server)
       await reply(server, channel, listing, outcome='ok', value={'missions': []})
-      assert await first_line == 'before the watch: summoner says already delivered'
+      assert await first_line == 'before the watch: summoner sends notice already delivered'
 
       gap_line = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, poll = await next_message(server)
@@ -428,7 +497,7 @@ async def test_watch_rearm_replays_only_chat_past_the_last_yielded_entry(monkeyp
       assert await gap_line == 'mission watch gap: events gap: oldest is 15; re-armed at 20'
 
       replay_line = asyncio.create_task(asyncio.to_thread(next, watch))
-      retained = entry(18, 'owner', 'while disconnected')
+      retained = entry(18, 'owner', 'while disconnected', role='notice')
       channel, own_query = await next_message(server)
       await reply(
         server,
@@ -446,8 +515,42 @@ async def test_watch_rearm_replays_only_chat_past_the_last_yielded_entry(monkeyp
         },
       )
       channel, listing = await next_message(server)
-      await reply(server, channel, listing, outcome='ok', value={'missions': []})
-      assert await replay_line == 'before the watch: summoner says while disconnected'
+      delivered = quest_record('S0', 'started', talk=['worker.say'], chat_seq=8)
+      child = quest_record('S1', 'started', talk=['worker.say'], chat_seq=17)
+      evicted = quest_record('S2', 'started', talk=['worker.say'], chat_seq=19)
+      await reply(
+        server,
+        channel,
+        listing,
+        outcome='ok',
+        value={'missions': [{**record, 'pending': []} for record in (delivered, child, evicted)]},
+      )
+      channel, child_query = await next_message(server)
+      assert child_query.args == {'id': 'S1'}
+      gap_notice = entry(16, 'worker', 'ready at https://x', role='notice')
+      gap_memo = entry(17, 'worker', 'halfway')
+      await reply(
+        server,
+        channel,
+        child_query,
+        outcome='ok',
+        value={'mission': {**child, 'messages': [gap_notice, gap_memo]}},
+      )
+      channel, evicted_query = await next_message(server)
+      assert evicted_query.args == {'id': 'S2'}
+      await reply(
+        server,
+        channel,
+        evicted_query,
+        outcome='ok',
+        value={'mission': {'id': 'S2', 'kind': 'launch', 'parent': 'ROOT', 'state': 'evicted'}},
+      )
+      assert await replay_line == (
+        'before the watch: mission S1 (bro to dev) sends notice ready at https://x'
+      )
+      assert await asyncio.to_thread(next, watch) == (
+        'before the watch: summoner sends notice while disconnected'
+      )
 
       resumed = asyncio.create_task(asyncio.to_thread(next, watch))
       channel, poll = await next_message(server)
@@ -537,13 +640,17 @@ async def test_watch_retries_an_arm_replay_that_timed_out(monkeypatch):
         outcome='ok',
         value={
           'mission': quest_record(
-            'ROOT', 'started', kind='root', messages=[entry(5, 'owner', 'retained')], chat_seq=5
+            'ROOT',
+            'started',
+            kind='root',
+            messages=[entry(5, 'owner', 'retained', role='notice')],
+            chat_seq=5,
           )
         },
       )
       channel, listing = await next_message(server)
       await reply(server, channel, listing, outcome='ok', value={'missions': []})
-      assert await replayed == 'before the watch: summoner says retained'
+      assert await replayed == 'before the watch: summoner sends notice retained'
 
 
 @pytest.mark.asyncio
@@ -575,13 +682,17 @@ async def test_watch_retries_a_gap_replay_that_timed_out(monkeypatch):
         outcome='ok',
         value={
           'mission': quest_record(
-            'ROOT', 'started', kind='root', messages=[entry(18, 'owner', 'retained')], chat_seq=18
+            'ROOT',
+            'started',
+            kind='root',
+            messages=[entry(18, 'owner', 'retained', role='notice')],
+            chat_seq=18,
           )
         },
       )
       channel, listing = await next_message(server)
       await reply(server, channel, listing, outcome='ok', value={'missions': []})
-      assert await replayed == 'before the watch: summoner says retained'
+      assert await replayed == 'before the watch: summoner sends notice retained'
 
 
 @pytest.mark.asyncio
@@ -614,6 +725,7 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
     'args': {'target': 'dev'},
     'transition': 'message',
     'from': 'worker',
+    'role': 'question',
     'id': 'QUESTION-1',
     'head': {'text': 'approve?'},
   }
@@ -625,11 +737,17 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
     'mission': 'ROOT',
     'parent': 'PARENT',
     'from': 'owner',
+    'role': 'reply',
     'id': None,
     'reply_to': 'QUESTION-2',
     'head': {'text': 'approved'},
   }
   assert mission._chat_event_line(own, 'ROOT') == 'summoner replies approved (to QUESTION-2)'
+  for role in ('memo', 'notice'):
+    say = {**child, 'role': role, 'id': None, 'head': {'text': 'ready'}}
+    assert mission._chat_event_line(say, 'ROOT') == f'mission CHILD (bro to dev) sends {role} ready'
+  with pytest.raises(mission.MissionError, match='no known role'):
+    mission._chat_event_line({**child, 'role': None}, 'ROOT')
   assert mission._chat_event_line({**own, 'from': 'worker'}, 'ROOT') is None
   refused = {
     **child,
@@ -646,7 +764,13 @@ def test_chat_watch_lines_show_the_other_end_and_every_refusal():
   assert mission._chat_event_line(counter, 'ROOT') == (
     'mission CHILD (bro to dev) asks approve? (question COUNTER, to ORIGINAL)'
   )
-  own_counter = {**own, 'id': 'COUNTER', 'reply_to': 'ORIGINAL', 'head': {'text': 'which?'}}
+  own_counter = {
+    **own,
+    'role': 'question',
+    'id': 'COUNTER',
+    'reply_to': 'ORIGINAL',
+    'head': {'text': 'which?'},
+  }
   assert mission._chat_event_line(own_counter, 'ROOT') == (
     'summoner asks which? (question COUNTER, to ORIGINAL)'
   )

@@ -66,7 +66,7 @@ class TestSessionAppendPrompt:
     monkeypatch.setenv(BROKER_TALK, 'owner.say,worker.say')
     out = ride_system_prompt.session_append_prompt('unattended', 'bro')
     assert 'session keeps a session watch' in out
-    assert 'messages from the summoner arrive as notifications' in out
+    assert "the summoner's notices arrive as notifications" in out
 
 
 class TestSurfaceRendering:

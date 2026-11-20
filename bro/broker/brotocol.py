@@ -5,7 +5,7 @@ A `Message` serializes to UTF-8 JSON with no delimiter (`to_bytes`) and parses b
 Framing belongs to the transport adapter; the TCP adapter uses NDJSON.
 
 The envelope has four types:
-a `request` opens a mission (`id`, `payload: {kind, args}`), `mark` carries a lifecycle transition, `message` carries kind-defined chat payload in either direction, and `result` closes the mission.
+a `request` opens a mission (`id`, `payload: {kind, args}`), `mark` carries a lifecycle transition, `message` carries kind-defined chat payload in either direction under a declared `role`, and `result` closes the mission.
 The type set is closed and the codec enforces every shape, so malformed envelopes fail at the boundary.
 The channel attach handshake carries `PROTOCOL_REVISION` for incompatible wire changes.
 """
@@ -23,7 +23,7 @@ from bro.broker.environment import (
   TalkRight as TalkRight,
 )
 
-PROTOCOL_REVISION = 5
+PROTOCOL_REVISION = 6
 MAX_FRAME_BYTES = 512 * 1024
 MAX_IDENTIFIER_BYTES = 4096
 
@@ -32,9 +32,16 @@ MARK_TRANSITIONS = frozenset({'accepted', 'listening', 'started', 'trail'})
 
 type End = Literal['owner', 'worker']
 
+# a memo asks nothing of its receiver, and a notice asks for its attention at once
+type SayRole = Literal['memo', 'notice']
+type Role = SayRole | Literal['question', 'reply']
+SAY_ROLES: frozenset[SayRole] = frozenset({'memo', 'notice'})
+ROLES: frozenset[Role] = frozenset({*SAY_ROLES, 'question', 'reply'})
+
 _REQUEST_ENVELOPE_KEYS = frozenset({'type', 'id', 'payload'})
 _CORRELATED_ENVELOPE_KEYS = frozenset({'type', 'request', 'payload'})
-_MESSAGE_ENVELOPE_KEYS = _CORRELATED_ENVELOPE_KEYS | {'id', 'reply_to'}
+_MESSAGE_REQUIRED_KEYS = _CORRELATED_ENVELOPE_KEYS | {'role'}
+_MESSAGE_ENVELOPE_KEYS = _MESSAGE_REQUIRED_KEYS | {'id', 'reply_to'}
 _ENVELOPE_KEYS = _REQUEST_ENVELOPE_KEYS | _MESSAGE_ENVELOPE_KEYS
 _RESULT_KEYS = frozenset({'outcome', 'value', 'error', 'detail'})
 
@@ -59,9 +66,10 @@ class Message:
   id: Optional[str] = None
   request: Optional[str] = None
   reply_to: Optional[str] = None
+  role: Optional[Role] = None
 
   def __post_init__(self):
-    _validate(self.type, self.id, self.request, self.reply_to, self.payload)
+    _validate(self.type, self.id, self.request, self.reply_to, self.role, self.payload)
 
   @property
   def request_id(self) -> str:
@@ -93,25 +101,25 @@ class Message:
 
   @property
   def is_say(self) -> bool:
-    """Whether this is an uncorrelated chat message."""
-    self._require_message_role()
-    return self.id is None and self.reply_to is None
+    """Whether this chat message is a memo or a notice."""
+    return self._chat_role() in SAY_ROLES
 
   @property
   def is_question(self) -> bool:
     """Whether this chat message opens a question, including a counter-question."""
-    self._require_message_role()
-    return self.id is not None
+    return self._chat_role() == 'question'
 
   @property
   def is_reply(self) -> bool:
-    """Whether this chat message answers a question."""
-    self._require_message_role()
+    """Whether this chat message answers a question, including a counter-question."""
+    self._chat_role()
     return self.reply_to is not None
 
-  def _require_message_role(self) -> None:
+  def _chat_role(self) -> Role:
     if self.type != Tag.MESSAGE:
       raise ProtocolError(f'a {self.type} message has no chat role')
+    assert self.role is not None
+    return self.role
 
   def to_bytes(self) -> bytes:
     if self.type == Tag.REQUEST:
@@ -119,6 +127,7 @@ class Message:
     else:
       wire = {'type': self.type, 'request': self.request, 'payload': self.payload}
       if self.type == Tag.MESSAGE:
+        wire['role'] = self.role
         if self.id is not None:
           wire['id'] = self.id
         if self.reply_to is not None:
@@ -150,6 +159,7 @@ class Message:
       id=parsed.get('id'),
       request=parsed.get('request'),
       reply_to=parsed.get('reply_to'),
+      role=parsed.get('role'),
     )
 
 
@@ -168,12 +178,15 @@ def mark(request_id: str, transition: str, **details: Any) -> Message:
 
 def message(
   request_id: str,
+  role: Role,
   payload: dict[str, Any],
   *,
   id: Optional[str] = None,
   reply_to: Optional[str] = None,
 ) -> Message:
-  return Message(type=Tag.MESSAGE, payload=payload, request=request_id, id=id, reply_to=reply_to)
+  return Message(
+    type=Tag.MESSAGE, payload=payload, request=request_id, id=id, reply_to=reply_to, role=role
+  )
 
 
 def result(
@@ -304,9 +317,13 @@ def frame_page(
   return value(fitting)
 
 
-def _validate(type_: Any, id_: Any, request_id: Any, reply_to: Any, payload: Any) -> None:
+def _validate(
+  type_: Any, id_: Any, request_id: Any, reply_to: Any, role: Any, payload: Any
+) -> None:
   if not isinstance(payload, dict):
     raise ProtocolError(f"message 'payload' must be dict, got {type(payload).__name__}")
+  if type_ != Tag.MESSAGE and role is not None:
+    raise ProtocolError(f"a {type_} carries no 'role' field")
   if type_ == Tag.REQUEST:
     if not isinstance(id_, str) or len(id_) == 0:
       raise ProtocolError("a request needs a non-empty string 'id'")
@@ -336,8 +353,7 @@ def _validate(type_: Any, id_: Any, request_id: Any, reply_to: Any, payload: Any
     if reply_to is not None:
       raise ProtocolError(f"a {type_} carries no 'reply_to' field")
   else:
-    _validate_optional_identifier('message id', id_)
-    _validate_optional_identifier('message reply_to', reply_to)
+    _validate_chat_role(role, id_, reply_to)
   if type_ == Tag.MARK:
     transition = payload.get('transition')
     if not isinstance(transition, str) or transition not in MARK_TRANSITIONS:
@@ -366,6 +382,23 @@ def _validate(type_: Any, id_: Any, request_id: Any, reply_to: Any, payload: Any
       raise ProtocolError("a result detail's 'reason' must be a string")
 
 
+def _validate_chat_role(role: Any, id_: Any, reply_to: Any) -> None:
+  """A question carries its `id` and a reply the `reply_to` it answers;
+  a counter-question carries both, and a memo or notice neither."""
+  if not isinstance(role, str) or role not in ROLES:
+    raise ProtocolError(f"a message needs 'role' of {', '.join(sorted(ROLES))}")
+  _validate_optional_identifier('message id', id_)
+  _validate_optional_identifier('message reply_to', reply_to)
+  if role == 'question' and id_ is None:
+    raise ProtocolError("a question needs an 'id'")
+  if role != 'question' and id_ is not None:
+    raise ProtocolError(f"a {role} carries no 'id' field")
+  if role == 'reply' and reply_to is None:
+    raise ProtocolError("a reply needs a 'reply_to'")
+  if role in SAY_ROLES and reply_to is not None:
+    raise ProtocolError(f"a {role} carries no 'reply_to' field")
+
+
 def _validate_optional_identifier(name: str, value: Any) -> None:
   if value is None:
     return
@@ -386,7 +419,7 @@ def _validate_identifier_size(name: str, value: str) -> None:
 
 
 def _require_message_envelope_keys(data: dict) -> None:
-  missing = sorted(_CORRELATED_ENVELOPE_KEYS - set(data))
+  missing = sorted(_MESSAGE_REQUIRED_KEYS - set(data))
   if len(missing) > 0:
     raise ProtocolError(f'message missing required key(s): {", ".join(missing)}')
   forbidden = sorted(set(data) - _MESSAGE_ENVELOPE_KEYS)

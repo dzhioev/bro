@@ -325,6 +325,7 @@ class Journal:
       raise TypeError(f'chat transition needs a message envelope, got {message.type!r}')
     payload: dict[str, Any] = {
       'from': sender,
+      'role': message.role,
       'head': _chat_head(message.payload, transition),
       **(details or {}),
     }

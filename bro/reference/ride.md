@@ -964,6 +964,7 @@ A joined child uses the party’s existing tree directly, including its current 
 The quest carries a fixed **talk** over four rights:
 `owner.say`, `owner.question`, `worker.say`, and `worker.question`.
 A reply is authorized by the other end's question right.
+An end's say right carries its memos, which ask nothing of the receiver, and its notices, which wake the receiver's session.
 A summon defaults to `worker.say` and widens only through the request's `talk` field, spelled `--talk <right>[,<right>]` by the CLI;
 the host fixes and enforces the set when the quest opens, while both peer surfaces refuse a forbidden move before sending.
 The answer is retained in the quest journal, while permitted messages can travel for the quest's whole life.
@@ -985,9 +986,9 @@ underneath it are two client surfaces over the same request, each split into the
   Grant/revoke/limit shape the child's authority; bare credential kinds in grant/revoke add or drop kinds.
   Harness and LLM flags shape the child's driving loop without answering to the summoner's credentials;
   the target's own host-config entry supplies whatever credentials that choice needs.
-  A blocking wait rides through child says.
+  A blocking wait rides through a child's memos and notices, logging each on stderr.
   When `worker.question` is granted, a child's question instead prints on stdout and exits 4 so the summoner gets a turn;
-  stderr names the question and the exact `quest say <quest> '<answer>' --reply-to <question>` command that answers it.
+  stderr names the question and the exact `quest reply <quest> <question> '<answer>'` command that answers it.
   `--detach` waits for the first correlated message:
   host `accepted` prints the quest id, while a denial or pre-acceptance launch failure exits with its reason and prints no id.
   Any summon is reclaimable by that quest id, detached or interrupted, and `self` names the session's own quest on every verb that reads a conversation or talks.
@@ -997,24 +998,25 @@ underneath it are two client surfaces over the same request, each split into the
   `quest history <id> [--wait] [--timeout <s>]` reads the conversation:
   the talk rights and the retained tail with every open question marked `pending` in place and `truncated` when older entries were dropped;
   it exits 4 when a question awaits the caller, and `--wait` returns on the next message or the end.
-  `quest say <id> '<text>' [--reply-to <question>]` sends a message that expects no reply, or a reply;
+  `quest memo <id> '<text>'` and `quest notice <id> '<text>'` send a message that expects no reply, and `quest reply <id> <question> '<text>'` the reply to a question;
   `quest ask <id> '<text>' [--reply-to <question>] [--wait [<seconds>]]` asks a question and prints its id, a counter-question with `--reply-to`;
   `--wait` prints a plain reply and exits 0, or prints a reply that is itself a question and exits 4, with stderr naming its `counter_question_id` and the ready counter-question command.
   When the optional wait bound passes first, it prints the original question id and exits 3, the reply still recoverable from the journal.
   Concurrent waiters and later reads see the same state.
   `quest list` walks the caller-scoped paginated `query {}` listing and prints retained bro summons live-first, including their talk and pending questions.
-  `mission watch` first takes the current `events {}` head, then replays retained own-mission messages and open questions of every mission this session launched whose journal sequence is no newer than that head, marked `before the watch`.
+  `mission watch` first takes the current `events {}` head,
+  then replays retained own-mission messages and the open questions and notices of every mission this session launched whose journal sequence is no newer than that head, marked `before the watch`.
   It then long-polls ordered lifecycle and chat events of those missions after the head, so chat committed between the head and replay queries arrives once through the stream.
   A mission launched by another session in the stream raises.
-  A child mission is named `mission <id> (<type>[ to <target>])`, and its says, questions (with their id, and the id a counter-question answers) and replies (with the id they answer) follow the name;
-  on the session's own mission it renders the other end as `summoner` and never echoes the session's own says or its own `listening` mark.
-  A child's service marks (`accepted`, `started`, `trail`, `listening`) and says are quiet lines;
-  questions, replies, refusals, ends, denials, gap notices, and the summoner's says to the session wake it.
+  A child mission is named `mission <id> (<type>[ to <target>])`, and its memos and notices (`sends memo`, `sends notice`), questions (with their id, and the id a counter-question answers) and replies (with the id they answer) follow the name;
+  on the session's own mission it renders the other end as `summoner` and never echoes the session's own messages or its own `listening` mark.
+  A child's service marks (`accepted`, `started`, `trail`, `listening`) and either end's memos are quiet lines;
+  notices, questions, replies, refusals, ends, denials, and watch-gap lines wake the session.
   An optional worker type narrows the child missions it streams.
   An event-retention gap prints a notice, re-arms from the current head, and repeats the retained replay.
   `quest cancel <id> [--timeout <seconds>]` ends a bro quest this session owns and waits for it to end;
   it exits 0 once the quest has ended and 3 when the bound passes first, the end still on its way.
-  `mission check|history|say|ask|share|list|watch|cancel` is the corresponding universal surface for every worker type:
+  `mission check|history|memo|notice|reply|ask|share|list|watch|cancel` is the corresponding universal surface for every worker type:
   Chat payloads are JSON objects, and `history --seq N` recovers one full retained entry.
   A blocking `mission ask` has the same exits and reply handling as `quest ask`, printing a JSON payload and putting `<json>` in the ready counter-question command.
   `share <id> <ref> [--timeout <seconds>]` hands an owner-reachable artifact to a live worker.
@@ -1022,12 +1024,12 @@ underneath it are two client surfaces over the same request, each split into the
   `rewind show <trail-id>` peeks at a long summon mid-run.
   Contract details in `bro/summon.py`, `bro/mission.py`, and `bro/quest.py`.
 - Every harness mounts the same service tools:
-  `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_say` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns,
+  `bro::summon`, then `bro::quest_check` / `quest_history` / `quest_memo` / `quest_notice` / `quest_reply` / `quest_ask` / `quest_share` / `quest_list` / `quest_cancel` on the `quest_id` it returns,
   and `bro::quest_watch(wake_on_quiet)` where the session may summon, setting its runtime-owned session watch to wake on its quiet lines or not.
   The summon tool's `passes` list is the CLI's repeatable `--pass` field.
   `summon` returns the accepted state after host acceptance;
   answers, questions, replies, refusals, and terminal states arrive through the session watch.
-  `quest_say` sends and returns, `quest_ask` mints a question id whose reply arrives through the watch, and `quest_share` hands an owner-reachable ref to a live child.
+  `quest_memo`, `quest_notice` and `quest_reply` send and return, `quest_ask` mints a question id whose reply arrives through the watch, and `quest_share` hands an owner-reachable ref to a live child.
   `quest_check` and `quest_history` are one non-blocking journal read each;
   `quest_cancel` returns once the host accepts the cancellation, with the terminal following on the watch;
   and `quest_list` is the paginated journal listing.

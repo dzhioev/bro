@@ -1552,7 +1552,9 @@ _QUEST_TOOLS = {
   'summon',
   'quest_check',
   'quest_history',
-  'quest_say',
+  'quest_memo',
+  'quest_notice',
+  'quest_reply',
   'quest_ask',
   'quest_share',
   'quest_list',
@@ -1609,7 +1611,9 @@ class TestSummonTool:
       assert 'passes' in properties(tools['summon'])
       assert properties(tools['quest_check']) == {'quest_id'}
       assert properties(tools['quest_history']) == {'quest_id'}
-      assert properties(tools['quest_say']) == {'quest_id', 'text', 'reply_to'}
+      assert properties(tools['quest_memo']) == {'quest_id', 'text'}
+      assert properties(tools['quest_notice']) == {'quest_id', 'text'}
+      assert properties(tools['quest_reply']) == {'quest_id', 'question_id', 'text'}
       assert properties(tools['quest_ask']) == {'quest_id', 'text', 'reply_to'}
       assert properties(tools['quest_share']) == {'quest_id', 'ref'}
       assert properties(tools['quest_cancel']) == {'quest_id'}
@@ -1684,24 +1688,41 @@ class TestSummonTool:
     assert calls == [('REQ-1', 'approve?', None)]
 
   @pytest.mark.asyncio
-  async def test_quest_say_returns_the_sent_state(self, monkeypatch):
+  async def test_quest_memo_notice_and_reply_send_their_role_and_return_the_sent_state(
+    self, monkeypatch
+  ):
     from bro import quest as quest_module
 
     monkeypatch.setenv('BROKER_CHANNEL', 'tcp://token@127.0.0.1:9')
     calls = []
 
-    def say(quest_id, text, *, reply_to):
-      calls.append((quest_id, text, reply_to))
+    def say(quest_id, role, text):
+      calls.append((quest_id, role, text))
+      return 'OWN-QUEST'
+
+    def reply(quest_id, question_id, text):
+      calls.append((quest_id, 'reply', question_id, text))
       return 'OWN-QUEST'
 
     monkeypatch.setattr(quest_module, 'say', say)
+    monkeypatch.setattr(quest_module, 'reply', reply)
+    sent = {'state': 'sent', 'quest_id': 'OWN-QUEST'}
     for harness in ('bro', 'claude'):
-      tool = await _find_tool(EchoBro(), 'quest_say', harness=harness)
-      assert await tool.call({'quest_id': 'self', 'text': 'yes', 'reply_to': 'Q1'}) == {
-        'state': 'sent',
-        'quest_id': 'OWN-QUEST',
-      }
-    assert calls == [('self', 'yes', 'Q1')] * 2
+      memo = await _find_tool(EchoBro(), 'quest_memo', harness=harness)
+      notice = await _find_tool(EchoBro(), 'quest_notice', harness=harness)
+      answer = await _find_tool(EchoBro(), 'quest_reply', harness=harness)
+      assert await memo.call({'quest_id': 'self', 'text': 'halfway'}) == sent
+      assert await notice.call({'quest_id': 'self', 'text': 'ready'}) == sent
+      assert await answer.call({'quest_id': 'self', 'question_id': 'Q1', 'text': 'yes'}) == sent
+    assert (
+      calls
+      == [
+        ('self', 'memo', 'halfway'),
+        ('self', 'notice', 'ready'),
+        ('self', 'reply', 'Q1', 'yes'),
+      ]
+      * 2
+    )
 
   @pytest.mark.asyncio
   async def test_quest_share_hands_a_ref_to_a_live_child(self, monkeypatch):

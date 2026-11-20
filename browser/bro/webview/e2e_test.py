@@ -498,11 +498,11 @@ class ScriptedLLM(LLM):
         },
       )
       await self.tools.call(
-        'bro__quest_say',
+        'bro__quest_reply',
         {
           'quest_id': 'self',
+          'question_id': instruction.id,
           'text': 'Clicked Done in the order edit section; the order editor remains open.',
-          'reply_to': instruction.id,
         },
       )
       self.phase = 'upload'
@@ -544,11 +544,11 @@ class ScriptedLLM(LLM):
       )
       assert 'resume.txt' in filename, filename
       await self.tools.call(
-        'bro__quest_say',
+        'bro__quest_reply',
         {
           'quest_id': 'self',
+          'question_id': instruction.id,
           'text': 'Uploaded resume.txt; the order editor remains open.',
-          'reply_to': instruction.id,
         },
       )
       self.phase = 'done'
@@ -559,8 +559,8 @@ class ScriptedLLM(LLM):
     closed = await self.tools.call('webview__close', {'webview': self.webview})
     assert closed['outcome'] == 'ok', closed
     await self.tools.call(
-      'bro__quest_say',
-      {'quest_id': 'self', 'text': 'The webview is closed.', 'reply_to': instruction.id},
+      'bro__quest_reply',
+      {'quest_id': 'self', 'question_id': instruction.id, 'text': 'The webview is closed.'},
     )
     await self.tools.call(
       'bro__answer',
@@ -630,7 +630,7 @@ with client:
   except Exception:
     client.result(mission, {'outcome': 'failed', 'error': traceback.format_exc()})
     raise
-  client.message(mission, {'event': 'ready', 'vnc': None})
+  client.message(mission, 'memo', {'event': 'ready', 'vnc': None})
   client.result(mission, {'outcome': 'ok', 'value': {'commands': 0}})
 """
 

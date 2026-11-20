@@ -234,17 +234,28 @@ def test_chat_folds_bounded_tail_pending_questions_and_chat_sequence(monkeypatch
     talk=frozenset({'owner.question', 'worker.say', 'worker.question'}),
     type='bro',
   )
-  journal.message(record, 'owner', brotocol.message('child', {'text': 'first'}, id='Q1'))
+  journal.message(
+    record, 'owner', brotocol.message('child', 'question', {'text': 'first'}, id='Q1')
+  )
   first_chat_seq = record.chat_seq
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'answer'}, reply_to='Q1'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'second'}, id='Q2'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'third'}, id='Q3'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'fourth'}, id='Q4'))
+  journal.message(
+    record, 'worker', brotocol.message('child', 'reply', {'text': 'answer'}, reply_to='Q1')
+  )
+  journal.message(
+    record, 'worker', brotocol.message('child', 'question', {'text': 'second'}, id='Q2')
+  )
+  journal.message(
+    record, 'worker', brotocol.message('child', 'question', {'text': 'third'}, id='Q3')
+  )
+  journal.message(
+    record, 'worker', brotocol.message('child', 'question', {'text': 'fourth'}, id='Q4')
+  )
 
   assert record.chat_seq > first_chat_seq
   assert [entry['id'] for entry in record.pending] == ['Q3', 'Q4']
   assert [entry['id'] for entry in record.messages] == ['Q3', 'Q4']
   assert record.messages[-1]['from'] == 'worker'
+  assert record.messages[-1]['role'] == 'question'
   assert record.messages[-1]['head'] == {'text': 'fourth'}
 
   journal.end(record, {'outcome': 'ok'})
@@ -263,7 +274,7 @@ def test_chat_state_is_folded_before_subscribers_observe_the_event():
     )
   )
 
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'ask'}, id='Q1'))
+  journal.message(record, 'worker', brotocol.message('child', 'question', {'text': 'ask'}, id='Q1'))
 
   [(event_sequence, chat_sequence, messages, pending)] = observed
   assert event_sequence == chat_sequence
@@ -274,7 +285,7 @@ def test_chat_state_is_folded_before_subscribers_observe_the_event():
 def test_refusal_joins_the_tail_without_turning_a_question_pending():
   journal = Journal()
   record = journal.open('child', 'summon', 'root', 'requester', {}, talk=frozenset(), type='bro')
-  candidate = brotocol.message('child', {'text': 'blocked'}, id='Q1', reply_to='Q0')
+  candidate = brotocol.message('child', 'question', {'text': 'blocked'}, id='Q1', reply_to='Q0')
 
   journal.refused(record, 'worker', candidate, 'worker lacks the talk right')
 
@@ -297,7 +308,7 @@ def test_a_message_at_the_bound_is_journaled_whole():
   )
   payload = {'text': text_at_the_message_bound()}
 
-  journal.message(record, 'worker', brotocol.message('child', payload))
+  journal.message(record, 'worker', brotocol.message('child', 'memo', payload))
 
   assert record.messages[-1]['head'] == payload
 
@@ -310,14 +321,14 @@ def test_a_message_over_the_bound_is_a_journal_error():
   payload = {'text': text_at_the_message_bound() + 'x'}
 
   with pytest.raises(ValueError, match='exceeds'):
-    journal.message(record, 'worker', brotocol.message('child', payload))
+    journal.message(record, 'worker', brotocol.message('child', 'memo', payload))
   assert record.messages == []
 
 
 def test_a_refused_message_over_the_bound_keeps_a_marked_head():
   journal = Journal()
   record = journal.open('child', 'summon', None, None, {}, talk=frozenset(), type='bro')
-  candidate = brotocol.message('child', {'text': text_at_the_message_bound() + 'x'})
+  candidate = brotocol.message('child', 'memo', {'text': text_at_the_message_bound() + 'x'})
 
   journal.refused(record, 'worker', candidate, 'over the bound')
 
@@ -333,8 +344,10 @@ def test_the_listing_view_keeps_pending_while_the_by_id_view_marks_the_conversat
     'child', 'summon', None, None, {}, talk=frozenset({'worker.say', 'worker.question'}), type='bro'
   )
   journal.listening(record)
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'ready'}))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'go on?'}, id='Q1'))
+  journal.message(record, 'worker', brotocol.message('child', 'memo', {'text': 'ready'}))
+  journal.message(
+    record, 'worker', brotocol.message('child', 'question', {'text': 'go on?'}, id='Q1')
+  )
 
   listing = record.view()
   by_id = record.view(include_messages=True)
@@ -355,11 +368,11 @@ def test_the_tail_marks_entries_its_retention_dropped(monkeypatch):
   record = journal.open(
     'child', 'summon', None, None, {}, talk=frozenset({'worker.say'}), type='bro'
   )
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'first'}))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'second'}))
+  journal.message(record, 'worker', brotocol.message('child', 'memo', {'text': 'first'}))
+  journal.message(record, 'worker', brotocol.message('child', 'memo', {'text': 'second'}))
   assert 'messages_truncated' not in record.view(include_messages=True)
 
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'third'}))
+  journal.message(record, 'worker', brotocol.message('child', 'memo', {'text': 'third'}))
 
   view = record.view(include_messages=True)
   assert [entry['head']['text'] for entry in view['messages']] == ['second', 'third']
@@ -373,9 +386,11 @@ def test_the_conversation_folds_an_open_question_older_than_the_tail_in_by_seque
   record = journal.open(
     'child', 'summon', None, None, {}, talk=frozenset({'worker.say', 'worker.question'}), type='bro'
   )
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'ship?'}, id='Q1'))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'first'}))
-  journal.message(record, 'worker', brotocol.message('child', {'text': 'second'}))
+  journal.message(
+    record, 'worker', brotocol.message('child', 'question', {'text': 'ship?'}, id='Q1')
+  )
+  journal.message(record, 'worker', brotocol.message('child', 'memo', {'text': 'first'}))
+  journal.message(record, 'worker', brotocol.message('child', 'memo', {'text': 'second'}))
 
   conversation = record.conversation()
   assert [entry['seq'] for entry in record.messages] == [3, 4]
@@ -386,7 +401,9 @@ def test_the_conversation_folds_an_open_question_older_than_the_tail_in_by_seque
   ]
   assert conversation[0]['head'] == {'text': 'ship?'}
 
-  journal.message(record, 'owner', brotocol.message('child', {'text': 'yes'}, reply_to='Q1'))
+  journal.message(
+    record, 'owner', brotocol.message('child', 'reply', {'text': 'yes'}, reply_to='Q1')
+  )
   assert [entry['seq'] for entry in record.conversation()] == [4, 5]
   assert not any('pending' in entry for entry in record.conversation())
 
@@ -401,11 +418,11 @@ def test_own_quest_event_visibility_is_limited_to_chat_transitions():
   journal.bind(child, 'child-peer')
   journal.started(child)
   journal.listening(child)
-  journal.message(child, 'worker', brotocol.message('child', {'text': 'ready'}))
+  journal.message(child, 'worker', brotocol.message('child', 'memo', {'text': 'ready'}))
   journal.refused(
     child,
     'worker',
-    brotocol.message('child', {'text': 'question'}, id='Q1'),
+    brotocol.message('child', 'question', {'text': 'question'}, id='Q1'),
     'not allowed',
   )
 

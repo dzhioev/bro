@@ -34,17 +34,21 @@ def test_mark_round_trip():
 
 
 def test_message_round_trip():
-  candidate = message('quest-1', {'note': 'working'}, id='question-1', reply_to='question-0')
+  candidate = message(
+    'quest-1', 'question', {'note': 'working'}, id='question-1', reply_to='question-0'
+  )
   assert Message.from_bytes(candidate.to_bytes()) == candidate
 
 
-def test_message_roles_cover_say_question_reply_and_counter_question():
-  say = message('quest', {})
-  question = message('quest', {}, id='question')
-  reply = message('quest', {}, reply_to='question')
-  counter_question = message('quest', {}, id='counter', reply_to='question')
+def test_message_roles_cover_memo_notice_question_reply_and_counter_question():
+  memo = message('quest', 'memo', {})
+  notice = message('quest', 'notice', {})
+  question = message('quest', 'question', {}, id='question')
+  reply = message('quest', 'reply', {}, reply_to='question')
+  counter_question = message('quest', 'question', {}, id='counter', reply_to='question')
 
-  assert say.is_say and not say.is_question and not say.is_reply
+  for say in (memo, notice):
+    assert say.is_say and not say.is_question and not say.is_reply
   assert question.is_question and not question.is_say and not question.is_reply
   assert reply.is_reply and not reply.is_say and not reply.is_question
   assert counter_question.is_question and counter_question.is_reply and not counter_question.is_say
@@ -62,25 +66,27 @@ def test_talk_encoding_is_canonical_and_strict():
 
 def test_talk_roles_require_the_senders_move_and_the_other_ends_question_for_a_reply():
   talk: Talk = frozenset({'owner.say', 'owner.question', 'worker.question'})
-  assert message_allowed(talk, 'owner', message('quest', {}))
-  assert message_allowed(talk, 'owner', message('quest', {}, id='question'))
-  assert message_allowed(talk, 'owner', message('quest', {}, reply_to='worker-question'))
-  assert not message_allowed(talk, 'worker', message('quest', {}))
-  assert message_allowed(talk, 'worker', message('quest', {}, reply_to='owner-question'))
+  assert message_allowed(talk, 'owner', message('quest', 'memo', {}))
+  assert message_allowed(talk, 'owner', message('quest', 'notice', {}))
+  assert not message_allowed(talk, 'worker', message('quest', 'notice', {}))
+  assert message_allowed(talk, 'owner', message('quest', 'question', {}, id='question'))
+  assert message_allowed(talk, 'owner', message('quest', 'reply', {}, reply_to='worker-question'))
+  assert not message_allowed(talk, 'worker', message('quest', 'memo', {}))
+  assert message_allowed(talk, 'worker', message('quest', 'reply', {}, reply_to='owner-question'))
   assert not message_allowed(
     frozenset({'worker.question'}),
     'worker',
-    message('quest', {}, reply_to='owner-question'),
+    message('quest', 'reply', {}, reply_to='owner-question'),
   )
   assert not message_allowed(
     frozenset({'worker.question'}),
     'owner',
-    message('quest', {}, id='counter', reply_to='worker-question'),
+    message('quest', 'question', {}, id='counter', reply_to='worker-question'),
   )
 
 
 def test_protocol_revision_identifies_the_message_wire():
-  assert PROTOCOL_REVISION == 5
+  assert PROTOCOL_REVISION == 6
 
 
 def test_result_round_trip():
@@ -155,7 +161,7 @@ def test_quest_id_unifies_opening_and_correlated_messages():
   opened = request('ping', {})
   assert opened.request_id == opened.id
   assert mark('quest-1', 'accepted').request_id == 'quest-1'
-  assert message('quest-1', {}).request_id == 'quest-1'
+  assert message('quest-1', 'memo', {}).request_id == 'quest-1'
   assert result('quest-1', 'ok').request_id == 'quest-1'
 
 
@@ -169,6 +175,17 @@ def test_correlated_wire_carries_no_id_key():
   assert set(wire) == {'type', 'request', 'payload'}
 
 
+def test_message_wire_carries_its_role_and_only_the_role_fields_it_has():
+  assert set(json.loads(message('quest-1', 'notice', {}).to_bytes())) == {
+    'type',
+    'request',
+    'role',
+    'payload',
+  }
+  wire = json.loads(message('quest-1', 'question', {}, id='q2', reply_to='q1').to_bytes())
+  assert (wire['role'], wire['id'], wire['reply_to']) == ('question', 'q2', 'q1')
+
+
 def test_accessors():
   opened = request('summon', {'target': 'bro'})
   assert opened.kind == 'summon'
@@ -180,7 +197,7 @@ def test_accessors_reject_the_wrong_type():
   with pytest.raises(ProtocolError):
     _ = result('quest-1', 'ok').kind
   with pytest.raises(ProtocolError):
-    _ = message('quest-1', {}).args
+    _ = message('quest-1', 'memo', {}).args
   with pytest.raises(ProtocolError):
     _ = request('ping', {}).outcome
 
@@ -197,17 +214,17 @@ def test_oversize_identifiers_are_rejected():
   with pytest.raises(ProtocolError, match='request kind'):
     Message(type=Tag.REQUEST, id='request', payload={'kind': oversize, 'args': {}})
   with pytest.raises(ProtocolError, match='message request'):
-    message(oversize, {})
+    message(oversize, 'memo', {})
   with pytest.raises(ProtocolError, match='trail id'):
     mark('quest', 'trail', trail_id=oversize)
 
 
 def test_identifier_bound_measures_the_encoded_cost():
-  assert message('quest', {}, id='x' * MAX_IDENTIFIER_BYTES).id is not None
+  assert message('quest', 'question', {}, id='x' * MAX_IDENTIFIER_BYTES).id is not None
   expanding = '\x00' * (MAX_IDENTIFIER_BYTES // 6 + 1)
   assert len(expanding.encode()) < MAX_IDENTIFIER_BYTES
   with pytest.raises(ProtocolError, match='encodes to'):
-    message('quest', {}, id=expanding)
+    message('quest', 'question', {}, id=expanding)
 
 
 def test_wire_frame_cap_is_512_kibibytes():
@@ -219,7 +236,7 @@ def test_to_bytes_has_no_framing():
 
 
 def test_to_bytes_utf8_round_trip():
-  candidate = message('quest-1', {'msg': 'naïve — café ☕'})
+  candidate = message('quest-1', 'memo', {'msg': 'naïve — café ☕'})
   assert Message.from_bytes(candidate.to_bytes()) == candidate
 
 
@@ -236,8 +253,16 @@ def test_to_bytes_utf8_round_trip():
     {'type': 'mark', 'payload': {}, 'request': 'q'},
     {'type': 'mark', 'payload': {'transition': 'unknown'}, 'request': 'q'},
     {'type': 'mark', 'payload': {'transition': 'trail'}, 'request': 'q'},
-    {'type': 'message', 'payload': {}},
-    {'type': 'message', 'payload': {}, 'request': 'q', 'id': ''},
+    {'type': 'message', 'payload': {}, 'role': 'memo'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'question', 'id': ''},
+    {'type': 'message', 'payload': {}, 'request': 'q'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'say'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'memo', 'id': 'i'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'notice', 'reply_to': 'i'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'question'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'reply'},
+    {'type': 'message', 'payload': {}, 'request': 'q', 'role': 'reply', 'id': 'i', 'reply_to': 'j'},
+    {'type': 'mark', 'payload': {'transition': 'accepted'}, 'request': 'q', 'role': 'memo'},
     {'type': 'result', 'payload': {}, 'request': 'q'},
     {'type': 'result', 'payload': {'outcome': 'done'}, 'request': 'q'},
     {'type': 'result', 'payload': {'outcome': 'ok', 'extra': 1}, 'request': 'q'},
@@ -257,7 +282,7 @@ def test_construction_rejects_malformed_envelopes(kwargs):
   [
     {'type': 'request', 'id': 'i', 'request': None, 'payload': {'kind': 'ping', 'args': {}}},
     {'type': 'mark', 'id': None, 'request': 'q', 'payload': {'transition': 'accepted'}},
-    {'type': 'message', 'id': None, 'request': 'q', 'payload': {}},
+    {'type': 'message', 'id': None, 'request': 'q', 'role': 'memo', 'payload': {}},
     {'type': 'result', 'id': None, 'request': 'q', 'payload': {'outcome': 'ok'}},
   ],
 )
@@ -277,6 +302,9 @@ def test_from_bytes_rejects_forbidden_null_envelope_fields(wire):
     json.dumps({'type': 5, 'id': 'i', 'payload': {}}).encode('utf-8'),
     json.dumps({'type': 'request', 'id': 'i', 'payload': []}).encode('utf-8'),
     json.dumps({'type': 'result', 'request': 5, 'payload': {'outcome': 'ok'}}).encode('utf-8'),
+    json.dumps({'type': 'message', 'request': 'q', 'payload': {}}).encode('utf-8'),
+    json.dumps({'type': 'message', 'request': 'q', 'role': [], 'payload': {}}).encode('utf-8'),
+    json.dumps({'type': 'message', 'request': 'q', 'role': {}, 'payload': {}}).encode('utf-8'),
     json.dumps(
       {'type': 'request', 'id': 'i', 'payload': {'kind': 'ping', 'args': {}}, 'v': 1}
     ).encode('utf-8'),

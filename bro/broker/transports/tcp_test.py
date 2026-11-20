@@ -93,9 +93,11 @@ async def test_delivery_and_channel_authenticity():
     # exercises scheme dispatch
     client_b = await asyncio.to_thread(connect, provisioned_b.host_endpoint.address(HOST))
 
-    await asyncio.to_thread(client_a.send, brotocol.message('X', {'who': 'a'}))
+    await asyncio.to_thread(client_a.send, brotocol.message('X', 'memo', {'who': 'a'}))
     # B puts a forged claim in its payload; attribution must still follow the token
-    await asyncio.to_thread(client_b.send, brotocol.message('X', {'who': 'b', 'claim': 'I am A'}))
+    await asyncio.to_thread(
+      client_b.send, brotocol.message('X', 'memo', {'who': 'b', 'claim': 'I am A'})
+    )
 
     seen = {}
     for _ in range(2):
@@ -202,7 +204,7 @@ async def test_accept_fires_on_connect_before_any_message():
     assert await _next(server.sink.connects) == provisioned.channel
     assert server.sink.messages.empty()  # birth precedes the first frame
 
-    await asyncio.to_thread(client.send, brotocol.message('X', {}))
+    await asyncio.to_thread(client.send, brotocol.message('X', 'memo', {}))
     channel, _ = await _next(server.sink.messages)
     assert channel == provisioned.channel
     client.close()
@@ -218,7 +220,7 @@ async def test_server_reply_reaches_only_its_channel():
     for _ in range(2):
       await _next(server.sink.connects)
 
-    await server.transport.send(provisioned_a.channel, brotocol.message('X', {'r': 1}))
+    await server.transport.send(provisioned_a.channel, brotocol.message('X', 'memo', {'r': 1}))
     reply = await asyncio.to_thread(client_a.receive, TIMEOUT)
     assert reply is not None
     assert reply.type == 'message'
@@ -235,15 +237,15 @@ async def test_ndjson_framing_coalesced_and_split():
     _, writer = await _raw_attach(provisioned)
 
     # two frames written in one syscall must deframe into two messages
-    frame1 = brotocol.message('X', {'n': 1}).to_bytes() + b'\n'
-    frame2 = brotocol.message('X', {'n': 2}).to_bytes() + b'\n'
+    frame1 = brotocol.message('X', 'memo', {'n': 1}).to_bytes() + b'\n'
+    frame2 = brotocol.message('X', 'memo', {'n': 2}).to_bytes() + b'\n'
     writer.write(frame1 + frame2)
     await writer.drain()
     numbers = {(await _next(server.sink.messages))[1].payload['n'] for _ in range(2)}
     assert numbers == {1, 2}
 
     # one frame split across two writes must reassemble into one message
-    frame3 = brotocol.message('X', {'n': 3}).to_bytes() + b'\n'
+    frame3 = brotocol.message('X', 'memo', {'n': 3}).to_bytes() + b'\n'
     writer.write(frame3[:4])
     await writer.drain()
     writer.write(frame3[4:])
@@ -285,7 +287,7 @@ async def test_a_sink_failure_drops_the_channel_and_notifies_the_disconnect(capl
     client = await client_for(provisioned)
     await _next(server.sink.connects)
 
-    await asyncio.to_thread(client.send, brotocol.message('X', {}))
+    await asyncio.to_thread(client.send, brotocol.message('X', 'memo', {}))
 
     assert await _next(server.sink.disconnects) == provisioned.channel
     assert await asyncio.to_thread(client.receive, TIMEOUT) is None  # the peer sees EOF

@@ -7,21 +7,23 @@ The quest's `talk` rights decide what may travel before that result;
 `self` names this quest on every `quest` surface.
 
 {{iff #talk contains owner.say}}
-The session keeps a session watch, so messages from the summoner arrive as notifications.
+The session keeps a session watch, so the summoner's notices arrive as notifications, and its memos with the next notification.
 A message from the summoner belongs to the request in hand rather than opening a new one:
 it amends the work or points at a problem in it, so fold it into the work and carry on to the one result this run owes.
 {{when #talk contains owner.question}}
-Answer a question with `bro::quest_say` on `self`, passing its id as `reply_to`.
+Answer a question with `bro::quest_reply` on `self`, passing its id.
 {{end}}
 {{eliff #talk contains owner.question}}
 The session keeps a session watch, so questions from the summoner arrive as notifications.
-Answer one with `bro::quest_say` on `self`, passing its id as `reply_to`.
+Answer one with `bro::quest_reply` on `self`, passing its id.
 {{else}}{{end}}
 
 {{when #talk contains worker.say}}
-Use `bro::quest_say` on `self` only for a concise progress report that informs the summoner:
-it reaches the summoner with this run's next question or its result, unless the summoner follows it live.
-Anything the summoner must act on belongs in a question, where the quest permits one, or in the answer.
+When the request asks to get something before the result, such as a link or a ready signal, send it with `bro::quest_notice` on `self` as soon as it exists:
+a notice wakes the summoner at once.
+Use `bro::quest_memo` on `self` only for a concise progress report that informs the summoner:
+a memo reaches the summoner with this run's next notice, question, or result, unless the summoner follows it live.
+Anything else the summoner must act on belongs in a question, where the quest permits one, or in the answer.
 Routine progress stays in the work's durable surfaces instead.
 {{end}}
 

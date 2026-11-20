@@ -112,7 +112,7 @@ def test_supervisor_passes_messages_for_other_missions_but_refuses_their_marks()
   listener = Listener()
   supervisor = Supervisor(cast(Runtime, object()), listener, 'own-mission', timeout=None)
   supervisor._mark_started()
-  routed = brotocol.message('child-mission', {'text': 'steer'})
+  routed = brotocol.message('child-mission', 'memo', {'text': 'steer'})
 
   supervisor.on_message(routed)
   supervisor.on_message(brotocol.mark('child-mission', 'trail', trail_id='wrong'))

@@ -156,7 +156,7 @@ async def test_marks_and_messages_keep_the_sticky_route_until_the_result():
 
     channel, request = await _next(harness.sink.messages)
     await harness.transport.send(channel, brotocol.mark(request.id, 'accepted'))
-    await harness.transport.send(channel, brotocol.message(request.id, {'step': 1}))
+    await harness.transport.send(channel, brotocol.message(request.id, 'memo', {'step': 1}))
     await _wait_until(lambda: len(interims) == 2, 'the interim messages never reached the client')
     assert harness.broxy._routes[request.id].writer.is_closing() is False
 
@@ -471,10 +471,10 @@ def test_await_times_out_on_a_dead_address():
 async def test_reply_routes_to_the_connection_that_sent_the_question():
   async with running_broxy() as harness:
     asker = await _local_client(harness)
-    question = await asyncio.to_thread(asker.message, 'quest', {'text': 'approve?'}, question=True)
+    question = await asyncio.to_thread(asker.message, 'quest', 'question', {'text': 'approve?'})
     await _next(harness.sink.messages)
 
-    reply = brotocol.message('quest', {'text': 'yes'}, reply_to=question.id)
+    reply = brotocol.message('quest', 'reply', {'text': 'yes'}, reply_to=question.id)
     await harness.transport.send(harness.channel, reply)
 
     assert await asyncio.to_thread(asker.receive, TIMEOUT) == reply
@@ -496,7 +496,7 @@ async def test_unsolicited_messages_fan_out_to_every_live_listener():
     await _next(harness.sink.messages)
     await _next(harness.sink.messages)
 
-    initial = brotocol.message('quest', {'index': 1})
+    initial = brotocol.message('quest', 'memo', {'index': 1})
     await harness.transport.send(harness.channel, initial)
     assert await asyncio.to_thread(first.receive, TIMEOUT) == initial
     assert await asyncio.to_thread(second.receive, TIMEOUT) == initial
@@ -506,7 +506,7 @@ async def test_unsolicited_messages_fan_out_to_every_live_listener():
       lambda: len(harness.broxy._listeners.get('quest', ())) == 1,
       'the listener survived its connection',
     )
-    later = brotocol.message('quest', {'index': 2}, reply_to='gone')
+    later = brotocol.message('quest', 'reply', {'index': 2}, reply_to='gone')
     await harness.transport.send(harness.channel, later)
     assert await asyncio.to_thread(second.receive, TIMEOUT) == later
     second.close()
@@ -523,20 +523,20 @@ async def test_reply_lookup_prefers_correlation_then_quest_before_listeners():
     question = await asyncio.to_thread(
       questioner.message,
       sent.request_id,
+      'question',
       {},
-      question=True,
     )
     await _next(harness.sink.messages)
     await asyncio.to_thread(listener.listen, sent.request_id)
     await _next(harness.sink.messages)
 
-    exact = brotocol.message(sent.request_id, {'text': 'answer'}, reply_to=question.id)
+    exact = brotocol.message(sent.request_id, 'reply', {'text': 'answer'}, reply_to=question.id)
     await harness.transport.send(harness.channel, exact)
     assert await asyncio.to_thread(questioner.receive, TIMEOUT) == exact
     assert await asyncio.to_thread(requester.receive, 0.05) is None
     assert await asyncio.to_thread(listener.receive, 0.05) is None
 
-    fallback = brotocol.message(sent.request_id, {'text': 'working'}, reply_to='gone')
+    fallback = brotocol.message(sent.request_id, 'reply', {'text': 'working'}, reply_to='gone')
     await harness.transport.send(harness.channel, fallback)
     assert await asyncio.to_thread(requester.receive, TIMEOUT) == fallback
     assert await asyncio.to_thread(listener.receive, 0.05) is None
@@ -549,8 +549,8 @@ async def test_reply_lookup_prefers_correlation_then_quest_before_listeners():
 async def test_missing_reply_route_warns_while_a_listenerless_message_is_info(caplog):
   async with running_broxy() as harness:
     caplog.clear()
-    reply = brotocol.message('quest', {}, reply_to='gone')
-    unsolicited = brotocol.message('other-quest', {})
+    reply = brotocol.message('quest', 'reply', {}, reply_to='gone')
+    unsolicited = brotocol.message('other-quest', 'memo', {})
     await harness.transport.send(harness.channel, reply)
     await harness.transport.send(harness.channel, unsolicited)
     await _wait_until(
@@ -575,8 +575,8 @@ async def test_route_bound_covers_request_question_and_listener_entries():
     question = await asyncio.to_thread(
       requester.message,
       'quest',
+      'question',
       {'text': 'approve?'},
-      question=True,
     )
     await _next(harness.sink.messages)
 
@@ -678,8 +678,8 @@ async def test_live_chat_crosses_dispatcher_and_broxies_in_both_directions():
     question = await asyncio.to_thread(
       requester.message,
       harness.quest,
+      'question',
       {'command': 'inspect'},
-      question=True,
     )
     delivered = await asyncio.to_thread(worker.receive, TIMEOUT)
     observed = await asyncio.to_thread(observer.receive, TIMEOUT)
@@ -689,6 +689,7 @@ async def test_live_chat_crosses_dispatcher_and_broxies_in_both_directions():
     reply = await asyncio.to_thread(
       worker.message,
       harness.quest,
+      'reply',
       {'result': 'ready'},
       reply_to=question.id,
     )
@@ -732,8 +733,8 @@ async def test_refused_live_question_is_correlated_in_the_journal():
     question = await asyncio.to_thread(
       worker.message,
       harness.quest,
+      'question',
       {'text': 'may I?'},
-      question=True,
     )
     reason = 'worker lacks the talk right for this message'
     with pytest.raises(PermissionError, match=reason):

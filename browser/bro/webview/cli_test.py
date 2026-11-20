@@ -149,6 +149,7 @@ async def test_open_rides_the_launch_to_ready_and_prints_the_owner_handle(monkey
       channel,
       brotocol.message(
         launch.request_id,
+        'memo',
         {
           'event': 'ready',
           'vnc': 'http://127.0.0.1:49152/vnc.html?autoconnect=1&resize=scale',
@@ -222,6 +223,7 @@ async def test_open_cancels_a_live_launch_when_ready_is_malformed(monkeypatch, c
       channel,
       brotocol.message(
         launch.request_id,
+        'memo',
         {'event': 'ready', 'vnc': None, 'unexpected': True},
       ),
     )

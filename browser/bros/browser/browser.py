@@ -63,7 +63,7 @@ Only when unattended with no way to ask, stop and `bro::raise` with the decision
 ## Failures
 
 Report a tool error as the page's failure.
-If a webview ends, reopen it once with `webview::reopen`, tell the summoner the page state was lost, and pass on the new noVNC URL.
+If a webview ends, reopen it once with `webview::reopen`, and tell the summoner in a notice that the page state was lost, passing on the new noVNC URL.
 """
 
 

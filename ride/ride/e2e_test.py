@@ -366,7 +366,7 @@ assert client is not None
 with client:
   ping = client.request('ping', {'worker': True}, 30)
   assert ping.payload == {'outcome': 'ok', 'value': {'worker': True}}, ping.payload
-  client.message(os.environ['BROKER_MISSION'], {'ref': artifact.ref, 'port': ports['8080']})
+  client.message(os.environ['BROKER_MISSION'], 'memo', {'ref': artifact.ref, 'port': ports['8080']})
 """
 
 
@@ -511,7 +511,7 @@ if '--settings' in argv:
 Path('/tree/.e2e-report.json').write_text(json.dumps(report))
 quest_route = os.environ.get('RIDE_E2E_QUEST_ROUTE')
 if quest_route is not None:
-  from bro.quest import ask, check, history, say
+  from bro.quest import ask, check, history, reply
   from bro.summon import summon_detached
 
   def emit(**event):
@@ -561,8 +561,8 @@ if quest_route is not None:
         [question] = conversation.awaiting
         break
       turn('waiting for the question')
-    report['model_actions'].append('quest_say')
-    say(quest_id, 'approved', reply_to=question.id)
+    report['model_actions'].append('quest_reply')
+    reply(quest_id, question.id, 'approved')
     turn('answered')
     while True:
       deliver()
@@ -1508,7 +1508,7 @@ def test_claude_summoner_receives_a_child_question_and_end_through_its_session_w
   report = _report(env, name)
 
   assert report['answer'] == 'approved'
-  assert report['model_actions'] == ['summon', 'quest_say', 'quest_check']
+  assert report['model_actions'] == ['summon', 'quest_reply', 'quest_check']
   delivered = '\n'.join(report['deliveries'])
   assert 'asks approve the change?' in delivered
   assert 'ended ok' in delivered
@@ -2630,15 +2630,15 @@ notifications = []
 with Runner(WatchBro(), EchoSpec(model='echo')) as runner:
   runner.watch_store.start('mission watch')
   deadline = time.monotonic() + 30
-  while not any('before the watch: summoner says before arm' in text for text in notifications):
+  while not any('before the watch: summoner sends notice before arm' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
       if not runner.inbox.wait(deadline, cancelled):
         raise TimeoutError('the arm replay did not wake the native child')
     batch = runner.inbox.drain()
     if batch is not None:
       notifications.append(batch.text)
-  say('self', 'watch armed')
-  while not any('summoner says after arm' in text for text in notifications):
+  say('self', 'memo', 'watch armed')
+  while not any('summoner sends notice after arm' in text for text in notifications):
     with runner.inbox.waiter() as cancelled:
       if not runner.inbox.wait(deadline, cancelled):
         raise TimeoutError('live steering did not wake the native child')
@@ -2667,7 +2667,7 @@ quest_id = summon_detached(
   harness='bro',
   timeout=120,
 )
-say(quest_id, 'before arm')
+say(quest_id, 'notice', 'before arm')
 deadline = time.monotonic() + 45
 while True:
   conversation = history(quest_id)
@@ -2681,7 +2681,7 @@ while True:
   if time.monotonic() >= deadline:
     raise TimeoutError('the child did not arm its watch')
   time.sleep(0.1)
-say(quest_id, 'after arm')
+say(quest_id, 'notice', 'after arm')
 while True:
   outcome = check(quest_id)
   if outcome.state == 'completed':
@@ -2792,8 +2792,8 @@ def test_native_child_watch_replays_pre_arm_steering_and_receives_live_steering(
 
   notifications = json.loads(raw_report)
   assert code == 0
-  assert any('before the watch: summoner says before arm' in text for text in notifications)
-  assert any('summoner says after arm' in text for text in notifications)
+  assert any('before the watch: summoner sends notice before arm' in text for text in notifications)
+  assert any('summoner sends notice after arm' in text for text in notifications)
   assert isolated_env.live_containers() == []
 
 
@@ -2802,7 +2802,7 @@ def _asking_child_summoner(harness: str, llm: Optional[str]) -> str:
 import time
 from pathlib import Path
 
-from bro.quest import check, history, say
+from bro.quest import check, history, reply
 from bro.summon import summon_detached
 
 quest_id = summon_detached(
@@ -2818,7 +2818,7 @@ while len(conversation.awaiting) == 0:
     raise TimeoutError('the child did not ask')
   conversation = history(quest_id, wait=True, timeout=remaining)
 [question] = conversation.awaiting
-say(quest_id, 'approved', reply_to=question.id)
+reply(quest_id, question.id, 'approved')
 outcome = check(quest_id, wait=True, timeout=max(deadline - time.monotonic(), 1))
 assert outcome.state == 'completed', outcome
 Path('/tree/.asking-child-report').write_text(outcome.answer)
@@ -3012,10 +3012,10 @@ class ScriptedLLM(LLM):
       if not pending:
         return 'the grandchild has not asked yet'
       [question] = pending
-      self.actions.append('bro__quest_say')
+      self.actions.append('bro__quest_reply')
       await self.tools.call(
-        'bro__quest_say',
-        {'quest_id': self.quest_id, 'text': 'approved', 'reply_to': question['id']},
+        'bro__quest_reply',
+        {'quest_id': self.quest_id, 'question_id': question['id'], 'text': 'approved'},
       )
       self.answered = True
       return 'answered the grandchild and ended the turn'
@@ -3161,9 +3161,7 @@ conversation = history('self')
 steering = [
   entry['head']['text']
   for entry in conversation.messages
-  if entry.get('from') == 'owner'
-  and entry.get('reply_to') is None
-  and entry.get('id') is None
+  if entry.get('from') == 'owner' and entry.get('role') == 'notice'
 ]
 assert steering == ['run the focused tests'], steering
 channel.completed(asked.answer + '|' + steering[0], 'ok')
@@ -3202,7 +3200,7 @@ def test_summon_chat_question_reply_and_steering_cross_the_live_broker(
   report = workspace.tree / '.quest-chat-report'
   root_source = """
 from pathlib import Path
-from bro.quest import Question, check, say
+from bro.quest import Question, check, reply, say
 from bro.summon import summon_and_wait
 
 quest_ids = []
@@ -3217,8 +3215,8 @@ question = summon_and_wait(
 )
 assert isinstance(question, Question), question
 [quest_id] = quest_ids
-say(quest_id, 'run the focused tests')
-say(quest_id, 'approved', reply_to=question.id)
+say(quest_id, 'notice', 'run the focused tests')
+reply(quest_id, question.id, 'approved')
 outcome = check(quest_id, wait=True, timeout=120)
 assert outcome.state == 'completed', outcome
 Path('/tree/.quest-chat-report').write_text(outcome.answer)
@@ -3260,7 +3258,7 @@ from bro.quest import say
 channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('e2e-cancel-trail')
-say('self', 'running')
+say('self', 'memo', 'running')
 time.sleep(600)
 """
 

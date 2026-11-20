@@ -38,7 +38,7 @@ write longer data to a file and report its artifact ref.
 If the instruction is ambiguous, asks for analysis outside your scope, or crosses a policy line it did not settle, ask a counter-question on `self` with `reply_to` set to the instruction's question id before acting on it.
 The owner answers that clarification with another question in the same thread;
 after acting, reply to that question with the outcome.
-If the owner answers as a plain say instead, send the outcome as a say because there is no question to close.
+If the owner answers with a memo or a notice instead, send the outcome as a notice because there is no question to close.
 
 For an upload, use only a ref the owner shared with this quest for that purpose.
 Pass it to `webview::share`, upload the returned path, and name the file in the outcome.

@@ -10,7 +10,7 @@ A summon needs a usable target in the summoner's host authority
 — read the banner's live `may_summon` row and any conditional `for` restrictions
 — so a denial stays a normal outcome the spell relays.
 
-version: 1.25.0
+version: 1.26.0
 ---
 
 # Ask
@@ -41,6 +41,7 @@ From the user's wording extract:
   Spell out concrete names, refs, and expectations.
   Ask for what the user actually wants in the final answer;
   live messages handle progress and questions but do not replace that deliverable.
+  When the user needs something before the child ends, such as a link or a ready signal, ask the child to send it as a notice once it exists.
   Shape the request around the target's card and leave mechanics to its own tools.
 
 Optional knobs normally follow only from the request:
@@ -74,9 +75,11 @@ The complete grammar and checks are in `bro/reference/permissions.md`; everyday 
 A quest gets `worker.say` by default.
 Widen it only for conversation the request needs:
 
-- `owner.say` lets this session steer the child with unsolicited messages;
+- `owner.say` lets this session steer the child with memos and notices;
 - `owner.question` lets this session ask the child and await its reply;
-- `worker.say` lets the child send informative progress, which reaches this session with the child's next question or its end unless `bro::quest_watch` follows it live;
+- `worker.say` lets the child send memos and notices:
+  a memo of progress reaches this session with its next waking line unless `bro::quest_watch` follows it live,
+  and a notice, such as a link the request asks to get mid-run, wakes it at once;
 - `worker.question` lets the child stop for an answer from this session.
 
 A reply follows a question right in the other direction, so do not add a say right merely to permit replies.
@@ -91,11 +94,13 @@ Do not poll a running child and never summon it again to recover a result.
 Whenever nothing else remains, end the turn;
 the watch wakes the run on the next transition that needs this session.
 
-When a child asks a question, answer it with `bro::quest_say`, setting `reply_to` to the question id.
+When a child asks a question, answer it with `bro::quest_reply` and the question id.
 To ask the child, call `bro::quest_ask`.
 Its reply arrives through the session watch and remains readable with `bro::quest_history`.
-If the reply is itself a question, answer that question with `bro::quest_say` and its id.
-Use `bro::quest_say` without `reply_to` to steer a child whose talk permits `owner.say`.
+If the reply is itself a question, answer that question with `bro::quest_reply` and its id.
+Steer a child whose talk permits `owner.say` with `bro::quest_notice` for what it should act on before its current wait ends,
+and with `bro::quest_memo` for what can wait for its next waking line.
+When a child's notice carries what the user is waiting on, relay it to the user at once.
 Use `bro::quest_share` to hand a live child an artifact created after launch.
 The child's session watch announces the share where the quest's talk carries `owner.say` or `owner.question`;
 under `worker.question` alone the ref reaches it only in a reply, and a quest with none of the three refuses the share
