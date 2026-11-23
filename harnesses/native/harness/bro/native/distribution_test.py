@@ -445,6 +445,7 @@ def test_claude_distribution_owns_its_console_scripts_and_registrations(wheels):
       f'bro.claude.{name.replace("_", "-")}': f'bro.claude._entrypoints:bro_claude_{name}'
       for name in (
         'command_gate',
+        'controlling_terminal',
         'read_gate',
         'session_end',
         'setup_token',

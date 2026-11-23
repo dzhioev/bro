@@ -10,6 +10,10 @@ def bro_claude_command_gate():
   return run_cli('bro.claude.command_gate', sys.argv)
 
 
+def bro_claude_controlling_terminal():
+  return run_cli('bro.claude.controlling_terminal', sys.argv)
+
+
 def bro_claude_read_gate():
   return run_cli('bro.claude.read_gate', sys.argv)
 
