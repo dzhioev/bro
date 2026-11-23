@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 # bro
 "bro.claude.command-gate" = "bro.claude._entrypoints:bro_claude_command_gate"
+"bro.claude.controlling-terminal" = "bro.claude._entrypoints:bro_claude_controlling_terminal"
 "bro.claude.read-gate" = "bro.claude._entrypoints:bro_claude_read_gate"
 "bro.claude.session-end" = "bro.claude._entrypoints:bro_claude_session_end"
 "bro.claude.setup-token" = "bro.claude._entrypoints:bro_claude_setup_token"

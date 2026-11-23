@@ -530,6 +530,31 @@ class TestRunInteractive:
     assert (run.code, run.stopped) == (0, False)
     assert size.read_text().split() == ['31', '101']
 
+  def test_a_resize_of_the_session_terminal_reaches_claude(self, tmp_path, waiters, stopped_calls):
+    size = tmp_path / 'size'
+    argv = _fake_claude(
+      tmp_path,
+      f"trap 'stty size > {size}; exit 0' WINCH\n"
+      "printf 'ready.'\n"
+      # a fake that never hears the resize gives up rather than hanging the run
+      'for _ in $(seq 400); do sleep 0.05; done\n'
+      'exit 3\n',
+    )
+    with _session_terminal() as terminal:
+
+      def _resize() -> None:
+        _read_until(terminal, b'ready.')
+        fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', 42, 133, 0, 0))
+        # what the kernel sends a session terminal's foreground group on a resize
+        os.kill(os.getpid(), signal.SIGWINCH)
+
+      driver = threading.Thread(target=_resize)
+      driver.start()
+      run = _interactive(argv, tmp_path, waiters, stopped_calls)
+      driver.join()
+    assert (run.code, run.stopped) == (0, False)
+    assert size.read_text().split() == ['42', '133']
+
 
 class _TranscriptClock:
   """the clock `interrupt` reads, moving only when it sleeps; a transcript

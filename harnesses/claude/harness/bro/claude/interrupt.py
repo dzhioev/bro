@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import IO
 
 from bro import turn_end, watches
-from bro.base import log
+from bro.base import log, spawn
 from bro.claude.claude_config import latest_jsonl
 from bro.claude.session_end_state import StoppedCallMark
 from bro.claude.transcripts import read_lines_after
@@ -489,8 +489,15 @@ def _terminal_run(argv: list[str], env: Mapping[str, str]) -> Generator[_Termina
     if os.isatty(_SESSION_STDIN):
       teardown.enter_context(_raw_mode(_SESSION_STDIN))
       teardown.enter_context(_window_size_followed(_SESSION_STDIN, terminal))
+    # the pty is claude's controlling terminal, so resizing it is what signals
+    # claude, after the new size is in place
     process = subprocess.Popen(
-      argv, env=dict(env), stdin=child_end, stdout=child_end, stderr=child_end
+      [spawn.console_script('bro.claude.controlling-terminal'), *argv],
+      env=dict(env),
+      stdin=child_end,
+      stdout=child_end,
+      stderr=child_end,
+      start_new_session=True,
     )
     # the child holds the only handle on its end now, so the proxy reads EOF
     # from the pty when it exits

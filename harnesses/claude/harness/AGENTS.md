@@ -23,10 +23,11 @@ The package `bro.claude` imports nothing from its `__init__.py`.
 - `competing_hooks.py` — where the pinned Claude Code loads a session's own `PreToolUse` hooks, and which of them could rewrite a gated tool's call after its gate.
 - `interrupt.py` — the two ways the runner runs Claude, and how each is ended so its last turn reaches the transcript.
   Print mode runs over stream-json as the harness's `bro.turn_end` port, settling each turn end and ended by SIGINT;
-  a TUI runs on a runner-owned pty that proxies the session's terminal, ended by the interrupt keypress.
+  a TUI runs on a runner-owned pty that proxies the session's terminal and is claude's controlling terminal, ended by the interrupt keypress.
   A session a service tool ended is not interrupted:
   its stop waits for the turn the session-end hook stopped, which a print session's stream ends at and a TUI quits after.
   Either stop stands the watch waiter down first.
+- `controlling_terminal.py` — the exec a TUI claude starts through, taking its stdin as its controlling terminal.
 - `claude_argv.py`
   — the argv builder, including solo print mode, settings, status line, MCP config under `--strict-mcp-config`, the append prompt, and the permission mode a hold and isolation select;
   the `--tools` allowlist, the command gate on a finite command list, and the read gate without files;
