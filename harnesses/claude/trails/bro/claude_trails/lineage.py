@@ -27,7 +27,7 @@ own rows folded (`lineage.py`). Two continuations are verifiable:
   every copy in the chain re-serializes; digests take no part here at all, since
   the rewritten `sessionId` changes every copied line's.
 
-A trail whose blaze response was lost carries no row to verify anything against.
+A trail whose start response was lost carries no row to verify anything against.
 It is attachable on the `cuts` its own mint stored instead, so a retry converges
 on the trail the lost response opened rather than stranding it and minting
 another.
@@ -170,7 +170,7 @@ def _continue_segment(
   one trail."""
   extent = _extent(header)
   if extent == 0:
-    # a blaze whose response was lost leaves a trail no row can be verified
+    # a start whose response was lost leaves a trail no row can be verified
     # against; the spans its own mint awarded are what the retry takes over
     return None if head.cuts is None else _attach(header, extent, head.cuts)
   line_by_uuid = evidence.line_by_uuid()

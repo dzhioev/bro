@@ -14,7 +14,7 @@ TRAILS_DIRECTORY = Path('ride') / 'trails'
 
 def recorded_a_trail(store_root: Path) -> bool:
   """whether the store holds one. Opening a store creates its own directories,
-  so a run that ended before blazing a trail leaves the layout behind with
+  so a run that ended before starting a trail leaves the layout behind with
   nothing in it."""
   if not (store_root / 'trails').is_dir():
     return False

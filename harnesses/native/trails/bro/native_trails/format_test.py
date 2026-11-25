@@ -6,12 +6,12 @@ import pytest
 from bro.llm import wires
 from bro.native_trails.format import BRO_FORMAT
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, named_tool_digests, tools_sha256
+from bro.trails.model import StartRequest, named_tool_digests, tools_sha256
 from bro.trails.store import fetch_recorded_trail
 
 
 def native_request(records):
-  return BlazeRequest(
+  return StartRequest(
     harness='bro',
     bro='bro',
     version='test',
@@ -36,7 +36,7 @@ def test_tagged_and_untagged_responses_project_identically_through_a_store(tmp_p
   with LocalStore(tmp_path) as store:
     projected = []
     for extras in ({}, {'wire': 'responses'}):
-      trail = store.blaze(
+      trail = store.start_trail(
         native_request(
           [
             {
@@ -78,7 +78,7 @@ def test_chat_projection_preserves_calls_interim_text_and_stop(tmp_path):
     ],
   }
   with LocalStore(tmp_path) as store:
-    trail = store.blaze(
+    trail = store.start_trail(
       native_request(
         [{'kind': 'llm_call', 'wire': 'chat', 'body': {'request': {}, 'response': response}}]
       )
@@ -120,7 +120,7 @@ def test_unavailable_wire_keeps_the_whole_record_as_one_event(tmp_path, monkeypa
   if wire is not None:
     record['wire'] = wire
   with LocalStore(tmp_path) as store:
-    trail = store.blaze(native_request([record]))
+    trail = store.start_trail(native_request([record]))
     messages = list(store.iter_messages(trail['id']))
     rows = list(store.iter_steps(trail['id']))
   assert len(messages) == 1
@@ -137,7 +137,7 @@ def test_broken_installed_wire_fails_loudly(tmp_path, monkeypatch):
     lambda: (importlib.metadata.EntryPoint('broken', 'missing.module', wires.ENTRY_POINT_GROUP),),
   )
   with LocalStore(tmp_path) as store:
-    trail = store.blaze(
+    trail = store.start_trail(
       native_request([{'kind': 'llm_call', 'wire': 'broken', 'body': {'response': {}}}])
     )
     with pytest.raises(RuntimeError, match='failed to load wire'):
@@ -209,7 +209,7 @@ def test_line_rows_store_verbatim_and_read_like_spread_rows(tmp_path, step_recor
       ],
       line_records,
     ):
-      trail_id = store.blaze(native_request([]))['id']
+      trail_id = store.start_trail(native_request([]))['id']
       store.append_records(trail_id, 0, records, tools={tools_sha256([]): []})
       trails.append(trail_id)
     spread_rows, line_rows = [list(store.iter_steps(trail_id)) for trail_id in trails]
@@ -297,7 +297,7 @@ def test_line_rows_require_kind_at_and_tool_digest_fields():
 
 def test_import_seal_refolds_line_rows_and_preserves_stored_lines(tmp_path, step_records):
   with LocalStore(tmp_path / 'source') as source, LocalStore(tmp_path / 'target') as target:
-    trail_id = source.blaze(native_request([]))['id']
+    trail_id = source.start_trail(native_request([]))['id']
     source.append_records(
       trail_id, 0, [line_record(record) for record in step_records], tools={tools_sha256([]): []}
     )

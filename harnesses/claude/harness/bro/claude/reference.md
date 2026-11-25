@@ -295,7 +295,7 @@ the core trails schema lives in `bro.trails` and the Claude lineage verdict in `
 A verified same-segment resume reopens that segment's trail where the previous lifetime stopped, so a process restart adds no edge;
 an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
 The daemon nominates nothing:
-it blazes with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
+it starts a trail with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
 The recorder republishes the session's trail pointer as segments turn over.
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir, the log its recording health beats name (`bro/reference/ride.md`, "Session recording");
 the statusLine and `ride banner` surface that signal.

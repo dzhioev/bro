@@ -9,7 +9,7 @@ leave a linear conversation linear; only a history copy opens a trail of its own
 
 The daemon decides none of that. It reports what it can see — the segment name,
 its lines' record uuids and digests, and the sibling segment files sharing those
-records — and blazes with that evidence; the Claude trail format's resolver answers
+records — and starts a trail with that evidence; the Claude trail format's resolver answers
 with the trail recording from here, the ordinal to append from, and the line
 ranges that trail owns, or declines a transcript claude has not finished writing
 (`harnesses/claude/trails/bro/claude_trails/lineage.py`). The daemon then uploads those ranges and keeps
@@ -44,7 +44,7 @@ from bro.claude_trails.format import CLAUDE_FORMAT
 from bro.launch.hold import session_hold
 from bro.monitor import SESSION_DIR_ENV, health, trail_pointer
 from bro.summon import summoned_by_from_env
-from bro.trails.model import BlazeRequest, payload_sha256
+from bro.trails.model import StartRequest, payload_sha256
 from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.rows import project_messages
@@ -182,7 +182,7 @@ def _verdict_chunks(result: dict) -> list[list[int]]:
 
 
 class _SegmentRecorder:
-  """records one segment file into one trail: the lines the blaze verdict
+  """records one segment file into one trail: the lines the start verdict
   awarded the trail, then every line the file grows by."""
 
   def __init__(
@@ -257,7 +257,7 @@ class _SegmentRecorder:
 
 class Recorder:
   """supervises one workspace's transcripts: which segment file is the session's
-  transcript right now, what lineage evidence its trail is blazed from, and when
+  transcript right now, what lineage evidence its trail is started from, and when
   the segment it handed to a `_SegmentRecorder` is over. `started_after` gates
   segment adoption to files modified after the session launched, so a reused
   workspace's older transcripts are not re-recorded."""
@@ -361,7 +361,7 @@ class Recorder:
       'lines': lines,
       'related_segments': self._related_segments(path, lines),
     }
-    verdict = self._blaze(path.stem, lineage)
+    verdict = self._start_trail(path.stem, lineage)
     if verdict is None:
       self._declined_signature = signature
       return False
@@ -401,11 +401,11 @@ class Recorder:
 
   # --- trail lifecycle ------------------------------------------------------------
 
-  def _blaze(self, segment: str, lineage: dict) -> Optional[dict]:
+  def _start_trail(self, segment: str, lineage: dict) -> Optional[dict]:
     """settle the trail this transcript records into and return the verdict;
     None when the resolver declines to adopt the segment yet."""
     body: dict[str, Any] = {'records': []}
-    request = BlazeRequest(
+    request = StartRequest(
       harness='claude',
       version=configs.VERSION,
       interactive=True,
@@ -424,7 +424,7 @@ class Recorder:
       summoned_by=self.summoned_by,
       lineage=lineage,
     )
-    result = self.client.blaze(request)
+    result = self.client.start_trail(request)
     if result.get('adopted') is False:
       log.info('segment %s not adopted yet (%s)', segment[:12], result.get('reason'))
       return None

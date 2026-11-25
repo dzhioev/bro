@@ -22,15 +22,15 @@ class Store(LocalStore):
   def __init__(self, root):
     super().__init__(root)
     self.appends = []
-    self.blazes = []
+    self.starts = []
     self.keepalives = []
     self.failure = None
     self.commit = 0
     self.on_append = lambda: None
 
-  def blaze(self, request):
-    self.blazes.append(request)
-    return super().blaze(request)
+  def start_trail(self, request):
+    self.starts.append(request)
+    return super().start_trail(request)
 
   def append_records(self, trail_id, offset, records, *, tools=None):
     self.appends.append(copy.deepcopy((offset, records, tools)))
@@ -111,7 +111,7 @@ def test_line_rows_tools_session_facts_pointer_and_beats(setup):
   )
   assert [tools_sha256(tools)] == [digest for _, _, blobs in store.appends for digest in blobs]
   assert store.get_tool(tools_sha256(tools)) == tools
-  request = store.blazes[0]
+  request = store.starts[0]
   assert request.location == recorder.session.location
   assert request.native['ride_command'] == recorder.session.ride_command
   assert request.body == {'records': []}
@@ -167,13 +167,13 @@ def test_summoner_is_read_once(setup, monkeypatch):
   monkeypatch.setenv(SUMMONER_ENV, 'not json')
   open_log(path)
   recorder.tick()
-  assert store.blazes[0].summoned_by == edge
+  assert store.starts[0].summoned_by == edge
 
 
 def test_absent_log_and_unended_log_keepalive(setup, monkeypatch):
   path, store, recorder = setup
   assert not recorder.tick()
-  assert store.blazes == []
+  assert store.starts == []
   open_log(path)
   recorder.tick()
   monkeypatch.setattr(spine, 'KEEPALIVE_INTERVAL_SECONDS', 0)
@@ -301,18 +301,18 @@ def test_unverified_partial_prefix_ends_recording(setup, monkeypatch):
   assert 'not acknowledged as a duplicate' in beat()['error']
 
 
-def test_nonzero_blaze_extent_is_permanent(setup, monkeypatch):
+def test_nonzero_start_extent_is_permanent(setup, monkeypatch):
   path, store, recorder = setup
-  blaze = store.blaze
+  start_trail = store.start_trail
 
   def nonzero(request):
-    return {**blaze(request), 'extent': 1}
+    return {**start_trail(request), 'extent': 1}
 
-  monkeypatch.setattr(store, 'blaze', nonzero)
+  monkeypatch.setattr(store, 'start_trail', nonzero)
   open_log(path)
   recorder.tick()
   recorder.tick()
-  assert len(store.blazes) == 1
+  assert len(store.starts) == 1
   assert store.appends == []
   assert 'nonzero extent' in beat()['error']
 

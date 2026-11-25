@@ -3,7 +3,8 @@ from typing import Any
 
 import pytest
 
-from bro.trails.model import MESSAGE_TYPES, BlazeRequest, validate_end
+from bro.base.lulid import lulid
+from bro.trails.model import MESSAGE_TYPES, StartRequest, validate_end
 
 
 def _wire_request(**overrides):
@@ -24,7 +25,7 @@ def test_messages_wire_admits_notifications():
   assert 'notification' in MESSAGE_TYPES
 
 
-def test_blaze_request_round_trips_wire_data_and_is_frozen():
+def test_start_request_round_trips_wire_data_and_is_frozen():
   wire_request = _wire_request(
     git={
       'repo': '/source/bro',
@@ -33,7 +34,7 @@ def test_blaze_request_round_trips_wire_data_and_is_frozen():
       'base_sha': 'abc123',
     }
   )
-  request = BlazeRequest.from_wire(wire_request)
+  request = StartRequest.from_wire(wire_request)
 
   assert request.to_wire() == wire_request
   mutable_request: Any = request
@@ -55,9 +56,9 @@ def test_blaze_request_round_trips_wire_data_and_is_frozen():
     (_wire_request(git={'branch': 1}), 'git.branch must be a non-empty string'),
   ],
 )
-def test_blaze_request_rejects_invalid_wire_data(data, message):
+def test_start_request_rejects_invalid_wire_data(data, message):
   with pytest.raises(ValueError, match=message):
-    BlazeRequest.from_wire(data)
+    StartRequest.from_wire(data)
 
 
 @pytest.mark.parametrize(
@@ -80,3 +81,48 @@ def test_validate_end_accepts_writer_outcomes(reason, detail):
 def test_validate_end_rejects_invalid_outcomes(reason, detail, message):
   with pytest.raises(ValueError, match=message):
     validate_end(reason, detail)
+
+
+@pytest.mark.parametrize('kind', ['resume', 'trail', 'branch'])
+def test_fork_kind_round_trip(kind):
+  wire = _wire_request(forked_from={'trail_id': 'parent', 'step_id': 0, 'kind': kind})
+  assert StartRequest.from_wire(wire).to_wire() == wire
+
+
+@pytest.mark.parametrize('kind', ['other', None, 1, []])
+def test_unknown_fork_kind_rejected(kind):
+  with pytest.raises(ValueError, match='forked_from.kind'):
+    StartRequest.from_wire(
+      _wire_request(forked_from={'trail_id': 'parent', 'step_id': 0, 'kind': kind})
+    )
+
+
+def test_summoned_pointer_refuses_kind():
+  with pytest.raises(ValueError, match='summoned_by'):
+    StartRequest.from_wire(
+      _wire_request(summoned_by={'trail_id': 'parent', 'step_id': 0, 'kind': 'resume'})
+    )
+
+
+@pytest.mark.parametrize('value', ['', '../trail', '01kwphn3q5-w1fdwep2-apw9ag3i', 1])
+def test_start_id_must_be_lulid(value):
+  with pytest.raises(ValueError, match='id must be a lulid'):
+    StartRequest.from_wire(_wire_request(id=value))
+
+
+def test_named_start_digest_includes_wire_nulls_and_body():
+  request = _wire_request(id=lulid(), subject=None)
+  parsed = StartRequest.from_wire(request)
+  assert parsed.to_wire() == request
+  without_null = {key: value for key, value in request.items() if value is not None}
+  assert parsed.start_sha256 != StartRequest.from_wire(without_null).start_sha256
+  assert (
+    parsed.start_sha256
+    != StartRequest.from_wire({**request, 'body': {'records': [1]}}).start_sha256
+  )
+
+
+@pytest.mark.parametrize('lineage', [{}, {'segment': 'record'}])
+def test_named_start_refuses_lineage(lineage):
+  with pytest.raises(ValueError, match='id and lineage evidence are mutually exclusive'):
+    StartRequest.from_wire(_wire_request(id=lulid(), lineage=lineage))

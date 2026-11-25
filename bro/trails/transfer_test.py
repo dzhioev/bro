@@ -5,17 +5,17 @@ import pytest
 
 from bro.trails import formats, model, transfer
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, tools_sha256
+from bro.trails.model import StartRequest, tools_sha256
 from bro.trails.store import TrailNotFound
 
 _TOOLS = [{'type': 'function', 'name': 'read'}]
 _TOOLS_DIGEST = tools_sha256(_TOOLS)
 
 
-def _blaze(store: LocalStore, **overrides) -> str:
+def _start_trail(store: LocalStore, **overrides) -> str:
   body = overrides.pop('body', {'records': [{'kind': 'system_prompt', 'body': 'prompt'}]})
-  return store.blaze(
-    BlazeRequest(
+  return store.start_trail(
+    StartRequest(
       harness='bro',
       bro='dev',
       version='test',
@@ -35,9 +35,9 @@ def _served(store: LocalStore, trail_id: str) -> tuple[dict, list[dict]]:
 def _lineage(source: LocalStore) -> tuple[str, str, str]:
   """A root, a fork of it, and a trail summoned from the fork, whose rows name
   a tool blob."""
-  root = _blaze(source)
-  fork = _blaze(source, forked_from={'trail_id': root, 'step_id': 0})
-  summoned = _blaze(source, summoned_by={'trail_id': fork, 'step_id': 0})
+  root = _start_trail(source)
+  fork = _start_trail(source, forked_from={'trail_id': root, 'step_id': 0})
+  summoned = _start_trail(source, summoned_by={'trail_id': fork, 'step_id': 0})
   source.append_records(
     summoned,
     1,
@@ -51,7 +51,7 @@ def _lineage(source: LocalStore) -> tuple[str, str, str]:
 def test_export_writes_the_ancestry_parents_first_and_import_reads_it_back(tmp_path):
   source = LocalStore(tmp_path / 'source')
   root, fork, summoned = _lineage(source)
-  unrelated = _blaze(source)
+  unrelated = _start_trail(source)
   layout = tmp_path / 'layout'
 
   exported = transfer.export_trails(source, [summoned], layout)
@@ -81,7 +81,7 @@ def test_export_and_import_carry_header_fields(tmp_path):
     'base_sha': 'abc123',
   }
   legacy_context = [{'title': 'recorded prompt', 'content': 'historical prompt'}]
-  trail_id = _blaze(source, git=git)
+  trail_id = _start_trail(source, git=git)
   header_path = source.trails_directory / trail_id / 'header.json'
   header = json.loads(header_path.read_text())
   header['legacy_launch_context'] = legacy_context
@@ -100,7 +100,7 @@ def test_export_and_import_carry_header_fields(tmp_path):
 
 def test_export_fails_on_an_ancestor_the_store_does_not_hold(tmp_path):
   source = LocalStore(tmp_path / 'source')
-  orphan = _blaze(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
+  orphan = _start_trail(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
 
   with pytest.raises(TrailNotFound) as missing:
     transfer.export_trails(source, [orphan], tmp_path / 'layout')
@@ -110,7 +110,7 @@ def test_export_fails_on_an_ancestor_the_store_does_not_hold(tmp_path):
 
 def test_import_layout_refuses_an_external_parent_by_default(tmp_path):
   source = LocalStore(tmp_path / 'source')
-  child = _blaze(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
+  child = _start_trail(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
 
   with pytest.raises(ValueError, match=f'trail {child} is summoned by elsewhere'):
     transfer.import_layout(tmp_path / 'source', LocalStore(tmp_path / 'destination'))
@@ -120,7 +120,7 @@ def test_import_layout_into_an_external_parents_store_keeps_the_pointer(tmp_path
   # a summoned child adopted into a store its summoner did not record to keeps
   # its cross-backend summon pointer
   source = LocalStore(tmp_path / 'source')
-  child = _blaze(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
+  child = _start_trail(source, summoned_by={'trail_id': 'elsewhere', 'step_id': 0})
   destination = LocalStore(tmp_path / 'destination', external_parents_ok=True)
 
   imported = transfer.import_layout(tmp_path / 'source', destination)
@@ -131,7 +131,7 @@ def test_import_layout_into_an_external_parents_store_keeps_the_pointer(tmp_path
 
 def test_transfer_refuses_a_source_with_an_incomplete_import(tmp_path):
   recorded = LocalStore(tmp_path / 'recorded')
-  trail_id = _blaze(recorded)
+  trail_id = _start_trail(recorded)
   recorded.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
   partial = LocalStore(tmp_path / 'partial')
   header, rows = _served(recorded, trail_id)
@@ -146,7 +146,7 @@ def test_transfer_refuses_a_source_with_an_incomplete_import(tmp_path):
 
 def test_import_layout_carries_each_record_in_the_format_it_was_written_in(tmp_path, monkeypatch):
   source = LocalStore(tmp_path / 'source')
-  trail_id = _blaze(source)
+  trail_id = _start_trail(source)
   source.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
   header_path = source.trails_directory / trail_id / 'header.json'
   rows_path = source.trails_directory / trail_id / 'steps.jsonl'
@@ -235,7 +235,7 @@ def test_parents_first_follows_both_pointers_and_refuses_a_cycle():
 
 def test_a_layout_export_is_a_store_rewind_can_read(tmp_path):
   source = LocalStore(tmp_path / 'source')
-  trail_id = _blaze(source, subject='named')
+  trail_id = _start_trail(source, subject='named')
   layout = Path(tmp_path / 'layout')
 
   transfer.export_trails(source, [trail_id], layout)

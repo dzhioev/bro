@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Any, Optional
 
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.store import TrailsStore
 
 KEEPALIVE_INTERVAL_SECONDS = 60.0
@@ -22,8 +22,8 @@ class Recording:
     self._lock = threading.RLock()
 
   @classmethod
-  def create(cls, store: TrailsStore, request: BlazeRequest) -> 'Recording':
-    opened = store.blaze(request)
+  def create(cls, store: TrailsStore, request: StartRequest) -> 'Recording':
+    opened = store.start_trail(request)
     return cls(store, opened['id'], opened['extent'])
 
   @property

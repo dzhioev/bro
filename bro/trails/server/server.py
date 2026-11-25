@@ -16,7 +16,7 @@ import bro.base.args as base_args
 from bro.base import credentials, log
 from bro.trails.model import (
   MESSAGE_TYPES,
-  BlazeRequest,
+  StartRequest,
   tool_not_found_body,
   trail_collision_body,
   trail_has_forks_body,
@@ -144,23 +144,22 @@ async def _handle_health(_: web.Request) -> web.Response:
 
 
 @requires(Permission.WRITE)
-async def _handle_blaze(request: web.Request) -> web.Response:
+async def _handle_start_trail(request: web.Request) -> web.Response:
   payload = await _read_json(request)
   if not isinstance(payload, dict):
     return _error('invalid json', 400)
   try:
-    blaze_request = BlazeRequest.from_wire(payload)
+    start_request = StartRequest.from_wire(payload)
   except ValueError as exception:
     return _error(str(exception), 400)
   store = request.app[STORE_KEY]
   try:
-    result = await _dispatch(store.blaze, blaze_request)
+    result = await _dispatch(store.start_trail, start_request)
   except ValueError as exception:
     return _error(str(exception), 400)
-  # a resolver that declines to adopt creates nothing, and neither does one that
-  # attaches the caller to the trail its segment already has
-  minted = result.get('adopted') is not False and 'attached' not in result
-  return web.json_response(result, status=201 if minted else 200)
+  except TrailCollision as exception:
+    return _collision(exception)
+  return web.json_response(result, status=201 if result['created'] else 200)
 
 
 @requires(Permission.WRITE)
@@ -582,7 +581,7 @@ def create_app(
   app[STORE_KEY] = store
   app[TOKENS_KEY] = tokens
   app.router.add_get(HEALTH_PATH, _handle_health)
-  app.router.add_post('/v1/trails', _handle_blaze)
+  app.router.add_post('/v1/trails', _handle_start_trail)
   app.router.add_get('/v1/trails', _handle_list_trails)
   app.router.add_get('/v1/trails/{trail_id}', _handle_get_trail)
   app.router.add_patch('/v1/trails/{trail_id}', _handle_set_subject)

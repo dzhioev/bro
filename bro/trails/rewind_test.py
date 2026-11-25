@@ -197,13 +197,19 @@ class TestShow:
     assert '#1 USER' in output and 'hello' in output
     assert '#2 ASSISTANT' in output and 'hi there' in output
 
-  def test_walks_the_fork_chain_through_the_exact_parent_anchor(self, capsys):
+  @pytest.mark.parametrize('kind', [None, 'resume', 'trail', 'branch'])
+  def test_walks_the_fork_chain_through_the_exact_parent_anchor(self, capsys, kind):
     client = FakeClient()
     client.add_claude('T1', [_user('hello'), _assistant('anchor'), _user('discarded')])
     client.add_claude(
       'T2',
       [_user('resumed')],
-      forked_from={'trail_id': 'T1', 'step_id': 1, 'index': 1},
+      forked_from={
+        'trail_id': 'T1',
+        'step_id': 1,
+        'index': 1,
+        **({'kind': kind} if kind is not None else {}),
+      },
     )
 
     assert _command_show(_client(client), _args('T2')) == 0
@@ -212,6 +218,8 @@ class TestShow:
     assert 'hello' in output and 'anchor' in output and 'resumed' in output
     assert 'discarded' not in output
     assert '── resumed as trail T2' in output
+    if kind is not None:
+      assert f'({kind}; segment ' in output
 
   def test_tool_results_are_retained_under_their_calls(self, capsys):
     call = json.dumps(
@@ -432,13 +440,14 @@ class TestListAndTree:
   def test_tree_uses_lineage_records_and_highlights_the_selected_node(self, capsys):
     client = FakeClient()
     client.add_bro('TROOT', [])
-    client.add_claude(LULID, [], forked_from={'trail_id': 'TROOT', 'step_id': 0})
+    client.add_claude(LULID, [], forked_from={'trail_id': 'TROOT', 'step_id': 0, 'kind': 'resume'})
 
     assert _command_tree(_client(client), {'trail_id': LULID, 'color': 'never'}) == 0
 
     output = capsys.readouterr().out
     assert 'TROOT' in output and LULID in output
     assert 'ws/claude' in output
+    assert 'resume' in output
     assert '<-- here' in output
 
 

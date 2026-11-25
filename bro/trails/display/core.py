@@ -409,6 +409,8 @@ class DisplaySession:
       segment_items = [BlockItem(record.trail_id, style=style, label='trail')]
       if record.segment is not None:
         segment_items.append(BlockItem(record.segment, style=style, label='segment'))
+      if record.edge_kind is not None:
+        segment_items.append(BlockItem(record.edge_kind, style=style, label='kind'))
       return tuple(segment_items)
     if isinstance(record, NativeStep):
       if isinstance(record.body, InlineStepBody):
@@ -464,6 +466,8 @@ class DisplaySession:
         lineage_items.append(BlockItem(record.model, style=style, label='model'))
       if record.fork_step_id is not None:
         lineage_items.append(BlockItem(str(record.fork_step_id), style=style, label='step'))
+      if record.edge_kind is not None:
+        lineage_items.append(BlockItem(record.edge_kind, style=style, label='kind'))
       if record.highlighted:
         lineage_items.append(BlockItem('here', style=StyleRole.HEADING))
       return tuple(lineage_items)

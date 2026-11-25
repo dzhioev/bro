@@ -6,7 +6,7 @@ import pytest
 
 from bro.claude_trails.lineage import resolve
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, payload_sha256
+from bro.trails.model import StartRequest, payload_sha256
 
 
 def _record(**fields: Any) -> str:
@@ -40,8 +40,8 @@ def store(tmp_path: Path) -> LocalStore:
   return LocalStore(tmp_path / 'trails')
 
 
-def _request(segment: str, lines: list[str], **fields: Any) -> BlazeRequest:
-  return BlazeRequest(
+def _request(segment: str, lines: list[str], **fields: Any) -> StartRequest:
+  return StartRequest(
     harness='claude',
     version='test',
     interactive=True,
@@ -57,16 +57,16 @@ def _request(segment: str, lines: list[str], **fields: Any) -> BlazeRequest:
   )
 
 
-def _blaze(
+def _start_trail(
   store: LocalStore, segment: str, lines: list[str], *, forked_from: Optional[dict] = None
 ) -> str:
-  return store.blaze(_request(segment, lines, forked_from=forked_from))['id']
+  return store.start_trail(_request(segment, lines, forked_from=forked_from))['id']
 
 
 def _adopt(store: LocalStore, segment: str, lines: list[str], **evidence: Any) -> dict:
-  """blaze the way a recorder does: no records, the verdict's spans uploaded
+  """start the way a recorder does: no records, the verdict's spans uploaded
   afterwards — so a response lost here leaves a trail with no row at all."""
-  return store.blaze(_request(segment, [], lineage=_evidence(segment, lines, **evidence)))
+  return store.start_trail(_request(segment, [], lineage=_evidence(segment, lines, **evidence)))
 
 
 class _IndexSpy:
@@ -93,7 +93,7 @@ def _recorded_lines(count: int) -> list[str]:
 class TestSameSegment:
   def test_resume_attaches_to_the_trail_recording_the_segment(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    trail_id = _blaze(store, 'seg-1', recorded)
+    trail_id = _start_trail(store, 'seg-1', recorded)
 
     decision = resolve(_evidence('seg-1', [*recorded, _user('more', 'u3')]), store)
 
@@ -104,7 +104,7 @@ class TestSameSegment:
 
   def test_a_file_that_has_not_grown_is_not_adopted(self, store):
     recorded = [_user('hello', 'u1')]
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
 
     decision = resolve(_evidence('seg-1', recorded), store)
 
@@ -113,7 +113,7 @@ class TestSameSegment:
 
   def test_a_rewritten_line_fails_the_anchors_and_roots(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
     rewritten = [_user('tampered', 'u1'), recorded[1], _user('more', 'u3')]
 
     decision = resolve(_evidence('seg-1', rewritten), store)
@@ -136,9 +136,9 @@ class TestSameSegment:
 
   def test_a_fork_inherits_the_conversations_first_record(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    parent_id = _blaze(store, 'seg-1', recorded)
+    parent_id = _start_trail(store, 'seg-1', recorded)
 
-    forked_id = _blaze(store, 'seg-1', [], forked_from={'trail_id': parent_id, 'step_id': 1})
+    forked_id = _start_trail(store, 'seg-1', [], forked_from={'trail_id': parent_id, 'step_id': 1})
 
     head = store.get_trail(forked_id)['native']['lineage_head']
     assert head == {
@@ -152,7 +152,7 @@ class TestSameSegment:
 class TestCopiedHistory:
   def test_a_verified_copy_forks_and_keeps_only_the_new_lines(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    trail_id = _blaze(store, 'seg-1', recorded)
+    trail_id = _start_trail(store, 'seg-1', recorded)
     copied = [_meta(), *recorded, _user('resumed', 'u3')]
 
     decision = resolve(_evidence('seg-2', copied, related=('seg-1',)), store)
@@ -162,7 +162,7 @@ class TestCopiedHistory:
 
   def test_a_copy_may_drop_trailing_ephemera(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2'), _user('dropped', 'u3')]
-    trail_id = _blaze(store, 'seg-1', recorded)
+    trail_id = _start_trail(store, 'seg-1', recorded)
     copied = [*recorded[:2], _user('resumed', 'u4')]
 
     decision = resolve(_evidence('seg-2', copied, related=('seg-1',)), store)
@@ -172,7 +172,7 @@ class TestCopiedHistory:
 
   def test_a_copy_missing_the_parents_first_record_roots(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
     copied = [recorded[1], _user('resumed', 'u3')]
 
     decision = resolve(_evidence('seg-2', copied, related=('seg-1',)), store)
@@ -181,7 +181,7 @@ class TestCopiedHistory:
 
   def test_a_copy_ending_inside_the_chain_is_not_adopted_yet(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
 
     decision = resolve(_evidence('seg-2', recorded, related=('seg-1',)), store)
 
@@ -190,9 +190,9 @@ class TestCopiedHistory:
 
   def test_the_copy_starts_at_the_earliest_line_an_ancestor_holds(self, store):
     root_lines = [_user('hello', 'u1')]
-    root_id = _blaze(store, 'seg-1', root_lines)
+    root_id = _start_trail(store, 'seg-1', root_lines)
     parent_lines = [_user('again', 'u2')]
-    parent_id = _blaze(
+    parent_id = _start_trail(
       store, 'seg-1', parent_lines, forked_from={'trail_id': root_id, 'step_id': 0}
     )
     copied = [_meta(), *root_lines, *parent_lines, _user('resumed', 'u3')]
@@ -206,13 +206,13 @@ class TestCopiedHistory:
 
   def test_a_copy_of_a_forked_chain_anchors_on_the_newest_head(self, store):
     root_lines = [_user('hello', 'u1')]
-    root_id = _blaze(store, 'seg-1', root_lines)
+    root_id = _start_trail(store, 'seg-1', root_lines)
     middle_lines = [_user('again', 'u2')]
-    middle_id = _blaze(
+    middle_id = _start_trail(
       store, 'seg-1', middle_lines, forked_from={'trail_id': root_id, 'step_id': 0}
     )
     parent_lines = [_user('third', 'u3')]
-    parent_id = _blaze(
+    parent_id = _start_trail(
       store, 'seg-1', parent_lines, forked_from={'trail_id': middle_id, 'step_id': 0}
     )
     spy = _IndexSpy(store)
@@ -227,7 +227,7 @@ class TestCopiedHistory:
 
   def test_a_copy_short_of_the_remembered_rows_waits_on_one_uuid_probe(self, store):
     recorded = _recorded_lines(25)
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
     spy = _IndexSpy(store)
 
     # claude re-serializes the history in order, so a copy read mid-write holds
@@ -240,7 +240,7 @@ class TestCopiedHistory:
 
   def test_a_file_whose_newest_record_the_family_does_not_store_roots(self, store):
     recorded = _recorded_lines(25)
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
     copied = [*recorded[:4], _user('elsewhere', 'u-elsewhere')]
 
     decision = resolve(_evidence('seg-2', copied, related=('seg-1',)), store)
@@ -252,10 +252,10 @@ class TestCopiedHistory:
     """a trail born from a copy holds a head chunk plus a tail, so its rows are
     not one contiguous run of the file it recorded."""
     root_lines = [_user('hello', 'u1')]
-    root_id = _blaze(store, 'seg-1', root_lines)
+    root_id = _start_trail(store, 'seg-1', root_lines)
     forked_file = [_meta(), *root_lines, _user('resumed', 'u2')]
     # the trail recording seg-2 holds the head ephemera and the tail, not the copy
-    forked_id = _blaze(
+    forked_id = _start_trail(
       store,
       'seg-2',
       [forked_file[0], forked_file[2]],
@@ -271,7 +271,7 @@ class TestCopiedHistory:
 class TestHeaderReads:
   def test_one_segment_lookup_answers_a_resume_of_any_length(self, store):
     recorded = _recorded_lines(80)
-    trail_id = _blaze(store, 'seg-1', recorded)
+    trail_id = _start_trail(store, 'seg-1', recorded)
     spy = _IndexSpy(store)
 
     decision = resolve(_evidence('seg-1', [*recorded, _user('more', 'u-new')]), spy)
@@ -282,7 +282,7 @@ class TestHeaderReads:
 
   def test_a_parent_far_behind_the_transcripts_newest_lines_is_still_found(self, store):
     recorded = [_user('hello', 'u-parent')]
-    trail_id = _blaze(store, 'seg-1', recorded)
+    trail_id = _start_trail(store, 'seg-1', recorded)
 
     # the transcript grew well past the recorded extent before this adoption
     decision = resolve(_evidence('seg-1', [*recorded, *_recorded_lines(80)]), store)
@@ -292,7 +292,7 @@ class TestHeaderReads:
 
   def test_a_line_rewritten_inside_the_remembered_window_fails_the_digests(self, store):
     recorded = _recorded_lines(80)
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
     tampered = [*recorded[:79], _user('tampered', 'u79'), _user('more', 'u-new')]
 
     decision = resolve(_evidence('seg-1', tampered), store)
@@ -304,7 +304,7 @@ class TestHeaderReads:
     """the head remembers a bounded window of rows, so a rewrite older than it
     verifies — the rigor the header-only resolution trades away."""
     recorded = _recorded_lines(80)
-    trail_id = _blaze(store, 'seg-1', recorded)
+    trail_id = _start_trail(store, 'seg-1', recorded)
     tampered = [_user('tampered', 'u0'), *recorded[1:], _user('more', 'u-new')]
 
     decision = resolve(_evidence('seg-1', tampered), store)
@@ -313,7 +313,7 @@ class TestHeaderReads:
 
 
 class TestOrphanConvergence:
-  """a blaze whose response was lost mints a trail the caller never learned of;
+  """a start whose response was lost mints a trail the caller never learned of;
   the retry must find it rather than strand it."""
 
   def test_a_retry_attaches_to_the_root_the_lost_response_minted(self, store):
@@ -327,7 +327,7 @@ class TestOrphanConvergence:
 
   def test_a_retry_takes_over_the_spans_a_lost_copy_verdict_awarded(self, store):
     recorded = [_user('hello', 'u1'), _user('again', 'u2')]
-    _blaze(store, 'seg-1', recorded)
+    _start_trail(store, 'seg-1', recorded)
     copied = [_meta(), *recorded, _user('resumed', 'u3')]
     orphan = _adopt(store, 'seg-2', copied, related=('seg-1',))
 
@@ -338,7 +338,7 @@ class TestOrphanConvergence:
     assert decision.chunks == [[0, 1], [3, 3]]
 
   def test_a_trail_minted_without_a_verdict_is_not_attachable(self, store):
-    _blaze(store, 'seg-1', [])
+    _start_trail(store, 'seg-1', [])
 
     decision = resolve(_evidence('seg-1', [_user('hello', 'u1')]), store)
 

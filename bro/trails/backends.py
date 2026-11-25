@@ -9,7 +9,7 @@ from typing import Any, Optional, cast
 
 from bro.llm.records import Call, DecodedCall, Message, Reasoning, Unknown
 from bro.trails.lineage import LineageDecision
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 
 ENTRY_POINT_GROUP = 'bro.trail_formats'
 _FORMAT_NAME = re.compile(r'[a-z][a-z0-9-]*')
@@ -17,7 +17,7 @@ _FORMAT_NAME = re.compile(r'[a-z][a-z0-9-]*')
 # the native header fields a store folds from a trail's rows
 SERVER_DERIVED_NATIVE_FIELDS = frozenset({'usage', 'step_counts_by_kind', 'lineage_head'})
 
-# the wire reason a blaze answers when the trail its verdict attaches to advanced
+# the wire reason a start answers when the trail its verdict attaches to advanced
 # between the verification and the write, leaving the awarded spans off by that
 # much; the caller's next attempt resolves against the extent it reached
 ATTACH_CONTENDED = 'the trail advanced while attaching'
@@ -140,23 +140,28 @@ class FormatRegistry:
 
 
 def resolve_lineage(
-  trail_format: TrailFormat, request: BlazeRequest, index: Any
+  trail_format: TrailFormat, request: StartRequest, index: Any
 ) -> LineageDecision:
-  """The trail format's verdict for a blaze carrying lineage evidence."""
+  """The trail format's verdict for a start carrying lineage evidence."""
   assert request.lineage is not None
   if trail_format.resolve_lineage is None:
     raise ValueError(f'the {request.harness} trail format does not resolve lineage')
   return trail_format.resolve_lineage(request.lineage, index)
 
 
-def blaze_result(
-  trail_id: str, started_at: str, extent: int, decision: Optional[LineageDecision]
+def start_result(
+  trail_id: str, started_at: str, extent: int, decision: Optional[LineageDecision], *, created: bool
 ) -> dict[str, Any]:
-  """The blaze response: the recording trail's identity and the ordinal its
+  """The start response: the recording trail's identity and the ordinal its
   writer appends from, plus the resolver's verdict when the request carried
   lineage evidence. An attached trail answers as itself, so its extent is
   whatever it already recorded."""
-  result: dict[str, Any] = {'id': trail_id, 'started_at': started_at, 'extent': extent}
+  result: dict[str, Any] = {
+    'id': trail_id,
+    'started_at': started_at,
+    'extent': extent,
+    'created': created,
+  }
   if decision is not None:
     result['adopted'] = True
     result['chunks'] = decision.chunks
@@ -169,9 +174,9 @@ def blaze_result(
   return result
 
 
-def attached_header(header: dict, request: BlazeRequest) -> HeaderRestamp:
+def attached_header(header: dict, request: StartRequest) -> HeaderRestamp:
   """The header values a trail takes on when a lifetime attaches to it: the facts
-  the blaze would have minted a trail with, latest-wins over the ones the previous
+  the start would have minted a trail with, latest-wins over the ones the previous
   lifetime left, and the end mark cleared so the trail is open again. `summoned_by`
   is left alone, since the attribution belongs to the run that opened the trail,
   and the server-derived native fold survives the merge because `validate_create`
