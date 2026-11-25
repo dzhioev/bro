@@ -229,10 +229,11 @@ It hands the run the resume notice (§3.5) through the suppressed `--resume-noti
 A resumed lifetime's model carries a history that states facts of an earlier lifetime:
 a banner, watches it armed, children it summoned, spell and reference texts it loaded.
 The lifetime therefore opens with a **resume notice**, on both harnesses,
-which states what is certain, compares what `do-ride` can compare, and says "may" for the rest.
+which states what is certain, compares what each launch records, and says "may" for the rest.
 
 **Launch facts.**
-At every start of a managed session `do-ride` writes `<session dir>/launch-facts.json`, replacing the earlier lifetime's:
+At every start of a managed session `do-ride` computes the lifetime's launch facts and writes them as **pending**,
+`<session dir>/launch-facts.pending.json`, replacing any pending facts an earlier launch left:
 
 ```json
 {
@@ -257,39 +258,51 @@ At every start of a managed session `do-ride` writes `<session dir>/launch-facts
 | `summoned`, `talk` | whether the run owes a summoner an answer, and its quest's talk rights, null when it has no quest |
 | `may_summon`, `permits`, `may_give` | the rows of the session's initial authority, as the banner prints them; null without a broker channel |
 | `credentials` | the stored name each held credential kind reads, sorted; names only, never material |
+| `record` | added by the harness: the id of the record the lifetime last ended a turn in |
+
+The harness **promotes** the pending facts at the lifetime's first turn end:
+it writes them as `<session dir>/launch-facts.json` with `record` added, and removes the pending file.
+Only then has the model read this lifetime's notice and worked under these facts.
+At a later turn end in another record, as after Claude's `/clear`, it rewrites `record`.
+A lifetime that ends before its first turn end
+— a start that failed, a session closed before any input —
+promotes nothing, and the facts an earlier lifetime promoted stand.
 
 Equal `runtime` hashes mean the same installed code and the same shipped texts:
 persona and policy text, spells, reference pages, tool descriptions, and the Claude Code pin.
+What a session is served of them is rendered at the launch:
+a spell body from the hold, the credentials and `may_summon` (`BaseBro.get_spell_body`), a reference page from no fact.
 
 **Building the notice.**
-On `do-ride … --resume`, `do-ride` reads the earlier lifetime's launch facts before it replaces them and builds the notice:
+The notice of a resumed lifetime is built from its own launch facts and a **baseline**:
+the promoted facts, when the record they name is the one the lifetime continues, or on the bro harness a log of its chain (§3.3).
+Promoted facts that name another record, facts of another `format`, and no promoted facts at all leave the lifetime without a baseline.
+Promoted facts of this `format` that are not of this shape fail the launch, naming the file.
 
-1. It opens with what is true of every resume, and closes with the pointer to the banner:
+1. The notice opens with what is true of every resume, and closes with the pointer to the banner:
    `this run continues an earlier one, in a new process`,
    `Jobs, watches and summoned children of the earlier run have ended`,
    `The working directory may have changed since`,
    and last `The mission and the trail are new: call bro::banner for them`.
    The working directory is never compared.
-2. Each fact that differs from the earlier lifetime's gets a line under `Changed since then:`,
+2. With a baseline, each fact that differs from it gets a line under `Changed since then:`,
    and the facts that are equal are named in one sentence after it, `Unchanged: …`;
    when no fact differs, that sentence stands alone as `Unchanged since then: …`:
 
    | Fact | When it differs | When it is equal |
    |---|---|---|
-   | `runtime` | `the runtime was updated: spell and reference texts you loaded earlier may differ; load one again before you rely on its wording` | `the runtime, so spell and reference texts are as you loaded them` |
+   | `runtime` | `the runtime was updated` | `the runtime` |
    | `llm` | `llm: <earlier> → <current>` | `the recipe` |
    | `hold` | `hold: <earlier> → <current>` | not named |
    | `summoned`, `talk` | `summoned: <earlier> → <current>`, `talk: <earlier> → <current>` | not named |
    | `may_summon`, `permits`, `may_give` | one line per differing row, `<row>: <earlier> → <current>` | `what you may summon` |
    | `credentials` | `credentials: <earlier> → <current>` | `your credentials` |
+   | the texts the model loaded, which follow from `runtime`, `hold`, `credentials` and `may_summon` | when any of the four differs: `spell and reference texts you loaded earlier may differ: load one again before you rely on its wording` | when all four are equal: `spell and reference texts, which are as you loaded them` |
 
    A null `runtime` on either side is a difference:
    a materialized bundle cannot be told from an updated one.
-3. Without earlier launch facts
-   — the first resume after landing 2, or an earlier lifetime whose record is of another `format` —
-   nothing is compared, and one sentence takes the place of both lists:
+3. Without a baseline nothing is compared, and one sentence takes the place of both lists:
    `The runtime, the recipe, your credentials and what you may summon may have changed too: spell and reference texts you loaded earlier may differ; load one again before you rely on its wording`.
-   A record of this `format` that is not of this shape fails the launch, naming the file.
 
 For example, a session resumed on the same runtime with nothing changed:
 
@@ -297,35 +310,43 @@ For example, a session resumed on the same runtime with nothing changed:
 [notice: this run continues an earlier one, in a new process.
 Jobs, watches and summoned children of the earlier run have ended.
 The working directory may have changed since.
-Unchanged since then: the runtime, so spell and reference texts are as you loaded them; the recipe; your credentials; what you may summon.
+Unchanged since then: the runtime; the recipe; your credentials; what you may summon; spell and reference texts, which are as you loaded them.
 The mission and the trail are new: call bro::banner for them.]
 ```
 
-and one resumed after the installation was re-synced, with `ride resume --grant @eyebro`:
+one resumed after the installation was re-synced, with `ride resume --grant @eyebro`:
 
 ```text
 [notice: this run continues an earlier one, in a new process.
 Jobs, watches and summoned children of the earlier run have ended.
 The working directory may have changed since.
 Changed since then:
-- the runtime was updated: spell and reference texts you loaded earlier may differ; load one again before you rely on its wording
+- the runtime was updated
 - may_summon: none → @eyebro for bro{}
+- spell and reference texts you loaded earlier may differ: load one again before you rely on its wording
 Unchanged: the recipe; your credentials.
 The mission and the trail are new: call bro::banner for them.]
 ```
 
-**Delivering the notice.**
-`do-ride` hands the text to the harness's session runner (`SessionRun.resume_notice`, null on a start that resumes nothing), and each harness puts it ahead of the lifetime's first input:
+and one whose baseline is two launches back:
+lifetime A runs on runtime R and promotes its facts;
+the installation is re-synced to runtime S, and a `ride resume` fails before its first turn end, leaving pending facts that say S;
+the next `ride resume`, on S, continues A's record against A's facts and says `the runtime was updated`,
+where the failed launch's facts would have had it say the runtime is unchanged.
 
-| Harness | Carrier | In the record |
-|---|---|---|
-| `bro` | `--resume-notice` (§3.4): the run delivers the text as a user-role input ahead of its first exchange | a `notification` step |
-| `claude` | a `SessionStart` hook matching `resume` in the session's settings, whose additional context is the text | an `attachment` line of type `hook_additional_context`, ahead of the next user line |
+**Delivering the notice.**
+`do-ride` hands the harness's session runner the launch's facts and the promoted ones (`SessionRun`).
+The runner knows the record it continues, so it settles the baseline, builds the text with the one function core gives both harnesses, and puts it ahead of the lifetime's first input:
+
+| Harness | Carrier | In the record | Promotes at |
+|---|---|---|---|
+| `bro` | `--resume-notice` (§3.4): the run delivers the text as a user-role input ahead of its first exchange | a `notification` step | the end of the run's first turn |
+| `claude` | a `SessionStart` hook matching `resume` in the session's settings, whose additional context is the text | an `attachment` line of type `hook_additional_context`, ahead of the next user line | the session's `Stop` hook, at its first turn end |
 
 The notice starts no turn of its own:
 on either harness the model reads it with the first input that follows.
 Both records are among the first rows of the lifetime's trail, so a conversation view shows where a lifetime began.
-An in-process `bro chat --fork` or `bro run --fork` gives no notice: it is no session.
+An in-process `bro chat --fork` or `bro run --fork` gives no notice and keeps no launch facts: it is no session.
 
 ## 4. Trails: one per stretch
 
@@ -402,7 +423,8 @@ Every statement below is about that store, whichever store an earlier lifetime o
   the recorder never appends to it, and reads its extent alone.
 - **Settling a record's entries.**
   Before the recorder relies on a record the map knows, it settles the record's last entry, and the one before it whenever it removes one, until an entry stands or none is left:
-  the entry of a restored trail stands when the store holds that trail and its extent reaches the end of the entry's spans;
+  the entry of a restored trail stands when the store holds that trail and its extent is at least the number of items the entry's spans hold, the sum of their lengths
+  — a restored trail whose spans are `[[212, 300]]` must hold 88 rows, not 300;
   when it does not, the session records to a store its history was not read from, and every entry of the record is removed;
   an entry whose trail the store does not hold was never started, and is removed;
   an entry whose trail holds no row is removed too, leaving an empty trail the store reads as unreported;
@@ -544,7 +566,8 @@ A start request gains two optional members:
   Without an `id`, the store mints one as today and keeps no digest.
   `NetworkStore` retries a start that names an id on its schedule for transient failures, and still sends one without an id once.
 - `forked_from.kind` — one of `resume`, `trail` and `branch`.
-  The store validates it, keeps it in the header and serves it.
+  The store validates it, keeps it in the header and serves it,
+  and the typed pointer a reader builds from a header (`ForkedFrom`) carries it.
   A `forked_from` without a kind stays valid: every trail stored before this design has none.
 
 `lineage` stays a member:
@@ -803,10 +826,14 @@ so no installation can run a recorder the deployed server refuses.
 - Landing 1's server may roll back to the image before it only while no installation runs landing 2:
   an older server refuses `id` and `kind`.
   After that it stays.
-- Landing 2 rolls back on an installation by re-syncing to the commit before it.
+- Landing 2 rolls back on an installation by re-syncing to the commit before it, which still carries landing 1.
   That runtime resumes a native workspace as it did before this design:
   through the trail its pointer names, with the read permission that takes, and never from a run log.
-  A workspace it continues holds a format-1 log again, which a later re-sync refuses (§8).
+  It reads the `kind` on that trail's edge, since landing 1 put it in the typed pointer (§5.1).
+  A runtime rolled back past landing 1 does not:
+  it cannot continue a native workspace whose pointer names a trail with an edge, since a landing-2 recorder gives every edge a kind,
+  while a workspace never resumed under landing 2, whose trail is a root, continues.
+  A workspace the older runtime continues holds a format-1 log again, which a later re-sync refuses (§8).
   A Claude workspace resumes under either runtime, and an older recorder attaches to the newest trail of its transcript, whichever generation wrote it (§15).
 
 **What this hands to the store's move.**
@@ -835,6 +862,8 @@ and §6.3 and §6.4, whose reading and writing of rows it changes.
 - The notice compares launch facts alone (§3.5).
   The working directory, whatever lies behind a tool, and a credential whose material changed under the same stored name are never compared,
   and the first resume after landing 2 compares nothing.
+- A lifetime killed during its first turn promotes no launch facts,
+  so the next resume compares against the lifetime before it and may name as changed what the killed lifetime already ran under.
 - The launch facts hold a lifetime's initial authority.
   A grant an operator made during the earlier lifetime with `ride override` is therefore named as a change at the next resume, though the model saw it happen.
 - A run log forked in place inside a session's directory, with `bro chat --fork <a session's log>` from the host, becomes that session's newest record:
@@ -861,8 +890,10 @@ Landing 2:
 - `harnesses/native/harness/bro/native/harness.py`, `recorder.py` — `session_exists`, `missing_session_error`, the runner's pick of the log to continue, the notice handed to the run, the pointer no longer restored, no warning.
 - `harnesses/native/harness/bro/native/trail_recorder.py` — §4.5 and §4.6.
 - `harnesses/claude/harness/bro/claude/trail_recorder.py` — §4.4 and §4.6 in place of the evidence it sends.
-- `ride/ride/do_ride.py` — the launch facts and the notice (§3.5), and `SessionRun.resume_notice`.
-- `harnesses/claude/harness/bro/claude/` — the `SessionStart` hook that carries the notice, in the session's settings.
+- `ride/ride/do_ride.py` — the pending launch facts, handed to the session runner on `SessionRun` with the promoted ones (§3.5).
+- a core module beside the banner's facts (`bro/workspace/`) — the launch facts' shape, the promotion, and the function that builds the notice.
+- `harnesses/native/harness/bro/native/runner.py` — the promotion at the run's first turn end.
+- `harnesses/claude/harness/bro/claude/` — the `SessionStart` hook that carries the notice, in the session's settings, and the promotion in the `Stop` hook.
 - `ride/ride/session.py` — §8's refusal for a record that predates resolved recipes.
 
 Trail resume, after the store's move:
@@ -916,7 +947,10 @@ and `bro/reference/extending.md` for the harness seam.
   `start_sha256` carried through an export and an import;
   the kind kept and served, an unknown kind refused.
 - **The resume notice.**
-  Each fact of §3.5 equal and different, a null `runtime`, no earlier launch facts, a record of another format, and a malformed one;
+  Each fact of §3.5 equal and different, and the loaded-texts line for each of its four facts;
+  a null `runtime`; no promoted facts, facts of another format, facts that name another record, and malformed ones;
+  a lifetime that ends before its first turn end leaving the earlier baseline, with the three-launch example of §3.5;
+  `record` rewritten after a turn in another transcript;
   on the bro harness the text ahead of the first exchange as a `notification` step that starts no turn;
   on the Claude harness the hook's line in the transcript ahead of the next user line.
 - **End-to-end routes of landings 1 and 2**, each run through `ride` as an operator runs it:
@@ -1001,7 +1035,7 @@ The owner approved these with the written file on 2026-11-24:
 The review added these, which await the owner's approval of this revision:
 
 - `session_at` on a run log's first step, as how a recorded prompt names its session part (§3.3);
-- the launch facts file, its facts and the notice's wording (§3.5);
+- the launch facts, pending until the lifetime's first turn end and then the baseline for the record they name, and the notice's wording (§3.5);
 - the notice's carriers: `--resume-notice` on the bro harness and a `SessionStart` hook on Claude (§3.4, §3.5);
 - `start_sha256` as what decides a repeated start, and a collision for every other trail under a named id (§5.1);
 - a restored trail is checked against the recorder's own store before a trail forks from it (§4.3);
@@ -1060,6 +1094,9 @@ The review added these, which await the owner's approval of this revision:
   all of which a run log's step lines hold.
 - A native system prompt is the composed persona text followed by the session fragment (`BaseBro.system_prompt_for`),
   and the fragment is composed from the hold, the summoned state and talk rights, whether the run may summon, and its credentials (`bro.prompts.session_fragment`).
+- A spell body is rendered when it is served, from the harness, the hold, the credentials, `may_summon` and the bro's features (`BaseBro.get_spell_body`):
+  the reviewer rendered `dev/bro/dev/spells/fix.md` under `attended` and `unattended` on one runtime and got different texts.
+  A reference page is rendered from no fact (`bro/prompts/AGENTS.md`).
 - A session's initial authority is kept in its session directory (`initial-authority.json`, `bro/authority_view.py`),
   the banner's facts are collected in one place (`SessionFacts` in `bro/workspace/banner.py`),
   and `do-ride` knows the kinds a session holds (`BRO_INSTALL_KINDS`).
