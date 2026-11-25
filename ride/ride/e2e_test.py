@@ -627,6 +627,7 @@ from ride.workspace.metadata import Isolation
 from ride.workspace.model import Workspace
 from ride.repo_attachment import repository_attachment
 from ride.workspace.store import ScopedSecrets
+from bro.summon import RUNTIME_ENV
 from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV, ISOLATION_ENV, project_root, runtime_base
 
 name = os.environ['RIDE_E2E_NAME']
@@ -648,6 +649,8 @@ if os.environ.get('RIDE_E2E_LOCAL_TRAILS') == '1':
   trails_dir = workspace.path / 'trails'
   trails_dir.mkdir()
   extra_mounts.append(f'{trails_dir}:/var/ride/trails')
+runtime_hash = os.environ['RIDE_E2E_RUNTIME_HASH']
+runtime_bundle = RuntimeBundle(runtime_base() / 'runtime' / runtime_hash, f'{sys.version_info.major}.{sys.version_info.minor}')
 launch = Launch(name=name,
                 command=json.loads(os.environ['RIDE_E2E_COMMAND']),
                 env={'CLAUDE_CONFIG_DIR': '/home/ride/.claude',
@@ -658,6 +661,7 @@ launch = Launch(name=name,
                      BRANCH_ENV: workspace.attachments[0].fields["branch"],
                      BASE_SHA_ENV: rev_parse_commit(project_root(), 'HEAD'),
                      'RIDE_SESSION_DIR': '/var/ride/session',
+                     RUNTIME_ENV: str(runtime_bundle.host_root),
                      **{
                          key: os.environ[key]
                          for key in ('RIDE_E2E_QUEST_ROUTE', 'RIDE_RESOLVED_RECIPE')
@@ -669,8 +673,6 @@ launch = Launch(name=name,
                 runtime_bundle_hash=os.environ['RIDE_E2E_RUNTIME_HASH'],
                 extra_mounts=tuple(extra_mounts),
                 attachments=workspace.attachments)
-runtime_hash = os.environ['RIDE_E2E_RUNTIME_HASH']
-runtime_bundle = RuntimeBundle(runtime_base() / 'runtime' / runtime_hash, f'{sys.version_info.major}.{sys.version_info.minor}')
 child_command = os.environ.get('RIDE_E2E_CHILD_COMMAND')
 if child_command is not None:
   import ride.bro_worker as ride_spawn
@@ -3663,13 +3665,19 @@ _RESUME_PICK_PROBE = r"""
 import json
 from pathlib import Path
 from bro.base import credentials
-from bro.monitor import trail_pointer
+from bro.monitor import session_dir
+from bro.native.run_log import RunLog, new_path
 
 path = Path('.resume-picks')
 picks = json.loads(path.read_text()) if path.is_file() else []
 picks.append(credentials.get('github'))
 path.write_text(json.dumps(picks))
-trail_pointer.publish('resume-pick-probe')
+directory = session_dir()
+assert directory is not None
+writer = RunLog(new_path(directory / 'bro' / 'runs'))
+writer.start('bro', {'type': 'echo', 'model': 'echo'}, 'prompt', None, False, 'test')
+writer.step('user_input', 'credential probe')
+writer.end('ok')
 """
 
 

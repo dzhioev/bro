@@ -1166,7 +1166,6 @@ class BaseBro(ABC):
     self._tool_declarations = tool_declarations
     # harness name -> the live servers built for it
     self._live_mcp: dict[str, list[llm_mcp.MCPServer]] = {}
-    self._system_prompt_override: Optional[str] = None
     # explicit `system_prompt=...` arg overrides MRO collection — escape hatch
     # for callers that need a dynamic prompt (e.g. PM injects current time).
     if system_prompt is not None:
@@ -1481,6 +1480,10 @@ class BaseBro(ABC):
 
   def system_prompt_for(self, *, hold: str, harness: mcp.HarnessLike) -> str:
     """The selected harness's composed prompt plus the session fragments."""
+    return self.system_prompt_parts_for(hold=hold, harness=harness)[0]
+
+  def system_prompt_parts_for(self, *, hold: str, harness: mcp.HarnessLike) -> tuple[str, int]:
+    """The complete prompt and the offset of its session part."""
     # the hold is pinned at run start, so the matching hold fragment is
     # injected rather than detected by the agent — run() defaults unattended,
     # send() guided, with the launch surfaces overriding per their --hold flag
@@ -1492,9 +1495,5 @@ class BaseBro(ABC):
       creds=credentials.known_names(),
       talk=summon.talk(),
     )
-    prompt = (
-      self._system_prompt_override
-      if self._system_prompt_override is not None
-      else self.composed_prompt(harness, hold=hold)
-    )
-    return f'{prompt}\n\n{fragment}'
+    prompt = self.composed_prompt(harness, hold=hold)
+    return f'{prompt}\n\n{fragment}', len(prompt) + 2

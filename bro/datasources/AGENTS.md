@@ -37,3 +37,4 @@ How to add a source of either shape: `bro/reference/extending.md`, "Adding a dat
   any module can declare a page, and `BaseBro` folds every page its class hierarchy declares into a single `ManSource` via `manual(...)`, so classes across an MRO contribute pages to one manual instead of colliding on its namespace.
   The tool description carries the roster with each page's summary and the `topic` parameter its enum, so a surface seeing only the tool listing knows what can be read;
   lookup is case- and whitespace-tolerant and a miss raises with the topics listed.
+  A page reaches the model whole, whatever its length, since its `read` replies whole (`bro/AGENTS.md`, "Kept results").

@@ -1,4 +1,4 @@
-"""Resume machinery for reopening a recorded call conversation."""
+"""Local run-log continuation and conversation history."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,70 +7,71 @@ from typing import Optional
 from bro.fork import fork, latest_fork_point
 from bro.llm.llm import Recipe
 from bro.llm.resolved import ResolvedRecipe
+from bro.native.run_log import Snapshot, chain, latest, read
 from bro.native.runner import Runner
-from bro.trails.display import DisplayRecord, RecordedAdapter
-from bro.trails.store import TrailsStore, fetch_recorded_trail
+from bro.native_trails.format import STEP_LINE_FORMAT
+from bro.trails.backends import get_format
+from bro.trails.display import DisplayRecord
+from bro.trails.display.recorded import MessageAdapter
 
 RESUME_LATEST = 'latest'
-_LATEST_SCAN_LIMIT = 200
-_CALL_ENTRY_POINT = 'call'
 
 
 @dataclass(frozen=True)
 class ResumedCall:
   runner: Runner
   history: list[DisplayRecord]
-  trail_id: str
+  run: Path
 
 
-def find_latest_call_trail(client: TrailsStore, bro_name: str) -> Optional[str]:
-  """Return the bro's newest recorded call conversation, when one exists."""
-  for header in client.iter_trails(bro=bro_name, max_items=_LATEST_SCAN_LIMIT):
-    if header.get('surface') == _CALL_ENTRY_POINT:
-      return header['id']
-  return None
-
-
-def conversation_history(client: TrailsStore, trail_id: str) -> list[DisplayRecord]:
-  """Normalize the recorded conversation and its exact fork-bounded ancestors."""
-  target = client.get_trail(trail_id)
-  return RecordedAdapter(client).conversation_records(target)
+def conversation_history(log: Snapshot, bound: int) -> list[DisplayRecord]:
+  adapter = MessageAdapter()
+  format = get_format('bro')
+  records = []
+  for segment, through in chain(log, bound):
+    messages = []
+    for entry in segment.entries:
+      if entry.step_number is None or entry.step_number > through:
+        continue
+      row = {
+        'run_log': STEP_LINE_FORMAT,
+        'body': entry.line,
+        'trail_id': segment.path.stem,
+        'step_id': entry.step_number,
+        'ts': entry.value['at'],
+      }
+      messages.extend(format.project(row))
+    records.extend(adapter.message_records(segment.path.stem, messages))
+  return records
 
 
 def resume(
-  client: TrailsStore,
   bro_name: str,
-  trail_ref: str,
+  run_ref: str,
   *,
   recipe: Recipe | ResolvedRecipe | None = None,
   at: Optional[int] = None,
   hold: Optional[str] = None,
   activity_file: Optional[Path] = None,
   run_log: Optional[Path] = None,
+  notice: Optional[str] = None,
 ) -> ResumedCall:
-  """Continue a recorded call at an explicit or latest consistent fork point."""
-  if trail_ref == RESUME_LATEST:
-    found = find_latest_call_trail(client, bro_name)
-    if found is None:
-      raise ValueError(
-        f'no call conversation found for {bro_name} among its {_LATEST_SCAN_LIMIT} newest trails'
-      )
-    trail_id = found
-  else:
-    trail_id = trail_ref
-  trail = fetch_recorded_trail(client, trail_id)
-  if trail.header.bro != bro_name:
-    raise ValueError(f'trail {trail_id} belongs to bro {trail.header.bro!r}, not {bro_name!r}')
-  history = conversation_history(client, trail_id)
-  fork_step_id = at if at is not None else latest_fork_point(trail)
+  path = latest(bro_name) if run_ref == RESUME_LATEST else Path(run_ref)
+  if path is None:
+    raise ValueError(f'no run log found for {bro_name} among the 200 newest run logs')
+  log = read(path)
+  if log.opened['bro'] != bro_name:
+    raise ValueError(f'run log {path} belongs to bro {log.opened["bro"]!r}, not {bro_name!r}')
+  bound = latest_fork_point(log) if at is None else at
+  history = conversation_history(log, bound)
   runner = fork(
-    trail,
-    fork_step_id,
+    path,
+    bound,
     recipe=recipe,
-    surface=_CALL_ENTRY_POINT,
+    surface='call',
     hold=hold,
-    fetch_forked_from=lambda forked_from_id: fetch_recorded_trail(client, forked_from_id),
     activity_file=activity_file,
     run_log=run_log,
+    notice=notice,
   )
-  return ResumedCall(runner=runner, history=history, trail_id=trail_id)
+  return ResumedCall(runner=runner, history=history, run=log.path)

@@ -24,12 +24,14 @@ from bro.llm.observer import Observer, ReasoningEvent, ToolCallEvent
 from bro.llm.wire import Text
 from bro.native import loop as native_loop
 from bro.native.recording_test_helper import record_run
+from bro.native.run_log import read
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
 from bro.registry import create_bro
 from bro.trails.local import LocalStore
 from bro.trails.store import fetch_recorded_trail
 from bro.wire_chat.fixtures_test_helper import call, response
+from bro.workspace.launch_facts_test_helper import FACTS
 from bro.workspace.settings import HomeSettings
 from ride import cli
 from ride.authority_launch import credentials_for, hydrate, request
@@ -145,9 +147,8 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
   )
 
   resumed = resume(
-    store,
     'bro',
-    runner_trail_id,
+    str(runner.run_log),
     recipe=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
@@ -158,7 +159,10 @@ async def test_run_tool_loop_projection_resume_and_fork(server, monkeypatch, tmp
     {'role': 'user', 'content': 'continue'},
   ]
   assert requests[-1]['messages'] == expected
-  restored = fork(recorded, latest_fork_point(recorded), hold='unattended', surface='test')
+  assert runner.run_log is not None
+  restored = fork(
+    runner.run_log, latest_fork_point(read(runner.run_log)), hold='unattended', surface='test'
+  )
   with restored:
     assert await restored.send('continue', surface='test') == 'reply'
   assert requests[-1]['messages'] == expected
@@ -220,9 +224,8 @@ async def test_http_capacity_stop_is_recorded_and_retried_without_entering_histo
   assert [step.extras.get('stopped') for step in calls] == ['capacity', None]
   assert [step.extras['call_index'] for step in calls] == [1, 1]
   resumed = resume(
-    store,
     'bro',
-    runner_trail_id,
+    str(runner.run_log),
     recipe=Recipe.from_dict(recorded.header.native['llm']),
     hold='unattended',
   )
@@ -366,7 +369,7 @@ def summoned_stage(
   monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'records'))
   monkeypatch.setenv('TRAILS_DISABLED', '1')
   monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env: spawned.append(argv) or 0)
-  assert native_harness.BRO.run_session(run) == 0
+  assert native_harness.BRO.run_session(run, FACTS) == 0
   session = credentials.Store(credentials.default_registry(), directory, {})
   return Stage(recipe, files, session, spawned[0])
 
@@ -433,9 +436,10 @@ async def test_rejected_completion_preserves_live_inputs_and_matches_resume(
       recorded.header.native['usage'][Recipe(model='deepseek-v4-pro').model]['completion_tokens']
       == 3
     )
-    assert latest_fork_point(recorded) < rejected[0].step_id
+    assert runner.run_log is not None
+    assert latest_fork_point(read(runner.run_log)) < rejected[0].step_id
     resumed = resume(
-      store, 'bro', runner_trail_id, recipe=Recipe(model='deepseek-v4-pro'), hold='unattended'
+      'bro', str(runner.run_log), recipe=Recipe(model='deepseek-v4-pro'), hold='unattended'
     )
     with resumed.runner:
       assert await resumed.runner.send('continue', surface='test') == 'reply'

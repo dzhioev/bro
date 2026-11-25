@@ -33,6 +33,7 @@ the runner resolves the actual session id later, from its cwd's projects dir.
 The runner (`harnesses/claude/harness/bro/claude/runner.py`) then, in order:
 refuses a session whose own Claude configuration could take a call around the gate of a tool it is served behind one, and under a finite command list writes the session's brash policy (both in "The claude argv" below);
 resolves a resume's Claude session id;
+reads the session's `launch-facts.json`, failing on a malformed file;
 starts the session-local MCP server (see "Session-local MCP serving");
 builds the Claude argv (see "The claude argv");
 starts the session recorder daemon (see "Session recording");
@@ -42,6 +43,12 @@ A SIGTERM aimed at `do-ride` (`docker stop`, kill) reaches it as the interrupt a
 one a terminating service tool sent waits instead for the turn the session-end hook stopped (see "Turn ends and watch delivery").
 `harnesses/claude/harness/bro/claude/interrupt.py` owns that per-flavor split.
 After Claude exits the runner stops the server and recorder (the stop is the recorder's final append and trail end).
+
+Every session's `SessionStart` hook, `bro.claude.session_start`, registers the lifetime's launch facts (`bro/reference/ride.md`, "The session executable")
+for each transcript Claude Code starts writing, at startup, on a resume, `/branch` and `/clear`, at its line count then.
+On a resume it returns the notice as its additional context, which Claude Code writes as a `hook_additional_context` attachment ahead of the next user line and sends with it.
+The baseline is the transcript's newest entry below its last line carrying a `uuid`, since Claude Code appends lines without one even to a session closed before any input;
+an entry this lifetime registered gives no notice.
 
 The runner exports `claude/usage.json` in the session state dir as the session's usage file (`BRO_USAGE_FILE`, `bro.llm.usage`),
 which a runner thread keeps current from the session's newest transcript segment and the transcripts of the subagents it spawned,
@@ -210,6 +217,7 @@ bro spells are not copied into `.claude/skills/` and have no slash-command alias
 A Claude session keeps its Claude Code state in the workspace's `claude/` state dir, the config root `CLAUDE_CONFIG_DIR` names (`harnesses/claude/harness/bro/claude/claude_config.py`),
 and its runtime artifacts under the session records' `claude/`
 — recorder and projector logs, the live statusLine projection, the usage file and its publisher lock, and the persistent Claude temp root.
+The session records' `launch-facts.json` names each transcript a lifetime began to write.
 A member that joined a party keeps its private Claude state under `party/<member>/claude/`, which a boxed join reaches through the party mount as `CLAUDE_CONFIG_DIR=/var/ride/party/<member>/claude`.
 Removing the workspace reclaims all of it.
 No Claude Code hooks are wired for clone creation or workspace provisioning, which `ride` owns.
@@ -288,15 +296,15 @@ a long blocking summon runs via the harness's background Bash, and `rewind show 
 The runner under `do-ride` starts a `bro.claude.trail-recorder` daemon (via `harnesses/claude/harness/bro/claude/recorder.py`) before launching Claude and stops it after Claude exits
 — the stop is the recorder's final append and trail end.
 `--no-trails` starts no recorder daemon.
-The recorder records one claude-harness *trail* per transcript segment and appends newly completed lines on every transcript write,
-and at its polling interval without one.
-`harnesses/claude/harness/bro/claude/trail_recorder.py` owns transcript acquisition;
-the core trails schema lives in `bro.trails` and the Claude lineage verdict in `bro.claude_trails`.
-A verified same-segment resume reopens that segment's trail where the previous lifetime stopped, so a process restart adds no edge;
-an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
-The daemon nominates nothing:
-it starts a trail with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
-The recorder republishes the session's trail pointer as segments turn over.
+The recorder records each stretch of the transcript the session writes to, the lines one lifetime adds to it before switching to another, into a claude-harness *trail* of its own,
+appending newly completed lines on every transcript write and at its polling interval without one.
+`harnesses/claude/harness/bro/claude/trail_recorder.py` owns transcript acquisition and decides each trail's edge from the session's recording map (`bro.trails`) and the transcripts alone.
+Nothing reopens a trail:
+the pinned release's `--resume` and `/resume` append to the transcript in place rather than copying its history, and the lifetime's trail gets a `resume` edge;
+`/branch` and `--fork-session` copy a transcript's records into a new one, whose trail takes its own lines with a `branch` edge;
+`/clear` opens a root.
+A whole conversation is the fork chain `rewind show` walks.
+The recorder republishes the session's trail pointer as it turns from one transcript to another.
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir, the log its recording health beats name (`bro/reference/ride.md`, "Session recording");
 the statusLine and `ride banner` surface that signal.
 A daemon that cannot be started at all never reaches that signal:

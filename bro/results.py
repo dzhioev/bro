@@ -2,7 +2,8 @@
 
 A store keeps each tool result whole under an id; `kept` wraps servers so every
 result of their tools lands in it, a reply too long for one window carrying its
-head and closing on a marker naming the `bro::page` call that continues it.
+head and closing on a marker naming the `bro::page` call that continues it,
+unless its tool replies whole.
 `page` and `results` read kept results back without calling the producing tool
 again.
 """
@@ -220,7 +221,7 @@ class _KeptTool(Tool):
     result = await self._tool.call(arguments)
     text = encode_tool_result(result)
     result_id = await off_loop(self._store().keep, self._canonical, arguments, text)
-    if len(text) <= BYTE_LIMIT:
+    if len(text) <= BYTE_LIMIT or self._tool.replies_whole:
       return result
     return window(result_id, text, 0, BYTE_LIMIT)
 

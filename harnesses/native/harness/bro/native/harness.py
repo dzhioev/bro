@@ -16,10 +16,18 @@ from bro.base.text_window import DEFAULT_LIMIT
 from bro.harness import Harness, Service, SessionEndReason
 from bro.inbox import Inbox
 from bro.jobs import Job, JobStatus, Registry
-from bro.monitor import health, session_dir, trail_pointer
+from bro.monitor import session_dir, trail_pointer
 from bro.native import dev_mcp, loop
-from bro.native.recorder import cleared_pointer, session_recorder
-from bro.native.run_log import new_path, private_directory
+from bro.native.recorder import session_recorder
+from bro.native.run_log import (
+  UnsupportedFormat,
+  chain,
+  continuable,
+  new_path,
+  private_directory,
+  read,
+)
+from bro.workspace.launch_facts import Launches, LaunchFacts, resume_notice
 from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -166,7 +174,21 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   ]
 
 
-def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[str]:
+def _baseline(launches: Launches, resume_log: Path) -> Optional[LaunchFacts]:
+  """The facts of the newest log of the continued chain the conversation takes a step from."""
+  from bro.fork import latest_fork_point
+
+  log = read(resume_log)
+  for segment, bound in reversed(chain(log, latest_fork_point(log))):
+    if bound > 0:
+      index = launches.baseline(segment.path.stem, bound + 1)
+      return None if index is None else launches.entries[index].facts
+  return None
+
+
+def _session_options(
+  spec: 'SessionRun', resume_log: Optional[Path], notice: Optional[str]
+) -> list[str]:
   from ride.do_ride import encode_resolved_recipe
 
   options = [
@@ -177,8 +199,10 @@ def _session_options(spec: 'SessionRun', resume_trail: Optional[str]) -> list[st
     '--activity-file',
     str(spec.activity_file),
   ]
-  if resume_trail is not None:
-    options.extend(['--continue-trail', resume_trail])
+  if resume_log is not None:
+    options.extend(['--fork', str(resume_log)])
+  if notice is not None:
+    options.extend(['--resume-notice', notice])
   return options
 
 
@@ -247,13 +271,20 @@ class BroHarness(Harness):
     return None
 
   def session_exists(self, workspace: Workspace) -> bool:
-    return trail_pointer.read(trail_pointer.session_pointer(workspace.path)) is not None
+    try:
+      return continuable(workspace.path / 'session' / 'bro' / 'runs') is not None
+    except UnsupportedFormat:
+      return False
 
   def missing_session_error(self, workspace: Workspace) -> str:
-    return (
-      f'cannot resume bro harness workspace {workspace.name!r}: no trail pointer was published; '
-      'the session ran with --no-trails or its recorder never opened a trail'
-    )
+    try:
+      continuable(workspace.path / 'session' / 'bro' / 'runs')
+    except UnsupportedFormat:
+      return (
+        f'cannot resume bro harness workspace {workspace.name!r}: '
+        'its session records predate run log format 2'
+      )
+    return f'cannot resume bro harness workspace {workspace.name!r}: it holds no session run log'
 
   def read_subject(self, workspace: Workspace) -> str | None:
     from ride.session import resume_metadata
@@ -280,7 +311,7 @@ class BroHarness(Harness):
   def check_runtime(self) -> None:
     subprocess.run([spawn.console_script('bro'), '--version'], check=True)
 
-  def run_session(self, spec: 'SessionRun') -> int:
+  def run_session(self, spec: 'SessionRun', launch_facts: LaunchFacts) -> int:
     from ride.do_ride import run_agent
 
     try:
@@ -291,44 +322,45 @@ class BroHarness(Harness):
     directory = session_dir()
     if directory is None:
       raise RuntimeError('native session requires a session directory')
-    resume_trail: Optional[str] = None
-    if spec.resume:
-      pointer = trail_pointer.path()
-      resume_trail = trail_pointer.read(pointer) if pointer is not None else None
-      if resume_trail is None:
-        log.error('no bro harness trail recorded for workspace %s', spec.name)
-        return 1
-      problem = health.problem()
-      if problem is not None:
-        newest = max((directory / 'bro' / 'runs').glob('*.jsonl'))
-        log.warning(
-          "session recording %s; the trail may lack the previous run's last steps; run log: %s",
-          problem,
-          newest,
-        )
+    resume_log = continuable(directory / 'bro' / 'runs') if spec.resume else None
+    if spec.resume and resume_log is None:
+      log.error('no bro harness session run log for workspace %s', spec.name)
+      return 1
     run_log = new_path(directory / 'bro' / 'runs')
     private_directory(run_log.parent)
+    try:
+      launches = Launches.load(directory)
+      notice = (
+        None if resume_log is None else resume_notice(launch_facts, _baseline(launches, resume_log))
+      )
+      launches.register(run_log.stem, 0, launch_facts)
+    except ValueError as error:
+      log.error('%s', error)
+      return 1
     verb = 'run' if spec.solo else 'chat'
     argv = [
       executable,
       verb,
-      *_session_options(spec, resume_trail),
+      *_session_options(spec, resume_log, notice),
       '--run-log',
       str(run_log),
       '--',
       spec.bro,
       *([] if spec.prompt is None else [spec.prompt]),
     ]
-    with cleared_pointer(run_log):
-      recording = (
-        nullcontext()
-        if 'TRAILS_DISABLED' in os.environ
-        else session_recorder(run_log, directory / 'bro' / 'session-recorder.log', os.environ)
-      )
-      with recording:
-        env = dict(os.environ)
-        env.pop('RIDE_SUMMONER', None)
-        return run_agent(argv, env=env)
+    pointer = trail_pointer.path()
+    if pointer is None:
+      raise RuntimeError('native session requires a trail pointer path')
+    pointer.unlink(missing_ok=True)
+    recording = (
+      nullcontext()
+      if 'TRAILS_DISABLED' in os.environ
+      else session_recorder(run_log, directory / 'bro' / 'session-recorder.log', os.environ)
+    )
+    with recording:
+      env = dict(os.environ)
+      env.pop('RIDE_SUMMONER', None)
+      return run_agent(argv, env=env)
 
   def container_extras(
     self, spec: 'SessionSpec', workspace: Workspace, scoped: ScopedSecrets

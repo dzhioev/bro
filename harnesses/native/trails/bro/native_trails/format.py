@@ -15,6 +15,8 @@ from bro.trails.backends import (
 )
 from bro.trails.model import is_sha256
 
+STEP_LINE_FORMAT = 1
+
 BRO_STEP_KINDS = frozenset(
   {
     'system_prompt',
@@ -30,7 +32,7 @@ BRO_TEXT_BODY_KINDS = frozenset({'system_prompt', 'user_input', 'notification'})
 
 
 def _step_line(record: dict) -> dict:
-  if type(record['run_log']) is not int or record['run_log'] != 1:
+  if type(record['run_log']) is not int or record['run_log'] != STEP_LINE_FORMAT:
     raise ValueError(f'unsupported bro run_log format {record["run_log"]!r}')
   body = record.get('body')
   line = parse_json_object(body) if isinstance(body, str) else None

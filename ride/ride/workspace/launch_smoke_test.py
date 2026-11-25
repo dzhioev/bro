@@ -273,7 +273,9 @@ root = Path('/tree') / 'repository'
 state = Path('/home/ride/session')
 state.mkdir()
 os.chdir(root)
-os.environ.update(RIDE_ISOLATION='boxed', RIDE_SESSION_DIR=str(state))
+os.environ.update(
+  RIDE_ISOLATION='boxed', RIDE_SESSION_DIR=str(state), RIDE_RUNTIME='/var/ride/runtime'
+)
 store_directory = Path('/home/ride/provision-store')
 (store_directory / 'creds').mkdir(parents=True)
 (store_directory / 'creds' / 'probe.cred').write_text('selected-session')
@@ -294,7 +296,7 @@ def persona(path):
 def prepare(run):
   assert (root / 'persona').is_file()
 
-def harness(run):
+def harness(run, launch_facts):
   print('session reply', flush=True)
   return 0
 
@@ -304,7 +306,7 @@ for resume in (False, True):
   starts.append(resume)
   run = do_ride.SessionRun(
     name='provision-smoke', attachments=(Attachment('repo', 'repository', {'repo': '/host/repo', 'branch': 'work'}),), harness='bro', hold='unattended',
-    resolved_recipe={}, solo=True, resume=resume, bro='bro', prompt='probe',
+    resolved_recipe={'recipe': {'type': 'echo', 'model': 'echo'}, 'source': 'test'}, solo=True, resume=resume, bro='bro', prompt='probe',
     activity_file=state / 'activity',
   )
   code = do_ride.run_session(SimpleNamespace(prepare_session=prepare, run_session=harness), run)

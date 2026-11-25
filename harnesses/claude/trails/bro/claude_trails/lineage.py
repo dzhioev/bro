@@ -1,12 +1,13 @@
 """Claude fork resolution: which recorded trail an adopted transcript continues.
 
-Claude Code writes one jsonl *segment* per session id. An interactive resume
-forks a fresh segment whose file re-serializes the conversation history — record
-`uuid`s and `timestamp`s preserved, `sessionId` rewritten, ephemeral records
-dropped — before the new turns; a headless resume appends to the existing
-segment. A trail is a segment's recording, shared by every lifetime that records
-that segment, so a resume either attaches to the trail its segment already has,
-forks a fresh one from the conversation it copied, or starts a root.
+Claude Code writes one jsonl *segment* per session id. A resume appends to the
+existing segment; a history copy (`/branch`, `--fork-session`) is a fresh
+segment whose file re-serializes the conversation history — record `uuid`s and
+`timestamp`s preserved, `sessionId` rewritten, ephemeral records dropped —
+before the new turns. A trail is a segment's recording, shared by every
+lifetime that records that segment, so a resume either attaches to the trail
+its segment already has, forks a fresh one from the conversation it copied, or
+starts a root.
 
 The evidence a recorder ships is the segment name, one `[uuid | null,
 payload_sha256]` pair per transcript line, and the names of sibling segment

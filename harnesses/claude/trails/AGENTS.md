@@ -10,8 +10,10 @@ Build with `uv build --package bro-claude-trails`.
 
 ## Lineage
 
-- `bro/claude_trails/lineage.py` owns the claude evidence contract and resolves lineage from it:
-  the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
+- `bro/claude_trails/lineage.py` owns the claude evidence contract and resolves lineage from it.
+  Only Claude recorders older than the recording map send that evidence;
+  `bro.claude.trail_recorder` decides its trails' edges itself and starts them under ids it names.
+  The evidence is the adopted segment, its lines' record uuids and digests, and the sibling segments sharing those records.
   It verifies that evidence against candidate headers' `lineage_head` and answers with the file ranges the recording trail owns, plus how that trail is reached:
   the trail this lifetime attaches to, a fork point for a new one, a decline while a history copy is mid-write, or a root.
   Trail identity follows the segment:

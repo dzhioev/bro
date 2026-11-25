@@ -579,12 +579,20 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
   ]
 
   def fake_resume(
-    client, bro_name, trail_ref, *, recipe, at=None, activity_file=None, run_log=None
+    bro_name,
+    trail_ref,
+    *,
+    recipe,
+    at=None,
+    hold=None,
+    activity_file=None,
+    run_log=None,
+    notice=None,
   ):
     captured['trail_ref'] = trail_ref
     captured['recipe'] = recipe
     captured['at'] = at
-    return ResumedCall(runner=forked_runner, history=history, trail_id='old-trail')
+    return ResumedCall(runner=forked_runner, history=history, run=Path('old-log.jsonl'))
 
   monkeypatch.setattr('bro.registry.get_class', lambda name: _ChatBro)
   monkeypatch.setattr('bro.launch.resume.resume', fake_resume)
@@ -602,16 +610,31 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
   assert 'conversation saved' not in capsys.readouterr().err
 
 
+def test_a_resume_notice_requires_fork(capsys):
+  assert _chat(['bro', 'record', '--resume-notice', '[notice: resumed]']) == 1
+  assert '--resume-notice opens a continued conversation; it requires --fork' in (
+    capsys.readouterr().err
+  )
+
+
 def test_bare_fork_selects_the_newest_call(monkeypatch):
   from bro.launch.resume import ResumedCall
 
   captured: dict = {}
 
   def fake_resume(
-    client, bro_name, trail_ref, *, recipe, at=None, activity_file=None, run_log=None
+    bro_name,
+    trail_ref,
+    *,
+    recipe,
+    at=None,
+    hold=None,
+    activity_file=None,
+    run_log=None,
+    notice=None,
   ):
     captured['trail_ref'] = trail_ref
-    return ResumedCall(runner=_MockRunner(), history=[], trail_id='old-trail')
+    return ResumedCall(runner=_MockRunner(), history=[], run=Path('old-log.jsonl'))
 
   async def fake_call_text(runner, initial, history=None, hold='guided'):
     pass
@@ -1285,12 +1308,25 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   recorded_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='low')
 
   def fake_resume(
-    client, bro_name, trail_ref, *, recipe, at=None, hold='guided', activity_file=None, run_log=None
+    bro_name,
+    trail_ref,
+    *,
+    recipe,
+    at=None,
+    hold='guided',
+    activity_file=None,
+    run_log=None,
+    notice=None,
   ):
     captured.update(
-      trail_ref=trail_ref, recipe=recipe, at=at, hold=hold, activity_file=activity_file
+      trail_ref=trail_ref,
+      recipe=recipe,
+      at=at,
+      hold=hold,
+      activity_file=activity_file,
+      notice=notice,
     )
-    return ResumedCall(runner=resumed_runner, history=[], trail_id=trail_ref)
+    return ResumedCall(runner=resumed_runner, history=[], run=Path(trail_ref))
 
   async def fake_call_text(runner, initial, history=None, hold='guided'):
     captured.update(runner=runner, initial=initial, history=history, chat_hold=hold)
@@ -1305,7 +1341,7 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
     [
       'bro',
       'record',
-      '--continue-trail',
+      '--fork',
       'workspace-trail',
       '--resolved-recipe',
       json.dumps({'recipe': recorded_spec.dump(), 'source': 'defaults'}),
@@ -1313,10 +1349,13 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
       'attended',
       '--activity-file',
       '/session/activity',
+      '--resume-notice',
+      '[notice: resumed]',
     ],
     program=['bro', 'chat'],
   )
   assert code is None
+  assert captured['notice'] == '[notice: resumed]'
   assert captured['trail_ref'] == 'workspace-trail'
   assert captured['recipe'].recipe == recorded_spec
   assert captured['recipe'].source == 'defaults'
@@ -1326,12 +1365,6 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   assert captured['initial'] is None
   assert captured['history'] == []
   assert captured['chat_hold'] == 'attended'
-
-
-def test_managed_continuation_requires_the_resolved_recipe(monkeypatch, caplog):
-  monkeypatch.setattr('bro.launch.resume.resume', lambda *args, **kwargs: pytest.fail('resumed'))
-  assert _chat(['bro', 'record', '--continue-trail', 'workspace-trail']) == 1
-  assert '--continue-trail requires --resolved-recipe' in caplog.text
 
 
 def test_native_launch_without_a_recipe_is_refused(monkeypatch, register_test_bros):
@@ -1348,27 +1381,18 @@ def test_native_launch_without_a_recipe_is_refused(monkeypatch, register_test_br
 
 
 @pytest.mark.parametrize('explicit', [False, True])
-def test_public_fork_runs_the_trails_recipe_without_a_configured_recipe(monkeypatch, explicit):
-  import contextlib
-
+def test_public_fork_runs_the_logs_recipe_without_a_configured_recipe(
+  monkeypatch, tmp_path, explicit
+):
   from bro.base import host_config
-  from bro.launch.resume_test import FakeTrailsStore, _header, _row
   from bro.llm.resolved import ResolvedRecipe
+  from bro.native.run_log_test_helper import conversation_log
   from bro.workspace.banner import render_banner
 
   recorded = llm_llms_echo.Recipe(model='echo')
-  header = _header('fork-source', bro='bro')
-  header['native']['llm'] = recorded.dump()
-  store = FakeTrailsStore(
-    [header],
-    {
-      'fork-source': [
-        _row('fork-source', 0, 'system_prompt', 'prompt'),
-        _row('fork-source', 1, 'user_input', 'hello'),
-      ]
-    },
-  )
-  monkeypatch.setattr('bro.trails.store.default_store', lambda: contextlib.nullcontext(store))
+  path = tmp_path / 'fork-source.jsonl'
+  writer = conversation_log(path)
+  writer.step('user_input', 'hello')
   monkeypatch.setattr('bro.launch.call._tui_supported', lambda: False)
   Path(host_config.HOST_CONFIG_FILE).write_text('{}')
   monkeypatch.setenv(
@@ -1385,8 +1409,8 @@ def test_public_fork_runs_the_trails_recipe_without_a_configured_recipe(monkeypa
 
   monkeypatch.setattr('bro.launch.call.call_text', inspect_runner)
   flags = ['--llm', 'echo:echo'] if explicit else []
-  assert _chat(['bro', 'bro', '--fork', 'fork-source', *flags]) is None
-  assert observed == [ResolvedRecipe(recorded, '--llm' if explicit else 'trail fork-source')]
+  assert _chat(['bro', 'bro', '--fork', str(path), *flags]) is None
+  assert observed == [ResolvedRecipe(recorded, '--llm' if explicit else 'run log fork-source')]
 
 
 def test_public_fork_still_requires_the_installations_home_marker(

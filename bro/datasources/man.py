@@ -18,7 +18,7 @@ class ManSource(DataSource):
   doc either as its own dedicated `read` tool or as a topic here. The roster
   and its summaries ride the tool description, so a surface that sees only the
   tool listing still knows what can be read; a topic that matches nothing
-  raises with the roster listed.
+  raises with the roster listed. A page is served whole, whatever its length.
   """
 
   def __init__(self, name: str, summary: str, pages: Sequence[FileSource]):
@@ -58,6 +58,10 @@ class _ReadTool(Tool):
     ]
     lines.extend(f'- `{page.name}` — {page.rendered_summary()}' for page in self._source.pages)
     return '\n'.join(lines)
+
+  @property
+  def replies_whole(self) -> bool:
+    return True
 
   @property
   def parameters(self) -> dict[str, Any]:

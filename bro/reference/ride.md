@@ -70,6 +70,8 @@ the launcher's own `--log` never reaches the session.
 ### Lifecycle verbs
 
 - `ride resume <workspace> [--llm RECIPE]` runs the recorded recipe and source unless `--llm` replaces them, with optional `--cred`, `--grant`, `--revoke`, and `--limit` adjustments.
+  Native sessions continue from their local run-log chain, including when recording was disabled or the trail store is unreachable.
+  A native workspace predating run log format 2 is refused rather than migrated.
   Resuming a solo run opens an interactive conversation in the same workspace, preserving its recorded hold.
   A resume checks the recorded recipe for admission and harness support before starting.
   `--llm` replaces it on the recorded harness, with source `--llm`;
@@ -383,6 +385,7 @@ A directory with a usable workspace name but no readable record is enumerated as
     session-recorder-health.json  the recording health signal ("Session recording")
     watch/                        the session's watch declarations, offsets, and output
     results/                      the session's kept tool results (`bro/AGENTS.md`, "Kept results")
+    launch-facts.json             what each lifetime launched under, by the record it began ("The session executable")
     <harness>/                    the harness's own session artifacts
   <harness>/          a harness's own state dir, where it keeps one
   party/<member>/     records for a session that joined this workspace's party:
@@ -1242,6 +1245,16 @@ While the harness runs, `runner.pid` under `RIDE_SESSION_DIR` records the execut
 `do-ride` removes only the record it owns when the session exits.
 Harness-specific preparation lives in `SessionHarness.prepare_session`, followed by `run_session`, so the neutral executable compares no harness names.
 
+Once the session's initial authority is captured, `do-ride` collects the lifetime's **launch facts** and hands them to `run_session` (`bro/workspace/launch_facts.py`):
+the frozen runtime bundle's hash, null for a materialized bundle, the admitted recipe as the banner prints it, the hold, the summoned state and talk rights,
+the rows of the initial authority, and the pick each held credential kind reads, never its material.
+The harness registers them in `launch-facts.json` under `RIDE_SESSION_DIR` for every record the lifetime begins to write, with the item it begins at.
+A resumed lifetime opens with a notice ahead of its first input:
+it says what holds for every resume, that the jobs, watches and children of the earlier run have ended and the working directory may have changed,
+and compares its facts with those of the newest lifetime that left an item in the history it continues, saying "may" where it cannot compare.
+A differing runtime, hold, credential pick, or `may_summon` row also says that spell and reference texts loaded earlier may differ.
+Each harness's reference says how it registers and where the notice lands.
+
 Every harness tells its session the hold up front, rendering the `--hold` level's text (`bro/prompts/AGENTS.md`, "Hold text") into the prompt its model starts under,
 so a session never detects its hold at runtime.
 Each session also names its agent's cumulative LLM usage to the commands it runs, in the usage file `BRO_USAGE_FILE` points at (`bro.llm.usage`), which the commit footer reads;
@@ -1386,6 +1399,12 @@ Whichever harness records it, the trail carries the launch recipe and the manage
 — and the session publishes its current trail id to its trail pointer (`bro/monitor/trail_pointer.py`),
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
 Each harness writes a local record of its run, a native run log or Claude transcript, and a separate session recorder turns it into a trail.
+No lifetime reopens a trail an earlier one recorded.
+A native lifetime writes a new log and records a new trail, with a `resume` edge to the trail of the log it continues.
+Its recorder completes predecessor trails from the local logs before forking, recording unknown ancestors oldest first.
+A Claude lifetime appends to the transcript it resumes and records each stretch of a transcript it writes into a trail of its own,
+with a `resume` edge to the trail holding the transcript's last recorded line, or a `branch` edge where Claude Code copied another transcript into a new one (`harnesses/claude/harness/bro/claude/reference.md`, "Session recording").
+The recording map in the session's records retains those trail identities across lifetimes; continuation reads only the local records, not the map or the pointer.
 The recorder beats the recording health file (`bro/monitor/health.py`) on every attempt, naming the log where a failure's cause is read, and `ride banner` surfaces it.
 The beat carries the outcome and the age at which the reader must give the recorder up, so both a recorder that fails loudly and one that is simply gone
 — killed by a signal, OOM, a crashed container process

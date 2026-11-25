@@ -167,6 +167,11 @@ class Tool(ABC):
   def output_schema(self) -> Optional[dict[str, Any]]:
     return None
 
+  @property
+  def replies_whole(self) -> bool:
+    """whether a surface that windows long replies passes every reply of this tool whole."""
+    return False
+
   @abstractmethod
   async def call(self, arguments: dict[str, Any]) -> dict[str, Any] | str: ...
 

@@ -17,6 +17,8 @@ from bro.claude.mcp import MCPEndpoint
 from bro.claude.session_end_state import ANSWER_TOOL, RAISE_TOOL
 from bro.claude.statusline import statusline_command
 from bro.mcp import HOLDS, ToolLayer, brash, files
+from bro.workspace.launch_facts import LaunchFacts
+from bro.workspace.launch_facts_test_helper import FACTS
 from ride.session_test import _spec as _session_spec
 from ride.workspace.metadata import Isolation
 
@@ -54,6 +56,8 @@ def _ride_session_launch(spec, **kwargs) -> ride_claude_argv.ClaudeLaunch:
   kwargs.setdefault('brash_policy', None)
   kwargs.setdefault('activity_file', _ACTIVITY_FILE)
   kwargs.setdefault('plugin_dir', None)
+  kwargs.setdefault('launch_facts', FACTS)
+  kwargs.setdefault('earlier_launches', 0)
   with patch('bro.claude.claude_argv.session_append_prompt', return_value='append text'):
     return ride_claude_argv.build_claude_launch(spec, **kwargs)
 
@@ -216,6 +220,15 @@ class TestRideSessionLaunch:
         assert hook['type'] == 'command'
         assert shlex.split(hook['command']) == module_argv('bro.claude.session_end')
 
+  def test_every_session_registers_its_launch_facts_where_a_transcript_starts(self):
+    for spec in (_spec(), _spec(solo=True, hold='unattended', prompt='go')):
+      argv = _ride_session_launch(spec, earlier_launches=3).argv
+      ((hook,),) = [entry['hooks'] for entry in _settings(argv)['hooks']['SessionStart']]
+      *command, earlier, facts = shlex.split(hook['command'])
+      assert command == module_argv('bro.claude.session_start')
+      assert int(earlier) == 3
+      assert LaunchFacts.from_wire(json.loads(facts)) == FACTS
+
   def test_a_summoning_solo_session_keeps_both_hook_kinds(self, monkeypatch, tmp_path):
 
     monkeypatch.setattr('bro.registry.create_bro', lambda name: _declaring(brash('git status')))
@@ -328,6 +341,8 @@ def test_unknown_bro_raises():
       brash_policy=None,
       activity_file=_ACTIVITY_FILE,
       plugin_dir=None,
+      launch_facts=FACTS,
+      earlier_launches=0,
     )
 
 

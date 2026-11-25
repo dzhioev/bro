@@ -31,9 +31,10 @@ from bro.claude.statusline import start_statusline_projector
 from bro.claude.usage_publisher import publishing_usage
 from bro.claude.waiter_state import WaiterState
 from bro.llm.usage import USAGE_FILE_VARIABLE
-from bro.monitor import SESSION_DIR_ENV, harness_session_dir, trail_pointer
+from bro.monitor import SESSION_DIR_ENV, harness_session_dir, session_dir, trail_pointer
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import RUNTIME_ENV, SUMMONER_ENV, summoned
+from bro.workspace.launch_facts import Launches, LaunchFacts, LaunchFactsError
 from bro.workspace.paths import ISOLATION_ENV
 from ride.workspace.metadata import Isolation
 
@@ -231,7 +232,7 @@ def _session_brash_policy(bro: str, tree: Path) -> Optional[Path]:
   return brash_policy.write(state, reach)
 
 
-def run_session(spec: 'SessionRun') -> int:
+def run_session(spec: 'SessionRun', launch_facts: LaunchFacts) -> int:
   tree = Path.cwd()
   try:
     isolation = _isolation()
@@ -254,6 +255,14 @@ def run_session(spec: 'SessionRun') -> int:
       return 1
     log.info('resuming session %s', latest.stem)
     resume_session = latest.stem
+  session_state = session_dir()
+  if session_state is None:
+    raise RuntimeError(f'{SESSION_DIR_ENV} is unset')
+  try:
+    earlier_launches = len(Launches.load(session_state).entries)
+  except LaunchFactsError as error:
+    log.error('%s', error)
+    return 1
 
   with contextlib.ExitStack() as teardown:
     waiters = WaiterState.for_session()
@@ -286,6 +295,8 @@ def run_session(spec: 'SessionRun') -> int:
       brash_policy=policy,
       activity_file=spec.activity_file,
       plugin_dir=None if spec.solo else claude_plugin.provision(_claude_state_dir()),
+      launch_facts=launch_facts,
+      earlier_launches=earlier_launches,
     )
     if os.environ.get('TRAILS_DISABLED') is None:
       try:
