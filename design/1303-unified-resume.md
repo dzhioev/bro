@@ -1043,7 +1043,7 @@ The owner approved these with the written file on 2026-11-24:
 - a trail that contributes no row is skipped when records are written (§6.4);
 - the wording of the refusals (§3.1).
 
-The review added these, which await the owner's approval of this revision:
+The review added these, which the owner approved with the revised file on 2026-11-25:
 
 - `session_at` on a run log's first step, as how a recorded prompt names its session part (§3.3);
 - the launch facts, registered for each record at the item a lifetime begins to write, the baseline as the newest lifetime with an item in the continued history, and the notice's wording (§3.5);
