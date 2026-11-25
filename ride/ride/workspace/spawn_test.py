@@ -679,14 +679,14 @@ time.sleep(30)
 class TestMemberTrailAdoption:
   def _record_member_trail(self, records: Path) -> str:
     from bro.trails.local import LocalStore
-    from bro.trails.model import BlazeRequest
+    from bro.trails.model import StartRequest
 
     store = LocalStore(records / 'trails')
     # a joined member's trail is summoned by its summoner's, which — for a
     # service-backed or --no-trails first session — lives in another backend, not
     # this local store; adoption must carry that external pointer
-    trail_id = store.blaze(
-      BlazeRequest(
+    trail_id = store.start_trail(
+      StartRequest(
         harness='bro',
         bro='dev',
         version='test',

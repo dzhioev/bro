@@ -13,7 +13,7 @@ from aiohttp import web
 
 from bro.trails import formats, model
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest, payload_sha256, tools_sha256
+from bro.trails.model import StartRequest, payload_sha256, tools_sha256
 from bro.trails.network import NetworkStore
 from bro.trails.server.auth import TokenTable
 from bro.trails.server.server import create_app
@@ -38,7 +38,7 @@ def _token_table(*permissions: str) -> TokenTable:
 
 
 def _bro_request(*, bro='dev', body=None, forked_from=None, subject=None, git=None):
-  return BlazeRequest(
+  return StartRequest(
     harness='bro',
     version='test',
     interactive=False,
@@ -62,7 +62,7 @@ def _lineage(*records, segment='segment', related=()):
 
 
 def _claude_request(*records, lineage=None, version='test', native=None, **fields):
-  return BlazeRequest(
+  return StartRequest(
     harness='claude',
     version=version,
     interactive=True,
@@ -168,7 +168,7 @@ def _install_synthetic_format(monkeypatch) -> None:
 
 class TestTrailsStoreContract:
   def test_writes_the_current_format_on_the_header_and_every_row(self, trails_store):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     trails_store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': 'hello'}])
 
     header_path, rows_path = _stored_paths(trails_store, trail_id)
@@ -181,7 +181,7 @@ class TestTrailsStoreContract:
   def test_upgrades_a_formatless_layout_in_memory_for_every_read_path(
     self, trails_store, monkeypatch
   ):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     _remove_stored_formats(trails_store, trail_id)
     _install_synthetic_format(monkeypatch)
 
@@ -197,7 +197,7 @@ class TestTrailsStoreContract:
     assert 'format' not in json.loads(rows_path.read_text().splitlines()[0])
 
   def test_refuses_a_format_newer_than_the_reader_names(self, trails_store):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     header_path, rows_path = _stored_paths(trails_store, trail_id)
     header = json.loads(header_path.read_text())
     header['format'] = model.TRAIL_FORMAT + 1
@@ -215,7 +215,7 @@ class TestTrailsStoreContract:
       trails_store.get_step(trail_id, 0)
 
   def test_append_migrates_an_older_layout_before_writing(self, trails_store, monkeypatch):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     _remove_stored_formats(trails_store, trail_id)
     _install_synthetic_format(monkeypatch)
 
@@ -251,7 +251,7 @@ class TestTrailsStoreContract:
   def test_migration_refuses_a_row_upgrade_that_changes_the_recorded_body(
     self, trails_store, monkeypatch
   ):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     _remove_stored_formats(trails_store, trail_id)
     monkeypatch.setitem(
       formats.UPGRADES,
@@ -273,11 +273,11 @@ class TestTrailsStoreContract:
   def test_attach_migrates_an_older_layout_before_reopening(self, trails_store, monkeypatch):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    trail_id = trails_store.blaze(_claude_request(first))['id']
+    trail_id = trails_store.start_trail(_claude_request(first))['id']
     _remove_stored_formats(trails_store, trail_id)
     _install_synthetic_format(monkeypatch)
 
-    attached = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+    attached = trails_store.start_trail(_claude_request(lineage=_lineage(first, second)))
 
     assert attached['id'] == trail_id
     header_path, rows_path = _stored_paths(trails_store, trail_id)
@@ -285,7 +285,7 @@ class TestTrailsStoreContract:
     assert json.loads(rows_path.read_text().splitlines()[0])['format'] == 2
 
   def test_write_read_and_end_lifecycle(self, trails_store):
-    created = trails_store.blaze(_bro_request(subject='initial'))
+    created = trails_store.start_trail(_bro_request(subject='initial'))
     trail_id = created['id']
     assert isinstance(created['started_at'], str)
     assert trails_store.get_trail(trail_id)['subject'] == 'initial'
@@ -337,11 +337,11 @@ class TestTrailsStoreContract:
     assert trails_store.get_trail(trail_id)['end']['detail'] == 'blocked'
 
   def test_listing_lineage_and_pagination(self, trails_store):
-    parent = trails_store.blaze(_bro_request(bro='parent'))['id']
-    child = trails_store.blaze(
+    parent = trails_store.start_trail(_bro_request(bro='parent'))['id']
+    child = trails_store.start_trail(
       _bro_request(bro='dev', forked_from={'trail_id': parent, 'step_id': 0})
     )['id']
-    sibling = trails_store.blaze(_bro_request(bro='dev'))['id']
+    sibling = trails_store.start_trail(_bro_request(bro='dev'))['id']
 
     page = trails_store.list_trails(bro='dev', limit=1)
     following = trails_store.list_trails(bro='dev', limit=1, cursor=page['next'])
@@ -356,12 +356,12 @@ class TestTrailsStoreContract:
     }
 
   def test_listing_matches_every_selector_given_across_pages(self, trails_store):
-    parent = trails_store.blaze(_bro_request(bro='parent'))['id']
+    parent = trails_store.start_trail(_bro_request(bro='parent'))['id']
     fork = {'trail_id': parent, 'step_id': 0}
-    dev_fork = trails_store.blaze(_bro_request(bro='dev', forked_from=fork))['id']
-    trails_store.blaze(_bro_request(bro='other', forked_from=fork))
-    dev = trails_store.blaze(_bro_request(bro='dev'))['id']
-    trails_store.blaze(_claude_request(bro='dev'))
+    dev_fork = trails_store.start_trail(_bro_request(bro='dev', forked_from=fork))['id']
+    trails_store.start_trail(_bro_request(bro='other', forked_from=fork))
+    dev = trails_store.start_trail(_bro_request(bro='dev'))['id']
+    trails_store.start_trail(_claude_request(bro='dev'))
 
     def listed(**selectors) -> list[str]:
       return sorted(trail['id'] for trail in trails_store.iter_trails(**selectors, page_size=1))
@@ -375,17 +375,17 @@ class TestTrailsStoreContract:
 
     for request in requests:
       with pytest.raises(InvalidRequest, match=r"unknown .* body fields: \['extra'\]"):
-        trails_store.blaze(request)
+        trails_store.start_trail(request)
 
-  def test_blaze_resolves_harness_lineage(self, trails_store):
+  def test_start_resolves_harness_lineage(self, trails_store):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    trail_id = trails_store.blaze(_claude_request(first, second))['id']
+    trail_id = trails_store.start_trail(_claude_request(first, second))['id']
     third = json.dumps({'type': 'user', 'uuid': 'uuid-3', 'message': {'content': 'again'}})
 
-    declined = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
-    resumed = trails_store.blaze(_claude_request(lineage=_lineage(first, second, third)))
-    copied = trails_store.blaze(
+    declined = trails_store.start_trail(_claude_request(lineage=_lineage(first, second)))
+    resumed = trails_store.start_trail(_claude_request(lineage=_lineage(first, second, third)))
+    copied = trails_store.start_trail(
       _claude_request(
         lineage=_lineage(first, second, third, segment='copy', related=('segment',)),
         native={'segment': 'copy'},
@@ -403,13 +403,13 @@ class TestTrailsStoreContract:
   def test_attaching_reopens_the_segments_trail_for_the_new_lifetime(self, trails_store):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    opened = trails_store.blaze(
+    opened = trails_store.start_trail(
       _claude_request(first, second, summoned_by={'trail_id': 'summoner', 'step_id': 1})
     )
     trails_store.end_trail(opened['id'], 'ok')
     third = json.dumps({'type': 'user', 'uuid': 'uuid-3', 'message': {'content': 'again'}})
 
-    attached = trails_store.blaze(
+    attached = trails_store.start_trail(
       _claude_request(
         lineage=_lineage(first, second, third),
         version='next',
@@ -433,14 +433,14 @@ class TestTrailsStoreContract:
     # the attribution stays with the run that opened the trail
     assert header['summoned_by'] == {'trail_id': 'summoner', 'step_id': 1}
 
-  def test_a_lost_blaze_response_converges_on_the_trail_it_minted(self, trails_store):
+  def test_a_lost_start_response_converges_on_the_trail_it_minted(self, trails_store):
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
     # the response the caller never saw: a trail awarded the whole file, holding
     # no row yet to be verified against
-    orphan = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+    orphan = trails_store.start_trail(_claude_request(lineage=_lineage(first, second)))
 
-    retry = trails_store.blaze(_claude_request(lineage=_lineage(first, second)))
+    retry = trails_store.start_trail(_claude_request(lineage=_lineage(first, second)))
     trails_store.append_records(retry['id'], retry['extent'], [first, second])
 
     assert retry['id'] == orphan['id']
@@ -449,7 +449,7 @@ class TestTrailsStoreContract:
     assert len(list(trails_store.iter_trails(harness='claude'))) == 1
 
   def test_every_backend_refuses_a_body_no_reader_could_render(self, trails_store):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
 
     with pytest.raises(InvalidRequest, match='user_input body must be a string'):
       trails_store.append_records(trail_id, 1, [{'kind': 'user_input', 'body': {'text': 'ping'}}])
@@ -458,7 +458,7 @@ class TestTrailsStoreContract:
     assert trails_store.get_trail(trail_id)['extent'] == 2
 
   def test_large_bodies_are_inline(self, trails_store):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     body = 'x' * (5 * 1024 * 1024)
 
     trails_store.append_records(trail_id, 1, [{'kind': 'tool_result', 'body': body}])
@@ -468,9 +468,11 @@ class TestTrailsStoreContract:
     assert trails_store.resolve_body(served) == body
 
   def test_delete_takes_a_trail_but_refuses_one_a_fork_points_at(self, trails_store):
-    parent = trails_store.blaze(_bro_request())['id']
+    parent = trails_store.start_trail(_bro_request())['id']
     trails_store.append_records(parent, 1, [{'kind': 'user_input', 'body': 'hello'}])
-    child = trails_store.blaze(_bro_request(forked_from={'trail_id': parent, 'step_id': 0}))['id']
+    child = trails_store.start_trail(_bro_request(forked_from={'trail_id': parent, 'step_id': 0}))[
+      'id'
+    ]
 
     with pytest.raises(TrailHasForks) as refused:
       trails_store.delete_trail(parent)
@@ -510,7 +512,7 @@ def _recorded(store: TrailsStore, trail_id: str) -> tuple[dict, list[dict]]:
 
 def _record_source(root: Path, **overrides) -> tuple[LocalStore, str]:
   source = LocalStore(root)
-  trail_id = source.blaze(_bro_request(subject='recorded', **overrides))['id']
+  trail_id = source.start_trail(_bro_request(subject='recorded', **overrides))['id']
   source.append_records(
     trail_id,
     1,
@@ -541,7 +543,7 @@ class TestImportContract:
     assert "unknown fields: ['extra']" in str(refused.value)
 
   def test_reads_a_tool_blob_by_digest(self, trails_store):
-    trail_id = trails_store.blaze(_bro_request())['id']
+    trail_id = trails_store.start_trail(_bro_request())['id']
     trails_store.append_records(
       trail_id,
       1,
@@ -596,7 +598,7 @@ class TestImportContract:
     header, rows = _recorded(source, trail_id)
     trails_store.import_trail(header, rows, tools={_TOOLS_DIGEST: _TOOLS})
     other = LocalStore(tmp_path / 'other')
-    other_id = other.blaze(_bro_request())['id']
+    other_id = other.start_trail(_bro_request())['id']
     other_header, other_rows = _recorded(other, other_id)
     trails_store.begin_import(other_header)
 
@@ -631,7 +633,7 @@ class TestImportContract:
 
   def test_an_import_requires_parents_and_tool_blobs(self, trails_store, tmp_path):
     source = LocalStore(tmp_path / 'source')
-    parent = source.blaze(_bro_request())['id']
+    parent = source.start_trail(_bro_request())['id']
     _, child = _record_source(tmp_path / 'source', forked_from={'trail_id': parent, 'step_id': 0})
     parent_header, parent_rows = _recorded(source, parent)
     child_header, child_rows = _recorded(source, child)
@@ -777,7 +779,7 @@ class TestImportContract:
     source = LocalStore(tmp_path / 'source')
     first = json.dumps({'type': 'system', 'uuid': 'uuid-1'})
     second = json.dumps({'type': 'user', 'uuid': 'uuid-2', 'message': {'content': 'hello'}})
-    minted = source.blaze(_claude_request(lineage=_lineage(first, second)))
+    minted = source.start_trail(_claude_request(lineage=_lineage(first, second)))
     source.append_records(minted['id'], 0, [first, second])
     header, rows = _recorded(source, minted['id'])
 

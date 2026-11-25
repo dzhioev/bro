@@ -29,7 +29,7 @@ MESSAGE_TYPES = frozenset(
 
 
 @dataclass(frozen=True)
-class BlazeRequest:
+class StartRequest:
   harness: str
   version: str
   interactive: bool
@@ -74,9 +74,9 @@ class BlazeRequest:
       validate_git(self.git)
 
   @classmethod
-  def from_wire(cls, data: dict[str, Any]) -> 'BlazeRequest':
+  def from_wire(cls, data: dict[str, Any]) -> 'StartRequest':
     if not isinstance(data, dict):
-      raise ValueError('blaze request must be an object')
+      raise ValueError('start request must be an object')
     fields = {
       'harness',
       'version',

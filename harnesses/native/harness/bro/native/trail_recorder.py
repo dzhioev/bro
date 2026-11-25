@@ -19,7 +19,7 @@ from bro.monitor import SESSION_DIR_ENV, health, trail_pointer
 from bro.native.run_log import STEP_KINDS, Entry, Reader, RunLogError, private_directory
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summoned, summoned_by_from_env
-from bro.trails.model import BlazeRequest, canonical_json_bytes
+from bro.trails.model import StartRequest, canonical_json_bytes
 from bro.trails.record.session import ManagedSession, managed_session
 from bro.trails.record.spine import Recording
 from bro.trails.store import (
@@ -162,7 +162,7 @@ class Recorder:
   def _open(self, value: dict) -> None:
     recording = Recording.create(
       self.store,
-      BlazeRequest(
+      StartRequest(
         harness='bro',
         bro=value['bro'],
         version=value['version'],

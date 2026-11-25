@@ -12,7 +12,7 @@ from bro.base.retry import RetryPolicy, retry
 from bro.trails import formats
 from bro.trails.model import (
   LOOPBACK_HOSTS,
-  BlazeRequest,
+  StartRequest,
   reported_collision,
   reported_forks,
   reported_missing_tool,
@@ -75,7 +75,7 @@ class NetworkStore(TrailsStore):
   the one it was on, so callers on different threads never share a socket.
   """
 
-  # the budget covers a blaze whose lineage resolution walks a long transcript,
+  # the budget covers a start whose lineage resolution walks a long transcript,
   # the one request this store makes that is not answered in well under a second
   def __init__(self, base_url: str, token: str, *, timeout: float = 30.0):
     self._base_url = base_url.rstrip('/')
@@ -166,7 +166,7 @@ class NetworkStore(TrailsStore):
       query.append(('limit', str(limit)))
     return self._get_pairs(f'/v1/trails/{trail_id}/messages', query)
 
-  def blaze(self, request: BlazeRequest) -> dict:
+  def start_trail(self, request: StartRequest) -> dict:
     """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
     returns `{id, started_at, extent}` plus the resolver's verdict where the
     request carried lineage evidence. deliberately not retried: minting is the

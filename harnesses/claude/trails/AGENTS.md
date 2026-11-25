@@ -16,7 +16,7 @@ Build with `uv build --package bro-claude-trails`.
   the trail this lifetime attaches to, a fork point for a new one, a decline while a history copy is mid-write, or a root.
   Trail identity follows the segment:
   a verified same-segment resume attaches, so a linear conversation stays one trail across process restarts and a fork edge marks an actual fork.
-  A trail whose blaze response was lost holds no row to verify, and is attachable on the `cuts` its mint stored instead, which is what makes a blaze idempotent for the segment it names.
+  A trail whose start response was lost holds no row to verify, and is attachable on the `cuts` its mint stored instead, which is what makes a start idempotent for the segment it names.
   `LineageIndex` is the store-internal surface it reads through, two lookups each backend implements its own way:
   the trails recording a set of segments
   — `DynamoStore` queries the `segment-started_at-index` GSI (partition `segment`, range `started_at`, projecting the whole header) over the top-level `segment` attribute, `LocalStore` filters its header scan

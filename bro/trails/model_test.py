@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from bro.trails.model import MESSAGE_TYPES, BlazeRequest, validate_end
+from bro.trails.model import MESSAGE_TYPES, StartRequest, validate_end
 
 
 def _wire_request(**overrides):
@@ -24,7 +24,7 @@ def test_messages_wire_admits_notifications():
   assert 'notification' in MESSAGE_TYPES
 
 
-def test_blaze_request_round_trips_wire_data_and_is_frozen():
+def test_start_request_round_trips_wire_data_and_is_frozen():
   wire_request = _wire_request(
     git={
       'repo': '/source/bro',
@@ -33,7 +33,7 @@ def test_blaze_request_round_trips_wire_data_and_is_frozen():
       'base_sha': 'abc123',
     }
   )
-  request = BlazeRequest.from_wire(wire_request)
+  request = StartRequest.from_wire(wire_request)
 
   assert request.to_wire() == wire_request
   mutable_request: Any = request
@@ -55,9 +55,9 @@ def test_blaze_request_round_trips_wire_data_and_is_frozen():
     (_wire_request(git={'branch': 1}), 'git.branch must be a non-empty string'),
   ],
 )
-def test_blaze_request_rejects_invalid_wire_data(data, message):
+def test_start_request_rejects_invalid_wire_data(data, message):
   with pytest.raises(ValueError, match=message):
-    BlazeRequest.from_wire(data)
+    StartRequest.from_wire(data)
 
 
 @pytest.mark.parametrize(

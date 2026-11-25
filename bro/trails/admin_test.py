@@ -4,13 +4,13 @@ from bro.base.args import CLIError
 from bro.trails import model
 from bro.trails.admin import main
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.store import PermissionDenied
 
 
-def _blaze(store: LocalStore, **overrides) -> str:
-  return store.blaze(
-    BlazeRequest(
+def _start_trail(store: LocalStore, **overrides) -> str:
+  return store.start_trail(
+    StartRequest(
       harness='bro',
       bro='dev',
       version='test',
@@ -31,7 +31,7 @@ def store(tmp_path, monkeypatch):
 
 
 def test_migrate_reports_the_current_format(store, capsys):
-  trail_id = _blaze(store)
+  trail_id = _start_trail(store)
 
   code = main(['trails', 'migrate', trail_id])
 
@@ -40,9 +40,9 @@ def test_migrate_reports_the_current_format(store, capsys):
 
 
 def test_delete_takes_a_whole_lineage_whatever_order_it_is_named_in(store, capsys):
-  root = _blaze(store)
-  child = _blaze(store, forked_from={'trail_id': root, 'step_id': 0})
-  grandchild = _blaze(store, forked_from={'trail_id': child, 'step_id': 0})
+  root = _start_trail(store)
+  child = _start_trail(store, forked_from={'trail_id': root, 'step_id': 0})
+  grandchild = _start_trail(store, forked_from={'trail_id': child, 'step_id': 0})
 
   code = main(['trails', 'delete', root, child, grandchild])
 
@@ -52,8 +52,8 @@ def test_delete_takes_a_whole_lineage_whatever_order_it_is_named_in(store, capsy
 
 
 def test_delete_reports_what_stayed_and_exits_nonzero(store, capsys):
-  root = _blaze(store)
-  _blaze(store, forked_from={'trail_id': root, 'step_id': 0})
+  root = _start_trail(store)
+  _start_trail(store, forked_from={'trail_id': root, 'step_id': 0})
 
   code = main(['trails', 'delete', root, 'absent'])
 
@@ -65,7 +65,7 @@ def test_delete_reports_what_stayed_and_exits_nonzero(store, capsys):
 
 
 def test_a_credential_without_the_admin_permission_stops_the_run(store, monkeypatch):
-  trail_id = _blaze(store)
+  trail_id = _start_trail(store)
 
   def refuse(_: str) -> dict:
     raise PermissionDenied('this trails token may not admin')
@@ -77,7 +77,7 @@ def test_a_credential_without_the_admin_permission_stops_the_run(store, monkeypa
 
 
 def test_export_then_import_moves_a_trail_between_stores(store, capsys, tmp_path, monkeypatch):
-  trail_id = _blaze(store)
+  trail_id = _start_trail(store)
   layout = tmp_path / 'layout'
 
   exported = main(['trails', 'export', '-o', str(layout), trail_id])

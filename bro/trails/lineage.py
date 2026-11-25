@@ -115,7 +115,7 @@ def _tail_row(entry: Any) -> TailRow:
 
 @dataclasses.dataclass(frozen=True)
 class LineageDecision:
-  """A harness resolver's verdict for a blaze: which trail records the artifact
+  """A harness resolver's verdict for a start: which trail records the artifact
   from here, and which of its ranges that trail will hold. Each chunk is a
   half-open ``[start, end)`` range; the last one grows as the artifact does.
   A verdict either mints a trail — rooted, or ``forked_from`` an existing one —

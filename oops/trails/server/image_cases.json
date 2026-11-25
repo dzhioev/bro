@@ -1,7 +1,7 @@
 [
   {
     "name": "native",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
@@ -58,7 +58,7 @@
   },
   {
     "name": "claude",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
@@ -89,7 +89,7 @@
   },
   {
     "name": "chat",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
@@ -146,7 +146,7 @@
   },
   {
     "name": "native-line-rows",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,

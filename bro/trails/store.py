@@ -11,9 +11,9 @@ from typing import Any, Optional
 from bro.base import credentials
 from bro.trails import backends, formats
 from bro.trails.model import (
-  BlazeRequest,
   ForkedFrom,
   RecordedTrail,
+  StartRequest,
   Step,
   Trail,
   canonical_json_bytes,
@@ -257,7 +257,7 @@ class TrailsStore(ABC):
     )
 
   @abstractmethod
-  def blaze(self, request: BlazeRequest) -> dict: ...
+  def start_trail(self, request: StartRequest) -> dict: ...
 
   @abstractmethod
   def append_records(

@@ -1,7 +1,7 @@
 import json
 
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 
 
 def test_claude_content_uses_messages_decode_without_changing_billing(tmp_path):
@@ -28,7 +28,7 @@ def test_claude_content_uses_messages_decode_without_changing_billing(tmp_path):
     ),
     record([{'type': 'text', 'text': 'reply'}], 'end_turn'),
   ]
-  request = BlazeRequest(
+  request = StartRequest(
     harness='claude',
     version='test',
     interactive=False,
@@ -42,7 +42,7 @@ def test_claude_content_uses_messages_decode_without_changing_billing(tmp_path):
     body={'records': records},
   )
   with LocalStore(tmp_path) as store:
-    trail = store.blaze(request)
+    trail = store.start_trail(request)
     messages = list(store.iter_messages(trail['id']))
   assert [event['type'] for event in messages] == [
     'llm_call',

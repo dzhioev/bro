@@ -9,9 +9,9 @@ import pytest
 
 from bro.trails.model import (
   INITIAL_TRAIL_FORMAT,
-  BlazeRequest,
   ForkedFrom,
   RecordedTrail,
+  StartRequest,
   Step,
   Trail,
   tool_not_found_body,
@@ -340,10 +340,10 @@ class TestRetryBehavior:
 
 
 class TestWrites:
-  def test_blaze_posts_the_payload_verbatim(self, monkeypatch):
+  def test_start_posts_the_payload_verbatim(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1", "started_at": "2026-01-01T00:00:00Z"}'))
-    request = BlazeRequest(
+    request = StartRequest(
       harness='claude',
       version='test',
       interactive=True,
@@ -351,17 +351,17 @@ class TestWrites:
       body={'records': []},
       native={},
     )
-    result = _client().blaze(request)
+    result = _client().start_trail(request)
     assert result['id'] == 'T1'
     method, path, body, headers = fake.requests[0]
     assert (method, path) == ('POST', '/v1/trails')
     assert headers['Content-Type'] == 'application/json'
     assert body is not None and json.loads(body) == request.to_wire()
 
-  def test_blaze_is_not_retried(self, monkeypatch):
+  def test_start_is_not_retried(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
-    request = BlazeRequest(
+    request = StartRequest(
       harness='claude',
       version='test',
       interactive=True,
@@ -370,7 +370,7 @@ class TestWrites:
       native={},
     )
     with pytest.raises(TransientUnavailable):
-      _client().blaze(request)
+      _client().start_trail(request)
     assert len(fake.requests) == 1
 
   def test_append_conflict_maps_to_store_error(self, monkeypatch):

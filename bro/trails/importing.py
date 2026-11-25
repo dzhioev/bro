@@ -5,7 +5,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from bro.trails import backends, formats, model, rows
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.store import collision, refusing_invalid_requests
 
 # what a served header carries over the stored one
@@ -46,7 +46,7 @@ def imported_header(header: dict, trail_format: backends.TrailFormat) -> dict:
   }
   if 'git' in upgraded:
     model.validate_git(upgraded['git'])
-  BlazeRequest(
+  StartRequest(
     harness=upgraded['harness'],
     version=upgraded['version'],
     interactive=upgraded['interactive'],
