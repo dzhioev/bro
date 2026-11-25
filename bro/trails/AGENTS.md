@@ -120,7 +120,10 @@ bro · claude recorders                     readers
   the spans the mint verdict awarded, written once at start and carried through the replay seed.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
-  core `record/spine.py` owns the shared write spine, and `record/session.py` the managed session a recorder runs in
+  core `record/recording_map.py` owns the session recording map and item-to-step spans;
+  `record/settling.py` probes and verifies its entries under the record permission.
+  `record/spine.py` owns the shared write spine and starts whose minted ids are persisted before sending,
+  and `record/session.py` the managed session a recorder runs in
   — the header `location` and `git`, plus the launch line under `native.ride_command`, read off the environment the session's launcher published (`bro/reference/ride.md`, "Forwarded env vars"),
   so a trail carries them whichever harness records it.
   Each engine distribution owns its recorder:
