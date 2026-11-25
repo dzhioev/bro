@@ -50,20 +50,11 @@ regenerate its scripts and committed `bro/native/_entrypoints.py` with `sync-scr
   `bro list` and `bro show <name> [--system-prompt HOLD]` remain metadata paths (card renderer in core `show.py`);
   `bro --version` prints the `bro` distribution's version and the commit it runs (core `source_commit.py`)
 - `bro/launch/{run,call,call_tui,resume}.py` — native one-shot and interactive launch surfaces
-- `bro/fork.py` — fork of a recorded trail.
-  `replay_prefix` gathers the steps through the selected fork point and follows `forked_from` ancestors when needed;
-  `latest_fork_point` chooses the newest consistent point using the recorded wire’s decoded calls, skipping steps marked `stopped`.
-  `fork(..., surface=<caller>)` requires the driving program's surface, returns a `Runner` preseeded with the replayed prefix, and opens the child run log with `ForkedFrom(trail_id, step_id)`;
-  it replays bro-native records, so a trail from another harness is refused up front rather than partway into a header that never carried what replay needs.
-  A fork runs under the hold it is given, guided when omitted, and recomposes the prompt under it when the recorded hold differs.
-  Every replayed call must use the target recipe's wire, checked before building the runner.
-  Same-provider/model forks at an `llm_call` under an unchanged prompt seed a chain only on a server-chained wire;
-  every other case asks the wire to restore the prefix from the steps' own records.
-  A step marked `stopped` cannot seed a chain and is omitted by restore; unmarked records, including accepted incomplete responses, replay whole.
-  Consumed by `bro chat --fork` and managed bro-harness continuation (`--at <step_id>` overrides the fork point).
-- `bro/native/run_log.py` — the append-only native run log, its tracker and bounded validating reader.
-- `bro/native/trail_recorder.py` (`bro.native.trail-recorder`) — session run-log recording in bounded line-row batches, recording health and trail publication.
-- `bro/native/recorder.py` — recorder readiness and lifetime, and the session pointer's removal and restoration.
+- `bro/fork.py` — continuation of a local run-log chain through its selected consistent point.
+  It checks every replayed call's wire, retains the recorded prompt when its session part matches the launch, and seeds a server chain or restores the prefix.
+- `bro/native/run_log.py` — the format-2 append-only run log, tracker, bounded validating reader, snapshots and bounded ancestor chains.
+- `bro/native/trail_recorder.py` (`bro.native.trail-recorder`) — mapped lifetime trails, predecessor completion, bounded line-row recording, health and trail publication.
+- `bro/native/recorder.py` — recorder readiness and context-managed lifetime.
 
 ## The run
 

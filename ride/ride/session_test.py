@@ -2195,8 +2195,7 @@ def test_pre_design_records_are_listed_but_refused_with_recovery_routes(
     host.run_started_party.assert_not_called()
   assert 'record predates resolved recipes' in caplog.text
   assert 'start a new session' in caplog.text
-  if harness == 'bro':
-    assert 'bro chat bro --fork old-trail' in caplog.text
+  assert '--fork old-trail' not in caplog.text
 
 
 def test_resume_replacement_survives_runtime_reexec(tmp_path, monkeypatch):

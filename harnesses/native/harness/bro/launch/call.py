@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import http.client
 import importlib.util
 import signal
 import sys
@@ -35,10 +34,8 @@ from bro.trails.display import (
 )
 
 FORK_HELP = (
-  'fork a recorded conversation, saving it as a run log that only a managed session records as '
-  'a trail: pass any trail id, or omit the value to fork '
-  "the bro's newest recorded call. prior exchanges are rendered as history and the fork runs "
-  "the trail's recorded LLM recipe unless --llm replaces it"
+  "continue a run log: pass its path, or omit the value for the bro's newest run log. "
+  'prior exchanges are rendered as history; the recorded recipe is kept unless --llm replaces it'
 )
 
 INTERRUPTED_NOTICE = '⨯ interrupted'
@@ -284,9 +281,8 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument('bro', help='bro name')
   parser.add_argument('what', nargs='?', help='first message to send to the bro')
   parser.add_argument(
-    '--fork', nargs='?', const=RESUME_LATEST, default=None, metavar='TRAIL_ID', help=FORK_HELP
+    '--fork', nargs='?', const=RESUME_LATEST, default=None, metavar='RUN_LOG', help=FORK_HELP
   )
-  parser.add_argument('--continue-trail', default=None, help=base_args.SUPPRESS)
   parser.add_argument(
     '--activity-file', type=Path, default=None, env=False, help=base_args.SUPPRESS
   )
@@ -305,13 +301,6 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   )
   args = parser.parse(argv)
 
-  continuing = args['continue_trail'] is not None
-  if continuing and args['resolved_recipe'] is None:
-    log.error('--continue-trail requires --resolved-recipe')
-    return 1
-  if continuing and (args['fork'] is not None or args['what'] is not None):
-    log.error('--continue-trail cannot be combined with --fork or an initial message')
-    return 1
   if args['at'] is not None and args['fork'] is None:
     log.error('--at names a fork point; it requires --fork')
     return 1
@@ -333,29 +322,25 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
 
   with session_broxy():
     history: Optional[list[DisplayRecord]] = None
-    if args['fork'] is not None or continuing:
+    if args['fork'] is not None:
       from bro.launch.resume import resume
-      from bro.trails.store import default_store
 
-      trail_ref = args['continue_trail'] if continuing else args['fork']
-      assert trail_ref is not None
-      with default_store() as client:
-        try:
-          fork_arguments = {
-            'recipe': resolved_recipe,
-            'at': args['at'],
-            'activity_file': args['activity_file'],
-            'run_log': args['run_log'],
-          }
-          if continuing:
-            fork_arguments['hold'] = hold
-          forked = resume(client, args['bro'], trail_ref, **fork_arguments)
-        except (ValueError, http.client.HTTPException) as error:
-          log.error('%s', error)
-          return 1
+      try:
+        forked = resume(
+          args['bro'],
+          args['fork'],
+          recipe=resolved_recipe,
+          at=args['at'],
+          hold=hold,
+          activity_file=args['activity_file'],
+          run_log=args['run_log'],
+        )
+      except (ValueError, OSError) as error:
+        log.error('%s', error)
+        return 1
       runner = forked.runner
       history = forked.history
-      log.info('forked trail %s (%d prior display records)', forked.trail_id, len(history))
+      log.info('continued run log %s (%d prior display records)', forked.run, len(history))
     else:
       from bro.registry import create_bro
 

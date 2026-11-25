@@ -150,11 +150,10 @@ def _native_header_fields(header: dict[str, Any]) -> list[tuple[str, Any]]:
   return backends.get_format(header['harness']).native_header_fields(header)
 
 
-class RecordedAdapter:
-  """Stateful converter for one recorded display session."""
+class MessageAdapter:
+  """Projected messages as display records, without a storage dependency."""
 
-  def __init__(self, client: TrailsStore):
-    self.client = client
+  def __init__(self):
     self._source_occurrences: dict[tuple[str, int, int], int] = {}
 
   def message_records(
@@ -164,6 +163,134 @@ class RecordedAdapter:
     for message in messages:
       records.append(self._message_record(trail_id, message))
     return records
+
+  def _message_record(self, trail_id: str, message: dict[str, Any]) -> DisplayRecord:
+    source = self._message_source(trail_id, message)
+    try:
+      message_type = _require_string(message.get('type'), 'message type', nonempty=True)
+      if message_type not in MESSAGE_TYPES:
+        raise ValueError(f'unknown message type {message_type!r}')
+      timestamp = message.get('ts')
+      if timestamp is not None:
+        timestamp = _require_string(timestamp, 'message timestamp', nonempty=True)
+      occurrence_key = (trail_id, source.step_id, source.index)
+      occurrence = self._source_occurrences.get(occurrence_key, 0)
+      self._source_occurrences[occurrence_key] = occurrence + 1
+      common = {
+        'key': (f'recorded:{trail_id}:message:{source.step_id}:{source.index}:{occurrence}'),
+        'origin': Origin.RECORDED,
+        'source': source,
+        'timestamp': timestamp,
+      }
+      if message_type == 'system_prompt':
+        return SystemPrompt(
+          content=_text_content(message.get('content'), 'system prompt'), **common
+        )
+      if message_type == 'notification':
+        content = message.get('content')
+        event = message.get('event')
+        if event is not None:
+          event = _require_string(event, 'notification event', nonempty=True)
+        return Notice(
+          content=content if isinstance(content, dict) else _text_content(content, 'notification'),
+          event=event,
+          **common,
+        )
+      if message_type == 'user_input':
+        is_meta = message.get('isMeta', False)
+        is_sidechain = message.get('isSidechain', False)
+        if not isinstance(is_meta, bool) or not isinstance(is_sidechain, bool):
+          raise ValueError('user markers must be booleans')
+        return UserInput(
+          content=_text_content(message.get('content'), 'user input'),
+          is_meta=is_meta,
+          is_sidechain=is_sidechain,
+          **common,
+        )
+      if message_type == 'reasoning':
+        return Reasoning(content=_text_content(message.get('content'), 'reasoning'), **common)
+      if message_type == 'assistant':
+        content = _text_content(message.get('content'), 'assistant content')
+        terminal = message.get('terminal')
+        if terminal is not None and not isinstance(terminal, bool):
+          raise ValueError('assistant terminal must be a boolean when present')
+        record_type = InterimAssistantText if terminal is False else AssistantText
+        return record_type(content=content, **common)
+      if message_type == 'llm_call':
+        return LLMCall(
+          model=_require_string(message.get('model'), 'llm_call model', nonempty=True),
+          usage=message.get('usage'),
+          **common,
+        )
+      if message_type == 'tool_call':
+        if 'arguments' not in message:
+          raise ValueError('tool_call arguments are required')
+        return ToolCall(
+          call_id=_require_string(message.get('call_id'), 'tool_call call_id', nonempty=True),
+          tool_name=_require_string(message.get('tool_name'), 'tool_call tool_name', nonempty=True),
+          arguments=message['arguments'],
+          **common,
+        )
+      if message_type == 'tool_result':
+        if 'content' not in message:
+          raise ValueError('tool_result content is required')
+        tool_name = message.get('tool_name')
+        if tool_name is not None:
+          tool_name = _require_string(tool_name, 'tool_result tool_name', nonempty=True)
+        is_error = message.get('is_error', False)
+        if not isinstance(is_error, bool):
+          raise ValueError('tool_result is_error must be a boolean')
+        return ToolResult(
+          call_id=_require_string(message.get('call_id'), 'tool_result call_id', nonempty=True),
+          tool_name=tool_name,
+          result=message['content'],
+          is_error=is_error,
+          **common,
+        )
+      if message_type == 'error':
+        return Error(content=_error_content(message.get('content'), 'error content'), **common)
+      if message_type == 'harness_event':
+        if 'raw' not in message:
+          raise ValueError('harness_event raw body is required')
+        raw = message['raw']
+        event = raw.get('type') if isinstance(raw, dict) else None
+        return HarnessEvent(
+          event=event if isinstance(event, str) else 'harness_event', body=raw, **common
+        )
+      raise AssertionError(f'unhandled known message type: {message_type}')
+    except (KeyError, TypeError, ValueError) as exception:
+      raise DisplayDataError(
+        f'malformed recorded message at {trail_id}:{source.step_id}:{source.index}: {exception}',
+        source=source,
+      ) from exception
+
+  @staticmethod
+  def _message_source(trail_id: str, message: dict[str, Any]) -> RecordedSource:
+    if not isinstance(message, dict):
+      raise DisplayDataError(f'malformed recorded message in trail {trail_id!r}: expected object')
+    source = message.get('source')
+    if not isinstance(source, dict):
+      raise DisplayDataError(
+        f'malformed recorded message in trail {trail_id!r}: source must be an object'
+      )
+    try:
+      return RecordedSource(
+        trail_id,
+        _require_integer(source.get('step_id'), 'message source step_id'),
+        _require_integer(source.get('index', 0), 'message source index'),
+      )
+    except ValueError as exception:
+      raise DisplayDataError(
+        f'malformed recorded message in trail {trail_id!r}: {exception}'
+      ) from exception
+
+
+class RecordedAdapter(MessageAdapter):
+  """Stateful converter for one recorded display session."""
+
+  def __init__(self, client: TrailsStore):
+    self.client = client
+    super().__init__()
 
   def conversation_records(self, header: dict[str, Any]) -> list[DisplayRecord]:
     target_id = _require_string(header.get('id'), 'trail id', nonempty=True)
@@ -398,123 +525,3 @@ class RecordedAdapter:
       return source.step_id < bound_step_id or source.index <= bound_index
 
     return [message for message in messages if within_bound(message)]
-
-  def _message_record(self, trail_id: str, message: dict[str, Any]) -> DisplayRecord:
-    source = self._message_source(trail_id, message)
-    try:
-      message_type = _require_string(message.get('type'), 'message type', nonempty=True)
-      if message_type not in MESSAGE_TYPES:
-        raise ValueError(f'unknown message type {message_type!r}')
-      timestamp = message.get('ts')
-      if timestamp is not None:
-        timestamp = _require_string(timestamp, 'message timestamp', nonempty=True)
-      occurrence_key = (trail_id, source.step_id, source.index)
-      occurrence = self._source_occurrences.get(occurrence_key, 0)
-      self._source_occurrences[occurrence_key] = occurrence + 1
-      common = {
-        'key': (f'recorded:{trail_id}:message:{source.step_id}:{source.index}:{occurrence}'),
-        'origin': Origin.RECORDED,
-        'source': source,
-        'timestamp': timestamp,
-      }
-      if message_type == 'system_prompt':
-        return SystemPrompt(
-          content=_text_content(message.get('content'), 'system prompt'), **common
-        )
-      if message_type == 'notification':
-        content = message.get('content')
-        event = message.get('event')
-        if event is not None:
-          event = _require_string(event, 'notification event', nonempty=True)
-        return Notice(
-          content=content if isinstance(content, dict) else _text_content(content, 'notification'),
-          event=event,
-          **common,
-        )
-      if message_type == 'user_input':
-        is_meta = message.get('isMeta', False)
-        is_sidechain = message.get('isSidechain', False)
-        if not isinstance(is_meta, bool) or not isinstance(is_sidechain, bool):
-          raise ValueError('user markers must be booleans')
-        return UserInput(
-          content=_text_content(message.get('content'), 'user input'),
-          is_meta=is_meta,
-          is_sidechain=is_sidechain,
-          **common,
-        )
-      if message_type == 'reasoning':
-        return Reasoning(content=_text_content(message.get('content'), 'reasoning'), **common)
-      if message_type == 'assistant':
-        content = _text_content(message.get('content'), 'assistant content')
-        terminal = message.get('terminal')
-        if terminal is not None and not isinstance(terminal, bool):
-          raise ValueError('assistant terminal must be a boolean when present')
-        record_type = InterimAssistantText if terminal is False else AssistantText
-        return record_type(content=content, **common)
-      if message_type == 'llm_call':
-        return LLMCall(
-          model=_require_string(message.get('model'), 'llm_call model', nonempty=True),
-          usage=message.get('usage'),
-          **common,
-        )
-      if message_type == 'tool_call':
-        if 'arguments' not in message:
-          raise ValueError('tool_call arguments are required')
-        return ToolCall(
-          call_id=_require_string(message.get('call_id'), 'tool_call call_id', nonempty=True),
-          tool_name=_require_string(message.get('tool_name'), 'tool_call tool_name', nonempty=True),
-          arguments=message['arguments'],
-          **common,
-        )
-      if message_type == 'tool_result':
-        if 'content' not in message:
-          raise ValueError('tool_result content is required')
-        tool_name = message.get('tool_name')
-        if tool_name is not None:
-          tool_name = _require_string(tool_name, 'tool_result tool_name', nonempty=True)
-        is_error = message.get('is_error', False)
-        if not isinstance(is_error, bool):
-          raise ValueError('tool_result is_error must be a boolean')
-        return ToolResult(
-          call_id=_require_string(message.get('call_id'), 'tool_result call_id', nonempty=True),
-          tool_name=tool_name,
-          result=message['content'],
-          is_error=is_error,
-          **common,
-        )
-      if message_type == 'error':
-        return Error(content=_error_content(message.get('content'), 'error content'), **common)
-      if message_type == 'harness_event':
-        if 'raw' not in message:
-          raise ValueError('harness_event raw body is required')
-        raw = message['raw']
-        event = raw.get('type') if isinstance(raw, dict) else None
-        return HarnessEvent(
-          event=event if isinstance(event, str) else 'harness_event', body=raw, **common
-        )
-      raise AssertionError(f'unhandled known message type: {message_type}')
-    except (KeyError, TypeError, ValueError) as exception:
-      raise DisplayDataError(
-        f'malformed recorded message at {trail_id}:{source.step_id}:{source.index}: {exception}',
-        source=source,
-      ) from exception
-
-  @staticmethod
-  def _message_source(trail_id: str, message: dict[str, Any]) -> RecordedSource:
-    if not isinstance(message, dict):
-      raise DisplayDataError(f'malformed recorded message in trail {trail_id!r}: expected object')
-    source = message.get('source')
-    if not isinstance(source, dict):
-      raise DisplayDataError(
-        f'malformed recorded message in trail {trail_id!r}: source must be an object'
-      )
-    try:
-      return RecordedSource(
-        trail_id,
-        _require_integer(source.get('step_id'), 'message source step_id'),
-        _require_integer(source.get('index', 0), 'message source index'),
-      )
-    except ValueError as exception:
-      raise DisplayDataError(
-        f'malformed recorded message in trail {trail_id!r}: {exception}'
-      ) from exception

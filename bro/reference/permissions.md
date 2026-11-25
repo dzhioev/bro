@@ -368,7 +368,7 @@ Resume records keep set values and the resolved-recipe record, not other resolve
 Summon depth and summon harness come from the new reading on resume.
 The launch audit records descriptor, gift/cap, and refusals with their rule and atom.
 Records without a resolved-recipe record are refused, not migrated, and `ride list` still lists them.
-The refusal names the workspace and recovery routes: fork its native trail with `bro chat <bro> --fork <trail>`, or start a new session.
+The refusal names the workspace and says to start a new session.
 
 ## Visibility and refusals
 
