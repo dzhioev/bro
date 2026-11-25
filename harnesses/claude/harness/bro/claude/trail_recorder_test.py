@@ -19,7 +19,7 @@ from bro.claude.trail_recorder import (
 from bro.claude.transcripts import read_lines_after
 from bro.monitor import health, trail_pointer
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.record.session import managed_session
 
 
@@ -29,13 +29,13 @@ class _Store(LocalStore):
 
   def __init__(self, root: Path):
     super().__init__(root)
-    self.blazes: list[BlazeRequest] = []
+    self.starts: list[StartRequest] = []
     self.keepalives: list[str] = []
     self.refusals = 0
 
-  def blaze(self, request: BlazeRequest) -> dict:
-    self.blazes.append(request)
-    return super().blaze(request)
+  def start_trail(self, request: StartRequest) -> dict:
+    self.starts.append(request)
+    return super().start_trail(request)
 
   def keepalive(self, trail_id: str) -> None:
     self.keepalives.append(trail_id)
@@ -142,8 +142,8 @@ def _write_segment(projects: Path, stem: str, lines: list[str]) -> Path:
 
 
 def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
-  """a recorder over the whole of `path`, on a trail blazed as its own root."""
-  request = BlazeRequest(
+  """a recorder over the whole of `path`, on a trail started as its own root."""
+  request = StartRequest(
     harness='claude',
     version='test',
     interactive=True,
@@ -162,7 +162,7 @@ def _worker(store: LocalStore, path: Path) -> _SegmentRecorder:
   return _SegmentRecorder(
     store,
     path,
-    store.blaze(request)['id'],
+    store.start_trail(request)['id'],
     extent=0,
     pending=_compose(lines, [[0, len(lines)]]),
     position=_Position(signature, byte_extent),
@@ -201,7 +201,7 @@ class TestAdoption:
     assert session is not None
     assert header['location'] == session.location
     assert header['git'] == session.git
-    assert store.blazes[0].git == session.git
+    assert store.starts[0].git == session.git
     assert _rows(store, header['id']) == lines
 
   def test_a_detached_session_records_no_git_state(self, environment, store, monkeypatch):
@@ -239,7 +239,7 @@ class TestAdoption:
     [header] = _trails(store)
     assert trail_pointer.read(_pointer()) == header['id']
 
-  def test_summoner_attribution_stamps_the_blazed_trail(self, environment, store, monkeypatch):
+  def test_summoner_attribution_stamps_the_started_trail(self, environment, store, monkeypatch):
     monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id": "t-parent", "step_id": 3}')
     _write_segment(environment, 'seg-1', [_user('hello', 'u1'), _assistant('hi', 'a1')])
 
@@ -267,9 +267,9 @@ class TestAdoption:
     second = _recorder(environment, store)
 
     assert second.tick() is False  # nothing past the recorded extent yet
-    blazes = len(_trails(store))
+    starts = len(_trails(store))
     assert second.tick() is False
-    assert len(_trails(store)) == blazes
+    assert len(_trails(store)) == starts
 
 
 class TestAppends:

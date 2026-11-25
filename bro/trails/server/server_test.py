@@ -11,7 +11,7 @@ from bro.llm import wires
 from bro.trails import backends, model
 from bro.trails.local import LocalStore
 from bro.trails.model import (
-  BlazeRequest,
+  StartRequest,
   reported_collision,
   reported_forks,
   reported_missing_tool,
@@ -45,7 +45,7 @@ def _auth(token: str = TOKEN) -> dict[str, str]:
   return {'Authorization': f'Bearer {token}'}
 
 
-def _blaze_payload(**overrides) -> dict:
+def _start_payload(**overrides) -> dict:
   payload = {
     'harness': 'bro',
     'bro': 'dev',
@@ -79,7 +79,7 @@ async def test_health_needs_no_auth(client):
 
 @pytest.mark.asyncio
 async def test_auth_is_required(client):
-  response = await (await client).post('/v1/trails', json=_blaze_payload())
+  response = await (await client).post('/v1/trails', json=_start_payload())
   assert response.status == 401
 
 
@@ -87,7 +87,7 @@ async def test_auth_is_required(client):
 async def test_a_write_token_records_without_reading(aiohttp_client, store):
   client = await aiohttp_client(create_app(store, _tokens('write')))
 
-  created = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  created = await client.post('/v1/trails', json=_start_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   listed = await client.get('/v1/trails', headers=_auth())
   read = await client.get(f'/v1/trails/{trail_id}/messages', headers=_auth())
@@ -102,16 +102,16 @@ async def test_a_write_token_records_without_reading(aiohttp_client, store):
 
 @pytest.mark.asyncio
 async def test_a_read_token_neither_records_nor_administers(aiohttp_client, store):
-  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  trail_id = store.start_trail(StartRequest(**_start_payload()))['id']
   client = await aiohttp_client(create_app(store, _tokens('read')))
 
   read = await client.get(f'/v1/trails/{trail_id}', headers=_auth())
-  blazed = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  started = await client.post('/v1/trails', json=_start_payload(), headers=_auth())
   keepalive = await client.post(f'/v1/trails/{trail_id}/keepalive', headers=_auth())
   administered = await client.post('/v1/admin/trails/check', json={}, headers=_auth())
 
   assert read.status == 200
-  assert blazed.status == 403
+  assert started.status == 403
   assert keepalive.status == 403
   assert administered.status == 403
 
@@ -144,17 +144,17 @@ async def test_an_undeclared_route_is_refused_rather_than_served_open(aiohttp_cl
 
 
 @pytest.mark.asyncio
-async def test_blaze_dispatches_the_real_store_off_loop(client, store, monkeypatch):
+async def test_start_dispatches_the_real_store_off_loop(client, store, monkeypatch):
   event_loop_thread = threading.get_ident()
   operation_threads = []
-  blaze = store.blaze
+  start_trail = store.start_trail
 
-  def observed_blaze(request):
+  def observed_start(request):
     operation_threads.append(threading.get_ident())
-    return blaze(request)
+    return start_trail(request)
 
-  monkeypatch.setattr(store, 'blaze', observed_blaze)
-  response = await (await client).post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  monkeypatch.setattr(store, 'start_trail', observed_start)
+  response = await (await client).post('/v1/trails', json=_start_payload(), headers=_auth())
 
   assert response.status == 201
   trail_id = (await response.json())['id']
@@ -170,7 +170,7 @@ async def test_server_refuses_an_uninstalled_format_then_serves_it_when_installe
   client = await client
   monkeypatch.setattr(backends, '_entry_points', lambda: ())
 
-  refused = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  refused = await client.post('/v1/trails', json=_start_payload(), headers=_auth())
 
   assert refused.status == 400
   assert "trail format 'bro' is not installed" in (await refused.json())['error']
@@ -179,7 +179,7 @@ async def test_server_refuses_an_uninstalled_format_then_serves_it_when_installe
     'bro', 'bro.native_trails.format:BRO_FORMAT', backends.ENTRY_POINT_GROUP
   )
   monkeypatch.setattr(backends, '_entry_points', lambda: (entry,))
-  served = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  served = await client.post('/v1/trails', json=_start_payload(), headers=_auth())
 
   assert served.status == 201
   trail_id = (await served.json())['id']
@@ -191,24 +191,24 @@ async def test_server_refuses_an_uninstalled_format_then_serves_it_when_installe
 @pytest.mark.parametrize(
   'field', ['harness', 'version', 'interactive', 'surface', 'body', 'native']
 )
-async def test_blaze_requires_universal_fields(client, field):
-  payload = _blaze_payload()
+async def test_start_requires_universal_fields(client, field):
+  payload = _start_payload()
   del payload[field]
   response = await (await client).post('/v1/trails', json=payload, headers=_auth())
   assert response.status == 400
 
 
 @pytest.mark.asyncio
-async def test_blaze_validates_lineage_and_harness_data(client):
+async def test_start_validates_lineage_and_harness_data(client):
   client = await client
   invalid_pointer = await client.post(
     '/v1/trails',
-    json=_blaze_payload(forked_from={'trail_id': 'parent'}),
+    json=_start_payload(forked_from={'trail_id': 'parent'}),
     headers=_auth(),
   )
   missing_bro = await client.post(
     '/v1/trails',
-    json=_blaze_payload(bro=None),
+    json=_start_payload(bro=None),
     headers=_auth(),
   )
 
@@ -219,7 +219,7 @@ async def test_blaze_validates_lineage_and_harness_data(client):
 @pytest.mark.asyncio
 async def test_append_maps_conflicts_and_bad_payloads(client):
   client = await client
-  created = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  created = await client.post('/v1/trails', json=_start_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   appended = await client.post(
     f'/v1/trails/{trail_id}/records',
@@ -246,7 +246,7 @@ async def test_append_maps_conflicts_and_bad_payloads(client):
 @pytest.mark.asyncio
 async def test_read_handlers_dispatch_local_store_semantics(client):
   client = await client
-  claude = _blaze_payload(
+  claude = _start_payload(
     harness='claude',
     bro=None,
     surface='ride',
@@ -271,10 +271,10 @@ async def test_read_handlers_dispatch_local_store_semantics(client):
 @pytest.mark.asyncio
 async def test_list_filters_and_rejects_invalid_queries(client):
   client = await client
-  await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  await client.post('/v1/trails', json=_start_payload(), headers=_auth())
   await client.post(
     '/v1/trails',
-    json=_blaze_payload(
+    json=_start_payload(
       harness='claude',
       bro=None,
       surface='ride',
@@ -303,7 +303,7 @@ async def test_list_filters_and_rejects_invalid_queries(client):
 @pytest.mark.asyncio
 async def test_header_and_end_handlers_preserve_store_validation(client, store):
   client = await client
-  created = await client.post('/v1/trails', json=_blaze_payload(), headers=_auth())
+  created = await client.post('/v1/trails', json=_start_payload(), headers=_auth())
   trail_id = (await created.json())['id']
   updated = await client.patch(
     f'/v1/trails/{trail_id}', json={'subject': 'renamed'}, headers=_auth()
@@ -349,7 +349,7 @@ async def test_an_unrouted_path_is_not_a_missing_trail(client):
 
 @pytest.mark.asyncio
 async def test_a_tool_blob_is_read_by_digest_and_a_missing_one_is_named(client, store):
-  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  trail_id = store.start_trail(StartRequest(**_start_payload()))['id']
   tools = [{'type': 'function', 'name': 'read'}]
   digest = tools_sha256(tools)
   store.append_records(trail_id, 1, [], tools={digest: tools})
@@ -367,7 +367,7 @@ async def test_a_tool_blob_is_read_by_digest_and_a_missing_one_is_named(client, 
 
 @pytest.mark.asyncio
 async def test_import_is_administered_and_a_collision_names_the_trail(aiohttp_client, store):
-  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  trail_id = store.start_trail(StartRequest(**_start_payload()))['id']
   header = store.get_trail(trail_id)
   rows = store.get_steps(trail_id)['steps']
   writer = await aiohttp_client(create_app(store, _tokens('read', 'write')))
@@ -418,7 +418,7 @@ async def test_import_is_administered_and_a_collision_names_the_trail(aiohttp_cl
 
 @pytest.mark.asyncio
 async def test_migrate_is_an_admin_operation(aiohttp_client, store):
-  trail_id = store.blaze(BlazeRequest(**_blaze_payload()))['id']
+  trail_id = store.start_trail(StartRequest(**_start_payload()))['id']
   full = await aiohttp_client(create_app(store, FULL_ACCESS))
   writer = await aiohttp_client(create_app(store, _tokens('write')))
 
@@ -435,9 +435,9 @@ async def test_migrate_is_an_admin_operation(aiohttp_client, store):
 
 @pytest.mark.asyncio
 async def test_delete_is_administered_and_reports_a_refusal_as_a_conflict(aiohttp_client, store):
-  parent = store.blaze(BlazeRequest(**_blaze_payload()))['id']
-  child = store.blaze(
-    BlazeRequest(**_blaze_payload(forked_from={'trail_id': parent, 'step_id': 0}))
+  parent = store.start_trail(StartRequest(**_start_payload()))['id']
+  child = store.start_trail(
+    StartRequest(**_start_payload(forked_from={'trail_id': parent, 'step_id': 0}))
   )['id']
   full = await aiohttp_client(create_app(store, FULL_ACCESS))
   writer = await aiohttp_client(create_app(store, _tokens('write')))
@@ -657,3 +657,41 @@ def test_malformed_served_entries_are_refused(tmp_path, payload):
   declaration.write_text(json.dumps(payload))
   with pytest.raises(ValueError):
     read_entries(declaration)
+
+
+@pytest.mark.asyncio
+async def test_named_start_http_status_and_collision_body(client):
+  from bro.base.lulid import lulid
+
+  client = await client
+  payload = {**_start_payload(), 'id': lulid(), 'subject': None}
+  created = await client.post('/v1/trails', json=payload, headers=_auth())
+  assert created.status == 201
+  first = await created.json()
+  assert first['created'] is True
+  repeated = await client.post('/v1/trails', json=payload, headers=_auth())
+  assert repeated.status == 200
+  assert await repeated.json() == {**first, 'created': False}
+  changed = {key: value for key, value in payload.items() if value is not None}
+  collision = await client.post('/v1/trails', json=changed, headers=_auth())
+  assert collision.status == 409
+  body = await collision.json()
+  assert reported_collision(json.dumps(body).encode()) == payload['id']
+  assert isinstance(body['error'], str) and body['error']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'extra',
+  [
+    {'id': '../invalid'},
+    {'forked_from': {'trail_id': 'parent', 'step_id': 0, 'kind': 'unknown'}},
+    {'id': '01m8a7qjvk-2833s2nx-3k3tpp28', 'lineage': {}},
+    {'summoned_by': {'trail_id': 'parent', 'step_id': 0, 'kind': 'resume'}},
+  ],
+)
+async def test_start_refuses_invalid_id_and_edge_fields(client, extra):
+  response = await (await client).post(
+    '/v1/trails', json={**_start_payload(), **extra}, headers=_auth()
+  )
+  assert response.status == 400

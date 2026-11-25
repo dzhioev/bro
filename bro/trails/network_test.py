@@ -7,11 +7,12 @@ from unittest.mock import patch
 
 import pytest
 
+from bro.base.lulid import lulid
 from bro.trails.model import (
   INITIAL_TRAIL_FORMAT,
-  BlazeRequest,
   ForkedFrom,
   RecordedTrail,
+  StartRequest,
   Step,
   Trail,
   tool_not_found_body,
@@ -340,10 +341,10 @@ class TestRetryBehavior:
 
 
 class TestWrites:
-  def test_blaze_posts_the_payload_verbatim(self, monkeypatch):
+  def test_start_posts_the_payload_verbatim(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue((201, b'{"id": "T1", "started_at": "2026-01-01T00:00:00Z"}'))
-    request = BlazeRequest(
+    request = StartRequest(
       harness='claude',
       version='test',
       interactive=True,
@@ -351,17 +352,17 @@ class TestWrites:
       body={'records': []},
       native={},
     )
-    result = _client().blaze(request)
+    result = _client().start_trail(request)
     assert result['id'] == 'T1'
     method, path, body, headers = fake.requests[0]
     assert (method, path) == ('POST', '/v1/trails')
     assert headers['Content-Type'] == 'application/json'
     assert body is not None and json.loads(body) == request.to_wire()
 
-  def test_blaze_is_not_retried(self, monkeypatch):
+  def test_start_is_not_retried(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)
     fake.queue(ConnectionError('blip'))
-    request = BlazeRequest(
+    request = StartRequest(
       harness='claude',
       version='test',
       interactive=True,
@@ -370,8 +371,26 @@ class TestWrites:
       native={},
     )
     with pytest.raises(TransientUnavailable):
-      _client().blaze(request)
+      _client().start_trail(request)
     assert len(fake.requests) == 1
+
+  @pytest.mark.parametrize('failure', [ConnectionError('blip'), (503, b'unavailable')])
+  def test_named_start_is_retried(self, monkeypatch, failure):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue(failure)
+    fake.queue((200, b'{"id": "T1", "extent": 1, "created": false}'))
+    request = StartRequest(
+      id=lulid(),
+      harness='claude',
+      version='test',
+      interactive=True,
+      surface='ride',
+      body={'records': []},
+      native={},
+    )
+    assert _client().start_trail(request)['created'] is False
+    assert len(fake.requests) == 2
+    assert fake.requests[0][2] == fake.requests[1][2]
 
   def test_append_conflict_maps_to_store_error(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

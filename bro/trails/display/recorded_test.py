@@ -259,11 +259,19 @@ class TestMessages:
 
 
 class TestCollection:
-  def test_fork_chain_honors_the_exact_step_and_index_bound(self):
+  @pytest.mark.parametrize('kind', [None, 'resume', 'trail', 'branch'])
+  def test_fork_chain_honors_the_exact_step_and_index_bound(self, kind):
     fake = FakeClient()
     fake.headers['parent'] = _header('parent', extent=3)
     fake.headers['child'] = _header(
-      'child', extent=1, forked_from={'trail_id': 'parent', 'step_id': 1, 'index': 1}
+      'child',
+      extent=1,
+      forked_from={
+        'trail_id': 'parent',
+        'step_id': 1,
+        'index': 1,
+        **({'kind': kind} if kind is not None else {}),
+      },
     )
     fake.messages['parent'] = [
       _message('user_input', 0, content='kept zero'),
@@ -282,7 +290,9 @@ class TestCollection:
       if isinstance(record, (UserInput, AssistantText, InterimAssistantText))
     ]
     assert message_content == ['kept zero', 'kept one', 'kept two', 'child']
-    assert any(isinstance(record, SegmentBoundary) for record in records)
+    boundaries = [record for record in records if isinstance(record, SegmentBoundary)]
+    assert len(boundaries) == 1
+    assert boundaries[0].edge_kind == kind
 
   def test_a_fork_bound_past_the_parents_steps_is_malformed(self):
     fake = FakeClient()

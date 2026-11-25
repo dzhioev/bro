@@ -12,7 +12,7 @@ from bro.trails import backends, formats, importing, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
-  BlazeRequest,
+  StartRequest,
   canonical_json_bytes,
   is_sha256,
   named_tool_digests,
@@ -27,6 +27,7 @@ from bro.trails.store import (
   ToolNotFound,
   TrailNotFound,
   TrailsStore,
+  collision,
   refuse_while_forked,
   refusing_invalid_requests,
 )
@@ -181,13 +182,17 @@ class DynamoStore(TrailsStore):
     stored['body_encoding'] = 'text' if isinstance(body, str) else 'json'
     return stored
 
-  def blaze(self, request: BlazeRequest) -> dict:
+  def start_trail(self, request: StartRequest) -> dict:
+    if request.id is not None:
+      existing = self._optional_header(request.id)
+      if existing is not None:
+        return self._repeated_start(request, existing)
     trail_format = self._trail_format(request.harness)
-    with refusing_invalid_requests('blaze request'):
+    with refusing_invalid_requests('start request'):
       trail_format.validate_create(request.native)
       if trail_format.requires_bro and request.bro is None:
         raise ValueError(f'bro is required for the {trail_format.name} trail format')
-    with refusing_invalid_requests('blaze body'):
+    with refusing_invalid_requests('start body'):
       opened = trail_format.open(request.body)
     decision = None
     forked_from = request.forked_from
@@ -195,7 +200,7 @@ class DynamoStore(TrailsStore):
     if request.lineage is not None:
       decision = backends.resolve_lineage(trail_format, request, self)
       if not decision.adopt:
-        return {'adopted': False, 'reason': decision.reason}
+        return {'created': False, 'adopted': False, 'reason': decision.reason}
       if decision.attach_to is not None:
         return self._attach(request, decision)
       forked_from = decision.forked_from
@@ -208,7 +213,7 @@ class DynamoStore(TrailsStore):
       )
     if decision is not None:
       native.update(minted_native(native, decision.chunks))
-    trail_id = dynamo_types.new_id()
+    trail_id = request.id if request.id is not None else dynamo_types.new_id()
     started_at = _now_iso()
     if len(opened.records) > dynamo_types.MAX_TRANSACTION_RECORDS:
       raise ValueError(
@@ -227,6 +232,8 @@ class DynamoStore(TrailsStore):
       'turn_count': 0,
       'native': native,
     }
+    if request.id is not None:
+      header['start_sha256'] = request.start_sha256
     optional = {
       'bro': request.bro,
       'hold': request.hold,
@@ -251,21 +258,40 @@ class DynamoStore(TrailsStore):
       seen_billing_keys=seen_billing_keys,
     )
     item.update(state_fields(state, len(prepared)))
-    self._dynamo.transact_write_items(
-      TransactItems=[
-        {
-          'Put': {
-            'TableName': self._trails_table,
-            'Item': _ddb_item(item),
-            'ConditionExpression': 'attribute_not_exists(id)',
-          }
-        },
-        *_row_puts(self._steps_table, prepared),
-      ],
-    )
-    return backends.blaze_result(trail_id, started_at, len(prepared), decision)
+    try:
+      self._dynamo.transact_write_items(
+        TransactItems=[
+          {
+            'Put': {
+              'TableName': self._trails_table,
+              'Item': _ddb_item(item),
+              'ConditionExpression': 'attribute_not_exists(id)',
+            }
+          },
+          *_row_puts(self._steps_table, prepared),
+        ],
+      )
+    except self._dynamo.exceptions.TransactionCanceledException as exception:
+      reasons = exception.response.get('CancellationReasons', [])
+      if not reasons or reasons[0].get('Code') != 'ConditionalCheckFailed':
+        raise
+      if request.id is None:
+        raise collision(trail_id, 'the minted id is occupied') from exception
+      return self._repeated_start(request, self._required_header(trail_id))
+    return backends.start_result(trail_id, started_at, len(prepared), decision, created=True)
 
-  def _attach(self, request: BlazeRequest, decision: LineageDecision) -> dict:
+  def _repeated_start(self, request: StartRequest, header: dict) -> dict:
+    assert request.id is not None
+    if (
+      importing.import_state(header) is not None
+      or header.get('start_sha256') != request.start_sha256
+    ):
+      raise collision(request.id, 'the start request does not match a completed start')
+    return backends.start_result(
+      request.id, header['started_at'], self._header_extent(header), None, created=False
+    )
+
+  def _attach(self, request: StartRequest, decision: LineageDecision) -> dict:
     """Reopen the trail the verdict attached to for this lifetime, conditional on
     the extent it was verified against."""
     assert decision.attach_to is not None
@@ -301,8 +327,8 @@ class DynamoStore(TrailsStore):
         ExpressionAttributeValues=values,
       )
     except self._dynamo.exceptions.ConditionalCheckFailedException:
-      return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
-    return backends.blaze_result(trail_id, header['started_at'], extent, decision)
+      return {'created': False, 'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+    return backends.start_result(trail_id, header['started_at'], extent, decision, created=False)
 
   def append_records(
     self,

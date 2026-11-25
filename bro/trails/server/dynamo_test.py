@@ -10,11 +10,12 @@ import pytest
 from moto import mock_aws
 
 from bro.trails import backends, formats, model
+from bro.trails.contract_test import TestNamedStarts as NamedStartContract
 from bro.trails.local import LocalStore
 from bro.trails.model import (
   MESSAGE_TYPES,
   UNREPORTED_END_INFERENCE,
-  BlazeRequest,
+  StartRequest,
   payload_sha256,
   tools_sha256,
 )
@@ -216,7 +217,7 @@ def components():
       yield store, Tables(dynamo), Bucket(s3, session.client('s3'))
 
 
-def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
+def _start_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
   payload = {
     'harness': 'bro',
     'version': '2',
@@ -228,7 +229,7 @@ def _blaze_bro(store: dynamo_store.DynamoStore, **overrides) -> str:
     'body': {'records': [{'kind': 'system_prompt', 'body': 'prompt', 'turn_index': 0}]},
   }
   payload.update(overrides)
-  return (store.blaze(BlazeRequest.from_wire(payload)))['id']
+  return (store.start_trail(StartRequest.from_wire(payload)))['id']
 
 
 _CLAUDE_NATIVE = {
@@ -252,8 +253,8 @@ def _claude_payload(**overrides) -> dict:
   return payload
 
 
-def _blaze_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
-  return (store.blaze(BlazeRequest.from_wire(_claude_payload(**overrides))))['id']
+def _start_claude(store: dynamo_store.DynamoStore, **overrides) -> str:
+  return (store.start_trail(StartRequest.from_wire(_claude_payload(**overrides))))['id']
 
 
 def test_build_dynamo_store_uses_the_shared_credential_shape(monkeypatch):
@@ -341,7 +342,7 @@ def test_installed_formats_declare_the_storage_and_projection_contract():
 
 def test_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   result = store.append_records(
     trail_id,
     offset=1,
@@ -389,7 +390,7 @@ def test_append_uses_ordinals_folds_raw_usage_and_is_idempotent(components):
 
 def test_notification_step_is_accepted_and_stored_as_text(components):
   store, _, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   body = '[notification: a background job reported]\njob output'
 
   result = store.append_records(
@@ -418,7 +419,7 @@ def test_notification_step_is_accepted_and_stored_as_text(components):
 
 def test_append_chunks_without_interleaving(components):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   records = [{'kind': 'error', 'body': str(index)} for index in range(51)]
   assert store.append_records(trail_id, offset=1, records=records) == {
     'extent': 52,
@@ -429,7 +430,7 @@ def test_append_chunks_without_interleaving(components):
 
 def test_append_rejects_a_header_format_change_after_its_read(components, monkeypatch):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   append_header_update = store._append_header_update
 
   def race_format_change(*args, **kwargs):
@@ -449,7 +450,7 @@ def test_append_rejects_a_header_format_change_after_its_read(components, monkey
 
 def test_migrate_on_append_conditionally_rewrites_older_rows(components, monkeypatch):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   with dynamo.editing_header(trail_id) as header:
     header.pop('format')
   with dynamo.editing_step(trail_id, 0) as step:
@@ -509,9 +510,9 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
   components, monkeypatch
 ):
   store, dynamo, _ = components
-  old_parent = _blaze_bro(store)
-  new_parent = _blaze_bro(store)
-  trail_id = _blaze_bro(
+  old_parent = _start_bro(store)
+  new_parent = _start_bro(store)
+  trail_id = _start_bro(
     store,
     forked_from={'trail_id': old_parent, 'step_id': 0},
     native={
@@ -555,7 +556,7 @@ def test_header_migration_rederives_storage_attributes_from_the_upgraded_header(
 
 def test_migration_refuses_a_body_changing_upgrade_before_rewriting(components, monkeypatch):
   store, dynamo, s3 = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
   store.append_records(trail_id, 1, [{'kind': 'tool_result', 'body': large}])
   previous_key = dynamo.steps[trail_id, 1]['body_s3']
@@ -585,7 +586,7 @@ def test_migration_refuses_a_body_changing_upgrade_before_rewriting(components, 
 
 def test_recompute_migrates_before_repairing_rows(components, monkeypatch):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   with dynamo.editing_header(trail_id) as header:
     header.pop('format')
   with dynamo.editing_step(trail_id, 0) as step:
@@ -612,7 +613,7 @@ def test_recompute_migrates_before_repairing_rows(components, monkeypatch):
 
 def test_bro_projection_derives_messages_from_the_llm_call_output(components):
   store, _, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   store.append_records(
     trail_id,
     offset=1,
@@ -654,7 +655,7 @@ def test_bro_projection_derives_messages_from_the_llm_call_output(components):
 
 def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
   store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
   second = _claude_assistant('message-1', 'second', uuid='uuid-2')
   third = _claude_assistant('message-1', 'third', uuid='uuid-3')
@@ -683,7 +684,7 @@ def test_claude_billing_decision_is_stored_across_batches_and_pages(components):
 
 def test_check_detects_non_adjacent_message_billing(components):
   store, _, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   store.append_records(
     trail_id,
     offset=0,
@@ -710,7 +711,7 @@ def test_check_detects_non_adjacent_message_billing(components):
 
 def test_claude_classifier_owns_version_title_and_turns(components):
   store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   records = [
     json.dumps({'type': 'system', 'version': '2.1.0'}),
     json.dumps({'type': 'ai-title', 'aiTitle': 'A useful title'}),
@@ -733,7 +734,7 @@ def test_claude_classifier_owns_version_title_and_turns(components):
 
 def test_spill_and_content_addressed_tools(components):
   store, _, s3 = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   tool_body = [{'type': 'function', 'name': 'read'}]
   sha256 = tools_sha256(tool_body)
   large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
@@ -755,7 +756,7 @@ def test_spill_and_content_addressed_tools(components):
 
 def test_spilled_claude_lines_resolve_in_the_store_thread_pool(components):
   store, _, s3 = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   raw_lines = [
     json.dumps(
       {
@@ -776,7 +777,7 @@ def test_spilled_claude_lines_resolve_in_the_store_thread_pool(components):
 
 def test_a_spilled_row_without_body_encoding_fails_loudly(components):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
   store.append_records(trail_id, 1, [{'kind': 'tool_result', 'body': large}])
   with dynamo.editing_step(trail_id, 1) as step:
@@ -788,8 +789,8 @@ def test_a_spilled_row_without_body_encoding_fails_loudly(components):
 
 def test_candidate_trails_come_from_the_segment_index(components):
   store, dynamo, _ = components
-  in_segment = _blaze_claude(store)
-  elsewhere = _blaze_claude(store, native={**_CLAUDE_NATIVE, 'segment': 'other-segment'})
+  in_segment = _start_claude(store)
+  elsewhere = _start_claude(store, native={**_CLAUDE_NATIVE, 'segment': 'other-segment'})
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
   store.append_records(in_segment, offset=0, records=[first])
 
@@ -808,8 +809,8 @@ def test_candidate_trails_come_from_the_segment_index(components):
 
 def test_the_mid_write_probe_is_one_keys_only_uuid_query(components):
   store, dynamo, _ = components
-  recorded = _blaze_claude(store)
-  elsewhere = _blaze_claude(store)
+  recorded = _start_claude(store)
+  elsewhere = _start_claude(store)
   store.append_records(
     recorded, offset=0, records=[_claude_assistant('message-1', 'first', uuid='uuid-1')]
   )
@@ -828,7 +829,7 @@ def test_the_mid_write_probe_is_one_keys_only_uuid_query(components):
 
 def test_the_segment_key_and_lineage_head_ride_the_header_writes(components):
   store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   first = _claude_assistant('message-1', 'first', uuid='uuid-1')
 
   assert dynamo.headers[trail_id]['segment'] == 'segment'
@@ -840,12 +841,12 @@ def test_the_segment_key_and_lineage_head_ride_the_header_writes(components):
     'last_row_digest': payload_sha256(first),
     'cuts': None,
   }
-  assert 'segment' not in dynamo.headers[_blaze_bro(store)]
+  assert 'segment' not in dynamo.headers[_start_bro(store)]
 
 
 def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(components, monkeypatch):
   store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   recorded = _claude_assistant('message-1', 'first', uuid='uuid-1')
   store.append_records(trail_id, offset=0, records=[recorded])
   store.end_trail(trail_id, 'ok')
@@ -860,8 +861,8 @@ def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(compo
     ],
   }
 
-  attached = store.blaze(
-    BlazeRequest.from_wire(
+  attached = store.start_trail(
+    StartRequest.from_wire(
       _claude_payload(
         lineage=lineage,
         version='3',
@@ -888,15 +889,17 @@ def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(compo
   store.append_records(trail_id, offset=1, records=resumed[:1])
   monkeypatch.setattr(store, 'find_segment_trails', lambda segments: stale)
 
-  contended = store.blaze(BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='4')))
+  contended = store.start_trail(
+    StartRequest.from_wire(_claude_payload(lineage=lineage, version='4'))
+  )
 
-  assert contended == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+  assert contended == {'created': False, 'adopted': False, 'reason': backends.ATTACH_CONTENDED}
   assert dynamo.headers[trail_id]['version'] == '3'
 
 
 def test_attach_rejects_a_header_format_change_after_its_read(components, monkeypatch):
   store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   recorded = _claude_assistant('message-1', 'first', uuid='uuid-1')
   resumed = _claude_assistant('message-2', 'second', uuid='uuid-2')
   store.append_records(trail_id, offset=0, records=[recorded])
@@ -925,16 +928,18 @@ def test_attach_rejects_a_header_format_change_after_its_read(components, monkey
 
   monkeypatch.setattr(store._dynamo, 'update_item', race_format_change)
 
-  attached = store.blaze(BlazeRequest.from_wire(_claude_payload(lineage=lineage, version='3')))
+  attached = store.start_trail(
+    StartRequest.from_wire(_claude_payload(lineage=lineage, version='3'))
+  )
 
-  assert attached == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+  assert attached == {'created': False, 'adopted': False, 'reason': backends.ATTACH_CONTENDED}
   assert dynamo.headers[trail_id]['version'] == '2'
   assert dynamo.headers[trail_id]['format'] == model.TRAIL_FORMAT + 1
 
 
 def test_check_detects_corruption_and_recompute_repairs_rows_and_header(components):
   store, dynamo, _ = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   store.append_records(
     trail_id,
     offset=0,
@@ -966,8 +971,8 @@ def test_check_detects_corruption_and_recompute_repairs_rows_and_header(componen
 
 def test_store_check_finds_cross_trail_duplicate_uuids(components):
   store, _, _ = components
-  first = _blaze_claude(store)
-  second = _blaze_claude(store)
+  first = _start_claude(store)
+  second = _start_claude(store)
   store.append_records(
     first,
     offset=0,
@@ -987,7 +992,7 @@ def test_store_check_finds_cross_trail_duplicate_uuids(components):
 
 def test_relink_manifests_before_trimming_and_recomputes(components):
   store, dynamo, s3 = components
-  trail_id = _blaze_claude(store)
+  trail_id = _start_claude(store)
   records = [
     json.dumps({'type': 'system', 'uuid': 'copied'}),
     json.dumps(
@@ -1023,7 +1028,7 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
   store, dynamo, s3 = components
   tool_body = [{'type': 'function', 'name': 'read'}]
   sha256 = tools_sha256(tool_body)
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   with dynamo.editing_header(trail_id) as header:
     header['legacy_launch_context'] = _LEGACY_CONTEXT
   large = 'x' * (dynamo_store.SPILLOVER_THRESHOLD_BYTES + 1)
@@ -1053,8 +1058,8 @@ def test_delete_manifests_the_trail_and_takes_only_what_it_owns(components):
 def _recorded_source(root) -> tuple[LocalStore, str, dict, list[dict], str]:
   """A local trail whose rows name a tool blob and carry a body Dynamo spills."""
   source = LocalStore(root)
-  trail_id = source.blaze(
-    BlazeRequest.from_wire(
+  trail_id = source.start_trail(
+    StartRequest.from_wire(
       {
         'harness': 'bro',
         'version': '2',
@@ -1085,7 +1090,7 @@ def test_import_derives_storage_attributes_from_an_upgraded_recorded_header(
   components, tmp_path, monkeypatch
 ):
   store, dynamo, _ = components
-  parent = _blaze_bro(store)
+  parent = _start_bro(store)
   _, trail_id, header, _, _ = _recorded_source(tmp_path)
   header['forked_from'] = {'parent': parent, 'ordinal': 0}
   header['native']['recorded_segment'] = 'segment'
@@ -1150,7 +1155,7 @@ def test_import_requires_the_tool_blobs_the_bucket_holds(components, tmp_path):
     store.import_rows(trail_id, 0, rows)
   with pytest.raises(ToolNotFound):
     store.get_tool(sha256)
-  other = _blaze_bro(store)
+  other = _start_bro(store)
   store.append_records(other, offset=1, records=[], tools={sha256: source.get_tool(sha256)})
   store.import_rows(trail_id, 0, rows)
   store.seal_import(trail_id)
@@ -1201,7 +1206,7 @@ def test_a_begin_that_loses_the_id_leaves_the_winner_in_place(components, tmp_pa
 
 def test_import_matches_a_live_trail_by_identity_and_refuses_another(components):
   store, dynamo, _ = components
-  trail_id = _blaze_bro(store)
+  trail_id = _start_bro(store)
   store.append_records(trail_id, offset=1, records=[_bro_call([])])
   header = store.get_trail(trail_id)
   rows = store.get_steps(trail_id)['steps']
@@ -1221,8 +1226,8 @@ def test_import_matches_a_live_trail_by_identity_and_refuses_another(components)
 
 def test_delete_refuses_a_trail_a_fork_still_points_at(components):
   store, _, _ = components
-  root = _blaze_bro(store)
-  child = _blaze_bro(store, forked_from={'trail_id': root, 'step_id': 0})
+  root = _start_bro(store)
+  child = _start_bro(store, forked_from={'trail_id': root, 'step_id': 0})
 
   with pytest.raises(TrailHasForks) as refused:
     store.delete_trail(root)
@@ -1234,8 +1239,8 @@ def test_delete_refuses_a_trail_a_fork_still_points_at(components):
 
 def test_list_and_pointer_index_stay_available(components):
   store, _, _ = components
-  root = _blaze_bro(store)
-  child = _blaze_bro(
+  root = _start_bro(store)
+  child = _start_bro(
     store,
     forked_from={'trail_id': root, 'step_id': 0, 'index': 2},
   )
@@ -1253,11 +1258,11 @@ def test_list_and_pointer_index_stay_available(components):
 
 def test_list_queries_the_fork_index_and_pages_past_a_page_the_bro_filter_empties(components):
   store, dynamo, _ = components
-  root = _blaze_bro(store, bro='root')
+  root = _start_bro(store, bro='root')
   fork = {'trail_id': root, 'step_id': 0, 'index': 2}
-  older = _blaze_bro(store, forked_from=fork)
-  other = _blaze_bro(store, bro='other', forked_from=fork)
-  newer = _blaze_bro(store, forked_from=fork)
+  older = _start_bro(store, forked_from=fork)
+  other = _start_bro(store, bro='other', forked_from=fork)
+  newer = _start_bro(store, forked_from=fork)
   for second, trail_id in enumerate((older, other, newer)):
     with dynamo.editing_header(trail_id) as header:
       header['started_at'] = f'2026-01-01T00:00:0{second}.000000Z'
@@ -1279,9 +1284,9 @@ def test_list_queries_the_fork_index_and_pages_past_a_page_the_bro_filter_emptie
 
 def test_list_combines_harness_and_bro_on_the_bro_index(components):
   store, dynamo, _ = components
-  bro_trail = _blaze_bro(store)
-  _blaze_bro(store, bro='other')
-  _blaze_claude(store, bro='dev')
+  bro_trail = _start_bro(store)
+  _start_bro(store, bro='other')
+  _start_claude(store, bro='dev')
   dynamo.queries.clear()
 
   listed = [trail['id'] for trail in store.iter_trails(harness='bro', bro='dev')]
@@ -1292,8 +1297,8 @@ def test_list_combines_harness_and_bro_on_the_bro_index(components):
 
 def test_sweep_marks_stale_trails_as_inferred_unreported(components):
   store, dynamo, _ = components
-  stale = _blaze_bro(store)
-  live = _blaze_bro(store)
+  stale = _start_bro(store)
+  live = _start_bro(store)
   with dynamo.editing_header(stale) as header:
     header['last_alive_at'] = '2020-01-01T00:00:00.000000Z'
 
@@ -1326,7 +1331,7 @@ def test_recompute_refolds_native_line_rows_without_changing_the_lines(component
       'tools_sha256': digest,
     },
   ]
-  trail_id = _blaze_bro(store, body={'records': []})
+  trail_id = _start_bro(store, body={'records': []})
   store.append_records(
     trail_id,
     0,
@@ -1353,3 +1358,12 @@ def test_recompute_refolds_native_line_rows_without_changing_the_lines(component
   header = store.get_trail(trail_id)
   assert header['turn_count'] == 1
   assert header['native']['usage'] == {'model': {'input_tokens': 10, 'output_tokens': 2}}
+
+
+@pytest.fixture
+def trails_store(components):
+  return components[0]
+
+
+class TestDynamoNamedStarts(NamedStartContract):
+  pass

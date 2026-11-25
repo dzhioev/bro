@@ -4,12 +4,12 @@ import pytest
 
 from bro.trails.cost import UnpricedCallError, strict_trail_cost, trail_cost
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.record.spine import Recording
 
 
-def _request(model: str = 'gpt-5.6-terra', *, summoned_by=None) -> BlazeRequest:
-  return BlazeRequest(
+def _request(model: str = 'gpt-5.6-terra', *, summoned_by=None) -> StartRequest:
+  return StartRequest(
     harness='bro',
     bro='dev',
     version='test',

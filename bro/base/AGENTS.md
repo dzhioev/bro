@@ -102,7 +102,7 @@ run those with `--help` for flags.
   A launch CLI's verbosity therefore reaches the processes it spawns on the host, workspace provisioning among them, and stops at the session boundary:
   a managed session's environment is composed explicitly, and `ride`'s `--session-log` is what sets the level the session's own processes run at;
   an explicit `--log` overrides an inherited value.
-- `lulid.py` — `lulid()`, the repo's id mint:
+- `lulid.py` — `lulid()`, the repo's id mint, and `is_lulid()`, its spelling check:
   a ULID restyled lowercase and dash-grouped 10-8-8 (`01kwphn3q5-w1fdwep2-apw9ag3b`).
   The restyle preserves lexicographic order, so lulids sort by mint time and are safe as range/sort keys.
 - `time_util.py` — timezone-aware `Moment` / `Duration` (`datetime` / `timedelta` subclasses), parsers (`parse_moment`, ISO, date), and `utc_now`.

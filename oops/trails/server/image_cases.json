@@ -1,7 +1,7 @@
 [
   {
     "name": "native",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
@@ -18,7 +18,8 @@
             "body": "fixture input"
           }
         ]
-      }
+      },
+      "id": "01m8a7qjvk-2833s2nx-3k3tpp28"
     },
     "records": [
       {
@@ -54,11 +55,12 @@
       "llm_call",
       "assistant"
     ],
-    "reply": "native reply"
+    "reply": "native reply",
+    "fork_kind": "resume"
   },
   {
     "name": "claude",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
@@ -89,7 +91,7 @@
   },
   {
     "name": "chat",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
@@ -146,7 +148,7 @@
   },
   {
     "name": "native-line-rows",
-    "blaze": {
+    "start": {
       "bro": "image-probe",
       "version": "image-probe",
       "interactive": false,
