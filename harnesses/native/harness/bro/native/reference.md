@@ -17,7 +17,7 @@ It passes `RIDE_RESOLVED_RECIPE` verbatim as `--resolved-recipe`, so the native 
 The loop's prompt composes the hold's level text through `bro/bro.py:BaseBro.system_prompt_for`, from the hold its launch surface picks (`bro/launch/AGENTS.md`, "Display and holds").
 Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
-A resume's existence check is the session's current-trail pointer, from which the runner resolves the trail to continue.
+A resume continues the newest session run log, without reading a trail store.
 
 ## Tool groups
 
@@ -51,7 +51,13 @@ A named path is created exclusively and holds one run.
 `Runner.run_log` exposes the opened log's path, or None when a replacement `tracker=` records the run.
 
 A managed session names its run log under `<session dir>/bro/runs/` and starts `bro.native.trail-recorder` before launching the run, waiting for its readiness byte.
-The recorder follows only that log, stores its step lines as trail rows, publishes the session's trail pointer, reports recording health and emits the trail mark for one-shot or summoned sessions.
+The recorder stores its step lines as trail rows, publishes the session's trail pointer, reports recording health and emits the trail mark for one-shot or summoned sessions.
+Each lifetime records a trail of its own.
+Before starting a continued log's trail, the recorder settles its predecessor's entry in `<session dir>/recording-map.json` and completes its trail from the local log, including tool lists and its end.
+A predecessor unknown to the map is recorded whole, oldest ancestor first, with its recorded run facts and the session's location but no historical launch line, git state or summon attribution.
+The new trail's edge names the predecessor's trail and the continued step, with kind `resume`.
+The recorder persists a minted trail id in the map before sending the start, so a lost reply retries the same start.
+A line row uses the trail format's own `run_log` tag, independently of the log's format.
 It stops after the run, making a final recording pass.
 Nested native runs write their own logs under the runtime root and neither record trails nor change the pointer.
 `--no-trails` disables the session recorder, not the run log.
@@ -64,23 +70,43 @@ the interactive surface delivers a summoned conversation's answer.
 
 ## Resume
 
-`ride resume` continues the session's trail at its latest consistent point under the recorded native recipe, producing a new trail with `forked_from`.
-Before the run starts, the session runner removes the old pointer;
-the recorder publishes the continued run's trail, or the runner restores the old pointer if the run never creates its log.
-A resume warns when the previous recording failed or stopped, naming the newest session run log whose last steps may not have reached the trail.
-A session with no pointer cannot be resumed, whether recording was disabled or its recorder never opened a trail.
-A `--llm` replacement on another wire than the recorded one is refused before the session starts.
-A kept summoned child's `broker-<channel>` workspace resumes as an interactive `bro chat` continuing the child's trail.
-A native trail whose session record predates the resolved-recipe record continues with `bro chat <bro> --fork <trail>`.
+`ride resume` continues the conversation from the session's own run-log chain at its latest consistent step, under the recorded resolved recipe and source.
+It works with a record-only trails token, with `--no-trails`, and while the store is unreachable.
+The session runner picks logs under `<session dir>/bro/runs/` newest by name, passing over files without a complete `open` and format-2 logs without step 0.
+A workspace with no continuable log is refused as holding no session run log;
+one whose newest non-debris log predates format 2 is refused without migration.
+Before the run starts, the session runner removes the old trail pointer, even if the run never opens;
+only the recorder publishes the new trail's pointer.
+A kept summoned child's workspace resumes as an interactive `bro chat`, like any kept native session.
+A session record predating resolved recipes is refused with an instruction to start a new session.
+
+A format-2 run log names the log it continues in `open.forked_from`, as `{run, step}`.
+Both logs must be in the same directory.
+A missing ancestor file or bound step is refused, naming the files.
+The conversation includes each ancestor through its bound, excluding their system-prompt steps.
+The latest consistent step leaves no unanswered tool call;
+a continued log's system prompt is itself a consistent point, carrying the ancestor conversation even if that lifetime wrote no input.
+A root holding its prompt alone has no consistent continuation point.
+
+Step 0's `session_at` is the character offset of the prompt's session part.
+Continuation keeps the recorded prompt byte for byte when that part equals the session part composed for the new launch;
+otherwise it composes the whole prompt again.
+Persona changes alone do not replace the recorded prompt.
+Every replayed call must use the selected recipe's wire, checked before the new log opens.
+An unchanged prompt and provider/model can seed a server-chained wire at a completed call's response id;
+other continuations restore the wire from the local records.
 
 ## In-process surfaces
 
 `bro run <bro> <input>` and `bro chat <bro> [what]` run in the calling process:
 they use ambient credentials and create no workspace or scope.
 They read the live installation's home-layer stack (`bro/reference/ride.md`, "Recipe selection") on the bro harness, and only its recipe.
-`bro chat --fork [TRAIL_ID] [--at N]` forks recorded history into a new run log, an omitted trail id selecting the bro's newest recorded call.
-The fork runs the trail's recorded recipe unless `--llm` replaces it, with source `trail <id>` when using the record;
-it checks admission and requires a compatible recorded wire.
+`bro chat <bro> [what] --fork [RUN_LOG] [--at N]` continues a local run log and renders its bounded chain as history.
+Omitting the path picks the bro's newest log by name among the default directory's 200 newest files, regardless of the surface that wrote it.
+The new log is created beside the continued one;
+`--run-log` naming another directory is refused.
+The fork runs the log's recorded recipe unless `--llm` replaces it, with source `run log <id>` when using the record.
+Its `open` must name the selected bro, and its recipe must be admitted on a compatible wire.
 
 `bro chat` exits with `conversation saved to <path>` when the conversation opened a run log.
 Only a managed session's recorder turns that log into a trail.

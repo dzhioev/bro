@@ -227,11 +227,12 @@ class Runner:
     self._tracker = tracker if tracker is not None else self._make_tracker()
     llm = self._create_llm(hold=hold)
     self._conversation = llm
-    system_prompt = self.bro.system_prompt_for(hold=hold, harness=BRO)
+    system_prompt, session_at = self.bro.system_prompt_parts_for(hold=hold, harness=BRO)
     self._tracker.start(
       bro=self.bro.name,
       recipe=self.recipe.dump(),
       system_prompt=system_prompt,
+      session_at=session_at,
       forked_from=None,
       interactive=interactive,
       surface=surface,

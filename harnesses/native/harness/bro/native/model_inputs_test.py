@@ -227,10 +227,8 @@ def test_chat_fork_preserves_the_recorded_recipe_unless_explicitly_replaced(
 
   from bro.launch.call import chat_main
   from bro.llm.resolved import ResolvedRecipe
-  from bro.native.recording_test_helper import record_run
   from bro.native.runner import Runner
   from bro.registry import create_bro
-  from bro.trails.local import LocalStore
   from bros.bro import Bro
 
   class Reader(Bro):
@@ -244,19 +242,18 @@ def test_chat_fork_preserves_the_recorded_recipe_unless_explicitly_replaced(
   )
   monkeypatch.setattr(host_config, 'HOST_CONFIG_FILE', tmp_path / 'bro-config.json')
   configure(monkeypatch, 'openai:gpt-6.1-sol')
-  store = LocalStore(tmp_path / 'trails')
-  monkeypatch.setattr('bro.trails.store.default_store', lambda: store)
   monkeypatch.setattr('bro.launch.broxy.session_broxy', nullcontext)
   recorded_runner = Runner(
     create_bro(Reader.name), ResponsesRecipe(model='gpt-7', passthrough=True)
   )
   asyncio.run(recorded_runner.run('start', surface='test', hold='guided'))
-  trail_id = record_run(store, recorded_runner)
+  path = recorded_runner.run_log
+  assert path is not None
 
   expected = (
     ResolvedRecipe(ResponsesRecipe(model='gpt-5.6-terra'), '--llm')
     if explicit
-    else ResolvedRecipe(recorded_runner.recipe, f'trail {trail_id}')
+    else ResolvedRecipe(recorded_runner.recipe, f'run log {path.stem}')
   )
 
   async def continue_chat(runner, initial, history=None, hold='guided'):
@@ -271,7 +268,7 @@ def test_chat_fork_preserves_the_recorded_recipe_unless_explicitly_replaced(
         'bro',
         Reader.name,
         '--fork',
-        trail_id,
+        str(path),
         *(['--llm', 'openai:gpt-5.6-terra'] if explicit else []),
       ],
       program=['bro', 'chat'],

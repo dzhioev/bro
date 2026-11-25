@@ -12,11 +12,11 @@ from typing import Any, Optional, get_args
 
 from bro.base import configs, log
 from bro.base.lulid import lulid
-from bro.llm.tracker import EndReason, StepKind, Tracker
-from bro.trails.model import ForkedFrom, tools_sha256, validate_end
+from bro.llm.tracker import EndReason, RunFork, StepKind, Tracker
+from bro.trails.model import Step, tools_sha256, validate_end
 from bro.workspace.paths import runtime_base
 
-FORMAT = 1
+FORMAT = 2
 STEP_KINDS = frozenset(get_args(StepKind))
 
 
@@ -36,6 +36,10 @@ def _now() -> str:
 
 
 class RunLogError(ValueError):
+  pass
+
+
+class UnsupportedFormat(RunLogError):
   pass
 
 
@@ -65,7 +69,7 @@ class _State:
       if kind != 'open':
         raise ValueError('first entry must be open')
       if type(value.get('format')) is not int or value['format'] != FORMAT:
-        raise ValueError(f'unsupported run log format: {value.get("format")!r}')
+        raise UnsupportedFormat(f'unsupported run log format: {value.get("format")!r}')
       for field in ('version', 'bro', 'surface', 'hold'):
         if not isinstance(value.get(field), str) or len(value[field]) == 0:
           raise ValueError(f'open requires {field}')
@@ -73,6 +77,19 @@ class _State:
         value.get('interactive'), bool
       ):
         raise ValueError('open requires recipe and interactive')
+      pointer = value.get('forked_from')
+      if pointer is not None:
+        if (
+          not isinstance(pointer, dict)
+          or set(pointer) != {'run', 'step'}
+          or not isinstance(pointer['run'], str)
+          or not pointer['run']
+          or Path(pointer['run']).name != pointer['run']
+          or pointer['run'] in ('.', '..')
+          or type(pointer['step']) is not int
+          or pointer['step'] < 0
+        ):
+          raise ValueError('forked_from requires a run id and non-negative step')
       self.opened = True
       return None
     if kind == 'open':
@@ -108,6 +125,10 @@ class _State:
       value['body'], str
     ):
       raise ValueError(f'{kind} body must be text')
+    if kind == 'system_prompt' and (
+      type(value.get('session_at')) is not int or not 0 <= value['session_at'] <= len(value['body'])
+    ):
+      raise ValueError('system_prompt requires session_at within its body')
     if kind == 'llm_call' and value.get('tools_sha256') not in self.tools:
       raise ValueError('llm_call names an unknown tools digest')
     step = self.steps
@@ -148,16 +169,17 @@ class RunLog(Tracker):
     bro: str,
     recipe: dict,
     system_prompt: str,
-    forked_from: Optional[ForkedFrom],
+    forked_from: Optional[RunFork],
     interactive: bool,
     surface: str,
     hold: str = 'unattended',
+    session_at: Optional[int] = None,
   ) -> None:
     with self._lock:
       if self._state.opened:
         raise RuntimeError('run log already opened')
-      if forked_from is not None and not isinstance(forked_from, ForkedFrom):
-        raise TypeError('forked_from must be a ForkedFrom')
+      if forked_from is not None and not isinstance(forked_from, RunFork):
+        raise TypeError('forked_from must be a RunFork')
       private_directory(self.path.parent)
       fields = (
         {}
@@ -179,7 +201,12 @@ class RunLog(Tracker):
         hold=hold,
         **fields,
       )
-      self._write('system_prompt', body=system_prompt, turn_index=0)
+      self._write(
+        'system_prompt',
+        body=system_prompt,
+        turn_index=0,
+        session_at=len(system_prompt) if session_at is None else session_at,
+      )
 
   def step(self, kind: StepKind, body: Any, **extras: Any) -> int:
     with self._lock:
@@ -254,10 +281,97 @@ class Reader:
             break
           step = state.accept(value)
         except (ValueError, TypeError, KeyError) as exception:
-          raise RunLogError(f'{self.path}:{line_number + 1}: {exception}') from exception
+          error = UnsupportedFormat if isinstance(exception, UnsupportedFormat) else RunLogError
+          raise error(f'{self.path}:{line_number + 1}: {exception}') from exception
         entries.append(Entry(value, line, step))
         total += count
         offset += len(raw)
         line_number += 1
     self.offset, self.line_number, self._state = offset, line_number, state
     return entries
+
+
+@dataclass(frozen=True)
+class Snapshot:
+  path: Path
+  entries: list[Entry]
+
+  @property
+  def opened(self) -> dict[str, Any]:
+    return self.entries[0].value
+
+  @property
+  def steps(self) -> list[Step]:
+    return [
+      Step(
+        trail_id=self.path.stem,
+        step_id=entry.step_number,
+        ts=entry.value['at'],
+        kind=entry.value['kind'],
+        body=entry.value['body'],
+        extras={
+          key: value for key, value in entry.value.items() if key not in ('kind', 'at', 'body')
+        },
+      )
+      for entry in self.entries
+      if entry.step_number is not None
+    ]
+
+  @property
+  def prompt(self) -> str:
+    return self.steps[0].body
+
+  @property
+  def session_at(self) -> int:
+    return self.steps[0].extras['session_at']
+
+
+def read(path: Path) -> Snapshot:
+  reader = Reader(path)
+  entries = []
+  while batch := reader.read(max_entries=1000, max_bytes=1024 * 1024):
+    entries.extend(batch)
+  if not any(entry.step_number == 0 for entry in entries):
+    raise RunLogError(f'{path}: run log has no system_prompt step')
+  return Snapshot(path.resolve(), entries)
+
+
+def chain(log: Snapshot, bound: int) -> list[tuple[Snapshot, int]]:
+  result = []
+  seen = set()
+  while True:
+    if log.path in seen:
+      raise RunLogError(f'{log.path}: run log chain contains a cycle')
+    seen.add(log.path)
+    if type(bound) is not int or not 0 <= bound < len(log.steps):
+      raise RunLogError(f'{log.path}: step {bound!r} not found in run log')
+    result.append((log, bound))
+    pointer = log.opened.get('forked_from')
+    if pointer is None:
+      return list(reversed(result))
+    parent = log.path.with_name(pointer['run'] + '.jsonl')
+    try:
+      log = read(parent)
+    except FileNotFoundError as exception:
+      raise RunLogError(f'{log.path}: forked_from names missing run log {parent}') from exception
+    bound = pointer['step']
+    if bound >= len(log.steps):
+      raise RunLogError(f'{result[-1][0].path}: forked_from names missing step {bound} in {parent}')
+
+
+def continuable(directory: Path) -> Optional[Path]:
+  for path in sorted(directory.glob('*.jsonl'), reverse=True):
+    reader = Reader(path)
+    while batch := reader.read(max_entries=1, max_bytes=1024 * 1024):
+      if batch[0].step_number == 0:
+        return path
+  return None
+
+
+def latest(bro: str) -> Optional[Path]:
+  directory = new_path().parent
+  for path in sorted(directory.glob('*.jsonl'), reverse=True)[:200]:
+    entries = Reader(path).read(max_entries=1, max_bytes=1024 * 1024)
+    if entries and entries[0].value['bro'] == bro:
+      return path
+  return None

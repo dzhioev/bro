@@ -1,6 +1,7 @@
 """Observer seam for durable LLM run recording."""
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Literal, Optional, TypedDict
 
 StepKind = Literal[
@@ -15,6 +16,12 @@ class ToolStepSource(TypedDict):
   index: int
 
 
+@dataclass(frozen=True)
+class RunFork:
+  run: str
+  step: int
+
+
 class Tracker(ABC):
   """Capture the LLM event stream in a durable sink."""
 
@@ -26,10 +33,11 @@ class Tracker(ABC):
     bro: str,
     recipe: dict,
     system_prompt: str,
-    forked_from: Optional[Any],
+    forked_from: Optional[RunFork],
     interactive: bool,
     surface: str,
     hold: str = 'unattended',
+    session_at: Optional[int] = None,
   ) -> None:
     """Open a run."""
     ...
@@ -53,10 +61,11 @@ class NullTracker(Tracker):
     bro: str,
     recipe: dict,
     system_prompt: str,
-    forked_from: Optional[Any],
+    forked_from: Optional[RunFork],
     interactive: bool,
     surface: str,
     hold: str = 'unattended',
+    session_at: Optional[int] = None,
   ) -> None:
     pass
 

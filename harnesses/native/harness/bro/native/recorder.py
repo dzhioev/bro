@@ -1,14 +1,12 @@
-"""Lifetimes around a session's run: its recorder and its trail pointer."""
+"""Lifetimes around a session's run: its recorder."""
 
 import contextlib
 import os
 import subprocess
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Optional
 
 from bro.base import log, spawn
-from bro.monitor import trail_pointer
 from bro.native.run_log import private_directory
 
 RECORDER_COMMAND = 'bro.native.trail-recorder'
@@ -62,23 +60,3 @@ def session_recorder(
         f'cannot start session recorder: {exception} (log: {log_path})'
       ) from exception
     yield process
-
-
-@contextlib.contextmanager
-def cleared_pointer(run_log: Path, pointer: Optional[Path] = None) -> Iterator[None]:
-  """Remove the pointer strictly; restore it only if the run never opened."""
-  target = trail_pointer.path() if pointer is None else pointer
-  if target is None:
-    raise RuntimeError('trail pointer requires a managed session')
-  try:
-    previous = target.read_bytes()
-  except FileNotFoundError:
-    previous = None
-  target.unlink(missing_ok=True)
-  try:
-    yield
-  finally:
-    if previous is not None and not run_log.exists():
-      temporary = target.with_name(target.name + '.tmp')
-      temporary.write_bytes(previous)
-      temporary.replace(target)

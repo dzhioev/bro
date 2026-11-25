@@ -226,20 +226,21 @@ class TestNativeArgv:
 
     assert runs == [('--hold=guided', 'unattended')]
 
-  def test_resume_carries_the_session_trail_and_recorded_recipe(self, monkeypatch, tmp_path):
+  def test_resume_carries_the_local_log_and_recorded_recipe(self, monkeypatch, tmp_path):
     session = self._session_dir(monkeypatch, tmp_path)
-    trail_pointer.write(session / trail_pointer.FILENAME, 'trail-1')
+    previous = session / 'bro' / 'runs' / 'previous.jsonl'
+    open_log(previous).step('user_input', 'earlier')
     run = _run(resume=True, prompt=None)
     argv = self._argv(run, monkeypatch)
     assert argv[:2] == ['/venv/bin/bro', 'chat'] and argv[-2:] == ['--', 'dev']
-    assert argv[argv.index('--continue-trail') + 1] == 'trail-1'
+    assert argv[argv.index('--fork') + 1] == str(previous)
     assert json.loads(argv[argv.index('--resolved-recipe') + 1]) == run.resolved_recipe
 
-  def test_resume_without_a_published_pointer_fails(self, monkeypatch, tmp_path, caplog):
+  def test_resume_without_a_local_log_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
     assert bro_harness.BRO.run_session(_run(resume=True)) == 1
-    assert 'no bro harness trail recorded' in caplog.text
+    assert 'no bro harness session run log' in caplog.text
 
   def test_missing_native_distribution_fails_before_spawn(self, monkeypatch, caplog):
     run_agent = MagicMock()
@@ -334,7 +335,7 @@ class TestContainerSession:
       f'{workspace_party_dir(workspace.path)}:{CONTAINER_PARTY_DIR}',
     )
 
-  def test_resume_refuses_without_a_broker_published_pointer(self, caplog, tmp_path):
+  def test_resume_refuses_without_a_local_log(self, caplog, tmp_path):
     workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
     assert (
       ride_session._launch_session(
@@ -347,7 +348,7 @@ class TestContainerSession:
       )
       == 1
     )
-    assert 'no trail pointer was published' in caplog.text
+    assert 'it holds no session run log' in caplog.text
 
   def test_fresh_session_clears_a_stale_pointer(self, monkeypatch, tmp_path):
     workspace = Workspace.create('w', (repository_attachment(tmp_path, 'w'),), Isolation.BOXED)
@@ -777,13 +778,15 @@ def test_resume_records_the_named_log_and_settles_the_pointer(
 ):
   pointer = trail_pointer.path()
   assert pointer is not None
-  trail_pointer.write(pointer, 'previous')
+  trail_pointer.write(pointer, 'stale')
+  previous = session / 'bro' / 'runs' / 'previous.jsonl'
+  open_log(previous).step('user_input', 'earlier')
   monkeypatch.setenv('RIDE_SUMMONER', '{"trail_id":"parent","step_id":7,"index":2}')
   paths = []
 
   def run(argv, env):
     assert trail_pointer.read(pointer) is None
-    assert argv[argv.index('--continue-trail') + 1] == 'previous'
+    assert argv[argv.index('--fork') + 1] == str(previous)
     assert 'RIDE_SUMMONER' not in env
     path = Path(argv[argv.index('--run-log') + 1])
     assert path.parent == session / 'bro' / 'runs'
@@ -798,7 +801,7 @@ def test_resume_records_the_named_log_and_settles_the_pointer(
   assert bro_harness.BRO.run_session(_run(resume=True, prompt=None)) == 23
   identifier = trail_pointer.read(pointer)
   if not opened:
-    assert identifier == 'previous'
+    assert identifier is None
     assert not paths[0].exists()
     return
   assert identifier is not None and identifier != 'previous'
@@ -833,40 +836,6 @@ def test_disabled_recording_still_names_the_run_log(session, monkeypatch, value)
   pointer = trail_pointer.path()
   assert pointer is not None and not pointer.exists()
   assert len(list((session / 'bro' / 'runs').glob('*.jsonl'))) == 1
-
-
-@pytest.mark.parametrize('problem', ['error', 'stopped', None])
-def test_resume_warns_from_previous_health_before_starting_the_recorder(
-  session, monkeypatch, caplog, problem
-):
-  pointer = trail_pointer.path()
-  assert pointer is not None
-  trail_pointer.write(pointer, 'previous')
-  runs = session / 'bro' / 'runs'
-  runs.mkdir(parents=True)
-  (runs / '01-old.jsonl').touch()
-  newest = runs / '02-new.jsonl'
-  newest.touch()
-  health.write(
-    'error' if problem == 'error' else 'ok',
-    interval=-100 if problem == 'stopped' else None,
-    diagnostics='previous-recorder.log',
-  )
-
-  @contextlib.contextmanager
-  def recording(*args):
-    health.write('ok', interval=None, diagnostics='current-recorder.log')
-    yield
-
-  monkeypatch.setattr(bro_harness, 'session_recorder', recording)
-  monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env: 0)
-  assert bro_harness.BRO.run_session(_run(resume=True, prompt=None)) == 0
-  if problem is None:
-    assert 'last steps' not in caplog.text
-  else:
-    assert 'last steps' in caplog.text
-    assert str(newest) in caplog.text
-    assert ('FAILING' if problem == 'error' else 'STOPPED') in caplog.text
 
 
 def test_recorder_exit_before_readiness_prevents_the_session_run(session, tmp_path, monkeypatch):
@@ -927,3 +896,314 @@ def test_session_run_waits_for_the_readiness_byte(session, tmp_path, monkeypatch
       stream.write(b'1')
     assert launch.result(timeout=10) == 0
   assert ran.is_set() and stopped.exists()
+
+
+@pytest.fixture
+def operator_runtime(tmp_path):
+  from ride.runtime_bundle import link_session_commands
+
+  root = tmp_path / 'runtime'
+  root.mkdir()
+  (root / 'venv').symlink_to(Path(sys.prefix), target_is_directory=True)
+  link_session_commands(root)
+  home = tmp_path / 'operator-home'
+  (home / '.bro' / 'creds').mkdir(parents=True)
+  environment = {**os.environ, 'HOME': str(home), 'BRO_STORE': str(home / '.bro')}
+  return root, environment
+
+
+def operator_ride(runtime, *arguments, input=''):
+  import subprocess
+
+  root, environment = runtime
+  return subprocess.run(
+    [str(root / 'venv' / 'bin' / 'ride'), *arguments],
+    input=input,
+    capture_output=True,
+    text=True,
+    env=environment,
+    timeout=120,
+  )
+
+
+@pytest.mark.parametrize('recording', ['local', 'disabled', 'unreachable', 'record-only'])
+def test_operator_resumes_native_local_history_without_reading_trails(
+  tmp_path, operator_runtime, recording, record_only_store
+):
+  from bro.native.run_log import chain, read
+  from bro.trails.local import LocalStore
+
+  runtime, environment = operator_runtime
+  if recording == 'record-only':
+    store, url = record_only_store
+    (Path(environment['BRO_STORE']) / 'creds' / 'trails.cred').write_text(
+      json.dumps({'backend': 'service', 'base_url': url, 'token': 'record-only'})
+    )
+  if recording == 'unreachable':
+    (Path(environment['BRO_STORE']) / 'creds' / 'trails.cred').write_text(
+      json.dumps({'backend': 'service', 'base_url': 'http://127.0.0.1:1', 'token': 'unreachable'})
+    )
+  result = operator_ride(
+    operator_runtime,
+    'solo',
+    '--runtime-bundle',
+    str(runtime),
+    '--workspace',
+    'native-resume',
+    '--unboxed',
+    '--harness',
+    'bro',
+    '--llm',
+    'echo:echo',
+    '--hold',
+    'unattended',
+    *(['--no-trails'] if recording == 'disabled' else []),
+    'bro',
+    'first-input',
+  )
+  assert result.returncode == 0, result.stderr
+  records = Path(environment['XDG_DATA_HOME']) / 'ride' / 'workspaces' / 'native-resume' / 'session'
+  (first_path,) = (records / 'bro' / 'runs').glob('*.jsonl')
+  first = read(first_path)
+  assert not first.opened['interactive']
+  result = operator_ride(operator_runtime, 'resume', 'native-resume', input='continued-input\n')
+  assert result.returncode == 0, result.stderr
+  assert 'continued-input' in result.stdout
+  assert 'first-input' in result.stderr
+  paths = sorted((records / 'bro' / 'runs').glob('*.jsonl'))
+  assert len(paths) == 2
+  continued = read(paths[-1])
+  assert continued.opened['forked_from']['run'] == first_path.stem
+  assert [
+    step.body
+    for segment, bound in chain(continued, len(continued.steps) - 1)
+    for step in segment.steps[: bound + 1]
+    if step.kind == 'user_input'
+  ] == ['first-input', 'continued-input']
+  if recording == 'local':
+    mapping = json.loads((records / 'recording-map.json').read_text())['records']
+    previous = mapping[first_path.stem]['trails'][0]['id']
+    current = mapping[paths[-1].stem]['trails'][0]['id']
+    with LocalStore(Path(environment['XDG_DATA_HOME']) / 'ride' / 'trails') as store:
+      assert store.get_trail(current)['forked_from'] == {
+        'trail_id': previous,
+        'step_id': len(first.steps) - 1,
+        'kind': 'resume',
+      }
+  elif recording == 'record-only':
+    from bro.trails.network import NetworkStore
+    from bro.trails.store import PermissionDenied
+
+    mapping = json.loads((records / 'recording-map.json').read_text())['records']
+    previous = mapping[first_path.stem]['trails'][0]['id']
+    current = mapping[paths[-1].stem]['trails'][0]['id']
+    store, url = record_only_store
+    assert store.get_trail(current)['forked_from'] == {
+      'trail_id': previous,
+      'step_id': len(first.steps) - 1,
+      'kind': 'resume',
+    }
+    with NetworkStore(url, 'record-only') as client, pytest.raises(PermissionDenied):
+      client.get_trail(current)
+  elif recording == 'disabled':
+    assert not (records / 'recording-map.json').exists()
+
+
+def test_operator_refuses_a_native_workspace_predating_format_two(operator_runtime):
+  runtime, environment = operator_runtime
+  result = operator_ride(
+    operator_runtime,
+    'solo',
+    '--runtime-bundle',
+    str(runtime),
+    '--workspace',
+    'native-old',
+    '--unboxed',
+    '--harness',
+    'bro',
+    '--llm',
+    'echo:echo',
+    '--hold',
+    'unattended',
+    '--no-trails',
+    'bro',
+    'first-input',
+  )
+  assert result.returncode == 0, result.stderr
+  records = Path(environment['XDG_DATA_HOME']) / 'ride' / 'workspaces' / 'native-old' / 'session'
+  (path,) = (records / 'bro' / 'runs').glob('*.jsonl')
+  values = [json.loads(line) for line in path.read_text().splitlines()]
+  values[0]['format'] = 1
+  path.write_text(''.join(json.dumps(value) + '\n' for value in values))
+  result = operator_ride(operator_runtime, 'resume', 'native-old')
+  assert result.returncode != 0
+  assert (
+    "cannot resume bro harness workspace 'native-old': its session records predate run log format 2"
+    in result.stderr
+  )
+
+
+@contextlib.contextmanager
+def recording_server(store):
+  import socket
+  from concurrent.futures import Future
+
+  from aiohttp import web
+
+  from bro.trails.server.auth import TokenTable
+  from bro.trails.server.server import create_app
+
+  ready = Future()
+
+  def serve():
+    with contextlib.ExitStack() as lifetime:
+      loop = asyncio.new_event_loop()
+      lifetime.callback(loop.close)
+      asyncio.set_event_loop(loop)
+      listener = lifetime.enter_context(socket.socket())
+      listener.bind(('127.0.0.1', 0))
+      listener.listen()
+      runner = web.AppRunner(
+        create_app(
+          store,
+          TokenTable.from_config(
+            {'tokens': {'record-only': {'token': 'record-only', 'permissions': ['write']}}}
+          ),
+        )
+      )
+      try:
+        loop.run_until_complete(runner.setup())
+        lifetime.callback(lambda: loop.run_until_complete(runner.cleanup()))
+        site = web.SockSite(runner, listener)
+        loop.run_until_complete(site.start())
+        ready.set_result((loop, listener.getsockname()[1]))
+        loop.run_forever()
+      except BaseException as exception:
+        if not ready.done():
+          ready.set_exception(exception)
+        raise
+
+  thread = threading.Thread(target=serve)
+  thread.start()
+  loop = None
+  try:
+    loop, port = ready.result(timeout=10)
+    yield f'http://127.0.0.1:{port}'
+  finally:
+    if loop is not None:
+      loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=10)
+    if thread.is_alive():
+      raise RuntimeError('recording server did not stop')
+
+
+@pytest.fixture
+def record_only_store(tmp_path):
+  from bro.trails.local import LocalStore
+
+  with LocalStore(tmp_path / 'service-store') as store, recording_server(store) as url:
+    yield store, url
+
+
+@pytest.mark.skipif(
+  not hasattr(os, 'pidfd_open'), reason='recorder exit synchronization needs pidfds'
+)
+def test_operator_resume_completes_a_recorder_stopped_before_the_log_ended(
+  tmp_path, operator_runtime
+):
+  import select
+  import signal
+  import subprocess
+
+  from bro.native.run_log import read
+  from bro.trails.local import LocalStore
+
+  recorded = threading.Event()
+
+  class SignallingStore(LocalStore):
+    def append_records(self, trail_id, offset, records, *, tools=None):
+      response = super().append_records(trail_id, offset, records, tools=tools)
+      if records:
+        recorded.set()
+      return response
+
+  runtime, environment = operator_runtime
+  with SignallingStore(tmp_path / 'store') as store, recording_server(store) as url:
+    (Path(environment['BRO_STORE']) / 'creds' / 'trails.cred').write_text(
+      json.dumps({'backend': 'service', 'base_url': url, 'token': 'record-only'})
+    )
+    command = [
+      str(runtime / 'venv' / 'bin' / 'ride'),
+      'along',
+      '--runtime-bundle',
+      str(runtime),
+      '--workspace',
+      'native-stopped',
+      '--unboxed',
+      '--harness',
+      'bro',
+      '--llm',
+      'echo:echo',
+      '--hold',
+      'unattended',
+      'bro',
+    ]
+    with (
+      (tmp_path / 'session.stderr').open('w') as diagnostics,
+      subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=diagnostics,
+        text=True,
+        env=environment,
+      ) as process,
+    ):
+      assert process.stdin is not None and process.stdout is not None
+      process.stdin.write('recorded-input\n')
+      process.stdin.flush()
+      assert select.select([process.stdout], [], [], 30)[0], 'session produced no reply'
+      assert process.stdout.readline().strip() == 'recorded-input'
+      assert recorded.wait(timeout=30), 'recorder appended no rows'
+      records = (
+        Path(environment['XDG_DATA_HOME']) / 'ride' / 'workspaces' / 'native-stopped' / 'session'
+      )
+      (path,) = (records / 'bro' / 'runs').glob('*.jsonl')
+      listing = subprocess.run(
+        ['ps', '-ww', '-eo', 'pid,args'], capture_output=True, text=True, check=True
+      )
+      (recorder_pid,) = [
+        int(line.split()[0])
+        for line in listing.stdout.splitlines()
+        if 'bro.native.trail-recorder' in line and str(path) in line
+      ]
+      with contextlib.ExitStack() as lifetime:
+        descriptor = os.pidfd_open(recorder_pid)
+        lifetime.callback(os.close, descriptor)
+        os.kill(recorder_pid, signal.SIGKILL)
+        assert select.select([descriptor], [], [], 30)[0], 'recorder did not exit'
+      process.stdin.write('unrecorded-input\n')
+      process.stdin.flush()
+      assert select.select([process.stdout], [], [], 30)[0], 'session produced no second reply'
+      assert process.stdout.readline().strip() == 'unrecorded-input'
+      process.stdin.close()
+      assert process.wait(timeout=30) == 0, (tmp_path / 'session.stderr').read_text()
+    mapping = json.loads((records / 'recording-map.json').read_text())['records']
+    previous = mapping[path.stem]['trails'][0]['id']
+    first = read(path)
+    assert store.get_trail(previous)['extent'] < len(first.steps)
+    assert not mapping[path.stem]['trails'][0]['ended']
+    result = operator_ride(operator_runtime, 'resume', 'native-stopped', input='continued-input\n')
+    assert result.returncode == 0, result.stderr
+    assert 'unrecorded-input' in result.stderr
+    mapping = json.loads((records / 'recording-map.json').read_text())['records']
+    assert mapping[path.stem]['trails'][0]['ended']
+    assert store.get_trail(previous)['extent'] == len(first.steps)
+    assert store.get_trail(previous)['end']['reason'] == 'ok'
+    new_path = max((records / 'bro' / 'runs').glob('*.jsonl'))
+    current = mapping[new_path.stem]['trails'][0]['id']
+    assert store.get_trail(current)['forked_from'] == {
+      'trail_id': previous,
+      'step_id': len(first.steps) - 1,
+      'kind': 'resume',
+    }

@@ -213,6 +213,7 @@ class TestRun:
         interactive,
         surface,
         hold='unattended',
+        session_at=None,
       ) -> None:
         calls.append(
           (
@@ -569,6 +570,7 @@ class TestSend:
         interactive,
         surface,
         hold='unattended',
+        session_at=None,
       ) -> None:
         calls.append(
           (
@@ -601,6 +603,7 @@ class TestSend:
         interactive,
         surface,
         hold='unattended',
+        session_at=None,
       ) -> None:
         calls.append(surface)
         return None
@@ -1089,6 +1092,7 @@ class TestRunLifecycle:
         interactive,
         surface,
         hold='unattended',
+        session_at=None,
       ) -> None:
         events.append('start')
         return None

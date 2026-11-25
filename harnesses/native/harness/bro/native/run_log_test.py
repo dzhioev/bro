@@ -7,9 +7,10 @@ from typing import Any
 
 import pytest
 
+from bro.llm.tracker import RunFork
 from bro.native import run_log
 from bro.native.run_log import Reader, RunLog, RunLogError
-from bro.trails.model import ForkedFrom, tools_sha256
+from bro.trails.model import tools_sha256
 from bro.workspace.paths import runtime_base
 
 
@@ -64,11 +65,11 @@ def test_steps_tools_times_and_verbatim_lines(tmp_path):
 
 def test_default_location_and_fork(tmp_path):
   writer = RunLog()
-  writer.start('dev', {}, 'system', ForkedFrom('parent', 7), True, 'call')
+  writer.start('dev', {}, 'system', RunFork('parent', 7), True, 'call')
   assert writer.path.parent == runtime_base() / 'bro' / 'runs'
   assert writer.path.suffix == '.jsonl'
   value = entries(writer.path)[0]
-  assert value['forked_from'] == {'trail_id': 'parent', 'step_id': 7}
+  assert value['forked_from'] == {'run': 'parent', 'step': 7}
   assert value['interactive'] is True
   assert value['recipe'] == {}
 
@@ -184,7 +185,7 @@ def test_reader_refuses_invalid_logs_naming_file_and_line(tmp_path, violation):
   elif violation == 'duplicate_open':
     values.insert(1, values[0])
   elif violation == 'unknown_format':
-    values[0]['format'] = 2
+    values[0]['format'] = 1
   elif violation == 'wrong_step_zero':
     values[1]['kind'] = 'user_input'
   elif violation == 'wrong_turn_zero':
@@ -212,3 +213,49 @@ def test_reader_refuses_invalid_logs_naming_file_and_line(tmp_path, violation):
     path.write_text('{\n')
   with pytest.raises(RunLogError, match=str(path) + r':\d+:'):
     Reader(path).read(max_entries=100, max_bytes=100000)
+
+
+@pytest.mark.parametrize('offset', [-1, 7, True, None])
+def test_reader_refuses_a_missing_or_out_of_bounds_session_offset(tmp_path, offset):
+  path = tmp_path / 'run.jsonl'
+  started(path)
+  values = entries(path)
+  values[1]['session_at'] = offset
+  path.write_text(''.join(json.dumps(value) + '\n' for value in values))
+  with pytest.raises(RunLogError, match=f'{path}.*session_at'):
+    run_log.read(path)
+
+
+@pytest.mark.parametrize('missing', ['file', 'step', 'cycle'])
+def test_chain_refuses_missing_origins_and_cycles(tmp_path, missing):
+  parent = started(tmp_path / 'parent.jsonl')
+  parent.step('user_input', 'hello')
+  child = RunLog(tmp_path / 'child.jsonl')
+  child.start('dev', {}, 'child', RunFork('parent', 1), True, 'test')
+  if missing == 'file':
+    parent.path.unlink()
+  elif missing == 'step':
+    parent.path.write_text('\n'.join(parent.path.read_text().splitlines()[:2]) + '\n')
+  else:
+    values = entries(parent.path)
+    values[0]['forked_from'] = {'run': 'child', 'step': 0}
+    parent.path.write_text(''.join(json.dumps(value) + '\n' for value in values))
+  with pytest.raises(RunLogError) as raised:
+    run_log.chain(run_log.read(child.path), 0)
+  assert 'child.jsonl' in str(raised.value)
+  if missing != 'cycle':
+    assert 'parent.jsonl' in str(raised.value)
+
+
+def test_continuable_skips_only_start_debris_and_refuses_older_formats(tmp_path):
+  oldest = started(tmp_path / '001.jsonl')
+  oldest.step('user_input', 'hello')
+  middle = started(tmp_path / '002.jsonl')
+  middle.path.write_text(middle.path.read_text().splitlines()[0] + '\n')
+  (tmp_path / '003.jsonl').write_text('{"kind":"open"')
+  assert run_log.continuable(tmp_path) == oldest.path
+  values = entries(oldest.path)
+  values[0]['format'] = 1
+  oldest.path.write_text(''.join(json.dumps(value) + '\n' for value in values))
+  with pytest.raises(run_log.UnsupportedFormat, match=str(oldest.path)):
+    run_log.continuable(tmp_path)

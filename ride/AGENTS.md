@@ -103,9 +103,9 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   A given runtime's unboxed sessions verify TLS against the certifi store it carries, set as `SSL_CERT_FILE` in their snapshot;
   a frozen runtime's sessions trust the host's own store.
   A manual token carries the frozen hash or given path, and its launch command names that runtime's own `ride`.
-- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail with its recorded resolved recipe and source, its set option values and newly computed defaults.
+- A bro resume continues the session's local run-log chain without reading trails, with its recorded resolved recipe and source, its set option values and newly computed defaults.
   `--llm` replaces the recipe on the recorded harness, with a same-wire check for native continuation.
-  No pointer is published when trail recording is disabled.
+  Trail pointers attribute summons and banner trails, not continuation history.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's typed attachments recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
   managed URL mirrors under `runtime_base()/repos/`.

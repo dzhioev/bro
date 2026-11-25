@@ -74,6 +74,7 @@ Current reference docs:
 
 ## Session fragments
 
+`BaseBro.system_prompt_parts_for` exposes the complete native prompt and the offset of its session part.
 `bro.prompts.session_fragment(hold, …facts)` renders the text a launch surface appends after the composed prompt, and every injection site calls it
 (`harnesses/claude/harness/bro/claude/system_prompt.py:session_append_prompt`, `bro/bro.py:BaseBro.system_prompt_for`).
 Those callers pass `bro.summon.talk()` as the `#talk` fact for the summoned contract;

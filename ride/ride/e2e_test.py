@@ -3663,13 +3663,19 @@ _RESUME_PICK_PROBE = r"""
 import json
 from pathlib import Path
 from bro.base import credentials
-from bro.monitor import trail_pointer
+from bro.monitor import session_dir
+from bro.native.run_log import RunLog, new_path
 
 path = Path('.resume-picks')
 picks = json.loads(path.read_text()) if path.is_file() else []
 picks.append(credentials.get('github'))
 path.write_text(json.dumps(picks))
-trail_pointer.publish('resume-pick-probe')
+directory = session_dir()
+assert directory is not None
+writer = RunLog(new_path(directory / 'bro' / 'runs'))
+writer.start('bro', {'type': 'echo', 'model': 'echo'}, 'prompt', None, False, 'test')
+writer.step('user_input', 'credential probe')
+writer.end('ok')
 """
 
 

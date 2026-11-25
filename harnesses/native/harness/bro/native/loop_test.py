@@ -112,6 +112,7 @@ class _RecordingTracker(Tracker):
     interactive,
     surface,
     hold='unattended',
+    session_at=None,
   ) -> None:
     self.headers.append(
       {
