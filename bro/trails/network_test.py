@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from bro.base.lulid import lulid
 from bro.trails.model import (
   INITIAL_TRAIL_FORMAT,
   ForkedFrom,
@@ -372,6 +373,24 @@ class TestWrites:
     with pytest.raises(TransientUnavailable):
       _client().start_trail(request)
     assert len(fake.requests) == 1
+
+  @pytest.mark.parametrize('failure', [ConnectionError('blip'), (503, b'unavailable')])
+  def test_named_start_is_retried(self, monkeypatch, failure):
+    fake = _install_fake_connection(monkeypatch)
+    fake.queue(failure)
+    fake.queue((200, b'{"id": "T1", "extent": 1, "created": false}'))
+    request = StartRequest(
+      id=lulid(),
+      harness='claude',
+      version='test',
+      interactive=True,
+      surface='ride',
+      body={'records': []},
+      native={},
+    )
+    assert _client().start_trail(request)['created'] is False
+    assert len(fake.requests) == 2
+    assert fake.requests[0][2] == fake.requests[1][2]
 
   def test_append_conflict_maps_to_store_error(self, monkeypatch):
     fake = _install_fake_connection(monkeypatch)

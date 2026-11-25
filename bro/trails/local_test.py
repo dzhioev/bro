@@ -194,6 +194,7 @@ def test_an_attach_declines_when_the_trail_advanced_under_the_verdict(tmp_path, 
   monkeypatch.setattr(store, 'find_segment_trails', lambda segments: stale)
 
   assert store.start_trail(_claude_request(lineage=lineage)) == {
+    'created': False,
     'adopted': False,
     'reason': backends.ATTACH_CONTENDED,
   }

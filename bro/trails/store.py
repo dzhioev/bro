@@ -41,7 +41,7 @@ class ToolNotFound(Exception):
 
 
 class TrailCollision(Exception):
-  """The id an import names already holds a different trail."""
+  """The id a start or import names already holds a different trail."""
 
   def __init__(self, trail_id: str, message: str):
     super().__init__(message)

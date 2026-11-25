@@ -18,7 +18,8 @@
             "body": "fixture input"
           }
         ]
-      }
+      },
+      "id": "01m8a7qjvk-2833s2nx-3k3tpp28"
     },
     "records": [
       {
@@ -54,7 +55,8 @@
       "llm_call",
       "assistant"
     ],
-    "reply": "native reply"
+    "reply": "native reply",
+    "fork_kind": "resume"
   },
   {
     "name": "claude",

@@ -157,10 +157,9 @@ async def _handle_start_trail(request: web.Request) -> web.Response:
     result = await _dispatch(store.start_trail, start_request)
   except ValueError as exception:
     return _error(str(exception), 400)
-  # a resolver that declines to adopt creates nothing, and neither does one that
-  # attaches the caller to the trail its segment already has
-  minted = result.get('adopted') is not False and 'attached' not in result
-  return web.json_response(result, status=201 if minted else 200)
+  except TrailCollision as exception:
+    return _collision(exception)
+  return web.json_response(result, status=201 if result['created'] else 200)
 
 
 @requires(Permission.WRITE)

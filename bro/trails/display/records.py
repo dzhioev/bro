@@ -182,6 +182,7 @@ class SegmentBoundary(Record):
   kind: ClassVar[RecordKind] = RecordKind.SEGMENT_BOUNDARY
   trail_id: str
   segment: str | None = None
+  edge_kind: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,7 @@ class LineageNode(Record):
   model: str | None = None
   owner: str | None = None
   fork_step_id: int | None = None
+  edge_kind: str | None = None
 
   def __post_init__(self) -> None:
     super().__post_init__()
