@@ -120,7 +120,10 @@ bro · claude recorders                     readers
   the spans the mint verdict awarded, written once at start and carried through the replay seed.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
-  core `record/spine.py` owns the shared write spine, and `record/session.py` the managed session a recorder runs in
+  core `record/recording_map.py` owns the session recording map and item-to-step spans;
+  `record/settling.py` probes and verifies its entries under the record permission.
+  `record/spine.py` owns the shared write spine and starts whose minted ids are persisted before sending,
+  and `record/session.py` the managed session a recorder runs in
   — the header `location` and `git`, plus the launch line under `native.ride_command`, read off the environment the session's launcher published (`bro/reference/ride.md`, "Forwarded env vars"),
   so a trail carries them whichever harness records it.
   Each engine distribution owns its recorder:
@@ -143,7 +146,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   A step id is an ordinal in rows and lineage pointers.
 - Core `record/spine.py` owns start, ordinal extent validation, batched appends, liveness, and ending;
   `bro.native.trail_recorder` records the session run's log as line rows.
-  `bro.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the format's lineage verdict it gets back.
+  `bro.claude.trail_recorder` records each stretch of a Claude transcript as a trail of its own, deciding its edge from the recording map.
 - `POST /v1/trails` starts from `body.records`, resolving `lineage` evidence when the request carries it.
   The response reports whether it `created` a trail, names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.
   A request without lineage evidence may name its `id`, validated by `bro.base.lulid.is_lulid`:

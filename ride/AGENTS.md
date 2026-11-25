@@ -29,6 +29,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   plus the selected harness's preparation and SIGTERM-forwarded agent spawn.
   It touches the session's activity file at start and end, and hands its path to the harness on `SessionRun` to touch as the session works;
   `ride list` reads its age off that file.
+  Once the session's initial authority is captured, it collects the lifetime's launch facts (`bro/workspace/launch_facts.py`) and hands them to the harness's `run_session` beside the `SessionRun`.
 - `ride/errors.py` — the runtime-path and workspace-record error wrapper shared by the distribution's public scripts.
 - `ride/scope.py` — prospective credential scopes, the harness's `ScopeRecipe`, and credential-store views.
   `scope_report.py` accepts complete recipe text and reports its resolved recipe and source, or a refusal.
@@ -78,7 +79,7 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
 - `ride/flags.py` — common session, scope, LLM, and harness flag registration, and the default an omitted `--hold` resolves to.
 - `ride/session_env.py` — the `--env` contract:
   assignment parsing for the CLI, and the validation every reader of a recorded mapping applies.
-- `ride/runtime_bundle.py` — toolset freezing, bundle locking and re-exec, host/container materialization with staged git pins, session-command shims, runtime volumes, and bundle GC.
+- `ride/runtime_bundle.py` — toolset freezing, bundle locking and re-exec, host/container materialization with staged git pins, session-command shims, runtime volumes, bundle GC, and the frozen bundle hash a session's `RIDE_RUNTIME` root names.
 - `ride/listing.py`, `ride/clean.py`, `ride/scope_report.py` — lifecycle implementations.
 - `ride/e2e_test.py` — live Docker launch coverage, outside the default test roster.
 - `ride/workspace/` — managed workspace creation, provisioning, container execution, credential hydration, broker spawners, and teardown;
@@ -105,9 +106,9 @@ The public authority reference is `bro/reference/permissions.md`; scenario-first
   A given runtime's unboxed sessions verify TLS against the certifi store it carries, set as `SSL_CERT_FILE` in their snapshot;
   a frozen runtime's sessions trust the host's own store.
   A manual token carries the frozen hash or given path, and its launch command names that runtime's own `ride`.
-- A bro resume reads the session-published pointer from the workspace's `session/` dir and continues that trail with its recorded resolved recipe and source, its set option values and newly computed defaults.
+- A bro resume continues the session's local run-log chain without reading trails, with its recorded resolved recipe and source, its set option values and newly computed defaults.
   `--llm` replaces the recipe on the recorded harness, with a same-wire check for native continuation.
-  No pointer is published when trail recording is disabled.
+  Trail pointers attribute summons and banner trails, not continuation history.
 - Workspace state is global under `runtime_base()/workspaces/`, with each workspace's typed attachments recorded in metadata.
   Runtime bundles live under `runtime_base()/runtime/`;
   managed URL mirrors under `runtime_base()/repos/`.

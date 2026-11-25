@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import json
 import threading
 from contextlib import ExitStack
@@ -18,6 +17,7 @@ from bro.llm.wire import Leg, SystemPrompt, Text, UserMessage, Wire
 from bro.native import loop as native_loop
 from bro.native.echo_declaration import Recipe as EchoSpec
 from bro.native.recording_test_helper import record_run
+from bro.native.run_log import read
 from bro.native.runner import Runner
 from bro.native.silent_turn_test_helper import JOB_TOOL, ReleaseWhenIdle, ShellBro, job_arguments
 from bro.native.wire_fixtures_test_helper import call, message, response
@@ -72,18 +72,19 @@ def server(monkeypatch, replies):
 )
 async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path):
   store = LocalStore(tmp_path)
-  runner = Runner(create_bro('bro'), recipe)
+  runner = Runner(create_bro('bro'), recipe, run_log=tmp_path / 'root.jsonl')
   assert await runner.run('reply', surface='test') == 'reply'
   runner_trail_id = record_run(store, runner)
   recorded = fetch_recorded_trail(store, runner_trail_id)
-  point = latest_fork_point(recorded)
+  assert runner.run_log is not None
+  point = latest_fork_point(read(runner.run_log))
   calls = [step for step in recorded.steps if step.kind == 'llm_call']
   assert [step.extras['wire'] for step in calls] == [recipe.WIRE]
   assert any(event['type'] == 'assistant' for event in store.iter_messages(recorded.header.id))
 
   resumed_log = tmp_path / 'resumed.jsonl'
   resumed = resume(
-    store, 'bro', recorded.header.id, recipe=recipe, hold='unattended', run_log=resumed_log
+    'bro', str(runner.run_log), recipe=recipe, hold='unattended', run_log=resumed_log
   )
   assert resumed.runner.run_log == resumed_log
   with resumed.runner:
@@ -96,8 +97,9 @@ async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path)
     assert server[-1]['previous_response_id'] == calls[-1].extras['response_id']
     assert server[-1]['input'] == [{'role': 'user', 'content': 'reply'}]
 
+  assert runner.run_log is not None
   restored = fork(
-    recorded,
+    runner.run_log,
     point,
     system_prompt='different prompt',
     hold='unattended',
@@ -112,20 +114,14 @@ async def test_run_record_resume_and_fork(recipe, server, monkeypatch, tmp_path)
     assert server[-1]['input'][0] == {'role': 'system', 'content': 'different prompt'}
     assert any(item.get('role') == 'assistant' for item in server[-1]['input'])
 
-  # Untagged persisted records must continue through both chain and replay paths.
   if calls[-1].extras.get('response_id') is not None:
-    legacy = dataclasses.replace(
-      recorded,
-      steps=[
-        dataclasses.replace(
-          step, extras={key: value for key, value in step.extras.items() if key != 'wire'}
-        )
-        for step in recorded.steps
-      ],
-    )
+    values = [json.loads(line) for line in runner.run_log.read_text().splitlines()]
+    for value in values:
+      value.pop('wire', None)
+    runner.run_log.write_text(''.join(json.dumps(value) + '\n' for value in values))
     for prompt in (None, 'legacy replay'):
       continuation = fork(
-        legacy, point, system_prompt=prompt, hold='unattended', record=False, surface='test'
+        runner.run_log, point, system_prompt=prompt, hold='unattended', record=False, surface='test'
       )
       with continuation:
         assert await continuation.send('reply', surface='test') == 'reply'
@@ -158,9 +154,8 @@ async def test_stopped_run_records_failure_usage_and_resumes_before_refused_call
   projected = list(store.iter_messages(recorded.header.id))
   assert next(event for event in projected if event['type'] == 'llm_call')['stop'] == 'truncated'
   resumed = resume(
-    store,
     'bro',
-    recorded.header.id,
+    str(runner.run_log),
     recipe=ResponsesSpec(model='gpt-6.1-sol'),
     hold='unattended',
   )

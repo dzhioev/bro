@@ -291,6 +291,9 @@ PYTEST_FILES = [
   'bro/trails/display/textual_test.py',
   'bro/trails/display/_reflow_test.py',
   'bro/trails/display/_yaml_test.py',
+  'bro/trails/record/recording_map_test.py',
+  'bro/trails/record/settling_test.py',
+  'bro/trails/record/spine_test.py',
   'bro/trails/record/session_test.py',
   'bro/trails/lineage_test.py',
   'harnesses/claude/trails/bro/claude_trails/lineage_test.py',
@@ -356,6 +359,7 @@ PYTEST_FILES = [
   'harnesses/claude/harness/bro/claude/watch_waiter_test.py',
   'harnesses/claude/harness/bro/claude/interrupt_test.py',
   'harnesses/claude/harness/bro/claude/session_end_test.py',
+  'harnesses/claude/harness/bro/claude/session_start_test.py',
   'harnesses/claude/harness/bro/claude/claude_config_test.py',
   'ride/ride/alias_test.py',
   'ride/ride/cli_test.py',
@@ -379,6 +383,7 @@ PYTEST_FILES = [
   'harnesses/claude/harness/bro/claude/system_prompt_test.py',
   'ride/ride/packaging_test.py',
   'bro/workspace/banner_test.py',
+  'bro/workspace/launch_facts_test.py',
   'ride/ride/workspace/build_context_test.py',
   'ride/ride/workspace/containers_test.py',
   'ride/ride/workspace/docker_test.py',
@@ -535,6 +540,7 @@ LLM_PYTEST_FILES = [
   'harnesses/claude/harness/bro/claude/remote_flags_llm_test.py',
   'harnesses/claude/harness/bro/claude/silent_turn_reminder_llm_test.py',
   'harnesses/claude/harness/bro/claude/permission_mode_llm_test.py',
+  'harnesses/claude/harness/bro/claude/resume_llm_test.py',
 ]
 # conformance probes: each launches real sessions on every installed harness under
 # every supported recipe (`conformance_test_helper.RECIPES`), so its stage, like

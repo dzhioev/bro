@@ -1,8 +1,8 @@
 """a managed session's current-trail pointer.
 
 The recording side publishes the pointer into the session's own state dir, which
-is also a workspace record (`session_pointer`) — so resume and summon provenance
-identify the session trail host-side without querying the trails service. An
+is also a workspace record (`session_pointer`) — so summon provenance
+identifies the session trail host-side without querying the trails service. An
 absent pointer means the session published no trail.
 
 Stdlib-only on purpose: the host-side reader must not pull in service

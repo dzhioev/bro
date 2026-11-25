@@ -14,6 +14,7 @@ from bro.claude.fake_claude_test_helper import write_fake_claude
 from bro.monitor import SESSION_DIR_ENV, health
 from bro.trails.local import LocalStore
 from bro.trails.store import local_root
+from bro.workspace.launch_facts_test_helper import FACTS
 from bro.workspace.paths import BASE_SHA_ENV, BRANCH_ENV
 from ride.do_ride import SessionRun
 from ride.harness import get_harness
@@ -155,7 +156,7 @@ def test_managed_claude_launch_hooks_recording_and_resume(
       )
       spec = replace(spec, resume=True)
     else:
-      assert harness.run_session(spec) == 0
+      assert harness.run_session(spec, FACTS) == 0
       assert (tmp_path / 'activity').exists()
       assert health.problem() is None
       recorder_health = health.health_path()
@@ -164,19 +165,29 @@ def test_managed_claude_launch_hooks_recording_and_resume(
 
     with LocalStore(local_root()) as store:
       earlier = list(store.iter_trails(harness='claude'))
-      assert harness.run_session(replace(spec, resume=True, prompt='second turn')) == 0
-      (resumed,) = list(store.iter_trails(harness='claude'))
-      if earlier:
-        assert resumed['id'] == earlier[0]['id']
+      assert harness.run_session(replace(spec, resume=True, prompt='second turn'), FACTS) == 0
+      earlier_ids = {trail['id'] for trail in earlier}
+      (resumed,) = [
+        trail for trail in store.iter_trails(harness='claude') if trail['id'] not in earlier_ids
+      ]
       assert resumed['end']['reason'] == 'ok'
       assert resumed['native']['llm'] == spec.resolved_recipe['recipe']
       assert resumed.get('git') is None
-      assert [
+      replies = [
         message['content'] for message in store.iter_messages(resumed['id'], types={'assistant'})
-      ] == [
-        'reply: first turn',
-        'reply: second turn',
       ]
+      if legacy_workspace:
+        assert earlier == []
+        assert 'forked_from' not in resumed
+        assert replies == ['reply: first turn', 'reply: second turn']
+      else:
+        (first,) = earlier
+        assert resumed['forked_from'] == {
+          'trail_id': first['id'],
+          'step_id': first['extent'] - 1,
+          'kind': 'resume',
+        }
+        assert replies == ['reply: second turn']
       arguments = json.loads((tree / 'launch.json').read_text())
       assert arguments[arguments.index('--resume') + 1] == 'segment'
       assert 'ride.claude' not in arguments[arguments.index('--settings') + 1]

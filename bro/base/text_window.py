@@ -15,7 +15,7 @@ from typing import Literal, Optional
 # beyond with the clamp announced.
 DEFAULT_LIMIT = 100
 MAX_LIMIT = 2000
-# the cap on one tool reply and on one batch of session news. ~30 KB is well
+# the cap on one windowed tool reply and on one batch of session news. ~30 KB is well
 # under a model service's 10 MB per-tool-output limit and cheap on input tokens across
 # the agent loop.
 BYTE_LIMIT = 30_000

@@ -1,19 +1,30 @@
-"""record a Claude Code session's transcript to the trails service.
+"""record a Claude Code session's transcripts to trails, one trail per stretch.
 
-Claude Code writes one jsonl *segment* per session id under the project's
-transcripts dir. One *trail* is the recording of one segment: the daemon adopts
-a transcript, appends each newly completed line, and ends the trail on segment
-transition or shutdown. A later lifetime over the same segment attaches to the
-trail already recording it and appends from where that one stopped, so restarts
-leave a linear conversation linear; only a history copy opens a trail of its own.
+Claude Code writes one jsonl transcript per session id under the project's
+transcripts dir, and the session writes to one of them at a time. The recorder
+follows that one, and each stretch it follows is a trail of its own: a trail
+takes every line of the transcript no trail holds, from the first such line on.
+Which trail holds which lines of which transcript is the session's recording map
+(`bro/trails/record/recording_map.py`), and the recorder decides each trail's
+edge from that map and the transcripts alone:
 
-The daemon decides none of that. It reports what it can see — the segment name,
-its lines' record uuids and digests, and the sibling segment files sharing those
-records — and starts a trail with that evidence; the Claude trail format's resolver answers
-with the trail recording from here, the ordinal to append from, and the line
-ranges that trail owns, or declines a transcript claude has not finished writing
-(`harnesses/claude/trails/bro/claude_trails/lineage.py`). The daemon then uploads those ranges and keeps
-appending to the last one.
+- a transcript the map knows continues its last trail: the new trail starts at
+  the line after the last held one, with a `resume` edge to that line's step;
+- a transcript the map does not know may copy one it knows, its origin
+  (`/branch`, `--fork-session`): the one its first record's
+  `forkedFrom.sessionId` names, or else the one carrying the longest run of its
+  leading record uuids. Once the copy carries a record of its own, the trail
+  takes its head and the lines after the last copied one a trail holds, looked
+  up by uuid through the origin and, for the lines the origin copied in turn,
+  through the origin's own origin, with a `branch` edge to the step holding it;
+- any other transcript, or a copy no trail holds a line of, is a root.
+
+Each trail is started under an id the recorder mints and writes to the map
+first, so a start whose reply was lost is answered with the trail it started.
+The recorder ends the trail when the session moves to another transcript,
+marking its entry ended; a transcript it turns back to is followed by the same
+rules. A transcript that shrank below its trail ends that trail and loses its
+entries.
 
 The append endpoint classifies records and folds usage, turns, harness version,
 and claude's generated title into the header. Quiet ticks keep the trail alive
@@ -32,6 +43,7 @@ import os
 import signal
 import threading
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
@@ -42,30 +54,43 @@ from bro.claude.session_end_state import RAISE_TOOL
 from bro.claude.transcripts import read_lines_after, watching
 from bro.claude_trails.format import CLAUDE_FORMAT
 from bro.launch.hold import session_hold
-from bro.monitor import SESSION_DIR_ENV, health, trail_pointer
+from bro.monitor import SESSION_DIR_ENV, health, session_dir, trail_pointer
 from bro.summon import summoned_by_from_env
-from bro.trails.model import StartRequest, payload_sha256
+from bro.trails.model import StartRequest
+from bro.trails.record.recording_map import RecordingMap, RecordingMapError, Span, TrailEntry
 from bro.trails.record.session import ManagedSession, managed_session
-from bro.trails.record.spine import Recording
+from bro.trails.record.settling import (
+  SettledTrail,
+  give_up_record,
+  settle_record,
+  trail_extent,
+  verify_trail,
+)
+from bro.trails.record.spine import MappedStart, Recording
 from bro.trails.rows import project_messages
-from bro.trails.store import TrailsStore, default_store
+from bro.trails.store import (
+  InvalidRequest,
+  PermissionDenied,
+  TrailCollision,
+  TrailNotFound,
+  TrailsStore,
+  default_store,
+)
 
-# one line of lineage evidence: the record's uuid when it carries one, and the
-# digest the stored row would hold
-_EvidenceLine = list[Optional[str]]
+_REFUSALS = (InvalidRequest, PermissionDenied, TrailCollision, TrailNotFound, RecordingMapError)
 
 
 class _Signature(NamedTuple):
-  """a segment file's identity for one tick; an unchanged one means nothing was
-  written to the file since it was taken."""
+  """a transcript file's identity for one tick; an unchanged one means nothing
+  was written to the file since it was taken."""
 
-  segment: str
+  record_id: str
   modified_ns: int
   size: int
 
 
 class _Position(NamedTuple):
-  """how far a segment file has been consumed, and the identity it carried at
+  """how far a transcript file has been consumed, and the identity it carried at
   that read — the pair is what makes `byte_extent` trustworthy."""
 
   signature: _Signature
@@ -73,7 +98,7 @@ class _Position(NamedTuple):
 
 
 class _Progress(enum.Enum):
-  """what one pass over the recorded segment found."""
+  """what one pass over the recorded transcript found."""
 
   QUIET = enum.auto()
   ADVANCED = enum.auto()
@@ -121,26 +146,37 @@ def _fold_raise_reason(raised: Optional[str], messages: Iterable[dict]) -> Optio
   return raised
 
 
-def _record_uuid(raw: str) -> Optional[str]:
+def _record(raw: str) -> dict:
   entry = CLAUDE_FORMAT.parse(raw).native['record']
-  uuid = entry.get('uuid') if isinstance(entry, dict) else None
+  return entry if isinstance(entry, dict) else {}
+
+
+def _record_uuid(raw: str) -> Optional[str]:
+  uuid = _record(raw).get('uuid')
   return uuid if isinstance(uuid, str) else None
 
 
-def _carries_record(path: Path, uuid: str) -> bool:
-  """whether the transcript at `path` holds the record `uuid`, reading no further
-  than the line that does. the raw line is tested for the uuid before it is
-  parsed, so the only lines that cost a parse are the ones naming it — its own,
-  and whichever record claims it as a parent."""
-  needle = uuid.encode()
-  with path.open('rb') as stream:
-    return any(
-      needle in raw and raw.endswith(b'\n') and _record_uuid(raw.decode()) == uuid for raw in stream
-    )
+@dataclass(frozen=True)
+class _Transcript:
+  """a transcript's complete lines as one read found them, the record uuid each
+  carries, and the first line carrying each uuid."""
 
+  lines: list[str]
+  uuids: list[Optional[str]]
+  line_by_uuid: dict[str, int]
 
-def _evidence_lines(file_lines: list[str]) -> list[_EvidenceLine]:
-  return [[_record_uuid(line), payload_sha256(line)] for line in file_lines]
+  @classmethod
+  def read(cls, path: Path) -> '_Transcript':
+    lines, _ = read_lines_after(path, 0)
+    uuids = [_record_uuid(line) for line in lines]
+    line_by_uuid: dict[str, int] = {}
+    for line, uuid in enumerate(uuids):
+      if uuid is not None:
+        line_by_uuid.setdefault(uuid, line)
+    return cls(lines, uuids, line_by_uuid)
+
+  def first_record(self) -> Optional[int]:
+    return next((line for line, uuid in enumerate(self.uuids) if uuid is not None), None)
 
 
 def _signature(path: Path) -> Optional[_Signature]:
@@ -158,60 +194,203 @@ def _modified_at(path: Path) -> float:
     return 0.0
 
 
-def _compose(file_lines: list[str], chunks: list[list[int]]) -> list[str]:
-  lines: list[str] = []
-  for start, end in chunks:
-    lines.extend(file_lines[start:end])
-  return lines
+def _compose(lines: list[str], spans: Iterable[Span]) -> list[str]:
+  """the lines `spans` hold, in step order."""
+  composed: list[str] = []
+  for span in spans:
+    composed.extend(lines[span.start : span.end])
+  return composed
 
 
-def _verdict_chunks(result: dict) -> list[list[int]]:
-  chunks = result.get('chunks')
-  if (
-    not isinstance(chunks, list)
-    or len(chunks) == 0
-    or not all(
-      isinstance(chunk, list)
-      and len(chunk) == 2
-      and all(isinstance(bound, int) and not isinstance(bound, bool) for bound in chunk)
-      for chunk in chunks
+@dataclass(frozen=True)
+class _Plan:
+  """the trail a stretch starts: the spans it takes, its edge, and the extent at
+  which the open span of the record's last trail closes."""
+
+  spans: tuple[Span, ...]
+  edge: Optional[dict[str, Any]] = None
+  closing: Optional[int] = None
+
+
+_ROOT = _Plan((Span(0),))
+
+
+class _Planner:
+  """one pass deciding the trail a transcript's next stretch starts, reading
+  each transcript, settling each record, and probing and verifying each trail at
+  most once."""
+
+  def __init__(self, recording_map: RecordingMap, store: TrailsStore, projects_dir: Path) -> None:
+    self._map = recording_map
+    self._store = store
+    self._projects_dir = projects_dir
+    self._transcripts: dict[str, _Transcript] = {}
+    self._settled: dict[str, Optional[SettledTrail]] = {}
+    self._extents: dict[str, int] = {}
+    self._verified: dict[str, bool] = {}
+
+  def plan(self, record_id: str) -> Optional[_Plan]:
+    """the trail to start for `record_id`, or None while it holds nothing to
+    start one from."""
+    transcript = self._transcript(record_id)
+    settled = self._settle(record_id)
+    if settled is not None:
+      first = settled.entry.item_at(settled.extent - 1) + 1
+      if len(transcript.lines) <= first:
+        return None
+      return _Plan(
+        (Span(first),),
+        {'trail_id': settled.entry.id, 'step_id': settled.extent - 1, 'kind': 'resume'},
+        settled.extent if settled.entry.spans[-1].end is None else None,
+      )
+    first_record = transcript.first_record()
+    if first_record is None:
+      return None
+    origin = self._origin(transcript, first_record)
+    if origin is None:
+      return _ROOT
+    carried = self._transcript(origin).line_by_uuid
+    first_own = next(
+      (
+        line
+        for line in range(first_record, len(transcript.lines))
+        if transcript.uuids[line] is not None and transcript.uuids[line] not in carried
+      ),
+      None,
     )
-  ):
-    raise ValueError(f'lineage verdict carries malformed chunks: {chunks!r}')
-  return [list(chunk) for chunk in chunks]
+    if first_own is None:
+      # the copy may still be being written
+      return None
+    for line in range(first_own - 1, first_record - 1, -1):
+      uuid = transcript.uuids[line]
+      holder = None if uuid is None else self._holder(origin, uuid, frozenset())
+      if holder is not None:
+        trail_id, step = holder
+        spans = (Span(line + 1),)
+        if first_record > 0:
+          spans = (Span(0, first_record), *spans)
+        return _Plan(spans, {'trail_id': trail_id, 'step_id': step, 'kind': 'branch'})
+    return _ROOT
+
+  def _path(self, record_id: str) -> Path:
+    return self._projects_dir / f'{record_id}.jsonl'
+
+  def _transcript(self, record_id: str) -> _Transcript:
+    if record_id not in self._transcripts:
+      self._transcripts[record_id] = _Transcript.read(self._path(record_id))
+    return self._transcripts[record_id]
+
+  def _settle(self, record_id: str) -> Optional[SettledTrail]:
+    if record_id not in self._settled:
+      settled = settle_record(self._map, record_id, self._store, self._transcript(record_id).lines)
+      self._settled[record_id] = settled
+      if settled is not None:
+        self._extents[settled.entry.id] = settled.extent
+        self._verified[settled.entry.id] = True
+    return self._settled[record_id]
+
+  def _extent(self, trail_id: str) -> int:
+    if trail_id not in self._extents:
+      try:
+        self._extents[trail_id] = trail_extent(self._store, trail_id)
+      except TrailNotFound:
+        self._extents[trail_id] = 0
+    return self._extents[trail_id]
+
+  def _verify(self, record_id: str, entry: TrailEntry) -> bool:
+    if entry.id not in self._verified:
+      self._verified[entry.id] = verify_trail(
+        self._store, entry, self._extent(entry.id), self._transcript(record_id).lines
+      )
+    return self._verified[entry.id]
+
+  def _origin(self, transcript: _Transcript, first: int) -> Optional[str]:
+    """the known record a transcript the map does not know copies."""
+    known = [record_id for record_id in self._map.records if self._path(record_id).exists()]
+    forked = _record(transcript.lines[first]).get('forkedFrom')
+    named = forked.get('sessionId') if isinstance(forked, dict) else None
+    if named in known:
+      return named
+    leading = [uuid for uuid in transcript.uuids if uuid is not None]
+    origin, longest = None, 0
+    for candidate in known:
+      carried = self._transcript(candidate).line_by_uuid
+      run = 0
+      while run < len(leading) and leading[run] in carried:
+        run += 1
+      if run > longest:
+        origin, longest = candidate, run
+    return origin
+
+  def _holder(
+    self, record_id: str, uuid: str, visited: frozenset[str]
+  ) -> Optional[tuple[str, int]]:
+    """the trail and step holding the line of `record_id` that carries `uuid`,
+    through the record it copied that line from."""
+    if record_id in visited:
+      raise RecordingMapError(f'the trail edges of record {record_id} form a cycle')
+    line = self._transcript(record_id).line_by_uuid.get(uuid)
+    if line is None:
+      return None
+    self._settle(record_id)
+    entries = self._map.records.get(record_id, [])
+    for entry in entries:
+      step = entry.step_at(line)
+      if step is None:
+        continue
+      if step >= self._extent(entry.id):
+        return None
+      if not self._verify(record_id, entry):
+        give_up_record(self._map, record_id)
+        return None
+      return (entry.id, step)
+    if len(entries) == 0 or line >= entries[0].spans[-1].start or entries[0].forked_from is None:
+      return None
+    parent_trail = entries[0].forked_from['trail_id']
+    parent = next(
+      (
+        candidate
+        for candidate, candidate_entries in self._map.records.items()
+        if any(entry.id == parent_trail for entry in candidate_entries)
+      ),
+      None,
+    )
+    if parent is None or not self._path(parent).exists():
+      return None
+    return self._holder(parent, uuid, visited | {record_id})
 
 
-class _SegmentRecorder:
-  """records one segment file into one trail: the lines the start verdict
-  awarded the trail, then every line the file grows by."""
+class _StretchRecorder:
+  """records one stretch of a transcript into one trail: the lines its spans
+  hold when it starts, then every line the file grows by."""
 
   def __init__(
     self,
-    store: TrailsStore,
     path: Path,
-    trail_id: str,
+    recording: Recording,
     *,
-    extent: int,
     pending: list[str],
     position: _Position,
   ) -> None:
-    """`extent` is what the trail already holds, `pending` the awarded lines and
-    `position` the read they came from; the trail owns everything the file
-    carries past it."""
+    """`pending` is what the trail is owed from the read at `position`; the
+    trail owns everything the file carries past it."""
     self.path = path
-    self.trail_id = trail_id
-    self._recording = Recording(store, trail_id, extent)
+    self._recording = recording
     self._pending = pending
     self._position = position
     self._raised: Optional[str] = None
 
   @property
-  def segment(self) -> str:
+  def record_id(self) -> str:
     return self.path.stem
 
+  @property
+  def trail_id(self) -> str:
+    return self._recording.trail_id
+
   def tick(self) -> _Progress:
-    """record what the trail is owed — the awarded lines, then whatever the
-    segment has grown by."""
+    """record what the trail is owed — the pending lines, then whatever the
+    transcript has grown by."""
     signature = _signature(self.path)
     if signature is None:
       self._recording.keepalive_if_idle()
@@ -231,15 +410,15 @@ class _SegmentRecorder:
     self._pending = []
     self._position = _Position(signature, byte_extent)
     log.info(
-      'recorded trail %s (%d lines, segment %s)',
+      'recorded trail %s (%d lines, transcript %s)',
       self.trail_id,
       self._recording.extent,
-      self.segment[:12],
+      self.record_id[:12],
     )
     return _Progress.ADVANCED
 
   def is_quiet(self) -> bool:
-    """True when the segment has not been written since the last read."""
+    """True when the transcript has not been written since the last read."""
     signature = _signature(self.path)
     return signature is None or signature == self._position.signature
 
@@ -255,12 +434,18 @@ class _SegmentRecorder:
     log.info('trail %s ended (%s)', self.trail_id, 'raised' if self._raised is not None else 'ok')
 
 
+class _PendingStart(NamedTuple):
+  """a start the map holds and the store has not answered yet."""
+
+  start: MappedStart
+  spans: tuple[Span, ...]
+
+
 class Recorder:
-  """supervises one workspace's transcripts: which segment file is the session's
-  transcript right now, what lineage evidence its trail is started from, and when
-  the segment it handed to a `_SegmentRecorder` is over. `started_after` gates
-  segment adoption to files modified after the session launched, so a reused
-  workspace's older transcripts are not re-recorded."""
+  """follows the transcript the session writes to and records each stretch of it
+  into a trail of its own. `started_after` gates following to files modified
+  after the session launched, so a reused workspace's older transcripts are not
+  re-recorded."""
 
   def __init__(
     self,
@@ -270,211 +455,216 @@ class Recorder:
     llm: dict,
     session: ManagedSession,
     started_after: float,
+    recording_map: RecordingMap,
   ) -> None:
     self.projects_dir = projects_dir
     self.client = client
     self.llm = llm
     self.session = session
     self.started_after = started_after
-    # read once: every segment of this recorder lifetime belongs to the same
+    # read once: every trail of this recorder lifetime belongs to the same
     # summoned run, and the reader consumes the env var
     self.summoned_by = summoned_by_from_env()
-    self._active: Optional[_SegmentRecorder] = None
-    self._consumed: set[str] = set()
-    self._declined_signature: Optional[_Signature] = None
+    self._map = recording_map
+    self._followed: Optional[Path] = None
+    self._active: Optional[_StretchRecorder] = None
+    self._start: Optional[_PendingStart] = None
+    # the followed transcript as it stood when its last plan waited or persisted a start
+    self._read: Optional[_Signature] = None
+    self._refusal: Optional[Exception] = None
     # a stale pointer from a previous lifetime must not attribute this
     # session's summons to an ended trail
     trail_pointer.clear()
 
-  # --- tick loop -----------------------------------------------------------------
+  # --- passes ---------------------------------------------------------------------
 
   def tick(self) -> bool:
-    """one pass; True when a server write advanced the trail."""
-    active = self._active
-    if active is None:
-      return self._maybe_adopt()
-    candidate = self._pick_segment()
-    if candidate is not None and candidate.stem != active.segment:
-      return self._maybe_transition(active, candidate)
-    return self._advance(active)
+    """one pass; True when a server write advanced the recording."""
+    return self._guarded(self._pass)
 
   def finalize(self) -> bool:
-    """the daemon's shutdown pass: one last append, then end the trail."""
+    """the daemon's shutdown pass: one last pass, then end the trail."""
+    return self._guarded(self._final_pass)
+
+  def _guarded(self, step: Callable[[], bool]) -> bool:
+    """run a pass; a refusal no later pass can change ends the recording."""
+    if self._refusal is not None:
+      raise self._refusal
+    try:
+      return step()
+    except _REFUSALS as refusal:
+      self._refusal = refusal
+      raise
+
+  def _final_pass(self) -> bool:
+    changed = self._pass()
     if self._active is None:
-      self._maybe_adopt()
-    if self._active is None:
-      return False
-    self._close(self._active)
+      return changed
+    self._end(self._active)
     return True
 
-  def _advance(self, active: _SegmentRecorder) -> bool:
+  def _pass(self) -> bool:
+    candidate = self._pick_transcript()
+    followed = self._followed
+    changed = False
+    if followed is not None and candidate is not None and candidate != followed:
+      if self._is_quiet(followed):
+        changed = self._leave()
+      else:
+        # a live followed transcript plus an unrelated newer jsonl: hold rather
+        # than flip recording back and forth between two growing files
+        log.warning(
+          'transcript %s appeared while %s is still growing; holding',
+          candidate.stem[:12],
+          followed.stem[:12],
+        )
+    if self._followed is None:
+      self._followed = candidate
+    if self._followed is None:
+      return changed
+    return self._advance(self._followed) or changed
+
+  def _advance(self, path: Path) -> bool:
+    active = self._active
+    if active is None:
+      return self._begin(path)
     progress = active.tick()
     if progress is not _Progress.REWOUND:
       return progress is _Progress.ADVANCED
-    log.warning('segment %s shrank below trail %s; closing', active.segment[:12], active.trail_id)
-    self._close(active)
+    log.warning(
+      'transcript %s shrank below trail %s; ending it', active.record_id[:12], active.trail_id
+    )
+    self._end(active, forget=True)
+    self._followed = None
     return True
 
-  # --- segment selection ----------------------------------------------------------
+  # --- following ------------------------------------------------------------------
 
-  def _pick_segment(self) -> Optional[Path]:
+  def _pick_transcript(self) -> Optional[Path]:
     if not self.projects_dir.is_dir():
       return None
-    active = self._active.segment if self._active is not None else None
     best: Optional[Path] = None
     best_mtime = 0.0
     for path in self.projects_dir.iterdir():
-      if path.suffix != '.jsonl' or path.stem in self._consumed:
+      if path.suffix != '.jsonl':
         continue
       try:
         mtime = path.stat().st_mtime
       except FileNotFoundError:
         continue
-      if path.stem != active and mtime < self.started_after:
+      if path != self._followed and mtime < self.started_after:
         continue
       if mtime > best_mtime:
         best = path
         best_mtime = mtime
     return best
 
-  # --- adoption -------------------------------------------------------------------
-
-  def _maybe_adopt(self) -> bool:
-    path = self._pick_segment()
-    if path is None:
-      return False
+  def _is_quiet(self, path: Path) -> bool:
+    if _modified_at(path) < self.started_after:
+      return True
+    if self._active is not None:
+      return self._active.is_quiet()
     signature = _signature(path)
-    if signature is None or signature == self._declined_signature:
-      # unchanged since the resolver declined it; ask again when it grows
-      return False
-    try:
-      file_lines, byte_extent = read_lines_after(path, 0)
-    except OSError:
-      return False
-    lines = _evidence_lines(file_lines)
-    if not any(uuid is not None for uuid, _ in lines):
-      # nothing but head ephemera: a history copy may still land, and the
-      # segment's lineage is settled by the tick that adopts it
-      return False
-    lineage = {
-      'segment': path.stem,
-      'lines': lines,
-      'related_segments': self._related_segments(path, lines),
-    }
-    verdict = self._start_trail(path.stem, lineage)
-    if verdict is None:
-      self._declined_signature = signature
-      return False
-    chunks = _verdict_chunks(verdict)
-    awarded = _compose(file_lines, [*chunks[:-1], [chunks[-1][0], len(file_lines)]])
-    active = _SegmentRecorder(
-      self.client,
+    return signature is None or signature == self._read
+
+  def _leave(self) -> bool:
+    """stop following the transcript, ending the trail written to it."""
+    ended = False
+    if self._active is not None:
+      self._end(self._active)
+      ended = True
+    self._followed = None
+    self._start = None
+    self._read = None
+    return ended
+
+  # --- trail lifecycle ------------------------------------------------------------
+
+  def _begin(self, path: Path) -> bool:
+    """start the trail the followed transcript's next stretch is recorded into,
+    once it holds a line for it."""
+    if self._start is None:
+      signature = _signature(path)
+      if signature is None or signature == self._read:
+        return False
+      plan = _Planner(self._map, self.client, self.projects_dir).plan(path.stem)
+      if plan is None:
+        self._read = signature
+        return False
+      start = MappedStart.prepare(
+        self._map, path.stem, plan.spans, self._request(path.stem, plan.edge), closing=plan.closing
+      )
+      self._start = _PendingStart(start, plan.spans)
+      self._read = signature
+    recording = self._start.start.start(self.client)
+    if recording.extent != 0:
+      raise RuntimeError(
+        f'started trail {recording.trail_id} already holds {recording.extent} rows'
+      )
+    signature = _signature(path)
+    if signature is None:
+      raise FileNotFoundError(f'transcript {path} disappeared before its trail started')
+    lines, byte_extent = read_lines_after(path, 0)
+    active = _StretchRecorder(
       path,
-      verdict['id'],
-      extent=verdict['extent'],
-      pending=awarded,
+      recording,
+      pending=_compose(lines, self._start.spans),
       position=_Position(signature, byte_extent),
     )
+    edge = self._start.start.request.forked_from
+    self._start = None
+    self._read = None
     self._active = active
+    if edge is None:
+      log.info('trail %s opens at transcript %s (root)', active.trail_id, path.stem[:12])
+    else:
+      log.info(
+        'trail %s opens at transcript %s (%s from %s @ %s)',
+        active.trail_id,
+        path.stem[:12],
+        edge['kind'],
+        edge['trail_id'],
+        edge['step_id'],
+      )
     trail_pointer.publish(active.trail_id)
     active.tick()
     return True
 
-  def _related_segments(self, path: Path, lines: list[_EvidenceLine]) -> list[str]:
-    """the segments whose files carry this transcript's first record: claude
-    rewrites `sessionId` in a history copy, so a record uuid is the only link
-    back to where the conversation was, and each copy in the chain carries it."""
-    first = next((uuid for uuid, _ in lines if uuid is not None), None)
-    if first is None:
-      return []
-    related: list[str] = []
-    for other in sorted(self.projects_dir.glob('*.jsonl'), key=_modified_at, reverse=True):
-      if other.stem == path.stem:
-        continue
-      try:
-        carries = _carries_record(other, first)
-      except OSError:
-        continue
-      if carries:
-        related.append(other.stem)
-    return related
-
-  # --- trail lifecycle ------------------------------------------------------------
-
-  def _start_trail(self, segment: str, lineage: dict) -> Optional[dict]:
-    """settle the trail this transcript records into and return the verdict;
-    None when the resolver declines to adopt the segment yet."""
-    body: dict[str, Any] = {'records': []}
-    request = StartRequest(
+  def _request(self, record_id: str, edge: Optional[dict[str, Any]]) -> StartRequest:
+    return StartRequest(
       harness='claude',
       version=configs.VERSION,
       interactive=True,
       surface='ride',
       native={
         'llm': self.llm,
-        'segment': segment,
+        'segment': record_id,
         'ride_command': self.session.ride_command,
         'harness_version': 'unknown',
       },
       location=self.session.location,
       git=self.session.git,
-      body=body,
+      body={'records': []},
       bro=os.environ.get('RIDE_BRO'),
       hold=session_hold(),
       summoned_by=self.summoned_by,
-      lineage=lineage,
+      forked_from=edge,
     )
-    result = self.client.start_trail(request)
-    if result.get('adopted') is False:
-      log.info('segment %s not adopted yet (%s)', segment[:12], result.get('reason'))
-      return None
-    trail_id = result['id']
-    if result.get('attached') is True:
-      log.info(
-        'trail %s continues segment %s from step %d',
-        trail_id,
-        segment[:12],
-        result['extent'],
-      )
-      return result
-    forked_from = result.get('forked_from')
-    if forked_from is None:
-      log.info(
-        'trail %s opens at segment %s (root: %s)', trail_id, segment[:12], result.get('reason')
-      )
-    else:
-      log.info(
-        'trail %s opens at segment %s (forked from %s @ %s)',
-        trail_id,
-        segment[:12],
-        forked_from['trail_id'],
-        forked_from['step_id'],
-      )
-    return result
 
-  def _maybe_transition(self, active: _SegmentRecorder, new_path: Path) -> bool:
-    if not self._active_is_quiet(active):
-      # a live active segment plus an unrelated newer jsonl: hold rather than
-      # flip recording back and forth between two growing files
-      log.warning(
-        'segment %s appeared while %s is still growing; holding',
-        new_path.stem[:12],
-        active.segment[:12],
-      )
-      return self._advance(active)
-    self._close(active)
-    self._maybe_adopt()
-    return True
-
-  def _active_is_quiet(self, active: _SegmentRecorder) -> bool:
-    return _modified_at(active.path) < self.started_after or active.is_quiet()
-
-  def _close(self, active: _SegmentRecorder) -> None:
-    """end the segment's trail and retire it: nothing adopts it again."""
+  def _end(self, active: _StretchRecorder, *, forget: bool = False) -> None:
+    """end the trail and mark its entry ended, or remove the record's entries
+    when `forget` is set."""
     active.close()
-    self._consumed.add(active.segment)
+    entries = self._map.records[active.record_id]
+    self._map.set_entries(
+      active.record_id,
+      []
+      if forget
+      else [
+        replace(entry, ended=True) if entry.id == active.trail_id else entry for entry in entries
+      ],
+    )
     self._active = None
-    self._declined_signature = None
     trail_pointer.clear()
 
 
@@ -526,13 +716,21 @@ def record_session(
   llm: Optional[str] = None,
 ) -> int:
   session = managed_session()
-  if session is None:
+  directory = session_dir()
+  if session is None or directory is None:
     log.error('%s is unset: the trail recorder runs inside a managed session', SESSION_DIR_ENV)
     return 1
   try:
     llm_recipe = json.loads(llm) if llm is not None else {}
   except json.JSONDecodeError as e:
     log.error('invalid --llm json: %s', e)
+    return 1
+
+  try:
+    recording_map = RecordingMap.load(directory)
+  except RecordingMapError as e:
+    log.error('%s', e)
+    health.write('error', _exception_summary(e), interval=None, diagnostics=str(log_path))
     return 1
 
   try:
@@ -549,6 +747,7 @@ def record_session(
     llm=llm_recipe,
     session=session,
     started_after=transcript_clock_now(projects_dir),
+    recording_map=recording_map,
   )
   log.info('recording %s (interval=%ds, workspace=%s)', projects_dir, interval, session.workspace)
   _watch(recorder, interval, log_path)

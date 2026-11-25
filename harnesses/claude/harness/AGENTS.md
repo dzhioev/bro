@@ -59,12 +59,13 @@ The package `bro.claude` imports nothing from its `__init__.py`.
 - `claude_plugin.py` and `plugin/` — ride's own Claude Code plugin and the copy of it an interactive session loads;
   the plugin draws each event of a watch rewake's batch into the transcript.
   `claude_plugin_llm_test.py` holds it to the pinned release's validator, its own `*.test.ts`, and a live rewake.
-- `command_gate.py`, `read_gate.py`, `watch_waiter.py`, and `session_end.py`
+- `command_gate.py`, `read_gate.py`, `watch_waiter.py`, `session_end.py`, and `session_start.py`
   — leaf modules invoked by Claude settings through the runner interpreter (`spawn.module_argv('bro.claude.<module>')`);
   the command gate rewrites each Bash and Monitor call of a finite command list into a brash call,
   the read gate holds the `Read` of a persona without files to the session's own Claude folders,
   the watch waiter is every session's `Stop` and `StopFailure` `asyncRewake` hook, waking the model with the watch store's next batch, each watch's lines kept in the session's results store,
-  and the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`reference.md`, "Turn ends and watch delivery").
+  the session-end hook is the `PostToolUse` hook of `answer` and `raise`, stopping the turn of a call that ended the session (`reference.md`, "Turn ends and watch delivery"),
+  and the session-start hook is every session's `SessionStart` hook, registering the lifetime's launch facts for each transcript it is told and returning the resume notice on a resume (`reference.md`, "The session runner").
 - `waiter_state.py` — what the waiters and the runner share under the session's `claude/` state dir:
   the current waiter's registration, the record of the rewakes waiters began with the latest one's delivery, the stand-down mark, the stdout mark that attributes a waiter's hook events,
   and the lock a waiter registers and takes a batch under and the runner settles a turn end under.

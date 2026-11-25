@@ -280,15 +280,9 @@ def load_resume_spec(workspace: Workspace, *, for_resume: bool = False) -> Optio
   if data is None:
     return None
   if for_resume and 'resolved_recipe' not in data:
-    trail = trail_pointer.read(trail_pointer.session_pointer(workspace.path))
-    native = (
-      f'bro chat {data["bro"]} --fork {trail} or '
-      if data.get('harness') == 'bro' and data.get('bro') and trail is not None
-      else ''
-    )
     raise ValueError(
       f'cannot resume workspace {workspace.name!r}: record predates resolved recipes; '
-      f'{native}start a new session'
+      'start a new session'
     )
   try:
     spec = SessionSpec.load(data)

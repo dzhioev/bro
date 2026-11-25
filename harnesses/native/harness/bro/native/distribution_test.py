@@ -448,6 +448,7 @@ def test_claude_distribution_owns_its_console_scripts_and_registrations(wheels):
         'controlling_terminal',
         'read_gate',
         'session_end',
+        'session_start',
         'setup_token',
         'statusline',
         'trail_recorder',

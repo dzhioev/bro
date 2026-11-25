@@ -1,1229 +1,231 @@
-import dataclasses
-import json
-from types import SimpleNamespace
-from typing import Any, Optional, cast
-from unittest.mock import patch
+from unittest.mock import Mock
 
 import pytest
-from openai.types.responses import Response
 
+import bro.fork as fork_module
 from bro.fork import fork, latest_fork_point, replay_prefix
-from bro.inbox import Inbox
-from bro.llm.tracker import NullTracker, Tracker
+from bro.llm.resolved import ResolvedRecipe
+from bro.llm.tracker import RunFork
+from bro.native.echo_declaration import Recipe as EchoRecipe
 from bro.native.harness import BRO
-from bro.native.loop_test_helper import ResponsesLoop, make_loop
-from bro.openai.declaration import Recipe as OpenAISpec
+from bro.native.run_log import read
+from bro.native.run_log_test_helper import conversation_log as log, echo_call as call
+from bro.openai.declaration import Recipe as OpenAIRecipe
 from bro.registry import create_bro
-from bro.trails.model import ForkedFrom, RecordedTrail, Step, Trail
-from bro.wire_responses.client import Responses
 
 
-def replay_messages(trail, step_id, **kwargs):
-  wire = Responses(OpenAISpec(model='gpt-5.6-terra'), {'api_key': 'dummy'})
-  wire.restore(replay_prefix(trail, step_id, **kwargs))
-  return wire._input_prefix
-
-
-_SYS_TEXT = 'you are a test bro'
-
-
-def _trail_header(
-  *,
-  trail_id: str = 'trail-1',
-  bro: str = 'bro',
-  recipe: Optional[dict] = None,
-  harness: str = 'bro',
-  hold: Optional[str] = 'guided',
-) -> Trail:
-  return Trail(
-    id=trail_id,
-    harness=harness,
-    bro=bro,
-    version='1',
-    native={'llm': recipe if recipe is not None else {'type': 'openai', 'model': 'gpt-6.1-sol'}},
-    started_at='2026-06-07T00:00:00.000000Z',
-    interactive=False,
-    surface='ask',
-    forked_from=None,
-    hold=hold,
-  )
-
-
-def _step(
-  kind: str,
-  body: Any,
-  *,
-  step_id: int,
-  trail_id: str = 'trail-1',
-  **extras: Any,
-) -> Step:
-  return Step(
-    trail_id=trail_id,
-    step_id=step_id,
-    ts='2026-06-07T00:00:00.000000Z',
-    kind=cast(Any, kind),
-    body=body,
-    extras=extras,
-  )
-
-
-def _output_message(text: str, *, role: str = 'assistant') -> dict:
-  return {'type': 'message', 'role': role, 'content': [{'type': 'output_text', 'text': text}]}
-
-
-def _output_function_call(name: str, *, call_id: str, arguments: str = '{}') -> dict:
-  return {'type': 'function_call', 'name': name, 'arguments': arguments, 'call_id': call_id}
-
-
-def _llm_call_body(*output_items: dict, request_input: Optional[list] = None) -> dict:
-  return {
-    'request': {
-      'model': 'gpt-6.1-sol',
-      'input': request_input if request_input is not None else [],
-    },
-    'response': {'id': 'resp', 'output': list(output_items)},
-  }
-
-
-class TestReplayMessages:
-  def test_raises_when_system_prompt_step_missing(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[_step('user_input', 'hello', step_id=1, turn_index=0)],
-    )
-    with pytest.raises(ValueError, match='no system_prompt step'):
-      replay_messages(trail, 1)
-
-  def test_raises_when_step_id_not_found(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-      ],
-    )
-    with pytest.raises(ValueError, match='not found'):
-      replay_messages(trail, 99)
-
-  def test_returns_only_system_and_user_when_forked_at_first_user_input(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('hi back')),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-      ],
-    )
-    assert replay_messages(trail, 1) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-    ]
-
-  def test_includes_response_output_when_forked_at_terminal_llm_call(self):
-    assistant_msg = _output_message('hi back')
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(assistant_msg),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-      ],
-    )
-    assert replay_messages(trail, 2) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      assistant_msg,
-    ]
-
-  def test_strips_response_only_fields_from_output_items(self):
-    # response.model_dump carries fields the API rejects when the items are
-    # replayed as input: `status` on every item kind, null-valued optionals
-    # (content / encrypted_content) on reasoning items.
-    raw_reasoning = {
-      'type': 'reasoning',
-      'id': 'rs_1',
-      'summary': [],
-      'content': None,
-      'encrypted_content': None,
-      'status': None,
-    }
-    raw_message = {
-      'type': 'message',
-      'role': 'assistant',
-      'id': 'msg_1',
-      'status': 'completed',
-      'content': [{'type': 'output_text', 'text': 'hi back'}],
-    }
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(raw_reasoning, raw_message),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-      ],
-    )
-    assert replay_messages(trail, 2) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      {'type': 'reasoning', 'id': 'rs_1', 'summary': []},
-      {
-        'type': 'message',
-        'role': 'assistant',
-        'id': 'msg_1',
-        'content': [{'type': 'output_text', 'text': 'hi back'}],
-      },
-    ]
-
-  def test_drops_compaction_items_from_output(self):
-    # a run that crossed the compact_threshold records a `compaction` item in
-    # that turn's response.output. replay carries the full verbatim history the
-    # summary stands for, so the item must not be re-sent as input.
-    compaction = {'type': 'compaction', 'id': 'cmp_1', 'encrypted_content': 'opaque'}
-    assistant_msg = _output_message('hi back')
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(compaction, assistant_msg),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-      ],
-    )
-    assert replay_messages(trail, 2) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      assistant_msg,
-    ]
-
-  def test_appends_function_call_output_for_tool_result(self):
-    call_item = _output_function_call('add', call_id='c1')
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'add 2+2', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(call_item),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-        _step('tool_call', None, step_id=3, turn_index=1, tool_name='add', call_id='c1'),
-        _step('tool_result', '4', step_id=4, turn_index=1, tool_name='add', call_id='c1'),
-      ],
-    )
-    assert replay_messages(trail, 4) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'add 2+2'},
-      call_item,
-      {'type': 'function_call_output', 'call_id': 'c1', 'output': '4'},
-    ]
-
-  def test_dict_tool_result_is_json_encoded(self):
-    call_item = _output_function_call('fetch', call_id='c1')
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'fetch x', step_id=1, turn_index=0),
-        _step('llm_call', _llm_call_body(call_item), step_id=2, turn_index=1, response_id='r'),
-        _step('tool_call', None, step_id=3, turn_index=1, tool_name='fetch', call_id='c1'),
-        _step(
-          'tool_result',
-          {'rows': [1, 2]},
-          step_id=4,
-          turn_index=1,
-          tool_name='fetch',
-          call_id='c1',
-        ),
-      ],
-    )
-    result = replay_messages(trail, 4)
-    fco = result[-1]
-    assert fco['output'] == '{"rows":[1,2]}'
-
-  @pytest.mark.parametrize('text', ['Привет', '漢字'])
-  def test_reencodes_structured_output_from_a_trail_with_escaped_wire_text(self, text):
-    payload = {'pages': [text, 'second']}
-    old_output = {
-      'type': 'function_call_output',
-      'call_id': 'c1',
-      'output': json.dumps(payload),
-    }
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0),
-        _step('user_input', 'read a document', step_id=1),
-        _step('llm_call', _llm_call_body(_output_function_call('read', call_id='c1')), step_id=2),
-        _step('tool_result', payload, step_id=3, call_id='c1'),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('done'), request_input=[old_output]),
-          step_id=4,
-        ),
-      ],
-    )
-
-    replayed = replay_messages(trail, 4)
-
-    assert replayed[-2] == {
-      'type': 'function_call_output',
-      'call_id': 'c1',
-      'output': '{"pages":["' + text + '","second"]}',
-    }
-    assert trail.steps[3].body == payload
-    assert trail.steps[4].body['request']['input'] == [old_output]
-
-  def test_replays_windowed_json_text_unchanged(self):
-    text = '{\n  "pages": ["Привет 漢字' + '\n[...more characters — bro::page(...)]'
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0),
-        _step('user_input', 'read a document', step_id=1),
-        _step('llm_call', _llm_call_body(_output_function_call('read', call_id='c1')), step_id=2),
-        _step('tool_result', text, step_id=3, call_id='c1'),
-      ],
-    )
-
-    assert replay_messages(trail, 3)[-1]['output'] == text
-
-  def test_replays_notification_as_user_input(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('working')),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-        _step('notification', 'background news', step_id=3, turn_index=2),
-      ],
-    )
-
-    assert replay_messages(trail, 3) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      _output_message('working'),
-      {'role': 'user', 'content': 'background news'},
-    ]
-
-  def test_multi_turn_after_second_user_input(self):
-    first_reply = _output_message('first reply')
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step('llm_call', _llm_call_body(first_reply), step_id=2, turn_index=1, response_id='r1'),
-        _step('user_input', 'follow up', step_id=3, turn_index=2),
-      ],
-    )
-    assert replay_messages(trail, 3) == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      first_reply,
-      {'role': 'user', 'content': 'follow up'},
-    ]
-
-
-class TestReplayMessagesAcrossForkChain:
-  def _forked_from(self) -> RecordedTrail:
-    return _simple_trail()
-
-  def _child(self) -> RecordedTrail:
-    # a fork of trail-1 at its terminal llm_call, with one exchange of its own
-    return RecordedTrail(
-      header=Trail(
-        id='trail-2',
-        harness='bro',
-        bro='bro',
-        version='1',
-        native={'llm': {'type': 'openai', 'model': 'gpt-6.1-sol'}},
-        started_at='2026-06-08T00:00:00.000000Z',
-        interactive=True,
-        surface='call',
-        forked_from=ForkedFrom(
-          trail_id='trail-1',
-          step_id=2,
-        ),
-      ),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, trail_id='trail-2', turn_index=0),
-        _step('user_input', 'continue', step_id=1, trail_id='trail-2', turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('continued')),
-          step_id=2,
-          trail_id='trail-2',
-          turn_index=1,
-          response_id='r2',
-        ),
-      ],
-    )
-
-  def test_prepends_ancestor_prefix_via_fetch_forked_from(self):
-    forked_froms = {'trail-1': self._forked_from()}
-    result = replay_messages(self._child(), 2, fetch_forked_from=lambda tid: forked_froms[tid])
-    assert result == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      _output_message('hi back'),
-      {'role': 'user', 'content': 'continue'},
-      _output_message('continued'),
-    ]
-
-  def test_raises_on_fork_trail_without_fetch_forked_from(self):
-    with pytest.raises(ValueError, match='fetch_forked_from'):
-      replay_messages(self._child(), 2)
-
-  def test_fork_at_system_prompt_step_replays_only_the_ancestor_prefix(self):
-    # an empty continuation (a fork with no exchanges of its own) resumes as
-    # exactly the ancestor conversation
-    forked_froms = {'trail-1': self._forked_from()}
-    child = self._child()
-    empty_child = RecordedTrail(header=child.header, steps=child.steps[:1])
-    result = replay_messages(empty_child, 0, fetch_forked_from=lambda tid: forked_froms[tid])
-    assert result == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      _output_message('hi back'),
-    ]
-
-
-class TestLatestForkPoint:
-  def test_picks_the_terminal_llm_call(self):
-    trail = _simple_trail()
-    assert latest_fork_point(trail) == 2
-
-  def test_picks_a_trailing_user_input(self):
-    # killed after the user sent a message but before the model replied
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('hi back')),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-        _step('user_input', 'follow up', step_id=3, turn_index=2),
-      ],
-    )
-    assert latest_fork_point(trail) == 3
-
-  def test_picks_a_trailing_notification(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('waiting')),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-        _step('notification', 'background news', step_id=3, turn_index=2),
-      ],
-    )
-
-    assert latest_fork_point(trail) == 3
-
-  def test_skips_an_llm_call_with_unanswered_function_calls(self):
-    # killed mid-tool-loop: the last llm_call's function_call has no
-    # tool_result, so the resume point falls back to the last consistent step
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'go', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_function_call('lookup', call_id='call-1')),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-        _step('tool_call', None, step_id=3, turn_index=1, tool_name='lookup', call_id='call-1'),
-      ],
-    )
-    assert latest_fork_point(trail) == 1
-
-  def test_picks_the_tool_result_that_completes_the_turn(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'go', step_id=1, turn_index=0),
-        _step(
-          'llm_call',
-          _llm_call_body(
-            _output_function_call('lookup', call_id='call-1'),
-            _output_function_call('lookup', call_id='call-2'),
-          ),
-          step_id=2,
-          turn_index=1,
-          response_id='r1',
-        ),
-        _step('tool_result', 'a', step_id=3, turn_index=1, tool_name='lookup', call_id='call-1'),
-        _step('tool_result', 'b', step_id=4, turn_index=1, tool_name='lookup', call_id='call-2'),
-      ],
-    )
-    assert latest_fork_point(trail) == 4
-
-  def test_raises_on_a_trail_with_nothing_to_resume(self):
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[_step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0)],
-    )
-    with pytest.raises(ValueError, match='no step to resume from'):
-      latest_fork_point(trail)
-
-  def test_fork_trail_falls_back_to_its_system_prompt_step(self):
-    # an empty continuation still resumes — through the ancestor prefix its
-    # forked_from pointer carries
-    trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[_step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0)],
-    )
-    forked = RecordedTrail(
-      header=Trail(
-        id='trail-2',
-        harness='bro',
-        bro='bro',
-        version='1',
-        native={'llm': {'type': 'openai', 'model': 'gpt-6.1-sol'}},
-        started_at='2026-06-08T00:00:00.000000Z',
-        interactive=True,
-        surface='call',
-        forked_from=ForkedFrom(
-          trail_id='trail-1',
-          step_id=2,
-        ),
-      ),
-      steps=trail.steps,
-    )
-    assert latest_fork_point(forked) == 0
-
-
-class _RecordingTracker(Tracker):
-  """captures every tracker call so tests can assert kind/body/extras."""
-
-  def __init__(self):
-    self.headers: list[dict] = []
-    self.steps: list[tuple[str, Any, dict]] = []
-    self.ended: list[str] = []
-
-  def start(
-    self,
-    bro,
-    recipe,
-    system_prompt,
-    forked_from,
-    interactive,
-    surface,
-    hold='unattended',
-  ) -> None:
-    self.headers.append(
-      {
-        'bro': bro,
-        'recipe': recipe,
-        'system_prompt': system_prompt,
-        'forked_from': forked_from,
-        'interactive': interactive,
-        'surface': surface,
-        'hold': hold,
-      }
-    )
-    return None
-
-  def step(self, kind, body, **extras) -> None:
-    self.steps.append((kind, body, extras))
-
-  def end(self, reason, detail=None) -> None:
-    self.ended.append(reason)
-
-
-def _fake_usage(*, input_tokens=10, output_tokens=20, reasoning_tokens=0):
-  return SimpleNamespace(
-    input_tokens=input_tokens,
-    output_tokens=output_tokens,
-    output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
-    input_tokens_details=SimpleNamespace(cached_tokens=0, cache_write_tokens=0),
-  )
-
-
-def _fake_response(*, output: list, response_id: str = 'resp_fork', dump_payload=None) -> Response:
-  namespace = SimpleNamespace(
-    id=response_id,
-    output=output,
-    usage=_fake_usage(),
-    model='gpt-6.1-sol',
-  )
-
-  def plain(value):
-    if isinstance(value, SimpleNamespace):
-      return {key: plain(item) for key, item in vars(value).items()}
-    if isinstance(value, list):
-      return [plain(item) for item in value]
-    return value
-
-  payload = {
-    'id': response_id,
-    'model': 'gpt-6.1-sol',
-    'status': 'completed',
-    'output': plain(output),
-    'usage': plain(namespace.usage),
-  }
-  if dump_payload is not None:
-    payload.update(dump_payload)
-  namespace.model_dump = lambda mode='json': payload
-  return cast(Response, namespace)
-
-
-def _message_item(text: str):
-  return SimpleNamespace(
-    type='message',
-    phase=None,
-    content=[SimpleNamespace(type='output_text', text=text)],
-  )
-
-
-def _install_responses(gpt: ResponsesLoop, sequence: list, captured: list[dict]) -> None:
-  iterator = iter(sequence)
-
-  async def create(**kwargs):
-    captured.append(kwargs)
-    return next(iterator)
-
-  gpt.wire.client = cast(Any, SimpleNamespace(responses=SimpleNamespace(create=create)))
-
-
-def _patch_native_openai_create(stub_responses):
-  """patch native provider construction with a controllable OpenAI client."""
-  captured_kwargs: list[dict] = []
-  created: list[ResponsesLoop] = []
-
-  def _create(
-    spec, inbox, mcp_servers=None, observer=None, tracker=None, agent=None, activity_file=None
-  ):
-    gpt = make_loop(
-      api_key='dummy',
-      inbox=inbox,
-      model=spec.model,
-      reasoning_effort=spec.reasoning_effort,
-      service_tier=spec.service_tier,
-      compact_threshold=spec.compact_threshold,
-      observer=observer,
-      tracker=tracker,
-      agent=agent,
-      activity_file=activity_file,
-    )
-    gpt._resolved_tools = []
-    _install_responses(gpt, stub_responses, captured_kwargs)
-    created.append(gpt)
-    return gpt
-
-  context = patch('bro.native.loop.create', _create)
-  return context, captured_kwargs, created
-
-
-def _simple_trail(**header_overrides: Any) -> RecordedTrail:
-  reply = _output_message('hi back')
-  return RecordedTrail(
-    header=_trail_header(**header_overrides),
-    steps=[
-      _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-      _step('user_input', 'hello', step_id=1, turn_index=0),
-      _step('llm_call', _llm_call_body(reply), step_id=2, turn_index=1, response_id='r1'),
-    ],
-  )
-
-
-@pytest.mark.parametrize('ancestor_mismatch', [False, True])
-def test_cross_wire_fork_is_refused_before_persona_construction(monkeypatch, ancestor_mismatch):
-  import bro.fork as fork_module
-  from bro.native.echo_declaration import Recipe as EchoSpec
-
-  trail = _simple_trail()
-  parent = trail
-  if ancestor_mismatch:
-    trail = RecordedTrail(
-      header=dataclasses.replace(
-        _trail_header(trail_id='child', recipe=EchoSpec(model='echo').dump()),
-        forked_from=ForkedFrom(parent.header.id, 2),
-      ),
-      steps=[_step('system_prompt', 'child prompt', step_id=0)],
-    )
-
-  def unexpected_construction(*args, **kwargs):
-    raise AssertionError('persona constructed before wire validation')
-
-  monkeypatch.setattr(fork_module, 'create_bro', unexpected_construction)
-  with pytest.raises(ValueError, match='responses.*echo.*recorded wire'):
-    fork(
-      trail,
-      0 if ancestor_mismatch else 2,
-      recipe=EchoSpec(model='echo'),
-      surface='test',
-      fetch_forked_from=lambda trail_id: parent,
-    )
-
-
-class TestForkHarnessGuard:
-  def test_a_foreign_harness_trail_is_refused(self):
-    # a claude session records a `bro` too, so `call --resume <claude-trail>`
-    # reaches fork; its records are not the llm_call stream replay reads
-    trail = _simple_trail(harness='claude')
-    with pytest.raises(ValueError, match='no bro-native conversation to continue'):
-      fork(trail, 2, surface='test')
-
-  def test_the_refusal_precedes_reading_the_recipe(self):
-    # 112 recorded claude headers carry no `native.llm` at all, so a guard that
-    # ran later would surface a KeyError instead of the reason
-    recorded = _simple_trail(harness='claude')
-    trail = RecordedTrail(
-      header=dataclasses.replace(recorded.header, native={}), steps=recorded.steps
-    )
-    with pytest.raises(ValueError, match='no bro-native conversation to continue'):
-      fork(trail, 2, surface='test')
-
-
-class TestForkLinkage:
-  def test_start_records_forked_from_pointer(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
-    with context:
-      fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert len(tracker.headers) == 1
-    header = tracker.headers[0]
-    assert header['forked_from'] == ForkedFrom(
-      trail_id='trail-1',
-      step_id=2,
-    )
-    assert header['surface'] == 'test'
-    assert header['interactive'] is True
-    assert header['bro'] == 'bro'
-
-  def test_surface_override_labels_the_new_trail(self):
-    # `call --resume` labels its continuations 'call' so they are themselves
-    # picked up by the next resume-latest lookup
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
-    with context:
-      runner = fork(forked_from_trail, 2, tracker=tracker, surface='call')
-    assert tracker.headers[0]['surface'] == 'call'
-    assert runner.run_log is None
-
-  def test_records_resolved_system_prompt(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
-    with context:
-      fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert tracker.headers[0]['system_prompt'] == _SYS_TEXT
-
-  def test_system_prompt_override_replaces_prefix_and_header(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, created = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
-      fork(forked_from_trail, 2, system_prompt='swapped prompt', tracker=tracker, surface='test')
-    assert tracker.headers[0]['system_prompt'] == 'swapped prompt'
-    # prefix on the new OpenAI's seam carries the override at index 0
-    seeded = created[0].wire._input_prefix
-    assert seeded is not None
-    assert seeded[0] == {'role': 'system', 'content': 'swapped prompt'}
-
-  @pytest.mark.parametrize('recorded_hold', ['unattended', None])
-  def test_an_omitted_hold_forks_guided_under_a_guided_prompt(self, recorded_hold):
-    trail = _simple_trail(hold=recorded_hold)
-    tracker = _RecordingTracker()
-    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
-    with context:
-      fork(trail, 2, tracker=tracker, surface='call')
-    expected_prompt = create_bro('bro').system_prompt_for(hold='guided', harness=BRO)
-    assert tracker.headers[0]['system_prompt'] == expected_prompt
-    assert tracker.headers[0]['hold'] == 'guided'
-
-  def test_a_changed_hold_recomposes_the_prompt_under_it(self):
-    trail = _simple_trail(hold='unattended')
-    tracker = _RecordingTracker()
-    context, _, created = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
-      fork(trail, 2, hold='attended', tracker=tracker, surface='call')
-    expected_prompt = create_bro('bro').system_prompt_for(hold='attended', harness=BRO)
-    assert tracker.headers[0]['system_prompt'] == expected_prompt
-    assert tracker.headers[0]['hold'] == 'attended'
-    prefix = created[0].wire._input_prefix
-    assert prefix is not None
-    assert prefix[0] == {'role': 'system', 'content': expected_prompt}
-
-
-class TestForkRecording:
-  def test_record_false_uses_null_tracker(self):
-    forked_from_trail = _simple_trail()
-    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
-    with context:
-      runner = fork(forked_from_trail, 2, record=False, surface='test')
-    assert isinstance(runner._tracker, NullTracker)
-
-  def test_record_true_uses_explicit_tracker(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, _ = _patch_native_openai_create([_fake_response(output=[_message_item('ok')])])
-    with context:
-      runner = fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert runner._tracker is tracker
-
-
-class TestForkSpec:
-  def test_defaults_to_forked_from_spec(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, created = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
-      fork(forked_from_trail, 2, tracker=tracker, surface='test')
-    assert created[0].wire.recipe.model == 'gpt-6.1-sol'
-    assert tracker.headers[0]['recipe'] == {
-      'type': 'openai',
-      'model': 'gpt-6.1-sol',
-      'reasoning_effort': None,
-      'service_tier': None,
-      'compact_threshold': None,
-    }
-
-  def test_cross_model_spec_override(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    override = OpenAISpec(model='gpt-5.6-terra', reasoning_effort='medium')
-    context, _, created = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
-      fork(forked_from_trail, 2, recipe=override, tracker=tracker, surface='test')
-    assert created[0].wire.recipe.model == 'gpt-5.6-terra'
-    assert created[0].wire.recipe.request_options()['reasoning']['effort'] == 'medium'
-    assert tracker.headers[0]['recipe']['model'] == 'gpt-5.6-terra'
-    assert tracker.headers[0]['recipe']['reasoning_effort'] == 'medium'
-
-
-class TestForkServerSidePath:
-  """default path when forking right after an `llm_call` with the same spec:
-  the new LLM is seeded with `previous_response_id` and OpenAI carries the
-  whole prefix server-side. only the new user message hits the wire.
-  """
-
-  @pytest.mark.asyncio
-  async def test_send_seeds_previous_response_id_and_omits_prefix(self):
-    forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('continuation')])]
-    )
-    with context:
-      runner = fork(forked_from_trail, 2, record=False, surface='test')
-      result = await runner.send('follow up', surface='test')
-    assert result == 'continuation'
-    assert len(captured) == 1
-    assert captured[0].get('previous_response_id') == 'r1'
-    assert captured[0]['input'] == [{'role': 'user', 'content': 'follow up'}]
-
-  @pytest.mark.asyncio
-  async def test_user_input_step_recorded_only_for_new_message(self):
-    forked_from_trail = _simple_trail()
-    tracker = _RecordingTracker()
-    context, _, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('continuation')])]
-    )
-    with context:
-      runner = fork(forked_from_trail, 2, tracker=tracker, surface='test')
-      await runner.send('follow up', surface='test')
-    user_inputs = [s for s in tracker.steps if s[0] == 'user_input']
-    # the replayed user input does NOT get re-emitted on the new trail — only
-    # the new message the caller passed to .send()
-    assert len(user_inputs) == 1
-    assert user_inputs[0][1] == 'follow up'
-
-  @pytest.mark.asyncio
-  async def test_multi_send_chains_response_ids(self):
-    forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_native_openai_create(
-      [
-        _fake_response(output=[_message_item('first')], response_id='r2'),
-        _fake_response(output=[_message_item('second')], response_id='r3'),
-      ]
-    )
-    with context:
-      runner = fork(forked_from_trail, 2, record=False, surface='test')
-      await runner.send('msg one', surface='test')
-      await runner.send('msg two', surface='test')
-    # first send carries the seeded fork-point response_id; the second chains
-    # off the first response's id. interleaved calls only ship the new user
-    # message — the prefix lives server-side throughout.
-    assert captured[0].get('previous_response_id') == 'r1'
-    assert captured[0]['input'] == [{'role': 'user', 'content': 'msg one'}]
-    assert captured[1].get('previous_response_id') == 'r2'
-    assert captured[1]['input'] == [{'role': 'user', 'content': 'msg two'}]
-
-
-class TestForkClientSideReplay:
-  """client-side replay covers everything server-side can't:
-  - fork at a non-`llm_call` step (e.g. a user_input)
-  - cross-model / cross-provider forks
-  - swapped system prompt
-  """
-
-  @pytest.mark.asyncio
-  async def test_resume_keeps_a_trailing_notification(self):
-    recorded = _simple_trail()
-    trail = RecordedTrail(
-      header=recorded.header,
-      steps=[
-        *recorded.steps,
-        _step('notification', 'background news', step_id=3, turn_index=2),
-      ],
-    )
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('continued')])]
-    )
-
-    with context:
-      runner = fork(trail, latest_fork_point(trail), record=False, surface='test')
-      await runner.send('continue', surface='test')
-
-    assert captured[0]['input'] == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      _output_message('hi back'),
-      {'role': 'user', 'content': 'background news'},
-      {'role': 'user', 'content': 'continue'},
-    ]
-
-  @pytest.mark.asyncio
-  async def test_fork_at_first_user_input(self):
-    # the fork point isn't an `llm_call`; server-side has nothing to anchor on,
-    # so the replay path is the only option.
-    forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('rerun')])]
-    )
-    with context:
-      runner = fork(forked_from_trail, 1, record=False, surface='test')
-      assert await runner.send('rerun please', surface='test') == 'rerun'
-    api_input = captured[0]['input']
-    # forking right after the first user_input replays system + that input, then
-    # the new user message lands at the end (re-ask path)
-    assert api_input == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      {'role': 'user', 'content': 'rerun please'},
-    ]
-
-  @pytest.mark.asyncio
-  async def test_fork_after_later_user_input(self):
-    first_reply = _output_message('first reply')
-    forked_from_trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'hello', step_id=1, turn_index=0),
-        _step('llm_call', _llm_call_body(first_reply), step_id=2, turn_index=1, response_id='r1'),
-        _step('user_input', 'follow up', step_id=3, turn_index=2),
-        _step(
-          'llm_call',
-          _llm_call_body(_output_message('second reply')),
-          step_id=4,
-          turn_index=3,
-          response_id='r2',
-        ),
-      ],
-    )
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('forked answer')])]
-    )
-    with context:
-      runner = fork(forked_from_trail, 3, record=False, surface='test')
-      await runner.send('actually try this', surface='test')
-    api_input = captured[0]['input']
-    assert api_input == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'hello'},
-      first_reply,
-      {'role': 'user', 'content': 'follow up'},
-      {'role': 'user', 'content': 'actually try this'},
-    ]
-
-  @pytest.mark.asyncio
-  async def test_fork_after_tool_loop_includes_function_call_outputs(self):
-    call_item = _output_function_call('lookup', call_id='c1')
-    assistant_reply = _output_message('done')
-    forked_from_trail = RecordedTrail(
-      header=_trail_header(),
-      steps=[
-        _step('system_prompt', _SYS_TEXT, step_id=0, turn_index=0),
-        _step('user_input', 'go', step_id=1, turn_index=0),
-        _step('llm_call', _llm_call_body(call_item), step_id=2, turn_index=1, response_id='r1'),
-        _step('tool_call', None, step_id=3, turn_index=1, tool_name='lookup', call_id='c1'),
-        _step(
-          'tool_result',
-          'tool answer',
-          step_id=4,
-          turn_index=1,
-          tool_name='lookup',
-          call_id='c1',
-        ),
-        _step(
-          'llm_call',
-          _llm_call_body(assistant_reply),
-          step_id=5,
-          turn_index=2,
-          response_id='r2',
-        ),
-      ],
-    )
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('continued')])]
-    )
-    with context:
-      runner = fork(
-        forked_from_trail, 5, system_prompt='another prompt', record=False, surface='test'
-      )
-      await runner.send('next', surface='test')
-    api_input = captured[0]['input']
-    # prefix preserves: system, user, function_call, function_call_output (with
-    # matching call_id), final assistant message — then the new user message
-    assert api_input == [
-      {'role': 'system', 'content': 'another prompt'},
-      {'role': 'user', 'content': 'go'},
-      call_item,
-      {'type': 'function_call_output', 'call_id': 'c1', 'output': 'tool answer'},
-      assistant_reply,
-      {'role': 'user', 'content': 'next'},
-    ]
-
-  @pytest.mark.asyncio
-  async def test_cross_model_falls_back_to_client_side(self):
-    # different model on the new spec disqualifies server-side (a
-    # response_id is pinned to the originating model on OpenAI's side).
-    forked_from_trail = _simple_trail()
-    override = OpenAISpec(model='gpt-5.6-terra')
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
-      runner = fork(forked_from_trail, 2, recipe=override, record=False, surface='test')
-      await runner.send('next', surface='test')
-    assert captured[0].get('previous_response_id') is None
-    api_input = captured[0]['input']
-    assert api_input[0] == {'role': 'system', 'content': _SYS_TEXT}
-    assert api_input[-1] == {'role': 'user', 'content': 'next'}
-
-  @pytest.mark.asyncio
-  async def test_system_prompt_override_forces_client_side(self):
-    # the cached server-side prefix already carries the prompt; we can't
-    # restate it through `previous_response_id`, so any override forces a
-    # full replay so the swapped prompt actually takes effect.
-    forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_native_openai_create(
-      [_fake_response(output=[_message_item('ok')])]
-    )
-    with context:
-      runner = fork(
-        forked_from_trail, 2, system_prompt='swapped prompt', record=False, surface='test'
-      )
-      await runner.send('next', surface='test')
-    assert captured[0].get('previous_response_id') is None
-    assert captured[0]['input'][0] == {'role': 'system', 'content': 'swapped prompt'}
-
-  @pytest.mark.asyncio
-  async def test_subsequent_send_does_not_re_inject_prefix(self):
-    # `_input_prefix` is consumed exactly once on first send. forced
-    # client-side here via prompt override so the prefix path actually fires.
-    forked_from_trail = _simple_trail()
-    context, captured, _ = _patch_native_openai_create(
-      [
-        _fake_response(output=[_message_item('first')], response_id='resp_a'),
-        _fake_response(output=[_message_item('second')], response_id='resp_b'),
-      ]
-    )
-    with context:
-      runner = fork(
-        forked_from_trail, 2, system_prompt='another prompt', record=False, surface='test'
-      )
-      await runner.send('msg one', surface='test')
-      await runner.send('msg two', surface='test')
-    # second call goes through `previous_response_id` and only ships the new
-    # user message — the replayed prefix never re-injects
-    assert captured[1].get('previous_response_id') == 'resp_a'
-    assert captured[1]['input'] == [{'role': 'user', 'content': 'msg two'}]
-
-
-@pytest.mark.parametrize('wire', ['chat', 'messages'])
-def test_fork_point_tracks_calls_decoded_from_other_wires(wire):
-  if wire == 'chat':
-    response = {
-      'choices': [
-        {
-          'finish_reason': 'tool_calls',
-          'message': {
-            'tool_calls': [
-              {'id': 'c1', 'type': 'function', 'function': {'name': 'read', 'arguments': '{}'}}
-            ]
-          },
-        }
-      ]
-    }
-  else:
-    response = {'content': [{'type': 'tool_use', 'id': 'c1', 'name': 'read', 'input': {}}]}
-  trail = RecordedTrail(
-    header=_trail_header(),
-    steps=[
-      _step('user_input', 'go', step_id=0),
-      _step('llm_call', {'response': response}, step_id=1, wire=wire),
-    ],
-  )
-  assert latest_fork_point(trail) == 0
-  trail.steps.append(_step('tool_result', 'done', step_id=2, call_id='c1'))
-  assert latest_fork_point(trail) == 2
-
-
-def test_fork_point_skips_refused_steps_but_not_accepted_incomplete_history():
-  body = _llm_call_body(_output_message('partial'))
-  body['response']['status'] = 'incomplete'
-  body['response']['incomplete_details'] = {'reason': 'max_output_tokens'}
-  trail = RecordedTrail(
-    header=_trail_header(),
-    steps=[_step('user_input', 'go', step_id=0), _step('llm_call', body, step_id=1)],
-  )
-  assert latest_fork_point(trail) == 1
-  trail.steps[-1] = _step('llm_call', body, step_id=1, stopped='truncated')
-  assert latest_fork_point(trail) == 0
-
-
-def test_fork_point_refuses_a_call_whose_result_cannot_be_matched():
-  body = _llm_call_body({'type': 'function_call', 'name': 'read', 'arguments': '{}'})
-  trail = RecordedTrail(
-    header=_trail_header(),
-    steps=[_step('user_input', 'go', step_id=0), _step('llm_call', body, step_id=1)],
-  )
-  with pytest.raises(ValueError, match='tool call without an id'):
-    latest_fork_point(trail)
-
-
-@pytest.mark.parametrize('refused', [True, False])
-def test_restore_skips_only_explicitly_refused_legs_including_old_tool_history(refused):
-  body = _llm_call_body(_output_function_call('read', call_id='c1'))
-  body['response'].update(status='incomplete', incomplete_details={'reason': 'max_output_tokens'})
-  trail = RecordedTrail(
-    header=_trail_header(),
-    steps=[
-      _step('system_prompt', _SYS_TEXT, step_id=0),
-      _step('user_input', 'go', step_id=1),
-      _step('llm_call', body, step_id=2, **({'stopped': 'truncated'} if refused else {})),
-    ],
-  )
-  if not refused:
-    trail.steps.append(_step('tool_result', 'done', step_id=3, call_id='c1'))
-  point = latest_fork_point(trail)
-  assert point == (1 if refused else 3)
-  restored = replay_messages(trail, trail.steps[-1].step_id)
-  assert restored[:2] == [
-    {'role': 'system', 'content': _SYS_TEXT},
-    {'role': 'user', 'content': 'go'},
+def test_three_log_chain_keeps_exact_bounds_and_no_system_steps(tmp_path):
+  first = log(tmp_path / 'first.jsonl')
+  first.step('user_input', 'first')
+  call(first)
+  first.step('user_input', 'excluded')
+  second = log(tmp_path / 'second.jsonl', parent=RunFork('first', 2))
+  second.step('notification', 'news')
+  call(second)
+  third = log(tmp_path / 'third.jsonl', parent=RunFork('second', 1))
+  third.step('user_input', 'third')
+  prefix = replay_prefix(read(third.path), 1)
+  assert [step.body for step in prefix.steps if step.kind in ('user_input', 'notification')] == [
+    'first',
+    'news',
+    'third',
   ]
-  assert restored[2:] == (
-    []
-    if refused
-    else [
-      body['response']['output'][0],
-      {'type': 'function_call_output', 'call_id': 'c1', 'output': 'done'},
-    ]
-  )
+  assert all(step.kind != 'system_prompt' for step in prefix.steps)
 
 
-def test_explicit_fork_at_stopped_call_restores_instead_of_seeding_its_response_id():
-  trail = RecordedTrail(
-    header=_trail_header(),
-    steps=[
-      _step('system_prompt', _SYS_TEXT, step_id=0),
-      _step('user_input', 'go', step_id=1),
-      _step(
-        'llm_call',
-        _llm_call_body(_output_message('partial')),
-        step_id=2,
-        stopped='truncated',
-        response_id='refused',
-      ),
-    ],
+@pytest.mark.parametrize(
+  'tail, expected', [('none', 1), ('call', 2), ('tool', 4), ('partial_tool', 1), ('stopped', 1)]
+)
+def test_latest_consistent_point(tmp_path, tail, expected):
+  writer = log(tmp_path / 'run.jsonl')
+  writer.step('user_input', 'hello')
+  if tail == 'call':
+    call(writer)
+  elif tail == 'tool':
+    call(writer, calls=['one', 'two'])
+    writer.step('tool_result', 'first result', call_id='one')
+    writer.step('tool_result', 'second result', call_id='two')
+    call(writer, calls=['unanswered'])
+  elif tail == 'partial_tool':
+    call(writer, calls=['one', 'two'])
+    writer.step('tool_result', 'first result', call_id='one')
+  elif tail == 'stopped':
+    call(writer, stopped=True)
+  assert latest_fork_point(read(writer.path)) == expected
+
+
+def test_system_prompt_alone_needs_an_ancestor(tmp_path):
+  root = log(tmp_path / 'root.jsonl')
+  with pytest.raises(ValueError, match='no step to resume'):
+    latest_fork_point(read(root.path))
+  root.step('user_input', 'hello')
+  child = log(tmp_path / 'child.jsonl', parent=RunFork('root', 1))
+  assert latest_fork_point(read(child.path)) == 0
+  assert replay_prefix(read(child.path), 0).steps[0].body == 'hello'
+
+
+@pytest.mark.parametrize('ancestor', [False, True])
+def test_wire_mismatch_is_refused_before_persona_construction(tmp_path, monkeypatch, ancestor):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'hello')
+  call(writer)
+  path = writer.path
+  if ancestor:
+    child = log(
+      tmp_path / 'child.jsonl', parent=RunFork('root', 2), recipe=OpenAIRecipe(model='gpt-6.1-sol')
+    )
+    path = child.path
+  monkeypatch.setattr(fork_module, 'create_bro', Mock(side_effect=AssertionError('persona built')))
+  with pytest.raises(ValueError, match='echo.*responses.*recorded wire'):
+    fork(path, recipe=OpenAIRecipe(model='gpt-6.1-sol'), surface='test')
+
+
+@pytest.mark.asyncio
+async def test_continuation_restores_locally_and_records_its_own_log(tmp_path, monkeypatch):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'earlier')
+  call(writer, text='earlier answer')
+  writer.end('ok')
+  monkeypatch.setattr(
+    'bro.trails.store.default_store', Mock(side_effect=AssertionError('store read'))
   )
-  loop = make_loop(inbox=Inbox())
-  with patch('bro.native.runner.Runner._create_llm', return_value=loop):
-    runner = fork(trail, 2, record=False, surface='test')
+  from bro.native.echo import Echo
+
+  requests = []
+  respond = Echo._respond
+
+  def observe(self, request):
+    requests.append(request)
+    return respond(self, request)
+
+  monkeypatch.setattr(Echo, '_respond', observe)
+  runner = fork(writer.path, surface='call')
+  assert runner.resolved_recipe == ResolvedRecipe(EchoRecipe(model='echo'), 'run log root')
   with runner:
-    assert loop.wire._last_response_id is None
-    assert loop.wire._input_prefix == [
-      {'role': 'system', 'content': _SYS_TEXT},
-      {'role': 'user', 'content': 'go'},
-    ]
+    assert await runner.send('next', surface='call') == 'next'
+  assert runner.run_log is not None and runner.run_log.parent == tmp_path
+  continued = read(runner.run_log)
+  assert continued.opened['forked_from'] == {'run': 'root', 'step': 2}
+  assert continued.opened['interactive'] is True
+  request = next(step.body['request'] for step in continued.steps if step.kind == 'llm_call')
+  assert [item['text'] for item in request['input']] == ['next']
+  assert requests[0]['input'][1:] == [
+    {'role': 'user', 'text': 'earlier'},
+    {'role': 'assistant', 'text': 'earlier answer'},
+    {'role': 'user', 'text': 'next'},
+  ]
+  assert continued.prompt == read(writer.path).prompt
 
 
-def test_fork_without_an_override_refuses_a_recorded_unlisted_model(monkeypatch):
-  monkeypatch.setattr('bro.base.credentials.get_json', lambda _: {'api_key': 'fixture-key'})
-  from bro.llm.providers import RecipeError
+@pytest.mark.asyncio
+async def test_a_notice_leads_the_first_exchange_without_starting_a_turn(tmp_path):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'earlier')
+  call(writer, text='earlier answer')
+  writer.end('ok')
+  runner = fork(writer.path, surface='call', notice='[notice: resumed]')
+  with runner:
+    assert not runner.inbox.has_news()
+    await runner.send('next', surface='call')
+    await runner.send('again', surface='call')
+  assert runner.run_log is not None
+  continued = read(runner.run_log)
+  assert [(step.kind, step.body) for step in continued.steps[1:3]] == [
+    ('notification', '[notice: resumed]'),
+    ('user_input', 'next'),
+  ]
+  requests = [step.body['request'] for step in continued.steps if step.kind == 'llm_call']
+  assert [[item['text'] for item in request['input']] for request in requests] == [
+    ['[notice: resumed]', 'next'],
+    ['again'],
+  ]
 
-  recorded = _simple_trail()
-  recorded.header.native['llm'] = OpenAISpec(model='gpt-7').dump()
-  with pytest.raises(RecipeError, match='gpt-7.*passthrough'):
-    fork(recorded, 2, record=False, surface='test')
+
+@pytest.mark.asyncio
+async def test_a_notice_leads_news_that_wakes_the_conversation_first(tmp_path):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'earlier')
+  call(writer, text='earlier answer')
+  writer.end('ok')
+  runner = fork(writer.path, surface='call', notice='[notice: resumed]')
+  with runner:
+    runner.notify('[watch line]')
+    await runner.wake()
+  assert runner.run_log is not None
+  continued = read(runner.run_log)
+  assert [(step.kind, step.body) for step in continued.steps[1:3]] == [
+    ('notification', '[notice: resumed]'),
+    ('notification', '[watch line]'),
+  ]
 
 
-def test_a_retired_recorded_recipe_is_readable_but_cannot_fork_without_replacement():
-  retired = next(iter(OpenAISpec.RETIRED_MODELS))
-  trail = RecordedTrail(
-    header=_trail_header(recipe=OpenAISpec(model=retired).dump()),
-    steps=[_step('system_prompt', _SYS_TEXT, step_id=0), _step('user_input', 'hello', step_id=1)],
+def test_new_log_must_be_beside_the_origin(tmp_path):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'hello')
+  target = tmp_path / 'elsewhere' / 'child.jsonl'
+  with pytest.raises(ValueError, match='beside'):
+    fork(writer.path, surface='test', run_log=target)
+  assert not target.exists()
+
+
+@pytest.mark.parametrize(
+  'change', ['persona', 'hold', 'summoned', 'no-longer-summoned', 'summoner']
+)
+def test_prompt_rule_compares_the_session_part(tmp_path, monkeypatch, change):
+  bro = create_bro('bro')
+  with monkeypatch.context() as initial:
+    if change == 'no-longer-summoned':
+      initial.setenv('RIDE_SUMMONED', '1')
+      initial.setattr('bro.summon.talk', lambda: ())
+    original, offset = bro.system_prompt_parts_for(hold='guided', harness=BRO)
+  recorded = 'recorded persona\n\n' + original[offset:]
+  writer = log(tmp_path / 'root.jsonl', prompt=recorded, session_at=len('recorded persona\n\n'))
+  writer.step('user_input', 'hello')
+  hold = 'guided'
+  if change == 'hold':
+    hold = 'unattended'
+  elif change == 'summoned':
+    monkeypatch.setenv('RIDE_SUMMONED', '1')
+    monkeypatch.setattr('bro.summon.talk', lambda: ())
+  elif change == 'summoner':
+    monkeypatch.setattr('bro.summon.effective_may_summon', lambda: ('bro',))
+  runner = fork(writer.path, surface='test', hold=hold)
+  assert runner.run_log is not None
+  used = read(runner.run_log)
+  if change == 'persona':
+    assert used.prompt == recorded
+  else:
+    assert used.prompt != recorded
+    assert used.prompt == create_bro('bro').system_prompt_for(hold=hold, harness=BRO)
+  expected, expected_offset = create_bro('bro').system_prompt_parts_for(hold=hold, harness=BRO)
+  assert used.prompt[used.session_at :] == expected[expected_offset:]
+  runner.end()
+
+
+@pytest.mark.parametrize('reason', ['same', 'model', 'prompt', 'input', 'stopped', 'wire'])
+def test_server_chaining_eligibility(tmp_path, monkeypatch, reason):
+  recipe = EchoRecipe(model='echo') if reason == 'wire' else OpenAIRecipe(model='gpt-6.1-sol')
+  writer = log(tmp_path / 'root.jsonl', recipe=recipe)
+  writer.step('user_input', 'hello')
+  writer.step(
+    'llm_call',
+    {'request': {'tools': []}, 'response': {'id': 'response', 'output': []}},
+    wire=recipe.WIRE,
+    response_id='response',
+    **({'stopped': 'failed'} if reason == 'stopped' else {}),
   )
-  with pytest.raises(ValueError, match='was retired on'):
-    fork(trail, 1, surface='call')
+  wire = Mock()
+  monkeypatch.setattr('bro.native.runner.Runner._create_llm', lambda self, **kwargs: wire)
+  options = {}
+  if reason == 'model':
+    options['recipe'] = OpenAIRecipe(model='gpt-5.6-terra')
+  if reason == 'prompt':
+    options['system_prompt'] = 'replacement'
+  runner = fork(writer.path, 1 if reason == 'input' else 2, surface='test', **options)
+  if reason == 'same':
+    wire.seed_chain.assert_called_once_with('response')
+    wire.restore.assert_not_called()
+  else:
+    wire.seed_chain.assert_not_called()
+    wire.restore.assert_called_once()
+  runner.end()

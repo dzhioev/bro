@@ -389,6 +389,16 @@ def test_a_git_installation_materializes_from_its_pin_with_bytecode(
     ]
 
 
+def test_a_host_root_names_its_frozen_bundle_and_no_materialized_one(tmp_path, monkeypatch):
+  monkeypatch.setattr(runtime_bundle, '_session_commands', lambda _python: _GIVEN_COMMANDS)
+  frozen = runtime_bundle.RuntimeBundle(tmp_path / 'runtime' / ('ab' * 32), '3.13')
+  materialized = runtime_bundle.RuntimeBundle(
+    _materialized_runtime(tmp_path / 'materialized'), '3.13', materialized=True
+  )
+  assert runtime_bundle.frozen_hash(frozen.host_root) == frozen.hash
+  assert runtime_bundle.frozen_hash(materialized.host_root) is None
+
+
 def test_a_host_snapshot_reresolves_to_its_own_bundle(monkeypatch, probe, tmp_path):
   monkeypatch.setattr(runtime_bundle, 'runtime_base', lambda: tmp_path)
   _read_installation(monkeypatch, probe.site_packages['directory'])
