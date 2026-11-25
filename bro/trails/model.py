@@ -1,9 +1,12 @@
 """Shared trail records and wire vocabulary."""
 
+import dataclasses
 import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Optional, TypedDict, cast
+
+from bro.base.lulid import is_lulid
 
 UNREPORTED_END_INFERENCE = 'unreported'
 LOOPBACK_HOSTS = frozenset({'127.0.0.1', 'localhost', '::1'})
@@ -36,6 +39,8 @@ class StartRequest:
   surface: str
   body: dict[str, Any]
   native: dict[str, Any]
+  id: Optional[str] = None
+  _wire_nulls: frozenset[str] = dataclasses.field(default_factory=frozenset, init=False, repr=False)
   bro: Optional[str] = None
   hold: Optional[str] = None
   forked_from: Optional[dict[str, Any]] = None
@@ -58,7 +63,11 @@ class StartRequest:
       raise ValueError('body must be an object')
     if not isinstance(self.native, dict):
       raise ValueError('native must be an object')
+    if self.id is not None and not is_lulid(self.id):
+      raise ValueError('id must be a lulid')
     _validate_lineage(self.lineage)
+    if self.id is not None and self.lineage is not None:
+      raise ValueError('id and lineage evidence are mutually exclusive')
     if self.lineage is not None and self.forked_from is not None:
       raise ValueError('lineage evidence and forked_from are mutually exclusive')
     for field in ('bro', 'subject'):
@@ -78,6 +87,7 @@ class StartRequest:
     if not isinstance(data, dict):
       raise ValueError('start request must be an object')
     fields = {
+      'id',
       'harness',
       'version',
       'interactive',
@@ -102,7 +112,8 @@ class StartRequest:
       raise ValueError(f'missing fields: {sorted(missing)}')
     if 'git' in data:
       validate_git(data['git'])
-    return cls(
+    request = cls(
+      id=data.get('id'),
       harness=data['harness'],
       version=data['version'],
       interactive=data['interactive'],
@@ -118,6 +129,10 @@ class StartRequest:
       git=data.get('git'),
       lineage=data.get('lineage'),
     )
+    object.__setattr__(
+      request, '_wire_nulls', frozenset(key for key, value in data.items() if value is None)
+    )
+    return request
 
   def to_wire(self) -> dict[str, Any]:
     data: dict[str, Any] = {
@@ -129,6 +144,7 @@ class StartRequest:
       'native': self.native,
     }
     for field in (
+      'id',
       'bro',
       'hold',
       'forked_from',
@@ -139,9 +155,13 @@ class StartRequest:
       'lineage',
     ):
       value = getattr(self, field)
-      if value is not None:
+      if value is not None or field in self._wire_nulls:
         data[field] = value
     return data
+
+  @property
+  def start_sha256(self) -> Optional[str]:
+    return payload_sha256(self.to_wire()) if self.id is not None else None
 
 
 def validate_end(reason: Any, detail: Any) -> tuple[str, Optional[str]]:
@@ -249,6 +269,8 @@ def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
   if value is None:
     return
   allowed = {'trail_id', 'step_id', 'index'}
+  if field == 'forked_from':
+    allowed.add('kind')
   required = {'trail_id'} if step_optional else {'trail_id', 'step_id'}
   if (
     not isinstance(value, dict) or not required.issubset(value) or not set(value).issubset(allowed)
@@ -256,6 +278,10 @@ def _validate_pointer(value: Any, field: str, *, step_optional: bool) -> None:
     raise ValueError(f'{field} has an invalid pointer shape')
   if not isinstance(value['trail_id'], str) or len(value['trail_id']) == 0:
     raise ValueError(f'{field}.trail_id must be a non-empty string')
+  if 'kind' in value and (
+    not isinstance(value['kind'], str) or value['kind'] not in {'resume', 'trail', 'branch'}
+  ):
+    raise ValueError('forked_from.kind must be one of resume, trail, branch')
   for ordinal in ('step_id', 'index'):
     item = value.get(ordinal)
     if item is not None and (not isinstance(item, int) or isinstance(item, bool) or item < 0):
@@ -299,6 +325,7 @@ class ForkedFrom:
   trail_id: str
   step_id: int
   index: Optional[int] = None
+  kind: Optional[str] = None
 
 
 @dataclass(frozen=True)

@@ -167,14 +167,12 @@ class NetworkStore(TrailsStore):
     return self._get_pairs(f'/v1/trails/{trail_id}/messages', query)
 
   def start_trail(self, request: StartRequest) -> dict:
-    """open a trail (`POST /v1/trails`, harness-native `body` envelope included);
-    returns `{id, started_at, extent}` plus the resolver's verdict where the
-    request carried lineage evidence. deliberately not retried: minting is the
-    one non-idempotent write, and a duplicate from a lost response would strand
-    an orphan trail — the caller's own next attempt is the retry, and for a
-    harness that resolves lineage it converges on that orphan instead.
-    """
-    return self._send('POST', '/v1/trails', request.to_wire(), retry_delays=())
+    return self._send(
+      'POST',
+      '/v1/trails',
+      request.to_wire(),
+      retry_delays=_HARD_RETRY_DELAYS_SECONDS if request.id is not None else (),
+    )
 
   def append_records(
     self,

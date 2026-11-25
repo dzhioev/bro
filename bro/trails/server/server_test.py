@@ -657,3 +657,41 @@ def test_malformed_served_entries_are_refused(tmp_path, payload):
   declaration.write_text(json.dumps(payload))
   with pytest.raises(ValueError):
     read_entries(declaration)
+
+
+@pytest.mark.asyncio
+async def test_named_start_http_status_and_collision_body(client):
+  from bro.base.lulid import lulid
+
+  client = await client
+  payload = {**_start_payload(), 'id': lulid(), 'subject': None}
+  created = await client.post('/v1/trails', json=payload, headers=_auth())
+  assert created.status == 201
+  first = await created.json()
+  assert first['created'] is True
+  repeated = await client.post('/v1/trails', json=payload, headers=_auth())
+  assert repeated.status == 200
+  assert await repeated.json() == {**first, 'created': False}
+  changed = {key: value for key, value in payload.items() if value is not None}
+  collision = await client.post('/v1/trails', json=changed, headers=_auth())
+  assert collision.status == 409
+  body = await collision.json()
+  assert reported_collision(json.dumps(body).encode()) == payload['id']
+  assert isinstance(body['error'], str) and body['error']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+  'extra',
+  [
+    {'id': '../invalid'},
+    {'forked_from': {'trail_id': 'parent', 'step_id': 0, 'kind': 'unknown'}},
+    {'id': '01m8a7qjvk-2833s2nx-3k3tpp28', 'lineage': {}},
+    {'summoned_by': {'trail_id': 'parent', 'step_id': 0, 'kind': 'resume'}},
+  ],
+)
+async def test_start_refuses_invalid_id_and_edge_fields(client, extra):
+  response = await (await client).post(
+    '/v1/trails', json={**_start_payload(), **extra}, headers=_auth()
+  )
+  assert response.status == 400

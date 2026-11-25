@@ -150,13 +150,18 @@ def resolve_lineage(
 
 
 def start_result(
-  trail_id: str, started_at: str, extent: int, decision: Optional[LineageDecision]
+  trail_id: str, started_at: str, extent: int, decision: Optional[LineageDecision], *, created: bool
 ) -> dict[str, Any]:
   """The start response: the recording trail's identity and the ordinal its
   writer appends from, plus the resolver's verdict when the request carried
   lineage evidence. An attached trail answers as itself, so its extent is
   whatever it already recorded."""
-  result: dict[str, Any] = {'id': trail_id, 'started_at': started_at, 'extent': extent}
+  result: dict[str, Any] = {
+    'id': trail_id,
+    'started_at': started_at,
+    'extent': extent,
+    'created': created,
+  }
   if decision is not None:
     result['adopted'] = True
     result['chunks'] = decision.chunks

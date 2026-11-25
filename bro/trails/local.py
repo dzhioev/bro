@@ -31,6 +31,7 @@ from bro.trails.store import (
   ToolNotFound,
   TrailNotFound,
   TrailsStore,
+  collision,
   delete_manifest,
   manifest_name,
   refuse_while_forked,
@@ -181,6 +182,8 @@ class LocalStore(TrailsStore):
       return self._read_stored_rows(trail_id)
 
   def start_trail(self, request: StartRequest) -> dict:
+    if request.id is not None and self._holds_trail(request.id):
+      return self._repeated_start(request)
     trail_format = self._trail_format(request.harness)
     with refusing_invalid_requests('start request'):
       trail_format.validate_create(request.native)
@@ -194,7 +197,7 @@ class LocalStore(TrailsStore):
     if request.lineage is not None:
       decision = backends.resolve_lineage(trail_format, request, self)
       if not decision.adopt:
-        return {'adopted': False, 'reason': decision.reason}
+        return {'created': False, 'adopted': False, 'reason': decision.reason}
       if decision.attach_to is not None:
         return self._attach(request, decision)
       forked_from = decision.forked_from
@@ -203,10 +206,12 @@ class LocalStore(TrailsStore):
       native.update(rows.inherited_native(trail_format, lambda: self.get_trail(parent_id)))
     if decision is not None:
       native.update(rows.minted_native(native, decision.chunks))
-    trail_id = lulid()
+    trail_id = request.id if request.id is not None else lulid()
     started_at = _now_iso()
-    directory = self._trail_directory(trail_id)
-    with _creating_directory(directory):
+    self.staging_directory.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=self.staging_directory) as temporary:
+      directory = Path(temporary) / trail_id
+      directory.mkdir()
       header: dict[str, Any] = {
         'id': trail_id,
         'format': model.TRAIL_FORMAT,
@@ -221,6 +226,8 @@ class LocalStore(TrailsStore):
         'native': native,
         'extent': 0,
       }
+      if request.id is not None:
+        header['start_sha256'] = request.start_sha256
       if forked_from is not None:
         header['forked_from'] = forked_from
       for field in ('bro', 'hold', 'summoned_by', 'subject', 'location', 'git'):
@@ -238,10 +245,31 @@ class LocalStore(TrailsStore):
         seen_billing_keys=set(),
       )
       header.update(rows.state_fields(state, len(prepared)))
-      self._write_rows(trail_id, prepared, append=False)
+      _atomic_bytes(directory / 'steps.jsonl', _encoded_rows(prepared))
       _atomic_json(directory / 'header.json', header)
       (directory / '.lock').touch()
-    return backends.start_result(trail_id, started_at, len(prepared), decision)
+      try:
+        os.rename(directory, self._trail_directory(trail_id))
+      except OSError as exception:
+        if exception.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+          raise
+        if request.id is None:
+          raise collision(trail_id, 'the minted id is occupied') from exception
+        return self._repeated_start(request)
+    return backends.start_result(trail_id, started_at, len(prepared), decision, created=True)
+
+  def _repeated_start(self, request: StartRequest) -> dict:
+    assert request.id is not None
+    with self._locked(request.id, shared=True):
+      header = self._read_header(request.id)
+      if (
+        importing.import_state(header) is not None
+        or header.get('start_sha256') != request.start_sha256
+      ):
+        raise collision(request.id, 'the start request does not match a completed start')
+      return backends.start_result(
+        request.id, header['started_at'], _extent(header), None, created=False
+      )
 
   def _attach(self, request: StartRequest, decision: LineageDecision) -> dict:
     """Reopen the trail the verdict attached to for this lifetime, at the extent
@@ -253,14 +281,14 @@ class LocalStore(TrailsStore):
       header = self._read_header(trail_id)
       self._migrate_locked(trail_id, header)
       if _extent(header) != extent:
-        return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+        return {'created': False, 'adopted': False, 'reason': backends.ATTACH_CONTENDED}
       restamp = backends.attached_header(header, request)
       header.update(restamp.values)
       for field in restamp.removed:
         header.pop(field, None)
       header['last_alive_at'] = _now_iso()
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
-    return backends.start_result(trail_id, header['started_at'], extent, decision)
+    return backends.start_result(trail_id, header['started_at'], extent, decision, created=False)
 
   def append_records(
     self,
@@ -554,10 +582,7 @@ class LocalStore(TrailsStore):
   def _write_rows(self, trail_id: str, prepared: list[dict], *, append: bool) -> None:
     path = self._trail_directory(trail_id) / 'steps.jsonl'
     mode = 'ab' if append else 'wb'
-    encoded = b''.join(
-      json.dumps(row, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode() + b'\n'
-      for row in prepared
-    )
+    encoded = _encoded_rows(prepared)
     if not append:
       _atomic_bytes(path, encoded)
       return
@@ -618,6 +643,13 @@ def _creating_directory(directory: Path) -> Iterator[None]:
   except BaseException:
     shutil.rmtree(directory)
     raise
+
+
+def _encoded_rows(prepared: list[dict]) -> bytes:
+  return b''.join(
+    json.dumps(row, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode() + b'\n'
+    for row in prepared
+  )
 
 
 def _extent(header: dict) -> int:

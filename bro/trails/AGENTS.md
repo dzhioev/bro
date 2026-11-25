@@ -39,9 +39,10 @@ bro · claude recorders                     readers
 - `network.py` owns `NetworkStore`, the authenticated wire proxy.
   HTTPS is required except for HTTP loopback hosts.
   It pools its connections, one per request in flight, so concurrent callers never share a socket.
+  It retries starts naming an id and sends an unnamed start once.
   It maps not-found, append-conflict, refused-permission, unsupported-operation, and transient transport failures onto the store errors and owns operation-specific retry schedules.
   A 404 becomes `TrailNotFound` only when its body reports the missing trail (`model.trail_not_found_body` is the shape both sides read), and a 409 becomes `TrailHasForks` only when its body names them (`model.trail_has_forks_body`);
-  a missing tool blob (`model.tool_not_found_body`) and an import collision (`model.trail_collision_body`) are read the same way, and every other 404 surfaces as `HTTPStatusError` carrying what the response said.
+  a missing tool blob (`model.tool_not_found_body`) and a start or import collision (`model.trail_collision_body`) are read the same way, and every other 404 surfaces as `HTTPStatusError` carrying what the response said.
   Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
 - An attach reopens the trail it names:
@@ -144,9 +145,16 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   `bro.native.trail_recorder` records the session run's log as line rows.
   `bro.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the format's lineage verdict it gets back.
 - `POST /v1/trails` starts from `body.records`, resolving `lineage` evidence when the request carries it.
-  The response names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.
+  The response reports whether it `created` a trail, names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.
+  A request without lineage evidence may name its `id`, validated by `bro.base.lulid.is_lulid`:
+  a free id creates a trail with `start_sha256`, the digest of the canonical wire request including its id and body.
+  A repeated request answers the existing trail at its current extent when that digest matches and no import is writing it;
+  every other occupied id is a `model.trail_collision_body` collision.
+  The digest is immutable and travels through export and import.
+  `forked_from` accepts an optional `kind` (`resume`, `trail`, or `branch`), kept in the header and the typed pointer;
+  `summoned_by` accepts no kind.
   201 is for a trail that was minted;
-  a declined adoption creates nothing and an attach reopens what already existed, so both answer 200.
+  a repeated named start, a declined adoption, and an attach create nothing, so they answer 200.
   `POST /v1/trails/{id}/records` appends at `offset`.
   A committed retry returns the current extent without folding again;
   any other extent mismatch is a conflict.
@@ -183,6 +191,7 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
   it owns argument parsing, queries, follow polling, regex matching, and grep context, while every `show`, `steps`, `list`, `tree`, and `grep` record renders through the matching display preset.
   A `show`, `steps`, or `grep` snapshot reads its trail through `TrailsStore.collect_steps` / `collect_messages`, which fetch the step range as concurrent windows, and `--follow` continues on the sequential page cursor.
   `steps` prints every stored record whole.
+  `tree` shows each edge's kind beside its step, and `show` names it at each chain boundary when present.
 - `admin.py` (`trails`) is the operator CLI beside it, carrying `export`, `import`, `migrate`, and `delete`.
   Export reads under the read permission and writes a store layout, import and migration reach every backend through the store contract and the administer-permission routes.
 - `contract_test.py` runs the same contract suite against `LocalStore` and `NetworkStore` over a real loopback aiohttp server backed by `LocalStore`, the import wire and the blob read among it;

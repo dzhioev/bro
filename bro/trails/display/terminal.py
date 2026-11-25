@@ -250,7 +250,10 @@ class _TerminalFormatter:
     fields = {item.label: item.text for item in block.items}
     segment = fields.get('segment', '?')[:8]
     timestamp = block.timestamp or '-'
-    text = f'── resumed as trail {fields.get("trail", "?")} (segment {segment}) · {timestamp} ──'
+    kind = f'{fields["kind"]}; ' if 'kind' in fields else ''
+    text = (
+      f'── resumed as trail {fields.get("trail", "?")} ({kind}segment {segment}) · {timestamp} ──'
+    )
     return '\n' + self._styled(text, StyleRole.MUTED) + '\n'
 
   def _rewind_conversation(self, block: PresentationBlock) -> str:
@@ -395,6 +398,9 @@ class _TerminalFormatter:
     step = items.get('step')
     if step is not None:
       text += f' {self._styled(f"@step {step.text}", StyleRole.MUTED)}'
+    kind = items.get('kind')
+    if kind is not None:
+      text += f' {self._styled(kind.text, StyleRole.MUTED)}'
     if any(item.text == 'here' for item in block.items):
       text += f' {self._styled("<-- here", StyleRole.HEADING)}'
     return text + '\n'

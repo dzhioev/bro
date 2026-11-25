@@ -10,6 +10,7 @@ import pytest
 from moto import mock_aws
 
 from bro.trails import backends, formats, model
+from bro.trails.contract_test import TestNamedStarts as NamedStartContract
 from bro.trails.local import LocalStore
 from bro.trails.model import (
   MESSAGE_TYPES,
@@ -892,7 +893,7 @@ def test_attaching_reopens_the_trail_conditional_on_the_extent_it_verified(compo
     StartRequest.from_wire(_claude_payload(lineage=lineage, version='4'))
   )
 
-  assert contended == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+  assert contended == {'created': False, 'adopted': False, 'reason': backends.ATTACH_CONTENDED}
   assert dynamo.headers[trail_id]['version'] == '3'
 
 
@@ -931,7 +932,7 @@ def test_attach_rejects_a_header_format_change_after_its_read(components, monkey
     StartRequest.from_wire(_claude_payload(lineage=lineage, version='3'))
   )
 
-  assert attached == {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
+  assert attached == {'created': False, 'adopted': False, 'reason': backends.ATTACH_CONTENDED}
   assert dynamo.headers[trail_id]['version'] == '2'
   assert dynamo.headers[trail_id]['format'] == model.TRAIL_FORMAT + 1
 
@@ -1357,3 +1358,12 @@ def test_recompute_refolds_native_line_rows_without_changing_the_lines(component
   header = store.get_trail(trail_id)
   assert header['turn_count'] == 1
   assert header['native']['usage'] == {'model': {'input_tokens': 10, 'output_tokens': 2}}
+
+
+@pytest.fixture
+def trails_store(components):
+  return components[0]
+
+
+class TestDynamoNamedStarts(NamedStartContract):
+  pass

@@ -1,9 +1,10 @@
 import asyncio
+import hashlib
 import json
 import socket
 import threading
 from collections.abc import Iterator
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 from aiohttp import web
 
+from bro.base.lulid import lulid
 from bro.trails import formats, model
 from bro.trails.local import LocalStore
 from bro.trails.model import StartRequest, payload_sha256, tools_sha256
@@ -392,7 +394,11 @@ class TestTrailsStoreContract:
       )
     )
 
-    assert declined == {'adopted': False, 'reason': 'no line past the recorded extent yet'}
+    assert declined == {
+      'created': False,
+      'adopted': False,
+      'reason': 'no line past the recorded extent yet',
+    }
     assert resumed['adopted'] is True
     assert (resumed['id'], resumed['attached'], resumed['extent']) == (trail_id, True, 2)
     assert resumed['chunks'] == [[2, 2]]
@@ -788,3 +794,140 @@ class TestImportContract:
     imported = trails_store.get_trail(minted['id'])
     assert imported['native']['lineage_head']['cuts'] == minted['chunks']
     assert imported == header
+
+
+class TestNamedStarts:
+  def test_retry_uses_immutable_digest_and_current_extent(self, trails_store):
+    request = replace(_bro_request(subject='initial'), id=lulid())
+    created = trails_store.start_trail(request)
+    assert created['id'] == request.id
+    assert created['created'] is True
+    assert trails_store.start_trail(request) == {**created, 'created': False}
+    header = trails_store.get_trail(created['id'])
+    digest = hashlib.sha256(model.canonical_json_bytes(request.to_wire())).hexdigest()
+    assert header['start_sha256'] == digest
+    trails_store.append_records(
+      created['id'], created['extent'], [{'kind': 'user_input', 'body': 'later'}]
+    )
+    trails_store.set_subject(created['id'], 'changed')
+    trails_store.end_trail(created['id'], 'ok')
+    repeated = trails_store.start_trail(request)
+    assert repeated['extent'] == created['extent'] + 1
+    assert repeated['started_at'] == created['started_at']
+    after = trails_store.get_trail(created['id'])
+    assert after['start_sha256'] == digest
+    assert after['subject'] == 'changed'
+    assert after['end']['reason'] == 'ok'
+    assert len(list(trails_store.iter_trails())) == 1
+
+  @pytest.mark.parametrize(
+    'change',
+    [
+      {'subject': 'different'},
+      {'body': {'records': []}},
+    ],
+  )
+  def test_changed_request_collides(self, trails_store, change):
+    request = replace(_bro_request(), id=lulid())
+    trails_store.start_trail(request)
+    with pytest.raises(TrailCollision) as failure:
+      trails_store.start_trail(replace(request, **change))
+    assert failure.value.trail_id == request.id
+
+  def test_store_minted_id_collides(self, trails_store):
+    request = _bro_request()
+    created = trails_store.start_trail(request)
+    assert 'start_sha256' not in trails_store.get_trail(created['id'])
+    with pytest.raises(TrailCollision):
+      trails_store.start_trail(replace(request, id=created['id']))
+
+  @pytest.mark.parametrize('carry_digest', [False, True])
+  def test_importing_trail_collides(self, trails_store, tmp_path, carry_digest):
+    source = LocalStore(tmp_path / 'source')
+    request = replace(_bro_request(), id=lulid())
+    assert request.id is not None
+    source.start_trail(request)
+    header = source.get_trail(request.id)
+    if not carry_digest:
+      header.pop('start_sha256')
+    trails_store.begin_import(header)
+    with pytest.raises(TrailCollision):
+      trails_store.start_trail(request)
+    trails_store.import_rows(request.id, 0, source.stored_rows(request.id))
+    trails_store.seal_import(request.id)
+    if carry_digest:
+      assert trails_store.start_trail(request)['id'] == request.id
+    else:
+      with pytest.raises(TrailCollision):
+        trails_store.start_trail(request)
+
+  def test_digest_survives_export_and_import(self, trails_store, tmp_path):
+    from bro.trails.transfer import export_trails, import_layout
+
+    source = LocalStore(tmp_path / 'source')
+    request = replace(_bro_request(), id=lulid())
+    assert request.id is not None
+    source.start_trail(request)
+    export_trails(source, [request.id], tmp_path / 'export')
+    import_layout(tmp_path / 'export', trails_store)
+    assert (
+      trails_store.get_trail(request.id)['start_sha256']
+      == source.get_trail(request.id)['start_sha256']
+    )
+    assert trails_store.start_trail(request)['id'] == request.id
+
+  @pytest.mark.parametrize('kind', [None, 'resume', 'trail', 'branch'])
+  def test_fork_kind_kept_and_typed(self, trails_store, kind):
+    from bro.trails.store import trail_from_header
+
+    parent = trails_store.start_trail(_bro_request())['id']
+    edge = {'trail_id': parent, 'step_id': 0}
+    if kind is not None:
+      edge['kind'] = kind
+    child = trails_store.start_trail(_bro_request(forked_from=edge))['id']
+    header = trails_store.get_trail(child)
+    assert header['forked_from'] == edge
+    typed = trail_from_header(header)
+    assert typed.forked_from is not None and typed.forked_from.kind == kind
+
+  @pytest.mark.parametrize('different', [False, True])
+  def test_concurrent_starts_choose_one_owner(self, trails_store, monkeypatch, different):
+    backend = (
+      _CONTRACT_LOCAL_STORES[id(trails_store)]
+      if id(trails_store) in _CONTRACT_LOCAL_STORES
+      else trails_store
+    )
+    original = backend._trail_format
+    both_validating = threading.Barrier(2)
+
+    def validating(name):
+      both_validating.wait()
+      return original(name)
+
+    request = replace(_bro_request(), id=lulid())
+    other = replace(request, subject='other') if different else request
+    with monkeypatch.context() as patch:
+      patch.setattr(backend, '_trail_format', validating)
+      with ThreadPoolExecutor(max_workers=2) as executor:
+        attempts = [executor.submit(trails_store.start_trail, value) for value in (request, other)]
+        outcomes = []
+        for attempt in attempts:
+          try:
+            outcomes.append(attempt.result())
+          except TrailCollision:
+            outcomes.append(None)
+    assert sum(result is not None for result in outcomes) == (1 if different else 2)
+    assert len(list(trails_store.iter_trails())) == 1
+    assert len(list(trails_store.iter_steps(request.id))) == 1
+
+  def test_import_refuses_an_unknown_fork_kind(self, trails_store, tmp_path):
+    source = LocalStore(tmp_path / 'source')
+    parent = source.start_trail(_bro_request())['id']
+    child = source.start_trail(_bro_request(forked_from={'trail_id': parent, 'step_id': 0}))['id']
+    trails_store.begin_import(source.get_trail(parent))
+    trails_store.import_rows(parent, 0, source.stored_rows(parent))
+    trails_store.seal_import(parent)
+    header = source.get_trail(child)
+    header['forked_from']['kind'] = 'unknown'
+    with pytest.raises(ValueError, match='forked_from.kind'):
+      trails_store.begin_import(header)

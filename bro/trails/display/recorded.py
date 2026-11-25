@@ -188,6 +188,7 @@ class RecordedAdapter:
               ),
               trail_id=segment_id,
               segment=segment,
+              edge_kind=segment_header['forked_from'].get('kind'),
             )
           )
         messages = self._segment_messages(segment_id, segment_header, bound)
@@ -363,6 +364,7 @@ class RecordedAdapter:
           model=_model(header),
           owner=_owner(header),
           fork_step_id=fork_step_id,
+          edge_kind=forked_from.get('kind') if forked_from is not None else None,
         )
       )
       children = list(self.client.iter_trails(forked_from=current_id))

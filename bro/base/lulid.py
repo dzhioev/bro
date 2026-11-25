@@ -15,13 +15,25 @@ positions in every id. Lulids therefore sort by mint time like the ULIDs
 underneath, so they are safe as range/sort keys.
 """
 
-from ulid import ULID
+import re
 
 
 def lulid() -> str:
+  from ulid import ULID
+
   return _restyle(str(ULID()))
 
 
 def _restyle(ulid_string: str) -> str:
   lowered = ulid_string.lower()
   return f'{lowered[:10]}-{lowered[10:18]}-{lowered[18:]}'
+
+
+def is_lulid(value: object) -> bool:
+  return (
+    isinstance(value, str)
+    and re.fullmatch(
+      r'[0-7][0-9a-hjkmnp-tv-z]{9}-[0-9a-hjkmnp-tv-z]{8}-[0-9a-hjkmnp-tv-z]{8}', value
+    )
+    is not None
+  )
