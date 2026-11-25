@@ -14,7 +14,7 @@ from bro.benchmark.trajectory import (
 )
 from bro.llm import providers
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.record.spine import Recording
 from bro.trails.store import local_root
 
@@ -23,8 +23,8 @@ MODEL = 'gpt-5.6-terra'
 PRICE_TABLES = {'openai': providers.price_table('openai')}
 
 
-def _request(*, summoned_by=None, model: str | None = MODEL) -> BlazeRequest:
-  return BlazeRequest(
+def _request(*, summoned_by=None, model: str | None = MODEL) -> StartRequest:
+  return StartRequest(
     harness='bro',
     bro='dev',
     version='test',
@@ -284,7 +284,7 @@ def test_the_job_walker_converts_every_trial_holding_a_trail(tmp_path, monkeypat
   no_trail = job_directory / 'failed-before-agent'
   no_trail.mkdir()
   (no_trail / 'result.json').write_text('{}')
-  empty_store = job_directory / 'died-before-blazing'
+  empty_store = job_directory / 'died-before-starting'
   empty_store.mkdir()
   (empty_store / 'result.json').write_text('{}')
   _trial_store(empty_store / 'agent', monkeypatch)

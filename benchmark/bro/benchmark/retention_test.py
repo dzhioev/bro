@@ -13,7 +13,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError
 from bro.benchmark import retention
 from bro.benchmark.bundle import MANIFEST_FORMAT, Bundle
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.record.spine import Recording
 
 JOB_ID = UUID('12345678-1234-5678-1234-567812345678')
@@ -127,7 +127,7 @@ def _record_trail(trial_directory: Path) -> str:
   store = LocalStore(trial_directory / retention.TRAILS_DIRECTORY)
   recording = Recording.create(
     store,
-    BlazeRequest(
+    StartRequest(
       harness='bro',
       bro='dev',
       version='test',

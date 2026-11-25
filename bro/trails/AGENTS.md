@@ -45,7 +45,7 @@ bro · claude recorders                     readers
   Its concrete `recompute`, `check`, and `relink` methods forward the Dynamo administration endpoints;
   they are not part of `TrailsStore`.
 - An attach reopens the trail it names:
-  each store clears `end` and restamps the blaze's own lifetime facts, including `git`, over the header latest-wins, leaving `summoned_by` to the run that opened the trail and the row-folded aggregate to the rows
+  each store clears `end` and restamps the start's own lifetime facts, including `git`, over the header latest-wins, leaving `summoned_by` to the run that opened the trail and the row-folded aggregate to the rows
   — `backends.attached_header` is the one place that decides which fields those are.
   The write is conditional on the extent the verdict was verified against, since an append landing meanwhile would leave the awarded spans off by its length;
   a lost race answers `backends.ATTACH_CONTENDED` and the caller resolves again.
@@ -84,8 +84,8 @@ bro · claude recorders                     readers
   `bro-native-trails` and `bro-claude-trails` supply the native and Claude formats respectively.
   Each is a sibling distribution of its harness under `harnesses/`.
   Reads are format-neutral:
-  `blaze` is the one store method taking format-specific data, in its own `native`, `body`, and `lineage` arguments.
-  A server refuses blaze and import requests naming an uninstalled format.
+  `start_trail` is the one store method taking format-specific data, in its own `native`, `body`, and `lineage` arguments.
+  A server refuses start and import requests naming an uninstalled format.
 - `display/` owns the typed process-local display records, immutable scenario presets, stateful presentation core, renderer-neutral block operations,
   the live and recorded adapters, plain stream/retained terminal renderers, and the lazy embedded Textual trail view.
   A structured value renders as YAML (`_yaml.py`)
@@ -101,7 +101,7 @@ bro · claude recorders                     readers
 - `importing.py` owns what every backend's import does alike:
   the unsealed header a recorded one becomes
   — every field as recorded, the read projections and the fold-owned fields dropped, the server-derived native fold cleared down to the minted lineage cuts, the format label kept —
-  the validation of a recorded header's blaze-owned fields, including `git`,
+  the validation of a recorded header's start-owned fields, including `git`,
   the identity two recorded headers are matched on and the mark an import leaves on its header until the seal,
   the parent requirements interpreted through the header's in-memory upgrade and digest verification of every stored or carried tool blob,
   the digest match of rows re-sent over ones already stored,
@@ -116,7 +116,7 @@ bro · claude recorders                     readers
   `validate_create` refuses those fields from a writer, and `AggregateState.replaying` clears them for the recompute/check re-fold.
   `native.lineage_head` (`lineage.py`) is among them, folded for the harnesses whose adapter resolves lineage.
   Its `cuts` are the exception the fold does not derive:
-  the spans the mint verdict awarded, written once at blaze and carried through the replay seed.
+  the spans the mint verdict awarded, written once at start and carried through the replay seed.
   Client-side stores and recorders do not import `bro.trails.server`.
 - **Recorder placement:**
   core `record/spine.py` owns the shared write spine, and `record/session.py` the managed session a recorder runs in
@@ -125,7 +125,7 @@ bro · claude recorders                     readers
   Each engine distribution owns its recorder:
   `bro-native` contributes `bro.native.trail_recorder`, while `bro-claude` contributes `bro.claude.trail_recorder`.
   They may import the core store contract, schema, formats, and write spine, never the reverse.
-- Trail formats mint lineage only when blazing a trail, and a trail's step ids are its rows' line ordinals in local storage.
+- Trail formats mint lineage only when starting a trail, and a trail's step ids are its rows' line ordinals in local storage.
   Writers cannot mutate an edge;
   the Dynamo operator can repair one through manifested `relink`, and audits detect copied records across trails.
 - Bro tool schemas are content-addressed and referenced by `tools_sha256` on a row;
@@ -136,14 +136,14 @@ Absence of a writer verdict is represented as `end.inference = unreported`, not 
 
 ## Surfaces
 
-- `model.py` owns `TRAIL_FORMAT`, `BlazeRequest`, the `git` header vocabulary and validator, shared validation constants, trail/step/lineage records, and body helpers.
-  `BlazeRequest.from_wire()` / `to_wire()` is the one blaze-envelope validator;
+- `model.py` owns `TRAIL_FORMAT`, `StartRequest`, the `git` header vocabulary and validator, shared validation constants, trail/step/lineage records, and body helpers.
+  `StartRequest.from_wire()` / `to_wire()` is the one start-envelope validator;
   harness-native validation and body opening remain in each store.
   A step id is an ordinal in rows and lineage pointers.
-- Core `record/spine.py` owns blaze, ordinal extent validation, batched appends, liveness, and ending;
+- Core `record/spine.py` owns start, ordinal extent validation, batched appends, liveness, and ending;
   `bro.native.trail_recorder` records the session run's log as line rows.
   `bro.claude.trail_recorder` records Claude transcripts, reporting each adopted segment's evidence and applying the format's lineage verdict it gets back.
-- `POST /v1/trails` blazes from `body.records`, resolving `lineage` evidence when the request carries it.
+- `POST /v1/trails` starts from `body.records`, resolving `lineage` evidence when the request carries it.
   The response names the recording trail and the `extent` its writer appends from, and adds the verdict (`adopted`, `chunks`, and either `forked_from` or `attached`) where evidence was carried.
   201 is for a trail that was minted;
   a declined adoption creates nothing and an attach reopens what already existed, so both answer 200.

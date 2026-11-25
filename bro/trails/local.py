@@ -19,7 +19,7 @@ from bro.trails import backends, formats, importing, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
-  BlazeRequest,
+  StartRequest,
   canonical_json_bytes,
   is_sha256,
   named_tool_digests,
@@ -180,13 +180,13 @@ class LocalStore(TrailsStore):
     with self._locked(trail_id, shared=True):
       return self._read_stored_rows(trail_id)
 
-  def blaze(self, request: BlazeRequest) -> dict:
+  def start_trail(self, request: StartRequest) -> dict:
     trail_format = self._trail_format(request.harness)
-    with refusing_invalid_requests('blaze request'):
+    with refusing_invalid_requests('start request'):
       trail_format.validate_create(request.native)
       if trail_format.requires_bro and request.bro is None:
         raise ValueError(f'bro is required for the {trail_format.name} trail format')
-    with refusing_invalid_requests('blaze body'):
+    with refusing_invalid_requests('start body'):
       opened = trail_format.open(request.body)
     decision = None
     forked_from = request.forked_from
@@ -241,9 +241,9 @@ class LocalStore(TrailsStore):
       self._write_rows(trail_id, prepared, append=False)
       _atomic_json(directory / 'header.json', header)
       (directory / '.lock').touch()
-    return backends.blaze_result(trail_id, started_at, len(prepared), decision)
+    return backends.start_result(trail_id, started_at, len(prepared), decision)
 
-  def _attach(self, request: BlazeRequest, decision: LineageDecision) -> dict:
+  def _attach(self, request: StartRequest, decision: LineageDecision) -> dict:
     """Reopen the trail the verdict attached to for this lifetime, at the extent
     it was verified against."""
     assert decision.attach_to is not None
@@ -260,7 +260,7 @@ class LocalStore(TrailsStore):
         header.pop(field, None)
       header['last_alive_at'] = _now_iso()
       _atomic_json(self._trail_directory(trail_id) / 'header.json', header)
-    return backends.blaze_result(trail_id, header['started_at'], extent, decision)
+    return backends.start_result(trail_id, header['started_at'], extent, decision)
 
   def append_records(
     self,

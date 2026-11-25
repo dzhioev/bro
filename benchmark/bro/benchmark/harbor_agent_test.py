@@ -33,7 +33,7 @@ from bro.benchmark.harbor_agent import (
 )
 from bro.benchmark.trial_store import TRAILS_DIRECTORY
 from bro.trails.local import LocalStore
-from bro.trails.model import BlazeRequest
+from bro.trails.model import StartRequest
 from bro.trails.record.spine import Recording
 from ride.workspace.spawn import PROCESS_TERM_GRACE
 
@@ -392,7 +392,7 @@ def _record_trail(agent_directory: Path, calls: list[dict[str, Any]]) -> None:
   store = LocalStore(agent_directory / TRAILS_DIRECTORY)
   recording = Recording.create(
     store,
-    BlazeRequest(
+    StartRequest(
       harness='bro',
       bro='terminal',
       version='test',

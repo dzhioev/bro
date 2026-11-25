@@ -351,7 +351,7 @@ async def test_resume_continues_stored_line_rows_through_wire_restore(
   from bro.native.echo import Echo
   from bro.native.echo_declaration import Recipe as EchoRecipe
   from bro.trails.local import LocalStore
-  from bro.trails.model import BlazeRequest, tools_sha256
+  from bro.trails.model import StartRequest, tools_sha256
 
   recipe = EchoRecipe(model='echo')
   steps = [
@@ -385,7 +385,7 @@ async def test_resume_continues_stored_line_rows_through_wire_restore(
 
   monkeypatch.setattr(Echo, '_respond', respond)
   with LocalStore(tmp_path) as store:
-    request = BlazeRequest(
+    request = StartRequest(
       harness='bro',
       bro='bro',
       version='test',
@@ -395,11 +395,11 @@ async def test_resume_continues_stored_line_rows_through_wire_restore(
       native={'llm': recipe.dump()},
       body={'records': []},
     )
-    parent_id = store.blaze(request)['id']
+    parent_id = store.start_trail(request)['id']
     store.append_records(parent_id, 0, records(steps), tools={tools_sha256([]): []})
     trail_id = parent_id
     if forked:
-      trail_id = store.blaze(
+      trail_id = store.start_trail(
         dataclasses.replace(
           request,
           forked_from={'trail_id': parent_id, 'step_id': 2},

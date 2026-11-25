@@ -22,7 +22,7 @@ def verify(base_url: str, token: str, fixtures: Path) -> None:
       return json.load(response)
 
   for case in json.loads(fixtures.read_text()):
-    created = request('/v1/trails', case['blaze'])
+    created = request('/v1/trails', case['start'])
     path = f'/v1/trails/{created["id"]}'
     appended = request(path + '/records', {'offset': created['extent'], 'records': case['records']})
     assert appended['appended'] == len(case['records']), case['name']
@@ -32,7 +32,7 @@ def verify(base_url: str, token: str, fixtures: Path) -> None:
     assistant = [message for message in messages if message['type'] == 'assistant']
     assert assistant[0]['content'] == case['reply'], assistant
     assert assistant[0]['terminal'] is True, assistant
-    log.info('%s: blaze, append and projection passed', case['name'])
+    log.info('%s: start, append and projection passed', case['name'])
 
 
 if __name__ == '__main__':

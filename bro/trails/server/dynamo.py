@@ -12,7 +12,7 @@ from bro.trails import backends, formats, importing, model, rows
 from bro.trails.lineage import LineageDecision
 from bro.trails.model import (
   UNREPORTED_END_INFERENCE,
-  BlazeRequest,
+  StartRequest,
   canonical_json_bytes,
   is_sha256,
   named_tool_digests,
@@ -181,13 +181,13 @@ class DynamoStore(TrailsStore):
     stored['body_encoding'] = 'text' if isinstance(body, str) else 'json'
     return stored
 
-  def blaze(self, request: BlazeRequest) -> dict:
+  def start_trail(self, request: StartRequest) -> dict:
     trail_format = self._trail_format(request.harness)
-    with refusing_invalid_requests('blaze request'):
+    with refusing_invalid_requests('start request'):
       trail_format.validate_create(request.native)
       if trail_format.requires_bro and request.bro is None:
         raise ValueError(f'bro is required for the {trail_format.name} trail format')
-    with refusing_invalid_requests('blaze body'):
+    with refusing_invalid_requests('start body'):
       opened = trail_format.open(request.body)
     decision = None
     forked_from = request.forked_from
@@ -263,9 +263,9 @@ class DynamoStore(TrailsStore):
         *_row_puts(self._steps_table, prepared),
       ],
     )
-    return backends.blaze_result(trail_id, started_at, len(prepared), decision)
+    return backends.start_result(trail_id, started_at, len(prepared), decision)
 
-  def _attach(self, request: BlazeRequest, decision: LineageDecision) -> dict:
+  def _attach(self, request: StartRequest, decision: LineageDecision) -> dict:
     """Reopen the trail the verdict attached to for this lifetime, conditional on
     the extent it was verified against."""
     assert decision.attach_to is not None
@@ -302,7 +302,7 @@ class DynamoStore(TrailsStore):
       )
     except self._dynamo.exceptions.ConditionalCheckFailedException:
       return {'adopted': False, 'reason': backends.ATTACH_CONTENDED}
-    return backends.blaze_result(trail_id, header['started_at'], extent, decision)
+    return backends.start_result(trail_id, header['started_at'], extent, decision)
 
   def append_records(
     self,
