@@ -12,6 +12,10 @@ This module owns their kinds, argument keys, and ref grammar for the library cli
   retaining the requested path's name; the host opens each tree-relative component
   without following links and copies from its opened descriptors.
   The host ingests a private copy into the ride store and answers `ok{ref, size}`.
+- `artifact.mint` with args `{entry, name}` — mint one regular file directly
+  inside the peer's launch-provisioned mint directory, without following links.
+  Both names pass `name_error`; this form is client-only, not a CLI option.
+  It answers the same `ok{ref, size}` as a tree mint.
 - `artifact.fetch` with args `{ref, checked?}` — the host materializes the ref for the requesting peer
   and answers `ok{path}` with the path it appears at, which ends in the ref itself:
   a link in the read-only view mount for a boxed peer, or a copy under the peer's workspace directory
@@ -73,7 +77,7 @@ if TYPE_CHECKING:
 
 __cli_name__ = 'artifact'
 
-MINT = 'artifact.mint'  # the kind a mint request names; args {path, name?}
+MINT = 'artifact.mint'  # args {path, name?} or {entry, name}
 FETCH = 'artifact.fetch'  # the kind a fetch request names; args {ref, checked?}
 LOCATE = 'artifact.locate'  # the kind a fetched-path lookup names; args {ref}
 LIST = 'artifact.list'  # the kind a reach listing names; args {cursor?}
@@ -276,7 +280,16 @@ def mint_artifact(
     }
   except (OSError, RuntimeError, ValueError) as error:
     raise ArtifactError(f'cannot resolve {path!r}: {error}') from None
-  value = _call(MINT, args, timeout)
+  return _minted_value(_call(MINT, args, timeout))
+
+
+def mint_entry(entry: str, *, name: str, timeout: Optional[float] = None) -> Minted:
+  """mint one regular `entry` in this session's mint directory as `name`.
+  Return its ref and size; raise `ArtifactError` on any failure."""
+  return _minted_value(_call(MINT, {'entry': entry, 'name': name}, timeout))
+
+
+def _minted_value(value: dict[str, Any]) -> Minted:
   ref = value.get('ref')
   size = value.get('size')
   if not is_ref(ref) or not isinstance(size, int) or isinstance(size, bool) or size < 0:

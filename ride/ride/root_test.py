@@ -8,7 +8,12 @@ import ride.broker_root
 import ride.root
 import ride.workspace.docker as workspace_docker
 import ride.workspace.spawn as workspace_spawn
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
+from bro.workspace.paths import (
+  CONTAINER_ARTIFACTS_ROOT,
+  CONTAINER_MINT_DIR,
+  MINT_DIR_ENV,
+  workspace_dir,
+)
 from ride.authority_test_helper import mission
 from ride.repo_attachment import repository_attachment
 from ride.workspace.metadata import Isolation
@@ -193,7 +198,9 @@ class TestBrokerStartedParty:
     assert captured['mission'] is record
     assert wrapped.launch.extra_mounts == (
       ride.artifacts.view_mount('ws', 'ws', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
+      ride.artifacts.mint_mount('ws', 'ws'),
     )
+    assert wrapped.launch.env[MINT_DIR_ENV] == str(CONTAINER_MINT_DIR)
     assert captured['workspace'] is workspace
 
   def test_wraps_an_unboxed_root_as_a_process_spec(self, monkeypatch, tmp_path):
@@ -224,6 +231,7 @@ class TestBrokerStartedParty:
     )
     assert isinstance(captured['launch'], workspace_spawn.ProcessLaunchSpec)
     assert captured['launch'].interactive
+    assert captured['launch'].env[MINT_DIR_ENV] == str(ride.artifacts.mint_dir('ws', 'ws'))
 
 
 def test_a_disabled_broker_refuses_an_unenforceable_finite_deadline(monkeypatch, tmp_path, caplog):
@@ -257,3 +265,47 @@ def test_a_refused_manual_claim_removes_its_unstarted_container(monkeypatch, tmp
       _docker_launch(), _workspace(tmp_path), credential_scope=_scope(), claim=claim
     )
   assert remove.call_args.args[0] == ['docker', 'rm', '-f', 'prepared-container']
+
+
+@pytest.mark.parametrize('manual', [False, True])
+@pytest.mark.parametrize('boxed', [False, True])
+def test_launches_without_a_store_get_no_mint_environment_or_mount(
+  monkeypatch, tmp_path, manual, boxed
+):
+  monkeypatch.setattr(ride.root, 'broker_enabled', lambda: False)
+  captured = {}
+
+  def prepare(launch):
+    captured['env'] = launch.env
+    captured['mounts'] = launch.extra_mounts
+    return 'container'
+
+  def run(command, **kwargs):
+    if 'env' in kwargs:
+      captured['env'] = kwargs['env']
+    return MagicMock(returncode=0)
+
+  monkeypatch.setattr(ride.root, 'prepare_container', prepare)
+  monkeypatch.setattr(ride.root.subprocess, 'run', run)
+  monkeypatch.setattr(ride.root, 'attach_interactive', lambda container: 0)
+  workspace = _workspace(tmp_path, Isolation.BOXED if boxed else Isolation.UNBOXED)
+  launch = (
+    _docker_launch()
+    if boxed
+    else ride.root.ProcessLaunch(['do-ride'], str(workspace.tree), {'RIDE_BRO': 'bro-dev'}, False)
+  )
+  if manual:
+    ride.root.run_manual_started_party(
+      launch, workspace, credential_scope=_scope(), claim=lambda: None
+    )
+  else:
+    ride.root.run_started_party(
+      launch,
+      workspace,
+      credential_scope=_scope(),
+      mission=mission(values={'timeout': None}),
+      runtime_bundle=MagicMock(),
+      container_runtime=MagicMock(),
+    )
+  assert MINT_DIR_ENV not in captured['env']
+  assert not any(str(CONTAINER_MINT_DIR) in mount for mount in captured.get('mounts', ()))

@@ -38,13 +38,14 @@ def _run_via_broker(
   container_runtime: ContainerRuntimeResolver,
   runtime_bundle: RuntimeBundle,
 ) -> int:
-  from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
-  from ride.artifacts import view_mount
+  from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, CONTAINER_MINT_DIR, MINT_DIR_ENV
+  from ride.artifacts import mint_dir, mint_mount, view_mount
   from ride.broker_root import run_root_via_broker
   from ride.workspace.spawn import DockerLaunchSpec, ProcessLaunchSpec
 
   launch_env = dict(launch.env)
   if isinstance(launch, DockerLaunch):
+    launch_env[MINT_DIR_ENV] = str(CONTAINER_MINT_DIR)
     artifacts_mount = view_mount(
       workspace.name,
       workspace.name,
@@ -54,11 +55,16 @@ def _run_via_broker(
       replace(
         launch,
         env=launch_env,
-        extra_mounts=(*launch.extra_mounts, artifacts_mount),
+        extra_mounts=(
+          *launch.extra_mounts,
+          artifacts_mount,
+          mint_mount(workspace.name, workspace.name),
+        ),
       ),
       capture_output=False,
     )
   else:
+    launch_env[MINT_DIR_ENV] = str(mint_dir(workspace.name, workspace.name))
     broker_launch = ProcessLaunchSpec(
       command=launch.command,
       cwd=launch.cwd,

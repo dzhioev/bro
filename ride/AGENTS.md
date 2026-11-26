@@ -56,8 +56,10 @@ regenerate its scripts and committed `ride/_entrypoints.py` with `sync-scripts -
   peer resolution through the journal worker binding, workspace/records/type attribution, type-owned extensions, ancestry, the operator's mission rows, and per-session current-trail attribution shared by launch, artifacts, and audit.
 - `ride/artifacts.py` — the ride's artifact store, the `artifact.mint`, `artifact.fetch`, `artifact.locate`, `artifact.list`, owner-authorized `artifact.share`, and `bro.export`-gated `artifact.export` kinds,
   the operator's `operator.artifact.share`, `operator.artifact.fetch`, and `operator.artifact.list`, and the broker's `JobOutput`:
-  descriptor-relative, no-follow tree opening and reflink-or-copy ingest into content-addressed objects, per-reader reach that materializes nothing, the sharing rules with their uniform denial, the byte cap, and the JSONL audit beside the store;
+  no-follow descriptor ingest of trees and mint entries into content-addressed objects, per-reader reach, sharing rules and uniform denials, the byte cap, and the JSONL audit;
   a fetch materializes by placement, into a per-peer view directory behind the read-only mount at the peer's declared artifact-view path or into an unboxed workspace's private copies.
+  Launch-built workspaces get writable mint directories in the store, with mount specs and provisioning reads for joins;
+  store removal restores directory permissions without following links before clearing peer-written leftovers.
   A broker job's run directory is staged in the store and collected through the same ingest, reaching the peer that requested the job and its summoners.
   The peer wire and CLI are the framework's `bro/artifact.py`.
 - `ride/pending_launch.py` — pending manual worker launches:

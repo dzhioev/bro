@@ -178,6 +178,11 @@ REF = f'sha256:{"a" * 64}/bundle'
 
 
 class TestClient:
+  def test_entry_mint_sends_names_without_resolving_a_tree_path(self, monkeypatch):
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
+    assert artifact.mint_entry('staged.bin', name='bundle', timeout=5) == artifact.Minted(REF, 7)
+    assert client.calls == [(artifact.MINT, {'entry': 'staged.bin', 'name': 'bundle'}, 5)]
+
   def test_mint_sends_the_kind_and_returns_ref_and_size(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
     minted = artifact.mint_artifact('out/bundle')
