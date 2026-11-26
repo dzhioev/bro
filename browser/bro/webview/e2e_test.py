@@ -26,8 +26,8 @@ from bro.base import credentials
 from bro.broker.transports.tcp import LOCAL_HOST
 from bro.webview.profile import PLAYWRIGHT_MCP_PROFILE_VERSIONS, PROFILE_VERSION
 from bro.workspace.installation import installation_home
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT
-from ride.artifacts import view_mount
+from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, CONTAINER_MINT_DIR, MINT_DIR_ENV
+from ride.artifacts import mint_mount, view_mount
 from ride.e2e_test import (
   _RUNTIME_PYTHON,
   IsolatedEnv,
@@ -115,15 +115,17 @@ channel.close()
 
 _TOOLSET_ROUTE = r"""
 import json
-import re
+import os
+import time
 import traceback
 import urllib.parse
 from pathlib import Path
 
 from bro import artifact_mcp
-from bro.artifact import ArtifactError, mint_artifact
+from bro.artifact import mint_artifact
 from bro.llm.mcp import Context
 from bro.webview import mcp
+from bros.browser import mcp as browser_mcp
 
 workspace = Path('/tree')
 report_path = workspace / '.webview-toolset-report.json'
@@ -136,72 +138,97 @@ try:
   upload_ref = mint_artifact(str(upload_directory), timeout=30).ref
 
   context = Context(mcp.Webviews())
-  opened = mcp.open(context)
+  opened = mcp.open(context, downloads=True)
   html = '''<!doctype html><html><body>
   <h1>typed webview route</h1>
   <input id="upload" type="file">
+  <a id="download" href="__DOWNLOAD_URL__">download</a>
   </body></html>'''
-  data_url = 'data:text/html,' + urllib.parse.quote(html)
-  navigated = mcp.command(
-    context, opened.webview, 'browser_navigate', {'url': data_url}
-  )
-  assert 'Page URL' in navigated, navigated
+  data_url = 'data:text/html;charset=utf-8,' + urllib.parse.quote(html)
+  navigated = mcp.command(context, opened.webview, 'browser_navigate', {'url': data_url})
+  assert 'Page URL' in navigated['text'], navigated
   snapshot = mcp.command(
-    context,
-    opened.webview,
-    'browser_snapshot',
-    {'filename': 'typed-snapshot.yml'},
+    context, opened.webview, 'browser_snapshot', {'filename': 'typed-snapshot.yml'}
   )
-  snapshot_match = re.search(r'typed-snapshot\.yml: (sha256:[0-9a-f]{64}/typed-snapshot\.yml)', snapshot)
-  assert snapshot_match is not None, snapshot
-  snapshot_ref = snapshot_match.group(1)
-  try:
-    artifact_mcp.read(snapshot_ref)
-  except ArtifactError as error:
-    assert 'fetch it first' in str(error), error
-  else:
-    raise AssertionError('an unfetched snapshot ref was read')
-  artifact_mcp.fetch(snapshot_ref)
-  read = artifact_mcp.read(snapshot_ref)
-  found = artifact_mcp.grep(snapshot_ref, 'typed webview route')
-  assert 'typed webview route' in read, read
-  assert 'typed webview route' in found, found
+  assert len(snapshot['files']) == 1, snapshot
+  snapshot_file = snapshot['files'][0]
+  snapshot_ref = snapshot_file['ref']
+  assert Path(snapshot_file['path']).read_text(), snapshot_file
+  assert 'typed webview route' in artifact_mcp.read(snapshot_ref)
+  assert 'typed webview route' in artifact_mcp.grep(snapshot_ref, 'typed webview route')
 
-  artifact_mcp.fetch(upload_ref)
   shared = mcp.share(context, opened.webview, upload_ref)
   assert shared['entries'] == ['resume.txt'], shared
-  mcp.command(
-    context,
-    opened.webview,
-    'browser_click',
-    {'element': 'file input', 'target': '#upload'},
-  )
+  mcp.command(context, opened.webview, 'browser_click', {'element': 'file input', 'target': '#upload'})
+  mcp.command(context, opened.webview, 'browser_file_upload')
+  mcp.command(context, opened.webview, 'browser_click', {'element': 'file input', 'target': '#upload'})
+  try:
+    mcp.command(
+      context, opened.webview, 'browser_file_upload', {'paths': ['/tree/output/statement (1).txt']}
+    )
+  except ValueError as error:
+    assert 'outside the artifact view' in str(error), error
+  else:
+    raise AssertionError('upload outside the artifact view succeeded')
   uploaded = mcp.command(
-    context,
-    opened.webview,
-    'browser_file_upload',
-    {'paths': [shared['path'] + '/resume.txt']},
+    context, opened.webview, 'browser_file_upload', {'paths': [shared['path'] + '/resume.txt']}
   )
-  assert 'error' not in uploaded.lower(), uploaded
+  assert 'error' not in uploaded['text'].lower(), uploaded
   filename = mcp.command(
-    context,
-    opened.webview,
-    'browser_evaluate',
+    context, opened.webview, 'browser_evaluate',
     {'function': "() => document.querySelector('#upload').files[0].name"},
   )
-  assert 'resume.txt' in filename, filename
+  assert 'resume.txt' in filename['text'], filename
+
+  replies = [mcp.command(
+    context, opened.webview, 'browser_click', {'element': 'download link', 'target': '#download'}
+  )]
+  deadline = time.monotonic() + 120
+  while not any('Downloaded file ' in reply['text'] for reply in replies):
+    if time.monotonic() >= deadline:
+      raise TimeoutError(f'no reply named the finished download: {replies}')
+    time.sleep(0.2)
+    replies.append(mcp.command(context, opened.webview, 'browser_snapshot'))
+  downloads = [file for reply in replies for file in reply['files'] if file['ref'].endswith('/statement.txt')]
+  assert len(downloads) == 1, replies
+  assert any('/tree/output/-statement.txt' in reply['text'] for reply in replies), replies
+  download = downloads[0]
+  assert Path(download['path']).read_bytes() == b'download-payload', download
+  assert download['size'] == len(b'download-payload'), download
+
+  failed = mcp.command(
+    context, opened.webview, 'browser_evaluate',
+    {'function': "() => 'x'.repeat(2 * 1024 * 1024)", 'filename': 'over-cap.json'},
+  )
+  assert failed['files'] == [], failed
+  assert len(failed['failed']) == 1, failed
+  assert failed['failed'][0]['name'] == 'over-cap.json', failed
+  assert 'store byte cap' in failed['failed'][0]['error'], failed
+
+  browser_mcp.credentials.available = lambda name: name == 'mu'
+  browser_mcp._read_page = lambda prompt, content: {'answer': content, 'elements': []}
+  before = set(workspace.rglob('*'))
+  looked = browser_mcp.look('What text is present?', webview=opened.webview, source='text')
+  assert 'typed webview route' in Path(looked['file']['path']).read_text(), looked
+  for length in (8000, 32000):
+    cut = mcp.command(
+      context, opened.webview, 'browser_evaluate', {'function': f"() => 'x'.repeat({length})"}
+    )
+    assert '...cut: whole' in cut['text'], cut
+    assert len(cut['files']) == 1, cut
+    whole = cut['files'][0]
+    assert whole['ref'].endswith('/reply.txt'), whole
+    assert 'x' * length in Path(whole['path']).read_text(), whole
+    assert not Path(whole['path']).is_relative_to(workspace), whole
+  assert set(workspace.rglob('*')) == before
+  assert list(Path(os.environ['RIDE_MINT_DIR']).iterdir()) == []
+
   closed = mcp.close(context, opened.webview)
   assert closed['outcome'] == 'ok', closed
-  report_path.write_text(
-    json.dumps(
-      {
-        'webview': opened.webview,
-        'snapshot_ref': snapshot_ref,
-        'upload_ref': upload_ref,
-        'closed': closed,
-      }
-    )
-  )
+  report_path.write_text(json.dumps({
+    'webview': opened.webview, 'snapshot_ref': snapshot_ref, 'upload_ref': upload_ref,
+    'download': download, 'failed': failed['failed'], 'closed': closed,
+  }))
 except Exception:
   error_path.write_text(traceback.format_exc())
   raise
@@ -259,11 +286,8 @@ browser_mcp._read_page = fake_reader
 
 
 def text_result(value):
-  if isinstance(value, dict):
-    assert set(value) == {'result'}, value
-    value = value['result']
-  assert isinstance(value, str), value
-  return value
+  assert isinstance(value, dict), value
+  return value['text']
 
 
 class ScriptedLLM(LLM):
@@ -291,7 +315,7 @@ class ScriptedLLM(LLM):
     )
     assert looked['answer'] == 'Use the Complete request button.', looked
     assert looked['elements'][0]['name'] == 'Complete request', looked
-    assert looked['ref'].startswith('sha256:'), looked
+    assert looked['file']['ref'].startswith('sha256:'), looked
     closed = await self.tools.call('webview__close', {'webview': webview})
     assert closed['outcome'] == 'ok', closed
     await self.tools.call(
@@ -432,11 +456,8 @@ browser_mcp._read_page = fake_reader
 
 
 def text_result(value):
-  if isinstance(value, dict):
-    assert set(value) == {'result'}, value
-    value = value['result']
-  assert isinstance(value, str), value
-  return value
+  assert isinstance(value, dict), value
+  return value['text']
 
 
 class ScriptedLLM(LLM):
@@ -511,7 +532,6 @@ class ScriptedLLM(LLM):
     if self.phase == 'upload':
       match = re.search(r'sha256:[0-9a-f]{64}/browser-thread-upload', instruction.text)
       assert match is not None, instruction
-      await self.tools.call('artifact__fetch', {'ref': match.group(0)})
       shared = await self.tools.call(
         'webview__share', {'webview': self.webview, 'ref': match.group(0)}
       )
@@ -1147,12 +1167,13 @@ def _run_route(
     workspace_docker.Launch(
       name=name,
       command=_session_broxy_probe(source),
-      env={'RIDE_BRO': target},
+      env={'RIDE_BRO': target, MINT_DIR_ENV: str(CONTAINER_MINT_DIR)},
       secrets=(),
       tty=False,
       image=env.image,
       runtime_bundle_hash=env.runtime_bundle_hash,
       extra_mounts=(
+        mint_mount(workspace.name, workspace.name),
         view_mount(
           workspace.name,
           workspace.name,
@@ -1780,23 +1801,40 @@ def test_downloads_reach_the_owner_as_refs_whether_they_finish_at_once_or_later(
   assert _live_containers(workspace) == []
 
 
-def test_webview_toolset_routes_artifact_read_share_upload_and_close(
+def test_webview_tool_files_normalize_downloads_report_failures_and_leave_the_checkout_clean(
   isolated_env: IsolatedEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-  code, workspace = _run_route(
-    isolated_env,
-    monkeypatch,
-    suffix='toolset',
-    source=_TOOLSET_ROUTE,
-    vnc=False,
-    observer=lambda _workspace, _route_ended: None,
-  )
+  import ride.artifacts as artifacts
+
+  class Download(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+      body = b'download-payload'
+      self.send_response(200)
+      self.send_header('Content-Type', 'application/octet-stream')
+      self.send_header('Content-Disposition', 'attachment; filename="-statement.txt"')
+      self.send_header('Content-Length', str(len(body)))
+      self.end_headers()
+      self.wfile.write(body)
+
+  monkeypatch.setattr(artifacts, 'MAX_STORE_BYTES', 1024 * 1024)
+  with _served(Download) as url:
+    code, workspace = _run_route(
+      isolated_env,
+      monkeypatch,
+      suffix='toolset',
+      source=_TOOLSET_ROUTE.replace('__DOWNLOAD_URL__', url),
+      vnc=False,
+      grants=('webview', 'webview.downloads'),
+      observer=lambda _workspace, _route_ended: None,
+    )
 
   assert code == 0, _diagnostic(workspace, '.webview-toolset-error')
   report = json.loads((workspace.tree / '.webview-toolset-report.json').read_text())
   assert report['closed']['outcome'] == 'ok'
   assert report['snapshot_ref'].startswith('sha256:')
   assert report['upload_ref'].startswith('sha256:')
+  assert report['download']['ref'].endswith('/statement.txt')
+  assert len(report['failed']) == 1
   assert _live_containers(workspace) == []
 
 

@@ -7,7 +7,7 @@ Workspace creation, provisioning, containers, credential hydration, and teardown
 ## Components
 
 - `git.py` — `git_out` / `git_run`, `no_prompt_env`, ref resolution, and the private fetch refs used to avoid concurrent-resolution races
-- `paths.py` — explicit repository-root resolution, the flat global runtime paths, fixed in-container mount paths, workspace naming, venv environment helpers, and `RuntimeLocationError`
+- `paths.py` — explicit repository-root resolution, the flat global runtime paths, fixed in-container mount paths and the mint-directory environment name, workspace naming, venv environment helpers, and `RuntimeLocationError`
 - `installation.py` — the environment's installation-home marker and home-name grammar
 - `settings.py` — the installed home's packaged launch settings
 - `repository.py` — repository provisioning configuration and uninterpreted owner tables, read at a repo attachment's clone root

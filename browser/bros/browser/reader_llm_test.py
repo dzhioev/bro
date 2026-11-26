@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from bro import tool_files
 from bro.base.suite_environment import host_credential_store
 from bros.browser import mcp
 
@@ -8,7 +9,12 @@ SNAPSHOT = Path(__file__).parents[2] / 'testdata' / 'browser-reader-snapshot.yml
 
 
 def test_reader_answers_over_a_real_snapshot_with_only_matching_elements(monkeypatch) -> None:
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(SNAPSHOT))
+  def fetch(ref: str, *, checked: bool) -> str:
+    assert ref == SNAPSHOT_REF
+    assert checked
+    return str(SNAPSHOT)
+
+  monkeypatch.setattr(tool_files, 'fetch_artifact', fetch)
 
   with host_credential_store():
     result = mcp.look(

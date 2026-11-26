@@ -751,23 +751,27 @@ def _parse_command(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 async def fetch_uploads(arguments: dict[str, Any]) -> None:
-  """Fetch every artifact an upload's paths name under the artifact view, so its content is in place when Playwright reads it.
-
-  Raises `ArtifactError` when a named artifact cannot be fetched.
-  """
-  paths = arguments.get('paths')
-  if not isinstance(paths, list):
+  """Fetch every upload from a normalized path beneath a shared artifact ref."""
+  if 'paths' not in arguments:
     return
+  paths = arguments['paths']
+  if not isinstance(paths, list):
+    raise ValueError('upload paths must be a list')
   for path in paths:
     if not isinstance(path, str):
-      continue
+      raise ValueError('upload paths must be strings')
+    candidate = Path(path)
+    if not candidate.is_absolute() or str(candidate) != path or '..' in candidate.parts:
+      raise ValueError(f'upload path {path!r} is outside the artifact view at {ARTIFACT_VIEW}')
     try:
-      relative = Path(path).relative_to(ARTIFACT_VIEW)
+      relative = candidate.relative_to(ARTIFACT_VIEW)
     except ValueError:
-      continue
+      raise ValueError(
+        f'upload path {path!r} is outside the artifact view at {ARTIFACT_VIEW}'
+      ) from None
     ref = '/'.join(relative.parts[:2])
     if not is_ref(ref):
-      continue
+      raise ValueError(f'upload path {path!r} names no artifact ref')
     fetched = Path(await asyncio.to_thread(fetch_artifact, ref))
     if fetched != ARTIFACT_VIEW / ref:
       raise DaemonError(
@@ -789,7 +793,7 @@ async def _tool_reply(
   if tool == UPLOAD_TOOL:
     try:
       await fetch_uploads(arguments)
-    except ArtifactError as error:
+    except (ArtifactError, ValueError) as error:
       return {'error': str(error)}
   before = await asyncio.to_thread(workspace_files)
   try:

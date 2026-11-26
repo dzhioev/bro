@@ -2,7 +2,8 @@
 
 `ArtifactStore` is the ride-scoped content-addressed store under
 `<runtime-root>/artifacts/<ride>/`. Ingest stages a private copy of the
-peer-named tree path — a reflink where the filesystem clones, a plain copy
+source opened from the tree root one component at a time without following
+links, reading only from the opened descriptors — a reflink where the filesystem clones, a plain copy
 otherwise, never a hardlink, so nothing a producer writes afterwards reaches
 stored bytes — normalizes modes to the manifest's vocabulary (0o755/0o644 per
 the recorded executable bit), digests the copy (`bro.artifact.digest_path`),
@@ -23,6 +24,11 @@ copy under its workspace's own `artifacts/` directory. A checked fetch digests
 the materialization and replaces one that no longer matches, failing when the
 stored object itself does not. A manually launched child has no host-built
 launch and therefore no view; its fetch is denied with the reason.
+
+Launch-built workspaces also hold writable `mint/<workspace>/` directories.
+An entry mint opens one regular file there without following links and uses
+the same descriptor ingest as a tree mint. Joined members use their party's
+directory; manually launched parties and worker containers have none.
 
 The operator reads only what a session exported or the operator itself shared in
 (`share_from_host`); an exported ref reaches no other peer.
@@ -54,10 +60,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import fcntl
 import json
 import os
 import shutil
+import stat
 import threading
 import time
 from collections.abc import Callable, Generator, Sequence
@@ -75,8 +83,8 @@ from bro.artifact import (
 )
 from bro.base import log
 from bro.base.lulid import lulid
-from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer, resolve_wire_path
-from bro.workspace.paths import artifacts_dir, workspace_dir
+from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer
+from bro.workspace.paths import CONTAINER_MINT_DIR, artifacts_dir, workspace_dir
 from ride.peer_facts import PeerFacts
 from ride.workspace.model import Workspace
 
@@ -93,7 +101,7 @@ MAX_STORE_BYTES = 32 << 30
 # filesystem that cannot clone, a cross-device pair) falls back to a plain copy
 _FICLONE = 0x40049409
 
-_MINT_KEYS = frozenset({'path', 'name'})
+_MINT_KEYS = frozenset({'path', 'entry', 'name'})
 _FETCH_KEYS = frozenset({'ref', 'checked'})
 _LOCATE_KEYS = frozenset({'ref'})
 _SHARE_KEYS = frozenset({'id', 'ref'})
@@ -125,42 +133,147 @@ def view_mount(ride: str, peer_workspace: str, container_path: PurePosixPath) ->
   return f'{view_dir(ride, peer_workspace)}:{container_path}:ro'
 
 
+def mint_dir(ride: str, peer_workspace: str) -> Path:
+  """a workspace's writable mint directory inside the ride store."""
+  return store_dir(ride) / 'mint' / peer_workspace
+
+
+def mint_mount(ride: str, peer_workspace: str) -> str:
+  """a workspace's read-write mint bind mount, as a docker mount spec."""
+  return f'{mint_dir(ride, peer_workspace)}:{CONTAINER_MINT_DIR}'
+
+
+@contextlib.contextmanager
+def _directory_below(root: int, components: Sequence[str]) -> Generator[int]:
+  descriptor = os.dup(root)
+  try:
+    for component in components:
+      child = os.open(
+        component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor
+      )
+      os.close(descriptor)
+      descriptor = child
+    yield descriptor
+  finally:
+    os.close(descriptor)
+
+
+def _remove_store(root: Path) -> None:
+  with _descriptor(root.parent, os.O_RDONLY | os.O_DIRECTORY) as directory:
+    pending: list[tuple[tuple[str, ...], bool]] = [((root.name,), False)]
+    while pending:
+      components, visited = pending.pop()
+      with _directory_below(directory, components[:-1]) as parent:
+        name = components[-1]
+        if not stat.S_ISDIR(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode):
+          os.unlink(name, dir_fd=parent)
+        elif visited:
+          os.rmdir(name, dir_fd=parent)
+        else:
+          os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
+          with _descriptor(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, parent=parent
+          ) as source:
+            names = os.listdir(source)
+          pending.append((components, True))
+          pending.extend(((*components, child), False) for child in names)
+
+
 def _denial(ref: str) -> str:
   return f'artifact {ref} is not shared with this peer'
 
 
-def _clone_or_copy_file(source: Path, destination: Path) -> int:
-  with source.open('rb') as source_file, destination.open('wb') as destination_file:
+class _SymbolicLink(ValueError):
+  def __init__(self, component: str):
+    self.component = component
+    super().__init__(f'crosses a symbolic link at {component!r}')
+
+
+@contextlib.contextmanager
+def _descriptor(path: str | Path, flags: int, *, parent: Optional[int] = None) -> Generator[int]:
+  descriptor = os.open(path, flags | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=parent)
+  try:
+    yield descriptor
+  finally:
+    os.close(descriptor)
+
+
+def _open_component(
+  stack: contextlib.ExitStack, parent: int, component: str, *, directory: bool
+) -> int:
+  flags = os.O_RDONLY | os.O_NOFOLLOW | (os.O_DIRECTORY if directory else 0)
+  try:
+    return stack.enter_context(_descriptor(component, flags, parent=parent))
+  except OSError as error:
+    if error.errno in (errno.ELOOP, errno.ENOTDIR):
+      if stat.S_ISLNK(os.stat(component, dir_fd=parent, follow_symlinks=False).st_mode):
+        raise _SymbolicLink(component) from None
+    raise
+
+
+@contextlib.contextmanager
+def _open_source(
+  root: Path, components: Sequence[str], *, file_only: bool = False
+) -> Generator[int]:
+  """open below a host-named root, with no link traversal in `components`."""
+  for component in components:
+    if component in ('', '.', '..') or '/' in component or '\0' in component:
+      raise ValueError(f'invalid path component {component!r}')
+  with contextlib.ExitStack() as stack:
+    descriptor = stack.enter_context(_descriptor(root, os.O_RDONLY | os.O_DIRECTORY))
+    for index, component in enumerate(components):
+      descriptor = _open_component(
+        stack, descriptor, component, directory=index < len(components) - 1
+      )
+    mode = os.fstat(descriptor).st_mode
+    if not stat.S_ISREG(mode) and (file_only or not stat.S_ISDIR(mode)):
+      raise ValueError(
+        'source is not a regular file' if file_only else 'source is not a file or directory'
+      )
+    yield descriptor
+
+
+def _clone_or_copy_file(source: int, destination: Path) -> int:
+  with os.fdopen(os.dup(source), 'rb') as source_file, destination.open('wb') as destination_file:
+    source_file.seek(0)
     try:
       fcntl.ioctl(destination_file.fileno(), _FICLONE, source_file.fileno())
     except OSError:
       shutil.copyfileobj(source_file, destination_file)
-  executable = source.stat().st_mode & 0o111 != 0
+  executable = os.fstat(source).st_mode & 0o111 != 0
   destination.chmod(0o755 if executable else 0o644)
   return destination.stat().st_size
 
 
-def _private_copy(source: Path, destination: Path, prefix: str = '') -> int:
-  """copy `source` (a file or directory) to `destination` with no inode shared
-  with the source, returning the copied file bytes; raises `ValueError` on an
-  entry that is neither file, directory, nor symlink."""
-  if source.is_file() and not source.is_symlink():
+def _copy_descriptor(source: int, destination: Path, prefix: str) -> int:
+  mode = os.fstat(source).st_mode
+  if stat.S_ISREG(mode):
     return _clone_or_copy_file(source, destination)
+  if not stat.S_ISDIR(mode):
+    raise ValueError(f'unsupported entry type at {prefix.rstrip("/")}')
   total = 0
-  destination.mkdir()
+  destination.mkdir(mode=0o755)
   destination.chmod(0o755)
-  for entry in sorted(os.scandir(source), key=lambda scanned: scanned.name):
-    target = destination / entry.name
-    inner = f'{prefix}{entry.name}'
-    if entry.is_symlink():
-      os.symlink(os.readlink(entry.path), target)
-    elif entry.is_dir(follow_symlinks=False):
-      total += _private_copy(Path(entry.path), target, f'{inner}/')
-    elif entry.is_file(follow_symlinks=False):
-      total += _clone_or_copy_file(Path(entry.path), target)
+  with os.scandir(source) as entries:
+    names = sorted(entry.name for entry in entries)
+  for name in names:
+    target = destination / name
+    inner = f'{prefix}{name}'
+    if stat.S_ISLNK(os.stat(name, dir_fd=source, follow_symlinks=False).st_mode):
+      os.symlink(os.readlink(name, dir_fd=source), target)
     else:
-      raise ValueError(f'unsupported entry type at {inner}')
+      with contextlib.ExitStack() as stack:
+        descriptor = _open_component(stack, source, name, directory=False)
+        total += _copy_descriptor(descriptor, target, f'{inner}/')
   return total
+
+
+def _private_copy(source: Path | int, destination: Path, prefix: str = '') -> int:
+  """copy from opened descriptors, returning the private copy's file bytes."""
+  if isinstance(source, int):
+    return _copy_descriptor(source, destination, prefix)
+  with _descriptor(source, os.O_RDONLY) as descriptor:
+    return _copy_descriptor(descriptor, destination, prefix)
 
 
 def _publish_without_replacing(staging: Path, destination: Path) -> None:
@@ -198,20 +311,6 @@ def _staged(directory: Path) -> Generator[Path]:
       staging.unlink()
 
 
-def _content_size(source: Path) -> int:
-  """the file bytes under `source` — the pre-copy cap check and the dedup
-  answer; a fresh ingest reserves the copy's own count instead."""
-  if source.is_file():
-    return source.stat().st_size
-  total = 0
-  for directory, _, file_names in os.walk(source):
-    for name in file_names:
-      path = Path(directory) / name
-      if not path.is_symlink() and path.is_file():
-        total += path.stat().st_size
-  return total
-
-
 class _Reach:
   """the refs one reader may read, in the order they reached it, and the
   digests they name — the access check, since reach is to the content."""
@@ -243,6 +342,16 @@ def _matches(entry: Path, digest: str) -> bool:
     return False
 
 
+def _tree_components(identity: PeerDescription, path: str) -> list[str]:
+  if not path.startswith('/'):
+    raise ValueError(f'{path!r} must be an absolute path')
+  components = path.split('/')[1:]
+  root = list(identity.tree_view.parts[1:])
+  if components[: len(root)] != root or any(component in ('.', '..') for component in components):
+    raise ValueError(f'{path!r} is outside the tree at {identity.tree_view}')
+  return [component for component in components[len(root) :] if component != '']
+
+
 class ArtifactStore:
   """One ride's content-addressed store (see the module docstring). The
   metadata lock guards the reach map and the byte account; content operations
@@ -257,10 +366,11 @@ class ArtifactStore:
     self._reach: dict[str, _Reach] = {}  # workspace name -> the refs it may read
     self._host_reach = _Reach()  # the refs the operator may read
     self._materializing: dict[Path, threading.Lock] = {}
+    self._mint_directories: dict[str, Path] = {}
     self._bytes = 0
     root = store_dir(workspace.name)
     if root.exists():
-      shutil.rmtree(root)  # a leftover from a crashed session; the store is ride-scoped
+      _remove_store(root)  # a leftover from a crashed session; the store is ride-scoped
     self._objects = root / 'objects'
     self._staging = root / 'staging'
     self._views = root / 'shared'
@@ -268,13 +378,14 @@ class ArtifactStore:
     for directory in (self._objects, self._staging, self._views, self._jobs):
       directory.mkdir(parents=True)
     self._audit_file = audit_file(workspace.name)
+    self.provision_mint(workspace.name)
     if root_boxed:
       self.view(workspace.name)
 
   def close(self) -> None:
     """Remove the store when the ride ends; keep its audit."""
     try:
-      shutil.rmtree(store_dir(self.ride))
+      _remove_store(store_dir(self.ride))
     except OSError as e:
       log.warning('could not remove the artifact store %s: %s', store_dir(self.ride), e)
 
@@ -284,6 +395,19 @@ class ArtifactStore:
     directory = self._views / peer_workspace
     directory.mkdir(exist_ok=True)
     return directory
+
+  def provision_mint(self, peer_workspace: str) -> Path:
+    """create a launch-built workspace's mint directory."""
+    directory = mint_dir(self.ride, peer_workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+    with self._lock:
+      self._mint_directories[peer_workspace] = directory
+    return directory
+
+  def mint_directory(self, peer_workspace: str) -> Optional[Path]:
+    """the provisioned mint directory, or None for a workspace with none."""
+    with self._lock:
+      return self._mint_directories.get(peer_workspace)
 
   def job_run(self) -> Path:
     """a fresh directory for one broker job's run — inside the store, so an
@@ -304,13 +428,37 @@ class ArtifactStore:
     size, shared with the minter and its ancestors. Raises `ArtifactDenied` on
     any refusal; heavy, called off-loop."""
     try:
-      source = resolve_wire_path(identity, path)
+      components = _tree_components(identity, path)
       name = path_name(path) if name is None else name
-    except ValueError as e:
-      raise ArtifactDenied(str(e)) from None
-    if not source.is_file() and not source.is_dir():
-      raise ArtifactDenied(f'no file or directory at {path!r} in the tree')
-    return self.adopt(source, name, identity.workspace, ancestors, event='mint', origin=path)
+      with _open_source(identity.tree, components) as source:
+        return self._adopt(source, name, identity.workspace, ancestors, event='mint', origin=path)
+    except _SymbolicLink as error:
+      raise ArtifactDenied(f'{path!r} crosses a symbolic link at {error.component!r}') from None
+    except (FileNotFoundError, NotADirectoryError):
+      raise ArtifactDenied(f'no file or directory at {path!r} in the tree') from None
+    except (OSError, ValueError) as error:
+      raise ArtifactDenied(str(error)) from None
+
+  def mint_entry(
+    self, identity: PeerDescription, ancestors: Sequence[str], entry: str, name: str
+  ) -> tuple[str, int]:
+    """ingest one regular entry of the workspace's provisioned mint directory."""
+    directory = self.mint_directory(identity.workspace)
+    if directory is None:
+      raise ArtifactDenied('no mint directory for this peer')
+    try:
+      with _open_source(directory, [entry], file_only=True) as source:
+        return self._adopt(
+          source, name, identity.workspace, ancestors, event='mint', origin=f'entry:{entry}'
+        )
+    except FileNotFoundError:
+      raise ArtifactDenied(f'no entry {entry} in the mint directory') from None
+    except (_SymbolicLink, ValueError):
+      raise ArtifactDenied(f'entry {entry} is not a regular file') from None
+    except OSError as error:
+      if error.errno in (errno.ENXIO, errno.ENODEV):
+        raise ArtifactDenied(f'entry {entry} is not a regular file') from None
+      raise ArtifactDenied(str(error)) from None
 
   def adopt(
     self,
@@ -327,23 +475,24 @@ class ArtifactStore:
     `origin` are what the audit records it as. Raises `ArtifactDenied` on any
     refusal; heavy, called off-loop.
 
-    The source is digested before anything is copied — the dedup probe that
-    makes re-ingesting unchanged content free of both the copy and the cap, and
-    the point a malformed tree (an escaping symlink, an odd entry type) is
-    refused before any bytes move. A fresh ingest stages a copy and commits it
-    under the copy's own digest, so stored bytes always match their ref even
-    when the producer wrote the source mid-ingest."""
+    Content below the host-named source is opened without following links."""
     try:
-      digest = digest_path(source)
-    except ValueError as e:
-      raise ArtifactDenied(str(e)) from None
-    size = _content_size(source)
-    if not (self._objects / digest).exists():
-      with self._lock:
-        over = self._bytes + size > MAX_STORE_BYTES
-      if over:
-        raise ArtifactDenied(f'ingesting {origin!r} would exceed the store byte cap')
-      digest, size = self._ingest(source)
+      with _descriptor(source, os.O_RDONLY) as descriptor:
+        return self._adopt(descriptor, name, workspace, ancestors, event=event, origin=origin)
+    except (OSError, ValueError) as error:
+      raise ArtifactDenied(str(error)) from None
+
+  def _adopt(
+    self,
+    source: int,
+    name: str,
+    workspace: str,
+    ancestors: Sequence[str],
+    *,
+    event: str,
+    origin: str,
+  ) -> tuple[str, int]:
+    digest, size = self._ingest(source, origin)
     ref = compose_ref(digest, name)
     shared_with = {workspace, *ancestors}
     with self._lock:
@@ -361,16 +510,15 @@ class ArtifactStore:
     )
     return ref, size
 
-  def _ingest(self, source: Path) -> tuple[str, int]:
+  def _ingest(self, source: int, origin: str) -> tuple[str, int]:
     with _staged(self._staging) as staging:
-      try:
-        size = _private_copy(source, staging)
-        digest = digest_path(staging)
-      except ValueError as e:
-        raise ArtifactDenied(str(e)) from None
+      size = _private_copy(source, staging)
+      digest = digest_path(staging)
       with self._lock:
+        if (self._objects / digest).exists():
+          return digest, size
         if self._bytes + size > MAX_STORE_BYTES:
-          raise ArtifactDenied(f'minting {source.name!r} would exceed the store byte cap')
+          raise ArtifactDenied(f'ingesting {origin!r} would exceed the store byte cap')
         self._bytes += size  # reserved; released again when the commit dedupes
       if not self._commit(staging, digest):
         with self._lock:
@@ -568,9 +716,21 @@ def _validate_mint(args: dict[str, Any]) -> Optional[str]:
   unknown = sorted(set(args) - _MINT_KEYS)
   if len(unknown) > 0:
     return f'unknown artifact.mint field(s): {", ".join(unknown)}'
-  path = args.get('path')
-  if not isinstance(path, str) or len(path) == 0:
-    return "artifact.mint needs a non-empty string 'path'"
+  if ('path' in args) == ('entry' in args):
+    return "artifact.mint needs exactly one of 'path' and 'entry'"
+  if 'entry' in args:
+    entry = args['entry']
+    if not isinstance(entry, str):
+      return "artifact.mint 'entry' must be a string"
+    error = name_error(entry)
+    if error is not None:
+      return error
+    if 'name' not in args:
+      return "artifact.mint with 'entry' needs 'name'"
+  else:
+    path = args['path']
+    if not isinstance(path, str) or len(path) == 0:
+      return "artifact.mint needs a non-empty string 'path'"
   if 'name' in args:
     name = args['name']
     if not isinstance(name, str):
@@ -707,14 +867,17 @@ class ArtifactControl:
     if error is not None:
       self._deny(context, peer, message, identity, error)
       return
-    path = args['path']
-    name = args.get('name')
-    self._answer_off_loop(context, peer, message.request_id, lambda: self._minted(identity, ancestors, path, name))  # fmt: skip
+    self._answer_off_loop(
+      context, peer, message.request_id, lambda: self._minted(identity, ancestors, args)
+    )
 
   def _minted(
-    self, identity: PeerDescription, ancestors: Sequence[str], path: str, name: Optional[str]
+    self, identity: PeerDescription, ancestors: Sequence[str], args: dict[str, Any]
   ) -> dict[str, Any]:
-    ref, size = self._store.mint(identity, ancestors, path, name)
+    if 'entry' in args:
+      ref, size = self._store.mint_entry(identity, ancestors, args['entry'], args['name'])
+    else:
+      ref, size = self._store.mint(identity, ancestors, args['path'], args.get('name'))
     return {'ref': ref, 'size': size}
 
   def fetch(self, context: Dispatcher, peer: Peer, message: Message) -> None:

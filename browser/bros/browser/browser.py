@@ -26,9 +26,9 @@ where no one can be asked, `bro::raise` with the refusal and the rewording.
 Open a webview and act through `webview::command`, one call at a time.
 Before a Playwright tool's first call, read its input schema with `webview::tools` naming the tool.
 Understand pages with `browser::look`; never read a whole snapshot into your own context.
-For exact detail use `browser_find`, a targeted snapshot, or the ref of a cut reply, fetched with `artifact::fetch` and read with `artifact::read`, `artifact::grep`, or `browser::look`.
+For exact detail use `browser_find`, a targeted snapshot, or a returned file read by ref with `artifact::read`, `artifact::grep`, or `browser::look`.
 Put the goal, the last action, and the detail you need into every `look` question, because its reader starts blank.
-Produce large results as files with `browser_evaluate`'s `filename`, screenshots, or `browser_network_request`, and report their refs.
+Produce large results as files with `browser_evaluate`'s `filename`, screenshots, or `browser_network_request`, and report the returned files' refs.
 Close the webview before answering.
 
 ## Reporting
@@ -48,10 +48,11 @@ Accept terms or consent only when the summoner authorized it for that step.
 Dismiss a cookie banner with its least permissive choice.
 Where the choice is consent or pay, read the content under the overlay and ask before clicking either.
 Report a CAPTCHA, bot check, or login wall instead of working around it, naming the profiles its live authority permits selecting for a webview.
-Upload only files the summoner shared for that purpose, naming each one.
+Upload only files the summoner shared for that purpose or a webview download the summoner asked to upload, naming each one.
+Pass the ref to `webview::share` first, including for the webview's own downloads, and upload only the path it returns.
 Never open `file://`.
 Open with a profile or an `allow` list only when the request names one, and with `downloads` only when the request needs a file downloaded.
-A download finishes after the action that starts it, and that action can reply before it does or time out while it runs: keep running a command, such as a snapshot, until a reply reports the file as downloaded, then report the file ref that reply carries.
+A download finishes after the action that starts it, and that action can reply before it does or time out while it runs: keep running a command, such as a snapshot, until a reply reports the file as downloaded, then report the returned file's ref.
 
 ## Decisions
 
@@ -74,7 +75,7 @@ class Browser(Bro):
   tools = [
     mount(webview_mcp.toolset),
     mount(mcp.toolset),
-    mount(artifact_mcp.toolset),
+    mount(artifact_mcp.toolset, 'fetch', 'list', 'read', 'grep'),
     source(CurrentTime()),
   ]
   spells = (browser.spells.browse,)

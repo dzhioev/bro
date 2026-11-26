@@ -461,6 +461,7 @@ _PROBE_NO_CHANNEL = """
 import os, subprocess, sys
 from pathlib import Path
 
+assert 'RIDE_MINT_DIR' not in os.environ
 assert os.environ.get('BROKER_CHANNEL') is None, os.environ.get('BROKER_CHANNEL')
 assert os.environ.get('BROKER_UPSTREAM') is None, os.environ.get('BROKER_UPSTREAM')
 assert not Path('/run/broker.sock').exists()
@@ -2115,9 +2116,11 @@ Path('.manual-report').write_text(outcome.answer)
 
 _MANUAL_CREDENTIAL_CHILD = r"""
 import json
+import os
 from bro.base import credentials
 from bro.run_lifecycle import RunLifecycle
 
+assert 'RIDE_MINT_DIR' not in os.environ
 assert credentials.get('github') == 'manual-github'
 assert credentials.try_get('cookies') is None
 channel = RunLifecycle.from_env()
@@ -2152,18 +2155,17 @@ def _host_root_route(
   *,
   mission: Mission,
 ) -> int:
-  from ride.broker_root import run_root_via_broker
+  from ride.root import ProcessLaunch, _run_via_broker
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
-  from ride.workspace.spawn import ProcessLaunchSpec
 
   workspace.prepare()
   bundle = RuntimeBundle(
     env.runtime_root / 'runtime' / env.runtime_bundle_hash,
     f'{sys.version_info.major}.{sys.version_info.minor}',
   )
-  return run_root_via_broker(
-    ProcessLaunchSpec(
+  return _run_via_broker(
+    ProcessLaunch(
       command=_broxy_probe(str(bundle.host_venv / 'bin' / 'python'), source),
       cwd=str(workspace.start_directory),
       env={
@@ -2173,8 +2175,8 @@ def _host_root_route(
       interactive=False,
     ),
     workspace=workspace,
-    bro=cast(str, mission.descriptor.values['target']),
     mission=mission,
+    session_env={},
     runtime_bundle=bundle,
     container_runtime=ContainerRuntimeResolver.fixed(
       ContainerRuntime(env.image, env.runtime_bundle_hash)
@@ -2182,10 +2184,98 @@ def _host_root_route(
   )
 
 
+_TOOL_FILES_PROBE = """
+import asyncio
+import json
+from contextlib import closing
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import ClassVar
+from unittest.mock import patch
+from bro import artifact_mcp
+from bro.artifact import ArtifactError
+from bro.llm.mcp import ToolRegistry, encode_tool_result
+from bro.mcp import Toolset, mount
+from bro.tool_files import ArtifactFile, staged, take
+from bros.bro import Bro
+
+toolset = Toolset[None]('documents')
+
+@toolset.tool('return a staged file')
+def produce() -> ArtifactFile:
+    with staged('returned.txt') as entry:
+        assert entry.path.parent == Path(os.environ['RIDE_MINT_DIR'])
+        assert entry.path.suffix == '.txt'
+        entry.path.write_bytes(b'tool file payload')
+        returned = entry.returned()
+    assert not entry.path.exists()
+    return returned
+
+@toolset.tool('take a file ref')
+def consume(ref: str) -> str:
+    return Path(take(ref)['path']).read_text()
+
+class FileBro(Bro):
+    name = 'tool-file-probe'
+    tools: ClassVar = [mount(toolset), mount(artifact_mcp.toolset)]
+
+with TemporaryDirectory(prefix='tool-files-session-') as state, patch.dict(os.environ, {'RIDE_SESSION_DIR': state}), closing(FileBro()) as persona:
+    assert persona.reach().files is None
+    assert persona.reach().brash is None
+    registry = ToolRegistry(persona.assemble(harness='bro', hold='unattended'))
+    def call(name, arguments):
+        return encode_tool_result(asyncio.run(registry.call(name, arguments)))
+    returned = json.loads(call('documents__produce', {}))
+    path = Path(returned['path'])
+    assert path.read_bytes() == b'tool file payload'
+    assert returned['size'] == len(b'tool file payload')
+    assert call('documents__consume', {'ref': returned['ref']}) == 'tool file payload'
+    if __ISOLATION__ == 'boxed':
+        assert path.is_relative_to('/var/ride/artifacts')
+    else:
+        path.write_bytes(b'modified private copy')
+        assert json.loads(call('documents__produce', {})) == returned
+        assert path.read_bytes() == b'tool file payload'
+    own_file = Path('own-file.txt')
+    own_file.write_text('from the shell-less persona tree')
+    minted = json.loads(call('artifact__mint', {'path': str(own_file), 'name': 'own.txt'}))
+    assert minted['size'] == own_file.stat().st_size
+    assert call('documents__consume', {'ref': minted['ref']}) == own_file.read_text()
+    try:
+        call('artifact__mint', {'path': '/etc/passwd'})
+    except ArtifactError as error:
+        assert 'outside the tree' in str(error), str(error)
+    else:
+        raise AssertionError('a shell-less persona minted outside its tree')
+(tree / '.tool-files-report').write_text(json.dumps({'returned': returned, 'minted': minted}))
+"""
+
+
 _ARTIFACT_PATHS_PROBE = r"""
 import json
+import os
 from pathlib import Path
-from bro.artifact import ArtifactError, fetch_artifact, mint_artifact
+from bro.artifact import ArtifactError, fetch_artifact, mint_artifact, mint_entry
+
+mint_directory = Path(os.environ['RIDE_MINT_DIR'])
+entry = mint_directory / 'staged.bin'
+entry.write_bytes(b'entry-payload')
+minted = mint_entry(entry.name, name='returned.bin', timeout=30)
+entry.write_bytes(b'changed after mint')
+assert Path(fetch_artifact(minted.ref, timeout=30)).read_bytes() == b'entry-payload'
+entry.unlink()
+for kind in ['symlink', 'fifo']:
+    if kind == 'symlink':
+        entry.symlink_to('/etc/hosts')
+    else:
+        os.mkfifo(entry)
+    try:
+        mint_entry(entry.name, name='refused.bin', timeout=30)
+    except ArtifactError as error:
+        assert str(error) == 'entry staged.bin is not a regular file', error
+    else:
+        raise AssertionError(f'host accepted {kind} in the mint directory')
+    entry.unlink()
 
 clone = Path.cwd()
 assert (clone / '.git').is_dir(), clone
@@ -2203,11 +2293,75 @@ for path in ['/etc/hosts', str(tree / 'escape')]:
     try:
         mint_artifact(path, timeout=30)
     except ArtifactError as error:
-        assert repr(path) in str(error), error
+        assert '/etc/hosts' in str(error), error
         denied.append(path)
     else:
         raise AssertionError(f'host accepted an outside path: {path}')
-(tree / '.artifact-paths-report').write_text(json.dumps({'accepted': accepted, 'denied': denied}))
+import subprocess
+import sys
+links = []
+for name, target in [('relative-link', 'relative-report'), ('absolute-link', str(clone / 'relative-report'))]:
+    (clone / name).symlink_to(target)
+    minted = subprocess.run([str(Path(sys.executable).with_name('artifact')), 'mint', name], check=True, text=True, capture_output=True).stdout.strip()
+    assert minted.endswith('/' + name), minted
+    assert Path(fetch_artifact(minted, timeout=30)).read_bytes() == b'from the clone'
+    links.append(name)
+
+race = None
+if tree == Path('/tree'):
+    import contextlib
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from bro.artifact import _call, MINT
+    outside = Path(__HOST_OUTSIDE__)
+    candidate = tree / 'candidate'
+    saved = tree / 'saved-candidate'
+    candidate.symlink_to(outside)
+    try:
+        _call(MINT, {'path': str(candidate / 'data')}, 30)
+    except ArtifactError as error:
+        assert "crosses a symbolic link at 'candidate'" in str(error), error
+    else:
+        raise AssertionError('unresolved outside link was accepted')
+    candidate.unlink()
+    candidate.mkdir()
+    (candidate / 'data').write_bytes(b'from the tree')
+    stopped = threading.Event()
+    cycled = threading.Event()
+
+    def swap():
+        while not stopped.is_set():
+            candidate.rename(saved)
+            candidate.symlink_to(outside)
+            candidate.unlink()
+            saved.rename(candidate)
+            cycled.set()
+
+    @contextlib.contextmanager
+    def swapping():
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(swap)
+            try:
+                assert cycled.wait(30), 'swapper did not complete a cycle'
+                yield
+            finally:
+                stopped.set()
+                future.result()
+
+    race = {'minted': 0, 'denied': 0}
+    with swapping():
+        for _ in range(100):
+            try:
+                minted = _call(MINT, {'path': str(candidate / 'data')}, 30)
+            except ArtifactError as error:
+                assert 'symbolic link' in str(error) or 'no file or directory' in str(error), error
+                race['denied'] += 1
+            else:
+                assert Path(fetch_artifact(minted['ref'], timeout=30)).read_bytes() == b'from the tree'
+                race['minted'] += 1
+    minted = mint_artifact(str(candidate / 'data'), timeout=30)
+    assert Path(fetch_artifact(minted.ref, timeout=30)).read_bytes() == b'from the tree'
+(tree / '.artifact-paths-report').write_text(json.dumps({'accepted': accepted, 'denied': denied, 'links': links, 'race': race}))
 """
 
 
@@ -2226,13 +2380,18 @@ def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, 
   workspace = Workspace.ensure(
     name, (repository_attachment(repository, name),), Isolation(isolation)
   )
+  outside = env.root / f'host-only-artifact-{isolation}'
+  outside.mkdir()
+  (outside / 'data').write_bytes(b'host secret, never minted')
+  source = _ARTIFACT_PATHS_PROBE.replace('__HOST_OUTSIDE__', repr(str(outside)))
+  source += _TOOL_FILES_PROBE.replace('__ISOLATION__', repr(isolation))
   mission = _root_mission(targets=(), placement=isolation)
   if workspace.isolation == Isolation.UNBOXED:
-    code = _host_root_route(env, workspace, _ARTIFACT_PATHS_PROBE, mission=mission)
+    code = _host_root_route(env, workspace, source, mission=mission)
   else:
     launch = workspace_docker.Launch(
       name=name,
-      command=_session_broxy_probe(_ARTIFACT_PATHS_PROBE),
+      command=_session_broxy_probe(source),
       env={'RIDE_BRO': 'bro-dev'},
       secrets=(),
       tty=False,
@@ -2259,6 +2418,14 @@ def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, 
   report = json.loads((workspace.tree / '.artifact-paths-report').read_text())
   assert len(report['accepted']) == 2
   assert len(report['denied']) == 2
+  assert len(report['links']) == 2
+  files = json.loads((workspace.tree / '.tool-files-report').read_text())
+  assert files['returned']['ref'].endswith('/returned.txt')
+  assert files['minted']['ref'].endswith('/own.txt')
+  if isolation == 'boxed':
+    assert report['race']['minted'] + report['race']['denied'] == 100
+  else:
+    assert report['race'] is None
 
 
 def _replace_unboxed_session(monkeypatch: pytest.MonkeyPatch, source: str) -> None:
@@ -2361,7 +2528,11 @@ def test_manual_summon_commits_over_the_operator_channel_through_credential_pick
 
 def _cross_isolation_member(prompt: str) -> str:
   return f"""
+import json
+import os
 import time
+from pathlib import Path
+from bro.tool_files import return_bytes, take
 from bro.base import credentials
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summon_and_wait
@@ -2370,6 +2541,16 @@ prompt = {prompt!r}
 channel = RunLifecycle.from_env()
 assert channel is not None
 channel.trail('trail-' + prompt)
+mint_directory = Path(os.environ['RIDE_MINT_DIR'])
+if prompt == 'boxed-member':
+  assert (mint_directory / 'party-marker').read_text() == 'root'
+elif prompt == 'unboxed-owner':
+  (mint_directory / 'party-marker').write_text(prompt)
+elif prompt == 'unboxed-member':
+  assert (mint_directory / 'party-marker').read_text() == 'unboxed-owner'
+returned = return_bytes(prompt.encode(), prompt + '.bin')
+assert Path(returned['path']).read_bytes() == prompt.encode()
+files = [returned]
 if prompt == 'boxed-member':
   assert credentials.get('github') == 'passed-github'
   answer = summon_and_wait(
@@ -2403,8 +2584,16 @@ elif prompt == 'unboxed-member':
 else:
   answer = 'boxed-final'
 if prompt != 'boxed-final':
+  child = json.loads(answer)
+  for file in child['files']:
+    fetched = take(file['ref'])
+    descendant = file['ref'].rsplit('/', 1)[1].removesuffix('.bin')
+    assert Path(fetched['path']).read_bytes() == descendant.encode()
+    files.append(fetched)
+  answer = child['chain']
   time.sleep(1)
-channel.completed(prompt + '>' + answer if prompt != 'boxed-final' else answer, 'ok')
+chain = prompt + '>' + answer if prompt != 'boxed-final' else answer
+channel.completed(json.dumps({{'chain': chain, 'files': files}}), 'ok')
 channel.close()
 """
 
@@ -2413,13 +2602,13 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   isolated_env: IsolatedEnv, monkeypatch
 ) -> None:
   import ride.bro_worker as ride_spawn
-  import ride.broker_root as broker_root
   from bro.base import credentials, host_config
-  from ride.root import ProcessLaunch
+  from ride.root import ProcessLaunch, run_started_party
   from ride.runtime_bundle import RuntimeBundle
   from ride.workspace.docker import ContainerRuntime, ContainerRuntimeResolver
   from ride.workspace.metadata import Isolation
   from ride.workspace.model import Workspace
+  from ride.workspace.store import ScopedSecrets
 
   env = isolated_env
   host_store = env.home / '.bro'
@@ -2493,11 +2682,15 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   monkeypatch.setenv('HOME', str(env.home))
   report = workspace.tree / '.cross-isolation-report'
   root_source = """
+import json
+import os
 import time
 from pathlib import Path
 from bro.base import credentials
 from bro.summon import summon_and_wait
+from bro.tool_files import take
 
+(Path(os.environ['RIDE_MINT_DIR']) / 'party-marker').write_text('root')
 assert not credentials.available('github')
 answer = summon_and_wait(
   'bro',
@@ -2510,27 +2703,31 @@ answer = summon_and_wait(
   timeout=120,
 )
 assert not credentials.available('github')
-Path('/tree/.cross-isolation-report').write_text(answer)
+child = json.loads(answer)
+assert len(child['files']) == 4
+for file in child['files']:
+  fetched = take(file['ref'])
+  descendant = file['ref'].rsplit('/', 1)[1].removesuffix('.bin')
+  assert Path(fetched['path']).read_bytes() == descendant.encode()
+Path('/tree/.cross-isolation-report').write_text(child['chain'])
 time.sleep(2)
 """
-  launch = DockerLaunchSpec(
-    workspace_docker.Launch(
-      name=name,
-      command=_session_broxy_probe(root_source),
-      env={'RIDE_BRO': 'bro-dev'},
-      secrets=(),
-      tty=False,
-      image=env.image,
-      runtime_bundle_hash=env.runtime_bundle_hash,
-      extra_mounts=(f'{party_directory}:/var/ride/party',),
-      attachments=(repository_attachment(env.project, name),),
-    )
+  launch = workspace_docker.Launch(
+    name=name,
+    command=_session_broxy_probe(root_source),
+    env={'RIDE_BRO': 'bro-dev'},
+    secrets=(),
+    tty=False,
+    image=env.image,
+    runtime_bundle_hash=env.runtime_bundle_hash,
+    extra_mounts=(f'{party_directory}:/var/ride/party',),
+    attachments=(repository_attachment(env.project, name),),
   )
 
-  code = broker_root.run_root_via_broker(
+  code = run_started_party(
     launch,
     workspace=workspace,
-    bro='bro-dev',
+    credential_scope=ScopedSecrets(set(), set()),
     mission=_root_mission(
       targets=('bro',),
       placements=('boxed', 'unboxed', 'join'),

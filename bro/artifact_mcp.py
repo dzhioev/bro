@@ -10,7 +10,14 @@ from typing import Annotated, Optional
 
 from pydantic import Field
 
-from bro.artifact import REF_FORM, fetch_artifact, list_artifacts, locate_artifact
+from bro.artifact import (
+  REF_FORM,
+  Minted,
+  fetch_artifact,
+  list_artifacts,
+  locate_artifact,
+  mint_artifact,
+)
 from bro.base.text_window import DEFAULT_LIMIT, MAX_LIMIT, apply_limit
 from bro.mcp import Toolset
 
@@ -281,3 +288,17 @@ def fetch(
 )
 def list() -> builtins.list[str]:
   return list_artifacts()
+
+
+@toolset.tool(
+  "mint a file or directory from this session's tree as an artifact ref and byte size. "
+  "path is relative to the tool server's working directory or absolute; paths outside "
+  'the tree are refused. Mounting this tool grants access to mint any file in that tree.'
+)
+def mint(
+  path: Annotated[str, Field(description='file or directory path inside the session tree')],
+  name: Annotated[
+    Optional[str], Field(description="artifact name; omit for the path's last component")
+  ] = None,
+) -> Minted:
+  return mint_artifact(path, name=name)

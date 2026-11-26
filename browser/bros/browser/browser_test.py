@@ -1,5 +1,8 @@
 import subprocess
 import sys
+from contextlib import closing
+
+import pytest
 
 from bros.browser import Browser
 
@@ -47,3 +50,12 @@ def test_browser_mounts_the_same_bounded_roster_on_both_harnesses() -> None:
       server.namespace for server in Browser().assemble(harness=harness, hold='attended')
     }
     assert {'webview', 'browser', 'artifact', 'current-time-source'} <= namespaces
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('harness', ['bro', 'claude'])
+async def test_browser_artifact_roster_does_not_grant_tree_minting(harness):
+  with closing(Browser()) as browser:
+    servers = browser.assemble(harness=harness, hold='attended')
+    (server,) = [server for server in servers if server.namespace == 'artifact']
+    assert {tool.name for tool in await server.list_tools()} == {'fetch', 'list', 'read', 'grep'}
