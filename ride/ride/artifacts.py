@@ -25,6 +25,11 @@ the materialization and replaces one that no longer matches, failing when the
 stored object itself does not. A manually launched child has no host-built
 launch and therefore no view; its fetch is denied with the reason.
 
+Launch-built workspaces also hold writable `mint/<workspace>/` directories.
+An entry mint opens one regular file there without following links and uses
+the same descriptor ingest as a tree mint. Joined members use their party's
+directory; manually launched parties and worker containers have none.
+
 The operator reads only what a session exported or the operator itself shared in
 (`share_from_host`); an exported ref reaches no other peer.
 
@@ -79,7 +84,7 @@ from bro.artifact import (
 from bro.base import log
 from bro.base.lulid import lulid
 from bro.worker_types import ArtifactDenied, PeerDescription, UnattributablePeer
-from bro.workspace.paths import artifacts_dir, workspace_dir
+from bro.workspace.paths import CONTAINER_MINT_DIR, artifacts_dir, workspace_dir
 from ride.peer_facts import PeerFacts
 from ride.workspace.model import Workspace
 
@@ -96,7 +101,7 @@ MAX_STORE_BYTES = 32 << 30
 # filesystem that cannot clone, a cross-device pair) falls back to a plain copy
 _FICLONE = 0x40049409
 
-_MINT_KEYS = frozenset({'path', 'name'})
+_MINT_KEYS = frozenset({'path', 'entry', 'name'})
 _FETCH_KEYS = frozenset({'ref', 'checked'})
 _LOCATE_KEYS = frozenset({'ref'})
 _SHARE_KEYS = frozenset({'id', 'ref'})
@@ -126,6 +131,52 @@ def view_dir(ride: str, peer_workspace: str) -> Path:
 def view_mount(ride: str, peer_workspace: str, container_path: PurePosixPath) -> str:
   """a peer's read-only view bind mount, as a docker mount spec."""
   return f'{view_dir(ride, peer_workspace)}:{container_path}:ro'
+
+
+def mint_dir(ride: str, peer_workspace: str) -> Path:
+  """a workspace's writable mint directory inside the ride store."""
+  return store_dir(ride) / 'mint' / peer_workspace
+
+
+def mint_mount(ride: str, peer_workspace: str) -> str:
+  """a workspace's read-write mint bind mount, as a docker mount spec."""
+  return f'{mint_dir(ride, peer_workspace)}:{CONTAINER_MINT_DIR}'
+
+
+@contextlib.contextmanager
+def _directory_below(root: int, components: Sequence[str]) -> Generator[int]:
+  descriptor = os.dup(root)
+  try:
+    for component in components:
+      child = os.open(
+        component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor
+      )
+      os.close(descriptor)
+      descriptor = child
+    yield descriptor
+  finally:
+    os.close(descriptor)
+
+
+def _remove_store(root: Path) -> None:
+  with _descriptor(root.parent, os.O_RDONLY | os.O_DIRECTORY) as directory:
+    pending: list[tuple[tuple[str, ...], bool]] = [((root.name,), False)]
+    while pending:
+      components, visited = pending.pop()
+      with _directory_below(directory, components[:-1]) as parent:
+        name = components[-1]
+        if not stat.S_ISDIR(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode):
+          os.unlink(name, dir_fd=parent)
+        elif visited:
+          os.rmdir(name, dir_fd=parent)
+        else:
+          os.chmod(name, 0o700, dir_fd=parent, follow_symlinks=False)
+          with _descriptor(
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, parent=parent
+          ) as source:
+            names = os.listdir(source)
+          pending.append((components, True))
+          pending.extend(((*components, child), False) for child in names)
 
 
 def _denial(ref: str) -> str:
@@ -315,10 +366,11 @@ class ArtifactStore:
     self._reach: dict[str, _Reach] = {}  # workspace name -> the refs it may read
     self._host_reach = _Reach()  # the refs the operator may read
     self._materializing: dict[Path, threading.Lock] = {}
+    self._mint_directories: dict[str, Path] = {}
     self._bytes = 0
     root = store_dir(workspace.name)
     if root.exists():
-      shutil.rmtree(root)  # a leftover from a crashed session; the store is ride-scoped
+      _remove_store(root)  # a leftover from a crashed session; the store is ride-scoped
     self._objects = root / 'objects'
     self._staging = root / 'staging'
     self._views = root / 'shared'
@@ -326,13 +378,14 @@ class ArtifactStore:
     for directory in (self._objects, self._staging, self._views, self._jobs):
       directory.mkdir(parents=True)
     self._audit_file = audit_file(workspace.name)
+    self.provision_mint(workspace.name)
     if root_boxed:
       self.view(workspace.name)
 
   def close(self) -> None:
     """Remove the store when the ride ends; keep its audit."""
     try:
-      shutil.rmtree(store_dir(self.ride))
+      _remove_store(store_dir(self.ride))
     except OSError as e:
       log.warning('could not remove the artifact store %s: %s', store_dir(self.ride), e)
 
@@ -342,6 +395,19 @@ class ArtifactStore:
     directory = self._views / peer_workspace
     directory.mkdir(exist_ok=True)
     return directory
+
+  def provision_mint(self, peer_workspace: str) -> Path:
+    """create a launch-built workspace's mint directory."""
+    directory = mint_dir(self.ride, peer_workspace)
+    directory.mkdir(parents=True, exist_ok=True)
+    with self._lock:
+      self._mint_directories[peer_workspace] = directory
+    return directory
+
+  def mint_directory(self, peer_workspace: str) -> Optional[Path]:
+    """the provisioned mint directory, or None for a workspace with none."""
+    with self._lock:
+      return self._mint_directories.get(peer_workspace)
 
   def job_run(self) -> Path:
     """a fresh directory for one broker job's run — inside the store, so an
@@ -371,6 +437,27 @@ class ArtifactStore:
     except (FileNotFoundError, NotADirectoryError):
       raise ArtifactDenied(f'no file or directory at {path!r} in the tree') from None
     except (OSError, ValueError) as error:
+      raise ArtifactDenied(str(error)) from None
+
+  def mint_entry(
+    self, identity: PeerDescription, ancestors: Sequence[str], entry: str, name: str
+  ) -> tuple[str, int]:
+    """ingest one regular entry of the workspace's provisioned mint directory."""
+    directory = self.mint_directory(identity.workspace)
+    if directory is None:
+      raise ArtifactDenied('no mint directory for this peer')
+    try:
+      with _open_source(directory, [entry], file_only=True) as source:
+        return self._adopt(
+          source, name, identity.workspace, ancestors, event='mint', origin=f'entry:{entry}'
+        )
+    except FileNotFoundError:
+      raise ArtifactDenied(f'no entry {entry} in the mint directory') from None
+    except (_SymbolicLink, ValueError):
+      raise ArtifactDenied(f'entry {entry} is not a regular file') from None
+    except OSError as error:
+      if error.errno in (errno.ENXIO, errno.ENODEV):
+        raise ArtifactDenied(f'entry {entry} is not a regular file') from None
       raise ArtifactDenied(str(error)) from None
 
   def adopt(
@@ -629,9 +716,21 @@ def _validate_mint(args: dict[str, Any]) -> Optional[str]:
   unknown = sorted(set(args) - _MINT_KEYS)
   if len(unknown) > 0:
     return f'unknown artifact.mint field(s): {", ".join(unknown)}'
-  path = args.get('path')
-  if not isinstance(path, str) or len(path) == 0:
-    return "artifact.mint needs a non-empty string 'path'"
+  if ('path' in args) == ('entry' in args):
+    return "artifact.mint needs exactly one of 'path' and 'entry'"
+  if 'entry' in args:
+    entry = args['entry']
+    if not isinstance(entry, str):
+      return "artifact.mint 'entry' must be a string"
+    error = name_error(entry)
+    if error is not None:
+      return error
+    if 'name' not in args:
+      return "artifact.mint with 'entry' needs 'name'"
+  else:
+    path = args['path']
+    if not isinstance(path, str) or len(path) == 0:
+      return "artifact.mint needs a non-empty string 'path'"
   if 'name' in args:
     name = args['name']
     if not isinstance(name, str):
@@ -768,14 +867,17 @@ class ArtifactControl:
     if error is not None:
       self._deny(context, peer, message, identity, error)
       return
-    path = args['path']
-    name = args.get('name')
-    self._answer_off_loop(context, peer, message.request_id, lambda: self._minted(identity, ancestors, path, name))  # fmt: skip
+    self._answer_off_loop(
+      context, peer, message.request_id, lambda: self._minted(identity, ancestors, args)
+    )
 
   def _minted(
-    self, identity: PeerDescription, ancestors: Sequence[str], path: str, name: Optional[str]
+    self, identity: PeerDescription, ancestors: Sequence[str], args: dict[str, Any]
   ) -> dict[str, Any]:
-    ref, size = self._store.mint(identity, ancestors, path, name)
+    if 'entry' in args:
+      ref, size = self._store.mint_entry(identity, ancestors, args['entry'], args['name'])
+    else:
+      ref, size = self._store.mint(identity, ancestors, args['path'], args.get('name'))
     return {'ref': ref, 'size': size}
 
   def fetch(self, context: Dispatcher, peer: Peer, message: Message) -> None:

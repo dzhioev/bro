@@ -98,6 +98,67 @@ def _audit(ride_name: str = 'ws') -> list[dict]:
   return [json.loads(line) for line in lines]
 
 
+class TestEntryMint:
+  def test_ingests_a_private_copy_with_ancestor_reach_and_entry_origin(self, store):
+    directory = store.provision_mint('child')
+    entry = directory / 'staged.bin'
+    entry.write_bytes(b'payload')
+    ref, size = store.mint_entry(
+      PeerIdentity('child', workspace_tree('ws')), ('ws',), entry.name, 'report.bin'
+    )
+    entry.write_bytes(b'rewritten')
+    assert _object(ref).read_bytes() == b'payload'
+    assert size == len(b'payload')
+    assert split_ref(ref)[1] == 'report.bin'
+    assert store.reachable(ref, 'child')
+    assert store.reachable(ref, 'ws')
+    assert not store.reachable(ref, 'sibling')
+    assert _audit()[-1]['path'] == 'entry:staged.bin'
+    assert list(ride.artifacts.view_dir('ws', 'ws').iterdir()) == []
+
+  @pytest.mark.parametrize('kind', ['missing', 'symlink', 'fifo', 'directory', 'socket'])
+  def test_refuses_an_entry_that_is_not_a_regular_file(self, store, tmp_path, monkeypatch, kind):
+    import socket
+
+    entry = ride.artifacts.mint_dir('ws', 'ws') / 'entry'
+    outside = tmp_path / 'outside'
+    outside.write_bytes(b'never minted')
+    with socket.socket(socket.AF_UNIX) as server:
+      if kind == 'symlink':
+        entry.symlink_to(outside)
+      elif kind == 'fifo':
+        os.mkfifo(entry)
+      elif kind == 'directory':
+        entry.mkdir()
+      elif kind == 'socket':
+        with monkeypatch.context() as environment:
+          environment.chdir(entry.parent)
+          server.bind(entry.name)
+      error = (
+        'no entry entry in the mint directory'
+        if kind == 'missing'
+        else 'entry entry is not a regular file'
+      )
+      with pytest.raises(ArtifactDenied, match=error):
+        store.mint_entry(_root_identity(), (), entry.name, 'report')
+    assert store.readable('ws') == []
+
+  def test_a_workspace_without_a_provisioned_directory_is_denied(self, store):
+    with pytest.raises(ArtifactDenied, match='no mint directory for this peer'):
+      store.mint_entry(PeerIdentity('manual', workspace_tree('ws'), manual=True), (), 'x', 'x')
+
+  def test_entry_mints_share_tree_mint_dedup_and_cap(self, store, monkeypatch):
+    entry = ride.artifacts.mint_dir('ws', 'ws') / 'entry'
+    entry.write_bytes(b'payload')
+    ref, size = store.mint_entry(_root_identity(), (), entry.name, 'first')
+    monkeypatch.setattr(ride.artifacts, 'MAX_STORE_BYTES', size)
+    second, _ = store.mint_entry(_root_identity(), (), entry.name, 'second')
+    assert split_ref(second)[0] == split_ref(ref)[0]
+    entry.write_bytes(b'different')
+    with pytest.raises(ArtifactDenied, match='byte cap'):
+      store.mint_entry(_root_identity(), (), entry.name, 'third')
+
+
 class TestMint:
   def test_mints_a_file_without_materializing_it(self, store):
     relative = _tree_file('out/a.bin', b'payload')
@@ -855,6 +916,40 @@ class TestJobArtifacts:
 
 class TestArtifactControl:
   @pytest.mark.asyncio
+  async def test_entry_mint_answers_the_correlated_result(self, control, store):
+    entry = ride.artifacts.mint_dir('ws', 'ws') / 'staged'
+    entry.write_bytes(b'payload')
+    context = _context(control)
+    message = brotocol.request(MINT, {'entry': entry.name, 'name': 'returned.bin'})
+    control.mint(cast(Dispatcher, context), ROOT, message)
+    _, result = await _delivered(context)
+    assert result.request == message.id
+    assert result.payload == {
+      'outcome': 'ok',
+      'value': {'ref': compose_ref(digest_path(entry), 'returned.bin'), 'size': 7},
+    }
+
+  @pytest.mark.parametrize(
+    'args',
+    [
+      {},
+      {'path': '/tree/x', 'entry': 'x', 'name': 'x'},
+      {'entry': 'x'},
+      {'entry': None, 'name': 'x'},
+      {'entry': '../x', 'name': 'x'},
+      {'entry': '', 'name': 'x'},
+      {'entry': 'x', 'name': '../x'},
+      {'entry': 'x', 'name': None},
+    ],
+  )
+  def test_invalid_entry_mint_arguments_are_denied_before_io(self, control, args):
+    context = _context(control)
+    control.mint(cast(Dispatcher, context), ROOT, brotocol.request(MINT, args))
+    assert len(context.replies) == 1
+    assert context.replies[0][1]['outcome'] == 'denied'
+    assert context.delivered == []
+
+  @pytest.mark.asyncio
   async def test_mint_answers_the_correlated_ok_result(self, control):
     _tree_file('out/a.bin', b'payload')
     context = _context(control)
@@ -1225,3 +1320,39 @@ class TestExportAndOperatorKinds:
     control.host_share(cast(Dispatcher, context), 'operator', brotocol.request('operator.artifact.share', args))  # fmt: skip
     [(_, payload)] = context.replies
     assert payload['outcome'] == 'denied'
+
+
+@pytest.mark.parametrize('operation', ['close', 'restart'])
+@pytest.mark.parametrize('depth', [2, 1100])
+def test_store_removal_clears_unwritable_mint_trees_without_following_links(
+  workspace, store, tmp_path, operation, depth
+):
+  outside = tmp_path / 'outside-mint'
+  outside.mkdir()
+  (outside / 'keep').write_bytes(b'outside')
+  outside.chmod(0o500)
+  directory = store.provision_mint('child')
+  locked = directory / 'locked'
+  locked.mkdir()
+  nested = locked
+  for _ in range(depth):
+    nested = nested / 'd'
+    nested.mkdir()
+  (nested / 'file').write_bytes(b'leftover')
+  (locked / 'link').symlink_to(outside, target_is_directory=True)
+  os.mkfifo(locked / 'fifo')
+  nested.chmod(0)
+  locked.chmod(0)
+  directory.chmod(0)
+  if operation == 'restart':
+    replacement = ArtifactStore(workspace, root_boxed=True)
+    root_directory = replacement.mint_directory('ws')
+    assert root_directory is not None and root_directory.is_dir()
+    assert replacement.mint_directory('child') is None
+    assert not directory.exists()
+    replacement.close()
+  else:
+    store.close()
+  assert not ride.artifacts.store_dir('ws').exists()
+  assert (outside / 'keep').read_bytes() == b'outside'
+  assert outside.stat().st_mode & 0o777 == 0o500

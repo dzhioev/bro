@@ -749,6 +749,7 @@ Layout:
   — goes through the project's CI instead.
 - `<runtime-root>/workspaces/<name>/party/` (host) → `/var/ride/party` rw.
   The root under which joined members' records are created later ("Workspaces"), mounted whole at creation so a join needs no mount of its own.
+- `<store>/shared/<workspace>/` (host) → `/var/ride/artifacts` ro, and `<store>/mint/<workspace>/` → `/var/ride/mint` rw, for a launch-built party with a broker ("Sharing artifacts between peers").
 - `<runtime-root>/trails` (host) → `/var/ride/trails` rw when the scoped trails backend is local.
   In-container readers resolve that fixed absolute path;
   no state path is relative to `/tree`.
@@ -1175,6 +1176,14 @@ Peers pass files by content-addressed reference through the ride's store the lau
   replacing a component cannot redirect a mint outside the tree.
   A directory's symbolic-link entries are recorded by target, never followed, and refused when the target escapes the directory.
   From a clone at `/tree/bro`, `artifact mint report.md` reads `/tree/bro/report.md`, and `artifact mint /tree/review/round.md` reads a report beside the clone.
+- The client-only `artifact.mint {entry, name}` form ingests one regular file directly inside the requesting party's mint directory, with both names passing `bro.artifact.name_error`.
+  `bro.artifact.mint_entry(entry, name=...)` calls it; `artifact mint` remains tree-only.
+  The host opens the entry without following a symbolic link or blocking on a FIFO, copies only from its opened descriptor, and refuses every non-regular entry.
+  Reach, deduplication and the byte cap are the same as for a tree mint, with the audit origin `entry:<entry>`.
+  The store provisions `<store>/mint/<workspace>/` for the root and each spawned child, outside their checkouts;
+  `RIDE_MINT_DIR` names its session-visible path, and joined members use their party's directory.
+  The producer removes its entries; the store clears all leftovers at ride end and at the next root start, including directories with cleared permission bits, without following links.
+  Broker-less sessions, manually launched children and members joining their parties get no mint directory, and neither do worker containers, which mint from their throwaway trees.
 - Reaching a ref materializes nothing, in any placement:
   `artifact list` prints every ref the requesting peer can read, one per line in the order they reached it,
   and `artifact fetch <ref>` materializes one and prints the path it appears at, the ref itself under the peer's artifact root, so the content keeps its name and two refs never collide.
@@ -1324,6 +1333,9 @@ Wrappers and session daemons rely on a small set of env vars:
   and by `ride banner` and `bro.prompts.session_fragment` so the run can tell in-session that it owes a summoner an answer.
 - `RIDE_PARTY_MEMBER` — the channel-derived member name when a session joined an existing party.
   Its presence makes the banner and session prompt state that the tree is shared, and makes `do-ride` skip persona workspace provisioning.
+- `RIDE_MINT_DIR` — the writable mint directory provisioned by the store for a launch-built session.
+  A boxed session sees `CONTAINER_MINT_DIR`; an unboxed one sees the host path inside the store, and members share their party's directory.
+  It is unset when no directory was provisioned ("Sharing artifacts between peers").
 - `RIDE_TRAILS_ROOT` — names the local trails backend's root (`bro.workspace.paths.trails_dir`) to a session that cannot derive it.
   An unboxed session gets its ride's own root, since its closed environment carries no data home and an inherited value would be its parent's;
   a boxed party member gets its own `party/<member>/trails` under the party mount, since the ride-wide `/var/ride/trails` bind belongs to the first session and its scope may not have one,
