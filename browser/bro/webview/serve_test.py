@@ -137,7 +137,10 @@ for line in sys.stdin:
   elif name == 'tool_error':
     answer(identifier, content(arguments.get('text', 'tool failed'), True))
   elif name == 'browser_file_upload':
-    answer(identifier, content('\n'.join(Path(path).read_text() for path in arguments['paths'])))
+    if 'paths' not in arguments:
+      answer(identifier, content('file chooser cancelled'))
+    else:
+      answer(identifier, content('\n'.join(Path(path).read_text() for path in arguments['paths'])))
   elif name == 'schedule_exit':
     answer(identifier, content('scheduled'))
     threading.Thread(target=lambda: (time.sleep(0.1), os._exit(19)), daemon=True).start()
@@ -598,21 +601,41 @@ async def test_an_upload_fetches_every_artifact_it_names_before_playwright_reads
     return str(entry)
 
   monkeypatch.setattr(serve, 'fetch_artifact', fetch)
-  (workspace / 'local.txt').write_text('local payload')
   async with running_broker(monkeypatch, workspace) as sink:
     daemon = asyncio.create_task(serve.serve())
     channel, _ = await _ready(sink)
 
-    paths = [str(workspace / 'artifacts' / REF / 'resume.txt'), str(workspace / 'local.txt')]
+    paths = [str(workspace / 'artifacts' / REF / 'resume.txt')]
     reply = await _ask(
       sink, channel, {'tool': 'browser_file_upload', 'arguments': {'paths': paths}}
     )
 
-    assert reply == {'text': 'shared upload payload\nlocal payload', 'files': []}
+    assert reply == {'text': 'shared upload payload', 'files': []}
     assert fetched == [REF]
 
     await _ask(sink, channel, {'webview': 'close'}, identifier='close')
     await sink.next(lambda message: message.type == Tag.RESULT)
+    await asyncio.wait_for(daemon, TIMEOUT)
+
+
+@pytest.mark.asyncio
+async def test_an_upload_without_paths_cancels_the_chooser_without_fetching(
+  daemon_files, monkeypatch
+):
+  workspace, _ = daemon_files
+  monkeypatch.setattr(
+    serve, 'fetch_artifact', lambda ref: pytest.fail('cancellation must not fetch')
+  )
+  async with running_broker(monkeypatch, workspace) as sink:
+    daemon = asyncio.create_task(serve.serve())
+    channel, _ = await _ready(sink)
+
+    reply = await _ask(sink, channel, {'tool': 'browser_file_upload', 'arguments': {}})
+
+    assert reply == {'text': 'file chooser cancelled', 'files': []}
+    await _ask(sink, channel, {'webview': 'close'}, identifier='close')
+    _, result = await sink.next(lambda message: message.type == Tag.RESULT)
+    assert result.payload['value'] == {'commands': 1}
     await asyncio.wait_for(daemon, TIMEOUT)
 
 
@@ -644,27 +667,35 @@ async def test_an_upload_of_an_artifact_the_webview_cannot_fetch_is_refused(
 
 
 @pytest.mark.asyncio
-async def test_an_upload_fetches_only_well_formed_refs_under_the_view(monkeypatch, tmp_path):
-  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', tmp_path / 'artifacts')
-  fetched: list[str] = []
-  monkeypatch.setattr(
-    serve, 'fetch_artifact', lambda ref: fetched.append(ref) or str(serve.ARTIFACT_VIEW / ref)
-  )
+@pytest.mark.parametrize(
+  ('path', 'reason'),
+  [
+    ('/tree/local.txt', 'outside the artifact view'),
+    ('/tree/output/download.txt', 'outside the artifact view'),
+    ('artifacts/' + REF, 'outside the artifact view'),
+    ('/tree/artifacts/../local.txt', 'outside the artifact view'),
+    ('/tree/artifacts/' + REF + '/../other', 'outside the artifact view'),
+    ('/tree/artifacts/./' + REF, 'outside the artifact view'),
+    ('/tree/artifacts//' + REF, 'outside the artifact view'),
+    ('/tree/artifacts/' + REF + '/', 'outside the artifact view'),
+    ('/tree/artifacts/not-a-ref/file', 'names no artifact ref'),
+    ('/tree/artifacts/sha256:short', 'names no artifact ref'),
+    ('/tree/artifacts', 'names no artifact ref'),
+  ],
+)
+async def test_an_upload_refuses_paths_outside_an_artifact(monkeypatch, path, reason):
+  monkeypatch.setattr(serve, 'ARTIFACT_VIEW', Path('/tree/artifacts'))
+  monkeypatch.setattr(serve, 'fetch_artifact', lambda ref: pytest.fail('must refuse before fetch'))
 
-  await serve.fetch_uploads(
-    {
-      'paths': [
-        str(tmp_path / 'artifacts' / REF),
-        str(tmp_path / 'artifacts' / 'not-a-ref' / 'file'),
-        str(tmp_path / 'artifacts' / 'sha256:short'),
-        str(tmp_path / 'elsewhere' / REF),
-        7,
-      ]
-    }
-  )
-  await serve.fetch_uploads({'paths': 'not a list'})
+  with pytest.raises(ValueError, match=reason):
+    await serve.fetch_uploads({'paths': [path]})
 
-  assert fetched == [REF]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('arguments', [{'paths': None}, {'paths': 'not a list'}, {'paths': [7]}])
+async def test_an_upload_refuses_malformed_paths(arguments):
+  with pytest.raises(ValueError, match='upload paths must be'):
+    await serve.fetch_uploads(arguments)
 
 
 @pytest.mark.asyncio

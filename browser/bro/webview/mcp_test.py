@@ -3,18 +3,38 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from bro import mission
-from bro.artifact import ArtifactError
+from bro import mission, tool_files
+from bro.artifact import ArtifactError, Minted
 from bro.llm.mcp import Context
 from bro.webview import mcp
 from bro.webview.cli import OpenedWebview, WebviewError
 
 REF = f'sha256:{"1" * 64}/upload.txt'
 OTHER_REF = f'sha256:{"2" * 64}/other.txt'
+
+
+@pytest.fixture(autouse=True)
+def minted_files(monkeypatch, tmp_path):
+  directory = tmp_path / 'mint'
+  directory.mkdir()
+  monkeypatch.setenv('RIDE_MINT_DIR', str(directory))
+  files = {}
+
+  def mint(entry, *, name):
+    content = (directory / entry).read_bytes()
+    ref = f'sha256:{hashlib.sha256(content).hexdigest()}/{name}'
+    path = tmp_path / 'artifacts' / ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    files[ref] = path
+    return Minted(ref, len(content))
+
+  monkeypatch.setattr(tool_files, 'mint_entry', mint)
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(files[ref]))
+  return files
 
 
 def _context() -> Context[mcp.Webviews]:
@@ -50,7 +70,7 @@ def test_module_imports_without_mcp_sdk_or_ride() -> None:
   assert probe.returncode == 0, probe.stderr
 
 
-def test_command_renders_text_files_and_remembers_the_page_url(monkeypatch) -> None:
+def test_command_returns_files_and_remembers_the_page_url(monkeypatch, tmp_path) -> None:
   context = _context()
   _open(monkeypatch, context)
   monkeypatch.setattr(
@@ -64,11 +84,16 @@ def test_command_renders_text_files_and_remembers_the_page_url(monkeypatch) -> N
     ),
   )
 
+  artifact = tmp_path / 'download.txt'
+  artifact.write_text('download')
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(artifact))
   rendered = mcp.command(context, 'webview-1', 'browser_click', {'target': '#done'})
 
-  assert rendered == (
-    f'done\n- Page URL: https://example.test/after\n\nFiles:\n- output/page.yml: {REF}'
-  )
+  assert rendered == {
+    'text': 'done\n- Page URL: https://example.test/after',
+    'files': [{'ref': REF, 'path': str(artifact), 'size': 8}],
+    'failed': [],
+  }
   assert context.state.get('webview-1').last_url == 'https://example.test/after'
 
 
@@ -82,21 +107,18 @@ def test_command_mints_and_cuts_a_large_inline_reply(monkeypatch, tmp_path) -> N
     'ask',
     lambda *_arguments, **_keywords: _answer({'text': text, 'files': []}),
   )
-  minted: list[bytes] = []
-
-  def mint(path: str, name: str):
-    content = Path(path).read_bytes()
-    minted.append(content)
-    return SimpleNamespace(ref=f'sha256:{hashlib.sha256(content).hexdigest()}/{name}')
-
-  monkeypatch.setattr(mcp, 'mint_artifact', mint)
-
+  before = set(tmp_path.iterdir())
   rendered = mcp.command(context, 'webview-1', 'browser_snapshot')
 
-  assert minted == [text.encode()]
-  assert len(rendered.encode()) == mcp.INLINE_REPLY_BYTES
-  assert 'whole 5,000-byte reply at sha256:' in rendered
-  assert list(tmp_path.iterdir()) == []
+  assert len(rendered['text'].encode()) == mcp.INLINE_REPLY_BYTES
+  assert 'whole 5,000-byte reply at sha256:' in rendered['text']
+  assert len(rendered['files']) == 1
+  file = rendered['files'][0]
+  assert file['ref'].endswith('/reply.txt')
+  assert file['size'] == len(text.encode())
+  assert Path(file['path']).read_text() == text
+  assert set(tmp_path.iterdir()) - before == {tmp_path / 'artifacts'}
+  assert list((tmp_path / 'mint').iterdir()) == []
 
 
 def test_command_reads_a_spilled_reply_head_without_minting(monkeypatch, tmp_path) -> None:
@@ -104,7 +126,7 @@ def test_command_reads_a_spilled_reply_head_without_minting(monkeypatch, tmp_pat
   _open(monkeypatch, context)
   spilled = tmp_path / 'spilled.txt'
   spilled.write_text('first line\n' + 'z' * 8000)
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(spilled))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(spilled))
   monkeypatch.setattr(
     mcp.mission,
     'ask',
@@ -112,13 +134,16 @@ def test_command_reads_a_spilled_reply_head_without_minting(monkeypatch, tmp_pat
       {'spilled': 'text', 'ref': REF, 'bytes': spilled.stat().st_size, 'files': []}
     ),
   )
-  monkeypatch.setattr(mcp, 'mint_artifact', lambda _path, name: pytest.fail('spill must be reused'))
+  monkeypatch.setattr(
+    tool_files, 'mint_entry', lambda *args, **options: pytest.fail('spill must be reused')
+  )
 
   rendered = mcp.command(context, 'webview-1', 'browser_snapshot')
 
-  assert rendered.startswith('first line\n')
-  assert len(rendered.encode()) == mcp.INLINE_REPLY_BYTES
-  assert rendered.endswith(f'at {REF}]')
+  assert rendered['text'].startswith('first line\n')
+  assert len(rendered['text'].encode()) == mcp.INLINE_REPLY_BYTES
+  assert rendered['text'].endswith(f'at {REF}]')
+  assert rendered['files'] == [{'ref': REF, 'path': str(spilled), 'size': spilled.stat().st_size}]
 
 
 def test_command_turns_worker_error_into_tool_error(monkeypatch) -> None:
@@ -204,7 +229,7 @@ ROSTER = [
 def _spilled_roster(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, roster: list) -> None:
   artifact = tmp_path / 'tools.json'
   artifact.write_text(json.dumps(roster))
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda _ref: str(artifact))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda _ref, **options: str(artifact))
   monkeypatch.setattr(
     mcp.mission,
     'ask',
@@ -261,7 +286,11 @@ def test_share_returns_upload_path_and_directory_entries(monkeypatch, tmp_path) 
   (directory / 'nested' / 'notes.txt').write_text('notes')
   shared: list[tuple[str, str]] = []
   monkeypatch.setattr(mcp.mission, 'share', lambda webview, ref: shared.append((webview, ref)))
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda _ref: str(directory))
+  monkeypatch.setattr(
+    mcp,
+    'fetch_artifact',
+    lambda _ref, *, checked: str(directory) if checked else pytest.fail('unchecked fetch'),
+  )
 
   result = mcp.share(context, 'webview-1', REF)
 
@@ -273,18 +302,18 @@ def test_share_returns_upload_path_and_directory_entries(monkeypatch, tmp_path) 
   assert context.state.get('webview-1').shares == [REF]
 
 
-def test_share_refuses_an_unfetched_ref_before_sharing_it(monkeypatch) -> None:
+def test_share_refuses_an_unreachable_ref_before_sharing_it(monkeypatch) -> None:
   context = _context()
   _open(monkeypatch, context)
   shared: list[tuple[str, str]] = []
   monkeypatch.setattr(mcp.mission, 'share', lambda webview, ref: shared.append((webview, ref)))
 
-  def refuse(ref: str) -> str:
-    raise ArtifactError(f'artifact {ref} is not fetched yet; fetch it first')
+  def refuse(ref: str, *, checked: bool) -> str:
+    raise ArtifactError(f'artifact {ref} is not shared with this peer')
 
-  monkeypatch.setattr(mcp, 'locate_artifact', refuse)
+  monkeypatch.setattr(mcp, 'fetch_artifact', refuse)
 
-  with pytest.raises(ArtifactError, match='fetch it first'):
+  with pytest.raises(ArtifactError, match='not shared'):
     mcp.share(context, 'webview-1', REF)
   assert shared == []
   assert context.state.get('webview-1').shares == []
@@ -314,7 +343,7 @@ def test_reopen_repeats_options_shares_and_last_url(monkeypatch, tmp_path) -> No
   assert first.webview == 'webview-1'
   artifact = tmp_path / 'later.txt'
   artifact.write_text('later')
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda _ref: str(artifact))
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda _ref, **options: str(artifact))
   monkeypatch.setattr(mcp.mission, 'share', lambda *_arguments: None)
   mcp.share(context, 'webview-1', OTHER_REF)
   context.state.get('webview-1').last_url = 'https://example.test/last'
@@ -418,3 +447,129 @@ def test_close_returns_the_webview_outcome(monkeypatch) -> None:
   monkeypatch.setattr(mcp, 'close_webview', lambda _webview: outcome)
 
   assert mcp.close(context, 'webview-1') == outcome
+
+
+def test_command_separates_mint_failures_from_normalized_files(monkeypatch, tmp_path):
+  context = _context()
+  _open(monkeypatch, context)
+  original_ref = REF.rsplit('/', 1)[0] + '/statement (1).pdf'
+  normalized_ref = REF.rsplit('/', 1)[0] + '/statement_1_.pdf'
+  artifact = tmp_path / 'download.pdf'
+  artifact.write_bytes(b'pdf payload')
+  fetched = []
+
+  def fetch(ref, *, checked):
+    assert checked
+    fetched.append(ref)
+    return str(artifact)
+
+  monkeypatch.setattr(tool_files, 'fetch_artifact', fetch)
+  monkeypatch.setattr(
+    mcp.mission,
+    'ask',
+    lambda *args, **options: _answer(
+      {
+        'text': 'downloaded',
+        'files': [
+          {'name': 'output/statement (1).pdf', 'ref': original_ref},
+          {'name': 'output/trace.zip', 'error': 'named file was not written by the command'},
+        ],
+      }
+    ),
+  )
+
+  result = mcp.command(context, 'webview-1', 'browser_snapshot')
+
+  assert fetched == [normalized_ref]
+  assert result == {
+    'text': 'downloaded',
+    'files': [{'ref': normalized_ref, 'path': str(artifact), 'size': len(b'pdf payload')}],
+    'failed': [{'name': 'output/trace.zip', 'error': 'named file was not written by the command'}],
+  }
+
+
+def test_command_propagates_a_returned_file_fetch_failure(monkeypatch):
+  context = _context()
+  _open(monkeypatch, context)
+  monkeypatch.setattr(
+    mcp.mission,
+    'ask',
+    lambda *args, **options: _answer(
+      {'text': 'done', 'files': [{'name': 'upload.txt', 'ref': REF}]}
+    ),
+  )
+
+  def refuse(ref, *, checked):
+    raise ArtifactError('stored content no longer matches its digest')
+
+  monkeypatch.setattr(tool_files, 'fetch_artifact', refuse)
+  with pytest.raises(ArtifactError, match='no longer matches'):
+    mcp.command(context, 'webview-1', 'browser_snapshot')
+
+
+def test_command_reads_a_whole_reply_spill_through_a_checked_fetch(monkeypatch, tmp_path):
+  context = _context()
+  _open(monkeypatch, context)
+  artifact = tmp_path / 'reply.json'
+  artifact.write_text(json.dumps({'text': 'whole reply', 'files': []}))
+  fetched = []
+
+  def fetch(ref, *, checked):
+    assert checked
+    fetched.append(ref)
+    return str(artifact)
+
+  monkeypatch.setattr(tool_files, 'fetch_artifact', fetch)
+  monkeypatch.setattr(
+    mcp.mission,
+    'ask',
+    lambda *args, **options: _answer({'spilled': 'reply', 'ref': REF}),
+  )
+
+  assert mcp.command(context, 'webview-1', 'browser_snapshot') == {
+    'text': 'whole reply',
+    'files': [],
+    'failed': [],
+  }
+  assert fetched == [REF]
+
+
+@pytest.mark.asyncio
+async def test_tool_metadata_exposes_the_file_contract_and_typed_command_result():
+  tools = {tool.name: tool for tool in await mcp.toolset.build().list_tools()}
+  assert tool_files.RETURNED_FILE_GUIDANCE in tools['command'].description
+  assert 'size: int' in tools['command'].description
+  assert 'failed:' in tools['command'].description
+  for name, parameter in [('share', 'ref'), ('open', 'share')]:
+    assert (
+      tools[name].parameters['properties'][parameter]['description']
+      == tool_files.FILE_PARAMETER_DESCRIPTION
+    )
+
+
+def test_share_fetches_a_file_with_checked_integrity_before_sharing(monkeypatch, tmp_path):
+  context = _context()
+  _open(monkeypatch, context)
+  artifact = tmp_path / 'upload.txt'
+  artifact.write_text('upload')
+  events = []
+
+  def fetch(ref, *, checked):
+    assert checked
+    events.append(('fetch', ref))
+    return str(artifact)
+
+  monkeypatch.setattr(mcp, 'fetch_artifact', fetch)
+  monkeypatch.setattr(mcp.mission, 'share', lambda webview, ref: events.append(('share', ref)))
+
+  assert mcp.share(context, 'webview-1', REF) == {'path': f'/tree/artifacts/{REF}'}
+  assert events == [('fetch', REF), ('share', REF)]
+
+
+def test_share_refuses_a_malformed_ref_without_fetching_or_sharing(monkeypatch):
+  context = _context()
+  _open(monkeypatch, context)
+  monkeypatch.setattr(mcp, 'fetch_artifact', lambda *args, **options: pytest.fail('must not fetch'))
+  monkeypatch.setattr(mcp.mission, 'share', lambda *args: pytest.fail('must not share'))
+  with pytest.raises(ValueError, match='malformed artifact ref'):
+    mcp.share(context, 'webview-1', '/etc/passwd')
