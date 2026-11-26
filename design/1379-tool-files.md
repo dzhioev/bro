@@ -121,6 +121,7 @@ An artifact file's fields:
 - **R2.** When the result arrives, every returned file's `path` exists and reads as the ref's content:
   `take` verifies the materialization it answers (§4.4).
 - **R3.** Every returned file's name obeys the file name rule.
+  `take` keeps the name its ref carries, so a file a tool took and hands back goes through `return_ref` (§4.5), never straight from `take`.
 - **R4.** The tool's description says which files it returns and carries the returned-file guidance, defined once beside `ArtifactFile`:
   "Each returned file is a read-only file at `path`, addressed by its artifact `ref`:
   open it at `path` with file tools, or read it by `ref` with the artifact tools.
@@ -472,13 +473,13 @@ Attachment names a mail tool receives, through `file_name(raw, fallback='attachm
 
 A remote producer:
 a webview worker mints a download as `sha256:77de…/statement (1).pdf`, which reaches the owning session,
-and reports a second file, `output/trace.zip`, as one it could not mint.
+and reports a second file its result named, `/tree/output/trace.zip`, as one it could not mint.
 `webview::command` returns the download through `return_ref(ref, 'download.bin')`:
 
 ```
 {"text": "### Result\n…",
  "files": [{"ref": "sha256:77de…/statement_1_.pdf", "path": "/var/ride/artifacts/sha256:77de…/statement_1_.pdf", "size": 88210}],
- "failed": [{"name": "output/trace.zip", "error": "named file was not written by the command"}]}
+ "failed": [{"name": "/tree/output/trace.zip", "error": "named file was not written by the command"}]}
 ```
 
 Sending a returned file:
@@ -565,15 +566,17 @@ End-to-end routes, each run through real sessions by the stage that completes it
 ## 10. Existing tools
 
 - `browser::look` returns what it read as a returned file, `file`, where it returned a bare `ref`:
-  page text through `return_bytes` as `page.txt`, a worker's snapshot through `return_ref`, and the artifact it was given as `take` answers it.
-  Its `ref` input is a file parameter read through `take`, so that artifact no longer has to be fetched first.
+  page text through `return_bytes` as `page.txt`, and a worker's snapshot or the artifact it was given through `return_ref`.
+  Its `ref` input is a file parameter, read at the path `return_ref` answers,
+  so that artifact no longer has to be fetched first and comes back under a name that obeys the rule (R3).
 - `webview::command` returns `{text, files, failed}` where it returned a string.
   `text` is the reply text, cut past the tool's inline bound, 4 KiB today, with a marker naming the whole reply's ref.
   `files` holds every file the worker minted, each through `return_ref`,
   and for a cut reply the whole text as `reply.txt`
   — through `return_bytes` where the tool server holds the text, through `return_ref` where the worker spilled it.
   `failed` lists `{name, error}` for each file the worker reports it could not mint:
-  `name` is the worker's tree-relative path and `error` its reason, both untrusted data.
+  `name` is the path the worker reported, tree-relative for a file it tried to mint and as its result named it for one it did not,
+  and `error` is its reason, both untrusted data.
   A failure the worker reports never fails the call, whose Playwright command has already run;
   a helper that raises fails it (§7).
 - `webview::share` takes a file parameter and hands the ref on by live share, P2's remote path.
