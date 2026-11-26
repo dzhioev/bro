@@ -1,17 +1,24 @@
 """Live probes of the transcripts the pinned Claude Code writes when a session
-is resumed, cleared or branched, and of the trails a resumed session records.
+is resumed, cleared or branched, of the `SessionStart` hooks it runs then, and
+of the trails and the resume notice a resumed session records.
 
 The session recorder decides each trail's edge from those files alone
 (`trail_recorder.py`): a resume has to append to the transcript it continues,
 `/clear` has to open one sharing no record with it, and `/branch` and
 `--fork-session` have to copy its records, uuids kept, into a new one, with
-`/branch` naming the transcript each record came from. The route through
+`/branch` naming the transcript each record came from. The session's
+`SessionStart` hook (`session_start.py`) registers each transcript it is told,
+and on a resume returns the notice as additional context, which has to reach
+the request and the transcript ahead of the next user line; a resume that
+ends before any input has to leave no line carrying a uuid. The route through
 `ride` resumes a recorded session, branches it, and reads the edges its trails
-got."""
+got and the notice its transcript carries."""
 
 import json
 import os
+import shlex
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -34,6 +41,7 @@ from bro.claude.provisioning import claude_code_version
 from bro.monitor import workspace_session_dir
 from bro.trails.local import LocalStore
 from bro.trails.record.recording_map import FILENAME
+from bro.workspace.launch_facts import Launches, resume_notice
 from bro.workspace.paths import ride_trails_dir, workspace_dir
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
@@ -224,6 +232,110 @@ def test_a_forked_session_copies_the_records_without_naming_their_transcript(
   assert all('forkedFrom' not in record and record['sessionId'] == fork.stem for record in copied)
 
 
+_SECRET = 'PELICAN'
+
+
+def _hooked_settings(root: Path) -> tuple[str, Path]:
+  """`--settings` running a `SessionStart` hook that logs what it is told, and on a
+  resume adds a context naming the secret word; with the log it writes."""
+  starts = root / 'starts.jsonl'
+  hook = root / 'hook.py'
+  hook.write_text(
+    'import json, sys\n'
+    'payload = json.load(sys.stdin)\n'
+    f'with open({str(starts)!r}, "a") as starts:\n'
+    '  starts.write(json.dumps(payload) + "\\n")\n'
+    'if payload["source"] == "resume":\n'
+    '  context = "The secret word is ' + _SECRET + '."\n'
+    '  output = {"hookEventName": "SessionStart", "additionalContext": context}\n'
+    '  print(json.dumps({"hookSpecificOutput": output}))\n'
+  )
+  command = shlex.join([sys.executable, str(hook)])
+  settings = {'hooks': {'SessionStart': [{'hooks': [{'type': 'command', 'command': command}]}]}}
+  return json.dumps(settings), starts
+
+
+def _starts(log: Path) -> list[dict]:
+  return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
+@pytest.mark.parametrize('mode', ['print', 'tui'])
+def test_a_resume_hooks_context_reaches_the_request_ahead_of_the_next_user_line(
+  tmp_path: Path, claude: Path, mode: str
+) -> None:
+  config = _config(tmp_path)
+  settings, starts = _hooked_settings(tmp_path)
+  _print(claude, config, tmp_path, 'Reply with the single word ONE.', '--settings', settings)
+  [transcript] = _transcripts(config / 'projects')
+  before = len(_records(transcript))
+
+  prompt = 'Reply with the secret word alone.'
+  if mode == 'print':
+    _print(claude, config, tmp_path, prompt, '--settings', settings, '--resume', transcript.stem)
+  else:
+    argv = [str(claude), '--model', 'haiku', '--settings', settings, '--resume', transcript.stem]
+    with terminal(argv, _environment(config), tmp_path) as tui:
+      _await(lambda: len(_starts(starts)) == 2, 'no SessionStart for the resume')
+      tui.type_line(prompt)
+      _await(lambda: _replied(_records(transcript)[before:], _SECRET), 'no reply naming the word')
+
+  assert [(start['source'], start['transcript_path']) for start in _starts(starts)] == [
+    ('startup', str(transcript)),
+    ('resume', str(transcript)),
+  ]
+  records = _records(transcript)[before:]
+  [context] = [
+    line
+    for line, record in enumerate(records)
+    if record.get('type') == 'attachment'
+    and record['attachment']['type'] == 'hook_additional_context'
+  ]
+  assert records[context]['attachment']['content'] == [f'The secret word is {_SECRET}.']
+  user = next(line for line, record in enumerate(records) if record.get('type') == 'user')
+  assert context < user
+  assert records[user]['message']['content'] == prompt
+  assert _replied(records[user:], _SECRET)
+
+
+def test_a_resume_ended_before_any_input_adds_no_line_carrying_a_uuid(
+  tmp_path: Path, claude: Path
+) -> None:
+  config = _config(tmp_path)
+  settings, starts = _hooked_settings(tmp_path)
+  _print(claude, config, tmp_path, 'Reply with the single word ONE.', '--settings', settings)
+  [transcript] = _transcripts(config / 'projects')
+  before = len(_records(transcript))
+  argv = [str(claude), '--model', 'haiku', '--settings', settings, '--resume', transcript.stem]
+  with terminal(argv, _environment(config), tmp_path) as tui:
+    _await(lambda: len(_starts(starts)) == 2, 'no SessionStart for the resume')
+    tui.type_line('/exit')
+    assert tui.process.wait(timeout=_AWAIT_SECONDS) == 0
+
+  added = _records(transcript)[before:]
+  assert not any('uuid' in record for record in added)
+
+
+def test_branch_and_clear_start_the_transcript_each_opens(tmp_path: Path, claude: Path) -> None:
+  config = _config(tmp_path)
+  settings, starts = _hooked_settings(tmp_path)
+  argv = [str(claude), '--model', 'haiku', '--settings', settings, 'Reply with the word ONE.']
+  with terminal(argv, _environment(config), tmp_path) as tui:
+    _await(lambda: len(_transcripts(config / 'projects')) == 1, 'no transcript')
+    [first] = _transcripts(config / 'projects')
+    _await(lambda: _replied(_records(first), 'ONE'), 'no reply to the first prompt')
+    tui.type_line('/branch')
+    _await(lambda: len(_starts(starts)) == 2, 'no SessionStart for the branch')
+    tui.type_line('/clear')
+    _await(lambda: len(_starts(starts)) == 3, 'no SessionStart for the clear')
+
+  startup, branched, cleared = _starts(starts)
+  assert (startup['source'], startup['transcript_path']) == ('startup', str(first))
+  assert [branched['source'], cleared['source']] == ['fork', 'clear']
+  opened = {Path(branched['transcript_path']), Path(cleared['transcript_path'])}
+  assert len(opened) == 2 and first not in opened
+  assert all(path.parent == first.parent for path in opened)
+
+
 def _ride(data: Path, *arguments: str, **options: Any) -> subprocess.CompletedProcess:
   return subprocess.run(
     [console_script('ride'), *arguments],
@@ -285,6 +397,7 @@ def test_a_resumed_and_branched_session_records_resume_and_branch_trails(
   [transcript] = _transcripts(projects)
   [root] = _entries(session)[transcript.stem]
   assert root['forked_from'] is None
+  first_lines = len(_records(transcript))
 
   argv = [console_script('ride'), 'resume', 'resume-probe']
   with bounded(_SESSION_TIMEOUT_SECONDS), terminal(argv, _ride_environment(data), tree) as tui:
@@ -298,6 +411,20 @@ def test_a_resumed_and_branched_session_records_resume_and_branch_trails(
     _await(lambda: branch.stem in _entries(session), 'no trail for the branch')
     tui.type_line('/exit')
     assert tui.process.wait() == 0
+
+  launches = Launches.load(session).entries
+  assert [launch.record for launch in launches] == [transcript.stem, transcript.stem, branch.stem]
+  assert [launch.start for launch in launches[:2]] == [0, first_lines]
+  continued = _records(transcript)[first_lines:]
+  user = next(line for line, record in enumerate(continued) if record.get('type') == 'user')
+  assert continued[user]['message']['content'] == 'Reply with the single word TWO.'
+  [context] = [
+    record['attachment']['content']
+    for record in continued[:user]
+    if record.get('type') == 'attachment'
+    and record['attachment']['type'] == 'hook_additional_context'
+  ]
+  assert context == [resume_notice(launches[1].facts, launches[0].facts)]
 
   entries = _entries(session)
   earlier, resumed = entries[transcript.stem]

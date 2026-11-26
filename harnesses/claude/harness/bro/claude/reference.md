@@ -33,6 +33,7 @@ the runner resolves the actual session id later, from its cwd's projects dir.
 The runner (`harnesses/claude/harness/bro/claude/runner.py`) then, in order:
 refuses a session whose own Claude configuration could take a call around the gate of a tool it is served behind one, and under a finite command list writes the session's brash policy (both in "The claude argv" below);
 resolves a resume's Claude session id;
+reads the session's `launch-facts.json`, failing on a malformed file;
 starts the session-local MCP server (see "Session-local MCP serving");
 builds the Claude argv (see "The claude argv");
 starts the session recorder daemon (see "Session recording");
@@ -42,6 +43,12 @@ A SIGTERM aimed at `do-ride` (`docker stop`, kill) reaches it as the interrupt a
 one a terminating service tool sent waits instead for the turn the session-end hook stopped (see "Turn ends and watch delivery").
 `harnesses/claude/harness/bro/claude/interrupt.py` owns that per-flavor split.
 After Claude exits the runner stops the server and recorder (the stop is the recorder's final append and trail end).
+
+Every session's `SessionStart` hook, `bro.claude.session_start`, registers the lifetime's launch facts (`bro/reference/ride.md`, "The session executable")
+for each transcript Claude Code starts writing, at startup, on a resume, `/branch` and `/clear`, at its line count then.
+On a resume it returns the notice as its additional context, which Claude Code writes as a `hook_additional_context` attachment ahead of the next user line and sends with it.
+The baseline is the transcript's newest entry below its last line carrying a `uuid`, since Claude Code appends lines without one even to a session closed before any input;
+an entry this lifetime registered gives no notice.
 
 The runner exports `claude/usage.json` in the session state dir as the session's usage file (`BRO_USAGE_FILE`, `bro.llm.usage`),
 which a runner thread keeps current from the session's newest transcript segment and the transcripts of the subagents it spawned,
@@ -150,7 +157,6 @@ During a live parent, a runner-side monitor waits and reaps the projector, remov
 the pid guard covers that exit-to-cleanup window, so an unexpected child death renders blank rather than stale.
 The remaining settings commands use the `do-ride` interpreter, so neither leans on PATH resolution nor on a file mode the wheel format does not guarantee;
 flagSettings outranking project settings means a consuming project neither declares a statusLine nor can break the session's with a stale one.
-The corollary is that a bare `claude` launched outside ride gets claude's default bar.
 
 Claude's own attribution is off in every managed session
 — its commit trailer, its pull-request line, and the appended session link:
@@ -160,8 +166,8 @@ the framework carries commit attribution of its own, and the same flagSettings r
 
 Every session gets its MCP tools from a session-local HTTP server the runner owns
 — one mechanism for both execution modes, dying with the session.
-The runner starts `mcp-server persona:<name> --http`, by its absolute path in the runtime the runner runs from, on an OS-assigned port (a fixed port would collide between concurrent sessions sharing a netns) with a per-session bearer token.
-`mcp-server --http --port 0 --port-file <path>` binds the socket *before* its heavy imports and publishes the real port through the port file, which the runner polls (milliseconds) before building the `--mcp-config` and launching claude;
+The runner starts `mcp-server persona:<name> --http`, by its absolute path in the runtime the runner runs from, on an OS-assigned port with a per-session bearer token.
+`mcp-server --http --port 0 --port-file <path>` binds the socket *before* its heavy imports and publishes the real port through the port file, which the runner polls before building the `--mcp-config` and launching claude;
 a claude connect that lands mid-import sits in the TCP backlog until uvicorn accepts on the pre-bound socket.
 The server is terminated when claude exits;
 a SIGKILLed runner orphans it.
@@ -187,8 +193,7 @@ the argv builder mounts each endpoint under its namespace as the claude server k
 Every server entry in a ride-generated `--mcp-config` carries `alwaysLoad: true`:
 a headless (`-p`) run then holds its first request until the server is connected, but an interactive session's argv-seeded first prompt does not wait
 — claude's MCP connects stay async, so that first turn can reach the model with no tools attached, bridged by Claude's own still-connecting reminder and ToolSearch.
-The runner polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout;
-the runner's own argv build overlaps the server's import, so much of the wait is already paid when the gate is reached.
+The runner polls the server's `/health` until ready *before* launching claude, so the configured bro and tool graph's potentially heavy imports is paid off claude's critical path instead of inside that startup block and its connect timeout.
 
 In boxed isolation the server runs inside the container, so the scoped credential store carries the served tools' own secrets (the persona's claude-harness manifest)
 — no deployed-server token is involved.
@@ -210,6 +215,7 @@ bro spells are not copied into `.claude/skills/` and have no slash-command alias
 A Claude session keeps its Claude Code state in the workspace's `claude/` state dir, the config root `CLAUDE_CONFIG_DIR` names (`harnesses/claude/harness/bro/claude/claude_config.py`),
 and its runtime artifacts under the session records' `claude/`
 — recorder and projector logs, the live statusLine projection, the usage file and its publisher lock, and the persistent Claude temp root.
+The session records' `launch-facts.json` names each transcript a lifetime began to write.
 A member that joined a party keeps its private Claude state under `party/<member>/claude/`, which a boxed join reaches through the party mount as `CLAUDE_CONFIG_DIR=/var/ride/party/<member>/claude`.
 Removing the workspace reclaims all of it.
 No Claude Code hooks are wired for clone creation or workspace provisioning, which `ride` owns.
@@ -224,8 +230,8 @@ The launcher's settings, hooks, permissions, custom agents, and OAuth credential
 
 The container does **not** bind-mount `~/.claude.json` from the host, nor does the host's OAuth credentials file ever enter the container.
 Instead, the launch provisions a container-private `.claude.json` in the workspace's `claude/` dir,
-which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`harnesses/claude/harness/bro/claude/claude_config.py:container_claude_state`
-— claude state is launch data the harness's boxed extras put on the neutral `Launch`, so a bro-harness container, which runs no Claude, mounts no claude state at all), while session auth comes from the `claude_code` token (below):
+which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names
+(`claude_config.py:container_claude_state`: launch data the harness's boxed extras put on the neutral `Launch`, so a bro-harness container mounts none), while session auth comes from the `claude_code` token (below):
 
 - `claude/.claude.json` — constructed once per workspace from an explicit config (`installMethod: global` to match the image's `npm i -g` install, `hasCompletedOnboarding`,
   `hasTrustDialogAccepted: true` on the project entry for the session's start directory so guided sessions skip the folder-trust prompt,
@@ -240,9 +246,7 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
 - **Session auth (`CLAUDE_CODE_OAUTH_TOKEN`)** — Claude sessions authenticate with this env var, which the **required** `claude_code` secret (a long-lived token that `claude-setup-token` mints) exports via its registry install hook.
   Claude Code reads it above any credentials file, and one stable bearer is shared by every session
   — so no OAuth credentials file is mounted or synced, and none of the cross-session refresh-token rotation that forced the periodic `/login`.
-  Being required, a missing token fails loudly on the launcher at scoped-store hydration, before the container starts (not as a turn-1 401 inside it).
-  Bro-run containers request no token;
-  only the Claude path does.
+  Being required, a missing token fails loudly on the launcher at scoped-store hydration, before the container starts.
   Unboxed sessions get the same var injected into the claude subprocess env directly (`bro.claude.claude_auth.apply_claude_auth`, applied idempotently by both the outer unboxed launch and the `do-ride` session executable next to claude).
   The outer launch reads it from the launch's scoped store rather than the launcher's ambient credential selection.
   The token is equally required there:
@@ -265,9 +269,6 @@ which reaches claude inside the mounted dir that `CLAUDE_CONFIG_DIR` names (`har
   It is mounted from the host rather than living in the container because the container is `--rm`'d at exit while the workspace outlives it:
   the transcripts are what `ride resume` continues and what `ride list` reads a subject from, and summon control reads the trail pointer beside them on the launcher while the session runs.
 - `claude/projects/<encoded start directory>/` — where Claude Code stores the session JSONL for the start directory.
-
-This means each boxed session has its own private `~/.claude.json` (so MCP server allow-lists are per-workspace) and its own session log directory, while authenticating with the shared,
-non-rotating `claude_code` token (so no session's refresh can blow away another's).
 
 ## Summoned Claude sessions
 

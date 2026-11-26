@@ -299,10 +299,14 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
   parser.add_argument(
     '--run-log', type=Path, default=None, env=False, help='save the run log at this path'
   )
+  parser.add_argument('--resume-notice', default=None, env=False, help=base_args.SUPPRESS)
   args = parser.parse(argv)
 
   if args['at'] is not None and args['fork'] is None:
     log.error('--at names a fork point; it requires --fork')
+    return 1
+  if args['resume_notice'] is not None and args['fork'] is None:
+    log.error('--resume-notice opens a continued conversation; it requires --fork')
     return 1
 
   try:
@@ -334,6 +338,7 @@ def chat_main(argv: list[str], *, program: list[str]) -> Optional[int]:
           hold=hold,
           activity_file=args['activity_file'],
           run_log=args['run_log'],
+          notice=args['resume_notice'],
         )
       except (ValueError, OSError) as error:
         log.error('%s', error)

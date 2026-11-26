@@ -28,6 +28,7 @@ from bro.claude.statusline import REFRESH_SECONDS, statusline_command
 from bro.claude.system_prompt import session_append_prompt
 from bro.claude.waiter_state import WAITER_EVENTS, WAITER_MARK
 from bro.mcp import Reach
+from bro.workspace.launch_facts import LaunchFacts
 from ride.workspace.metadata import Isolation
 
 if TYPE_CHECKING:
@@ -106,6 +107,17 @@ def session_end_hooks() -> dict:
   return {'PostToolUse': [{'matcher': tool, 'hooks': [stop]} for tool in (ANSWER_TOOL, RAISE_TOOL)]}
 
 
+def session_start_hooks(earlier_launches: int, launch_facts: LaunchFacts) -> dict:
+  """the `hooks` settings block registering `launch_facts` for each transcript the
+  session starts writing, after the `earlier_launches` entries of earlier lifetimes."""
+  command = _settings_command(
+    'bro.claude.session_start',
+    str(earlier_launches),
+    json.dumps(launch_facts.to_wire(), separators=(',', ':')),
+  )
+  return {'SessionStart': [{'hooks': [{'type': 'command', 'command': command}]}]}
+
+
 ACTIVITY_EVENTS = ('UserPromptSubmit', 'PostToolUse', 'Stop')
 
 
@@ -176,6 +188,8 @@ def build_claude_launch(
   brash_policy: Optional[Path],
   activity_file: Path,
   plugin_dir: Optional[Path],
+  launch_facts: LaunchFacts,
+  earlier_launches: int,
 ) -> ClaudeLaunch:
   """build the claude argv for a session.
 
@@ -189,6 +203,8 @@ def build_claude_launch(
   no shell or an unrestricted one. `activity_file` is the session's activity mark
   its hooks touch. `plugin_dir` is the session's copy of ride's Claude plugin
   (`bro.claude.claude_plugin`); None for a session that loads none.
+  `launch_facts` are the lifetime's, which its `SessionStart` hook registers
+  after the `earlier_launches` entries the session's launch-facts file holds.
   """
   from bro.registry import create_bro
 
@@ -215,7 +231,11 @@ def build_claude_launch(
   if finite(reach) != (brash_policy is not None):
     raise ValueError(f'{spec.bro} needs a brash policy exactly where its command list is finite')
   hooks = {**watch_waiter_hooks(), **gate_hooks(reach, brash_policy)}
-  for block in (session_end_hooks(), activity_hooks(activity_file)):
+  for block in (
+    session_end_hooks(),
+    activity_hooks(activity_file),
+    session_start_hooks(earlier_launches, launch_facts),
+  ):
     for event, entries in block.items():
       hooks.setdefault(event, []).extend(entries)
   settings['hooks'] = hooks

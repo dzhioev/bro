@@ -579,7 +579,15 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
   ]
 
   def fake_resume(
-    bro_name, trail_ref, *, recipe, at=None, hold=None, activity_file=None, run_log=None
+    bro_name,
+    trail_ref,
+    *,
+    recipe,
+    at=None,
+    hold=None,
+    activity_file=None,
+    run_log=None,
+    notice=None,
   ):
     captured['trail_ref'] = trail_ref
     captured['recipe'] = recipe
@@ -602,13 +610,28 @@ def test_fork_defaults_to_the_recorded_recipe(monkeypatch, capsys):
   assert 'conversation saved' not in capsys.readouterr().err
 
 
+def test_a_resume_notice_requires_fork(capsys):
+  assert _chat(['bro', 'record', '--resume-notice', '[notice: resumed]']) == 1
+  assert '--resume-notice opens a continued conversation; it requires --fork' in (
+    capsys.readouterr().err
+  )
+
+
 def test_bare_fork_selects_the_newest_call(monkeypatch):
   from bro.launch.resume import ResumedCall
 
   captured: dict = {}
 
   def fake_resume(
-    bro_name, trail_ref, *, recipe, at=None, hold=None, activity_file=None, run_log=None
+    bro_name,
+    trail_ref,
+    *,
+    recipe,
+    at=None,
+    hold=None,
+    activity_file=None,
+    run_log=None,
+    notice=None,
   ):
     captured['trail_ref'] = trail_ref
     return ResumedCall(runner=_MockRunner(), history=[], run=Path('old-log.jsonl'))
@@ -1285,10 +1308,23 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
   recorded_spec = llm_llms_openai.Recipe(model='gpt-6.1-sol', reasoning_effort='low')
 
   def fake_resume(
-    bro_name, trail_ref, *, recipe, at=None, hold='guided', activity_file=None, run_log=None
+    bro_name,
+    trail_ref,
+    *,
+    recipe,
+    at=None,
+    hold='guided',
+    activity_file=None,
+    run_log=None,
+    notice=None,
   ):
     captured.update(
-      trail_ref=trail_ref, recipe=recipe, at=at, hold=hold, activity_file=activity_file
+      trail_ref=trail_ref,
+      recipe=recipe,
+      at=at,
+      hold=hold,
+      activity_file=activity_file,
+      notice=notice,
     )
     return ResumedCall(runner=resumed_runner, history=[], run=Path(trail_ref))
 
@@ -1313,10 +1349,13 @@ def test_managed_continuation_uses_the_recorded_recipe_and_hold(monkeypatch):
       'attended',
       '--activity-file',
       '/session/activity',
+      '--resume-notice',
+      '[notice: resumed]',
     ],
     program=['bro', 'chat'],
   )
   assert code is None
+  assert captured['notice'] == '[notice: resumed]'
   assert captured['trail_ref'] == 'workspace-trail'
   assert captured['recipe'].recipe == recorded_spec
   assert captured['recipe'].source == 'defaults'

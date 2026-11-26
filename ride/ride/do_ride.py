@@ -19,7 +19,8 @@ from bro.launch.hold import HOLD_VARIABLE
 from bro.llm.llm import Recipe
 from bro.llm.resolved import RESOLVED_RECIPE_ENV, ResolvedRecipe
 from bro.monitor import PROCESS_FILENAME, SESSION_DIR_ENV, session_dir
-from bro.summon import party_member
+from bro.summon import RUNTIME_ENV, party_member
+from bro.workspace.launch_facts import LaunchFacts
 from bro.workspace.paths import ISOLATION_ENV, workspace_dir
 from bro.workspace.session import clear_requested_exit_status, requested_exit_status
 from ride.attachments import Attachment, get_attachment_type
@@ -259,6 +260,15 @@ def run_agent(argv: list[str], env: Optional[dict[str, str]] = None) -> int:
     return process.wait()
 
 
+def _launch_facts(run: SessionRun) -> LaunchFacts:
+  from ride.runtime_bundle import frozen_hash
+
+  runtime = os.environ.get(RUNTIME_ENV)
+  if runtime is None:
+    raise RuntimeError(f'{RUNTIME_ENV} is unset: do-ride requires the runtime it runs from')
+  return LaunchFacts.collect(runtime=frozen_hash(Path(runtime)), recipe=run.recipe, hold=run.hold)
+
+
 def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
   """Run the session in this process's prepared working directory."""
   os.environ.update(bro_git_identity_env(run.bro))
@@ -292,7 +302,7 @@ def run_session(harness: 'SessionHarness', run: SessionRun) -> int:
       save_deferred_contract(harness=get_harness(run.harness), hold=run.hold)
       watch_owner.store.start(watches.SESSION_WATCH_COMMAND)
       session_scope.enter_context(watch_owner.store.kept_alive(watches.SESSION_WATCH_COMMAND))
-    code = harness.run_session(run)
+    code = harness.run_session(run, _launch_facts(run))
   requested = requested_exit_status()
   return code if requested is None else requested
 

@@ -10,6 +10,7 @@ from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
   from bro.llm.llm import Recipe
+  from bro.workspace.launch_facts import LaunchFacts
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
   from ride.workspace.model import Workspace
@@ -67,7 +68,7 @@ class SessionHarness(Protocol):
     """Remove unused host-wide caches and report what was removed or retained."""
     ...
 
-  def run_session(self, spec: SessionRun) -> int: ...
+  def run_session(self, spec: SessionRun, launch_facts: LaunchFacts) -> int: ...
 
   def container_extras(
     self, spec: SessionSpec, workspace: Workspace, scoped: ScopedSecrets

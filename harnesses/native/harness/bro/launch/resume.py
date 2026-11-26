@@ -54,6 +54,7 @@ def resume(
   hold: Optional[str] = None,
   activity_file: Optional[Path] = None,
   run_log: Optional[Path] = None,
+  notice: Optional[str] = None,
 ) -> ResumedCall:
   path = latest(bro_name) if run_ref == RESUME_LATEST else Path(run_ref)
   if path is None:
@@ -71,5 +72,6 @@ def resume(
     hold=hold,
     activity_file=activity_file,
     run_log=run_log,
+    notice=notice,
   )
   return ResumedCall(runner=runner, history=history, run=log.path)

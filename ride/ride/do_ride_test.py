@@ -10,7 +10,9 @@ import bro.workspace.session as workspace_session
 import ride.do_ride as do_ride
 import ride.repo_attachment as repo_attachment
 from bro import watches
+from bro.llm.providers import format_recipe
 from bro.monitor import workspace_session_dir
+from bro.summon import RUNTIME_ENV
 from ride.harness import get_harness
 from ride.repo_attachment import repository_attachment
 from ride.session_test import _spec
@@ -29,6 +31,9 @@ def admitted_recipe(monkeypatch):
   monkeypatch.setenv(
     do_ride.RESOLVED_RECIPE_ENV, do_ride.encode_resolved_recipe(_spec().resolved_recipe)
   )
+
+
+_BUNDLE_HASH = 'ab' * 32
 
 
 def _command(spec) -> list[str]:
@@ -175,6 +180,7 @@ class TestRunSession:
     persona_effect=None,
   ):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(RUNTIME_ENV, str(tmp_path / 'runtime' / _BUNDLE_HASH / 'host'))
     if party_member:
       monkeypatch.setenv('RIDE_PARTY_MEMBER', 'broker-CH')
     else:
@@ -231,7 +237,7 @@ class TestRunSession:
     def persona(root):
       observed.append((root / 'provisioned').read_text())
 
-    def harness(run):
+    def harness(run, _launch_facts):
       assert len(observed) == (2 if run.resume else 1)
       return 0
 
@@ -335,7 +341,7 @@ class TestRunSession:
     seen: list[dict] = []
     process_path = tmp_path / 'session' / do_ride.PROCESS_FILENAME
 
-    def capture(_run):
+    def capture(_run, _launch_facts):
       seen.append(json.loads(process_path.read_text()))
       return 0
 
@@ -348,7 +354,7 @@ class TestRunSession:
   def test_the_session_is_marked_active_at_its_start_and_its_end(self, monkeypatch, tmp_path):
     activity_file = tmp_path / 'session' / 'activity'
 
-    def age_the_start_mark(_run):
+    def age_the_start_mark(_run, _launch_facts):
       os.utime(activity_file, (1000.0, 1000.0))
       return 0
 
@@ -376,11 +382,34 @@ class TestRunSession:
 
     monkeypatch.setattr(watches.Store, 'start', record_start)
 
-    def capture(_run):
+    def capture(_run, _launch_facts):
       assert started == ['snapshot', watches.SESSION_WATCH_COMMAND]
       return 0
 
     self._run(monkeypatch, tmp_path, harness_effect=capture)
+
+  def test_the_harness_runs_under_the_facts_of_its_launch(self, monkeypatch, tmp_path):
+    monkeypatch.setattr(watches, 'session_watch_admitted', lambda: True)
+    monkeypatch.setattr(watches.Store, 'start', lambda store, command: MagicMock())
+    captured: list[bool] = []
+    monkeypatch.setattr('bro.authority_view.capture_initial', lambda: captured.append(True))
+
+    def initial():
+      assert captured, 'the facts were collected before the initial authority was captured'
+      return {
+        'may_summon': ['eyebro'],
+        'summon_entries': ['@eyebro for bro{}'],
+        'permits': ['bro for *'],
+        'may_give': [],
+      }
+
+    monkeypatch.setattr('bro.authority_view.initial', initial)
+    _, harness, _ = self._run(monkeypatch, tmp_path)
+    run, facts = harness.run_session.call_args.args
+    assert facts.runtime == _BUNDLE_HASH
+    assert facts.llm == format_recipe(run.recipe)
+    assert facts.hold == run.hold
+    assert facts.may_summon == ('@eyebro for bro{}',)
 
   def test_skips_the_session_watch_when_the_rule_does_not_admit_it(self, monkeypatch, tmp_path):
     monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
@@ -392,7 +421,7 @@ class TestRunSession:
     monkeypatch.setattr(watches, 'session_watch_admitted', lambda: False)
     identities = []
 
-    def start_watch(_run):
+    def start_watch(_run, _launch_facts):
       watch = watches.session_store().start('sleep 30')
       identity = watch.producer_identity()
       assert identity is not None
@@ -412,7 +441,7 @@ class TestRunSession:
     stale.command_file.write_text('old command')
     stale.log.write_text('uncommitted\n[watch-run] exited 0\n')
 
-    def capture(_run):
+    def capture(_run, _launch_facts):
       store = watches.session_store()
       assert store.declared() == []
       assert store.take() is None
@@ -461,7 +490,7 @@ class TestRequestedExitStatus:
   def test_the_requested_status_outranks_the_harness_exit(self, monkeypatch, tmp_path):
     monkeypatch.setattr(os, 'kill', lambda pid, sig: None)
 
-    def request(_run):
+    def request(_run, _launch_facts):
       workspace_session.terminate_session(4)
       return 0
 

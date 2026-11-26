@@ -24,6 +24,7 @@ from bro.claude.live_claude_test_helper import (
   bounded,
   claude_token,
 )
+from bro.workspace.launch_facts_test_helper import FACTS
 from ride.do_ride import SessionRun
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
@@ -184,7 +185,7 @@ def test_silent_http_mcp_call_survives_the_native_idle_cut(
       watches.Owner.for_session(),
       bounded(_SESSION_TIMEOUT_SECONDS),
     ):
-      code = runner.run_session(_session(prompt, session / 'activity'))
+      code = runner.run_session(_session(prompt, session / 'activity'), FACTS)
 
   assert code == 0
   assert _RESULT in capfd.readouterr().out

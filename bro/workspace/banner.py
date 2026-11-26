@@ -20,17 +20,23 @@ _BRO_LOGO = """\
 """
 
 
-def _render_summon_targets(names: tuple[str, ...]) -> str:
-  """the allow-list entries, each marked with the further names it answers to."""
+def may_summon_row(
+  may_summon: tuple[str, ...], summon_entries: Optional[tuple[str, ...]]
+) -> tuple[str, ...]:
+  """the entries the banner prints in its `may_summon` row: the summon entries
+  where the authority carries them, else each allowed target marked with the
+  further names it answers to."""
+  if summon_entries:
+    return summon_entries
   # lazy: the registry import pulls the bro class graph, which importers of
   # this module must not pay for up front
   from bro.registry import lineage
 
   marked: list[str] = []
-  for name in names:
+  for name in may_summon:
     inherited = lineage(name)[1:]
     marked.append(f'{name} ({", ".join(inherited)})' if len(inherited) > 0 else name)
-  return ', '.join(marked)
+  return tuple(marked)
 
 
 @dataclass(frozen=True)
@@ -185,13 +191,7 @@ class SessionFacts:
       rows.append(('summoned:', '', f'{dim}yes — a summoner is waiting on the answer{reset}'))
 
     if self.may_summon is not None:
-      targets = (
-        ', '.join(self.summon_entries)
-        if self.summon_entries
-        else _render_summon_targets(self.may_summon)
-        if self.may_summon
-        else '(none)'
-      )
+      targets = ', '.join(may_summon_row(self.may_summon, self.summon_entries)) or '(none)'
       rows.append(('may summon:', '', f'{dim}{targets}{reset}'))
 
     if self.talk is not None:
@@ -249,13 +249,7 @@ class SessionFacts:
     if self.may_summon is not None:
       # spelled out when empty: "this session may summon nobody" is a different
       # answer from a launch surface that publishes no list at all
-      targets = (
-        ', '.join(self.summon_entries)
-        if self.summon_entries
-        else _render_summon_targets(self.may_summon)
-        if self.may_summon
-        else 'none'
-      )
+      targets = ', '.join(may_summon_row(self.may_summon, self.summon_entries)) or 'none'
       lines.append(f'may_summon: {targets}')
     if self.talk is not None:
       lines.append(f'talk: {", ".join(self.talk) or "none"}')

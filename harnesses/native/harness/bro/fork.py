@@ -72,8 +72,10 @@ def fork(
   hold: Optional[str] = None,
   activity_file: Optional[Path] = None,
   run_log: Optional[Path] = None,
+  notice: Optional[str] = None,
 ) -> Runner:
-  """Build a continuation with a server chain or a restored same-wire prefix."""
+  """Build a continuation with a server chain or a restored same-wire prefix;
+  `notice` is delivered as a notification ahead of its first exchange."""
   log = read(run)
   bound = latest_fork_point(log) if up_to_step_id is None else up_to_step_id
   target = new_path(log.path.parent) if run_log is None else run_log.resolve()
@@ -125,6 +127,8 @@ def fork(
     inner_llm.seed_chain(fork_step.extras['response_id'])
   else:
     inner_llm.restore(Prefix(effective_prompt, prefix.steps))
+  if notice is not None:
+    inner_llm.deliver_ahead(notice)
   runner._llm = inner_llm
   runner._tracker.start(
     bro=bro.name,

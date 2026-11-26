@@ -48,6 +48,10 @@ class LLM(ABC):
   def seed_chain(self, response_id: str) -> None:
     raise NotImplementedError
 
+  def deliver_ahead(self, text: str) -> None:
+    """Send `text` as a notification ahead of the next exchange's inputs; it starts no turn."""
+    raise NotImplementedError
+
   async def _track_step(self, kind: StepKind, body: object, **extras: object) -> Optional[int]:
     """record one step of the loop, touching the activity mark when one was given."""
     if self.activity_file is not None:
