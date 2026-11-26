@@ -8,7 +8,7 @@ Reads the design file the root task's `## Design` links with fresh eyes, verifie
 Implements nothing and changes no task status.
 
 parameters: {"task": "ref of the root task whose design to review and plan", "delivery?": "coordinator roles and gates the coordinator chose for the stages, beyond the stage default"}
-version: 1.0.0
+version: 1.1.0
 ---
 
 # plan
@@ -33,7 +33,9 @@ Use [[design]] for agreed revisions, without restarting settled decisions;
 revise the file on the design branch and push, never copying the specification back to the page.{{when #may_summon contains eyebro}}
 
 The design's pull request is the design review.
-Watch it with `poll-pr` using [[follow pr]]'s trust-file and replay procedure, armed before the reviewer is summoned.
+Start it only once the user has settled every objection and decision you brought them and the revisions they agreed are pushed
+— the eyebro reviews the design the user agreed to, not a draft still under discussion.
+Then watch the pull request with `poll-pr` using [[follow pr]]'s trust-file and replay procedure, armed before the reviewer is summoned.
 Reconcile the whole replay before acting;
 this is document review only, with no code folds or landing.
 [[Ask <the eyebro your banner's may_summon grants>]] to review that pull request as a document, not code:
