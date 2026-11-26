@@ -241,6 +241,8 @@ PYTEST_FILES = [
   'local/bro/local/syscall_tables_test.py',
   'local/bro/local/file_bench_test.py',
   'bro/artifact_mcp_test.py',
+  'bro/tool_files_test.py',
+  'local/bro/local/tool_files_test.py',
   'bro/run_lifecycle_test.py',
   'harnesses/native/harness/bro/fork_test.py',
   'harnesses/native/harness/bro/native/llm_test.py',

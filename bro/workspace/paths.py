@@ -9,6 +9,8 @@ from bro.workspace.git import git_run
 CONTAINER_TREE = Path('/tree')
 CONTAINER_TRAILS_ROOT = Path('/var/ride/trails')
 CONTAINER_ARTIFACTS_ROOT = Path('/var/ride/artifacts')
+CONTAINER_MINT_DIR = Path('/var/ride/mint')
+MINT_DIR_ENV = 'RIDE_MINT_DIR'
 CONTAINER_SESSION_DIR = Path('/var/ride/session')
 CONTAINER_PARTY_DIR = Path('/var/ride/party')
 _DATA_HOME_ENV = 'XDG_DATA_HOME'

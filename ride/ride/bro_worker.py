@@ -35,7 +35,12 @@ from bro.worker_types import (
   UnattributablePeer,
   WorkerType,
 )
-from bro.workspace.paths import CONTAINER_ARTIFACTS_ROOT, workspace_dir
+from bro.workspace.paths import (
+  CONTAINER_ARTIFACTS_ROOT,
+  CONTAINER_MINT_DIR,
+  MINT_DIR_ENV,
+  workspace_dir,
+)
 from ride.attachments import (
   AttachmentRequest,
   ResolvedAttachment,
@@ -247,7 +252,7 @@ def _lower_resolved_summon(
   artifacts: ArtifactStore,
   resolved: ResolvedAttachment | None,
 ) -> DockerLaunchSpec | ProcessLaunchSpec:
-  from ride.artifacts import view_mount
+  from ride.artifacts import mint_mount, view_mount
   from ride.root import ProcessLaunch
   from ride.workspace.model import Workspace
   from ride.workspace.spawn import DockerLaunchSpec, ProcessLaunchSpec
@@ -263,6 +268,11 @@ def _lower_resolved_summon(
     container_runtime.resolve()
   workspace = Workspace.ensure(workspace_name, attachments, launch.isolation, throwaway=True)
   record_resume_spec(workspace, spec)
+  mint_directory = artifacts.provision_mint(workspace_name)
+  session_env = summoned_child_env(launch.summoner)
+  session_env[MINT_DIR_ENV] = str(
+    CONTAINER_MINT_DIR if launch.isolation is Isolation.BOXED else mint_directory
+  )
   mounts: tuple[str, ...] = ()
   temporary_store: Optional[Path] = None
   if launch.isolation is Isolation.BOXED:
@@ -273,6 +283,7 @@ def _lower_resolved_summon(
         workspace_name,
         PurePosixPath(CONTAINER_ARTIFACTS_ROOT),
       ),
+      mint_mount(artifacts.ride, workspace_name),
     )
   else:
     temporary_store = Path(tempfile.mkdtemp(prefix=f'ride-{workspace_name}-store-'))
@@ -287,7 +298,7 @@ def _lower_resolved_summon(
       launch_scope,
       runtime_bundle=runtime_bundle,
       container_runtime=container_runtime,
-      env=summoned_child_env(launch.summoner),
+      env=session_env,
       mounts=mounts,
       credential_directory=(
         workspace.path / 'credentials' if temporary_store is None else temporary_store / 'store'
@@ -379,6 +390,12 @@ def _lower_join(
     PARTY_MEMBER_ENV: member,
     **summoned_child_env(launch.summoner),
   }
+
+  mint_directory = artifacts.mint_directory(workspace.name)
+  if mint_directory is not None:
+    member_env[MINT_DIR_ENV] = str(
+      CONTAINER_MINT_DIR if workspace.isolation is Isolation.BOXED else mint_directory
+    )
 
   if workspace.isolation is Isolation.BOXED:
     prepared_exec = boxed_member_launch(

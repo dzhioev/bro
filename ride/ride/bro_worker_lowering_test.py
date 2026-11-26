@@ -46,8 +46,10 @@ from bro.monitor import (
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
 from bro.workspace.paths import (
   CONTAINER_ARTIFACTS_ROOT,
+  CONTAINER_MINT_DIR,
   CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
+  MINT_DIR_ENV,
   workspace_dir,
   workspace_tree,
 )
@@ -299,6 +301,7 @@ class TestSummonLowering:
           'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
           'RIDE_SUMMONED': '1',
           'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
+          MINT_DIR_ENV: str(CONTAINER_MINT_DIR),
         },
         secrets={'aws', 'trails'},
         optional_secrets={'openai'},
@@ -316,6 +319,7 @@ class TestSummonLowering:
           _session_state_mount('broker-CH'),
           _party_mount('broker-CH'),
           ride.artifacts.view_mount(SESSION, 'broker-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
+          ride.artifacts.mint_mount(SESSION, 'broker-CH'),
         ),
         attachments=(repository_attachment(Path('/proj'), 'broker-CH'),),
         base_ref='PARENT-SHA',
@@ -522,6 +526,7 @@ class TestSummonLowering:
       _session_state_mount('broker-CH'),
       _party_mount('broker-CH'),
       ride.artifacts.view_mount(SESSION, 'broker-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
+      ride.artifacts.mint_mount(SESSION, 'broker-CH'),
     )
 
   def test_the_child_keeps_session_state_like_any_boxed_session(self, lowering_harness):
@@ -598,6 +603,7 @@ class TestSummonLowering:
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
+      MINT_DIR_ENV: str(CONTAINER_MINT_DIR),
     }
     assert lowered.base_ref == 'REF-SHA'
 
@@ -1258,6 +1264,7 @@ class TestClaudeSummonLowering:
       'RIDE_SESSION_DIR': str(CONTAINER_SESSION_DIR),
       'RIDE_SUMMONED': '1',
       'RIDE_SUMMONER': '{"trail_id":"T-parent"}',
+      MINT_DIR_ENV: str(CONTAINER_MINT_DIR),
     }
     assert lowered.launch.base_ref == 'PARENT-SHA'
     assert lowered.launch.extra_mounts == (
@@ -1265,6 +1272,7 @@ class TestClaudeSummonLowering:
       _session_state_mount('broker-CH'),
       _party_mount('broker-CH'),
       ride.artifacts.view_mount(SESSION, 'broker-CH', PurePosixPath(CONTAINER_ARTIFACTS_ROOT)),
+      ride.artifacts.mint_mount(SESSION, 'broker-CH'),
     )
     assert lowered.launch.tty is False
 
@@ -1430,3 +1438,66 @@ class TestRunRootViaBroker:
     assert captured['end'] is True
     assert callable(captured['lifetime'])
     assert captured['launch'] is launch
+
+
+@pytest.mark.parametrize('isolation', [Isolation.BOXED, Isolation.UNBOXED])
+@pytest.mark.parametrize('provisioned', [False, True])
+def test_join_gets_its_partys_mint_directory_only_when_provisioned(
+  lowering_harness, monkeypatch, tmp_path, isolation, provisioned
+):
+  workspace = Workspace.ensure(PARENT, (), isolation)
+  workspace.tree.mkdir(parents=True)
+  artifacts = _artifacts()
+  directory = artifacts.provision_mint(PARENT) if provisioned else None
+  monkeypatch.setattr(ride.session, 'find_container_id', lambda tree: 'cid-party')
+  launch = _launch(
+    target='dev',
+    prompt='p',
+    parent=PARENT,
+    parent_tree=workspace.tree,
+    summoner=SUMMONER,
+    harness='bro',
+    party='join',
+    isolation=None,
+  )
+  with contextlib.ExitStack() as cleanup:
+    lowered = ride.bro_worker._lower_join(launch, 'member', _runtime_bundle(tmp_path), artifacts)
+    if isinstance(lowered, workspace_spawn.ProcessLaunchSpec):
+      assert lowered.cleanup_directory is not None
+      cleanup.callback(shutil.rmtree, lowered.cleanup_directory)
+    environment = (
+      lowered.launch.env if isinstance(lowered, workspace_spawn.ExecLaunchSpec) else lowered.env
+    )
+    if provisioned:
+      assert environment[MINT_DIR_ENV] == str(
+        CONTAINER_MINT_DIR if isolation is Isolation.BOXED else directory
+      )
+    else:
+      assert MINT_DIR_ENV not in environment
+
+
+@pytest.mark.parametrize('isolation', [Isolation.BOXED, Isolation.UNBOXED])
+def test_spawn_provisions_the_childs_mint_directory(lowering_harness, tmp_path, isolation):
+  artifacts = _artifacts()
+  launch = _launch(
+    target='dev',
+    prompt='p',
+    parent=PARENT,
+    parent_tree=workspace_tree(PARENT),
+    summoner=SUMMONER,
+    harness='bro',
+    isolation=isolation,
+  )
+  with contextlib.ExitStack() as cleanup:
+    lowered = ride.bro_worker._lower_summon(
+      launch, 'child', _runtime_bundle(tmp_path), _container_runtime(), artifacts
+    )
+    directory = artifacts.mint_directory('child')
+    assert directory is not None and directory.is_dir()
+    if isinstance(lowered, workspace_spawn.DockerLaunchSpec):
+      assert lowered.launch.env[MINT_DIR_ENV] == str(CONTAINER_MINT_DIR)
+      assert ride.artifacts.mint_mount(artifacts.ride, 'child') in lowered.launch.extra_mounts
+    else:
+      assert lowered.env[MINT_DIR_ENV] == str(directory)
+      assert lowered.cleanup_directory is not None
+      cleanup.callback(shutil.rmtree, lowered.cleanup_directory)

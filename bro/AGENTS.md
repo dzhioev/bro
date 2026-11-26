@@ -69,9 +69,12 @@ A subpackage with a map of its own is pointed at, not described here.
   except that a summoned run first gets a notice, which each tool call it makes re-arms.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.fetch`, `artifact.locate`, `artifact.list`, `artifact.share`, and `artifact.export` kinds,
   the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
-  minting sends a relative-to-cwd or absolute path as an absolute peer-visible wire path;
-  `artifact_mcp.py` is the registered `artifact` toolset, fetching and listing reachable refs and reading and grepping fetched text refs in bounded windows;
+  tree minting resolves links in the peer's namespace and sends that absolute wire path with the requested name;
+  the client-only entry form names one regular file of the session's provisioned mint directory;
+  `artifact_mcp.py` is the registered `artifact` toolset, minting tree paths, fetching and listing reachable refs and reading and grepping fetched text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
+- `tool_files.py` — synchronous staged returns and checked takes of regular-file artifacts, the typed `ArtifactFile`, shared tool-description texts, and returned-file naming;
+  the extension contract is `reference/extending.md`, "Files in tools".
 - `job_supervisor.py` — the shared supervisor behind core's `watch-run` and bro-native's jobs:
   it runs the command in a process group of its own and outlives every descendant;
   SIGTERM terminates them, `KILL_SIGNAL` kills them, and the owner-liveness handle closing asks for both in turn.
@@ -140,7 +143,7 @@ A subpackage with a map of its own is pointed at, not described here.
   see `setup/AGENTS.md`
 - `trails/` — the recording pipeline;
   see `trails/AGENTS.md`
-- `workspace/` — the dependency-light workspace contracts core services read;
+- `workspace/` — the dependency-light workspace contracts core services read, including `paths.py` for runtime and mount paths and the mint-directory environment name;
   see `workspace/AGENTS.md` and `reference/ride.md`, "Home settings", for installation and host harness selections
 - `bros/bro/` — the core distribution's sole concrete persona, inside the shared PEP 420 `bros` namespace.
   It defines `Bro(BaseBro)`, the minimal bro registered as `bro`, with a minimal go-to system prompt and no MCP servers.

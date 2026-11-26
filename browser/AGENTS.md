@@ -34,23 +34,24 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 It navigates and extracts:
 before browsing, it refuses a request or instruction that asks for analysis, suggesting an extraction-only rewording.
 Its own seed grants the whole webview worker type, while profile selection, a visible view, and page downloads require the guarded `webview.cred`, `webview.vnc`, and `webview.downloads` permissions.
-It mounts `webview::`, `browser::`, and `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
+It mounts `webview::`, `browser::`, and only `fetch`, `list`, `read` and `grep` from `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
 Its answers omit element refs, page markup such as snapshot syntax or HTML, and tool names;
 Markdown formatting is allowed.
 The `[[browse]]` spell keeps one webview open while the owner sends each instruction as a quest question;
 a clarification is a counter-question in that thread, and "done" closes the webview and returns the session log.
 
 `browser::look` captures a snapshot or the page's decoded `innerText`, or reads an existing artifact ref, and sends that representation plus one focused question to a disposable reader.
-It returns a bounded answer and only element refs whose role and accessible name match the snapshot it read.
+It returns the representation under `file`, a bounded answer and only element refs whose role and accessible name match the snapshot it read.
 The optional `mu` credential enables the reader through its `reader` role and is the boundary across which page content travels;
-without it the browser uses `browser_find`, targeted snapshots, and `artifact::read` or `artifact::grep` over refs it fetched with `artifact::fetch`.
+without it the browser uses `browser_find`, targeted snapshots, and `artifact::read` or `artifact::grep` over returned files, which are already fetched.
 
 ## Owner toolset
 
 The `webview` toolset is the typed owner surface over the mission wire.
-`open` retains the launch options and initial shares, `command` bounds reply text while preserving the whole text by artifact ref,
+`open` retains the launch options and initial shares, `command` returns `{text, files, failed}` with bounded reply text, returned files and worker mint failures,
 and `tools` lists the live Playwright roster by name and first sentence, or returns one tool's roster entry with its input schema.
-`share` hands the webview a ref the owner fetched and returns the worker-side upload path, `reopen` repeats every retained option and share before restoring the last reported page URL, and `close` returns the terminal outcome.
+`share` fetches a reachable ref with checked integrity, hands it to the webview and returns the worker-side upload path.
+`reopen` repeats every retained option and share before restoring the last reported page URL, and `close` returns the terminal outcome.
 
 ## Owner command
 
@@ -67,6 +68,8 @@ It holds the stored name's lock for the run, writes only while the starting mate
 Commands between `open` and `close` use `mission ask <id> '<json>' --wait`, with `mission history <id>` retaining their full payloads.
 `mission share <id> <ref>` makes a later-minted upload available under `/tree/artifacts/<ref>` without reopening the webview;
 the daemon fetches each artifact a `browser_file_upload` names there, shared at launch or since, before Playwright reads it.
+Every upload path must be absolute and normalized beneath a reachable ref in that view;
+this includes the worker's own downloads, which upload by sharing their refs back.
 
 ## Browser profile
 
@@ -87,7 +90,8 @@ Capture runs the display, noVNC, and Playwright startup shared with serve in a p
 A webview mission has talk `{owner.question, worker.say}` and carries JSON objects as its chat payloads.
 An owner question is either one Playwright MCP call as `{tool, arguments?}` or `{webview: tools|close}`.
 The daemon answers a tool call with `{text, files}`, where each file names its tree-relative path and artifact ref or mint error, and answers a malformed or failed call with `{error}`.
-An oversized reply names the artifact holding its text or its whole object instead.
+An oversized wire reply names the artifact holding its text or its whole object instead.
+The owner toolset materializes the files its result returns, including `reply.txt` for a cut reply, without staging files in the session's checkout.
 The `ready` say is `{event: ready, vnc}`, and a close ends the mission with the number of successful tool calls.
 
 The daemon mints the files a tool result names — link lines in its `Result` and `Snapshot` sections and download lines in its `Events` section — when the call wrote them anywhere under `/tree` outside the read-only artifact view;
