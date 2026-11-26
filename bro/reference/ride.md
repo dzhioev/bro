@@ -1195,7 +1195,10 @@ Peers pass files by content-addressed reference through the ride's store the lau
   a peer that wants an editable copy makes one.
   A repeat fetch answers the materialization already there;
   `--checked` digests it first and replaces one that no longer matches the ref, failing when the stored content itself no longer does.
-  The `artifact::` toolset serves the same `fetch` and `list`, and its `read` and `grep` take only refs the session fetched.
+  The `artifact::` toolset serves the tree `mint`, `fetch` and `list`, and its `read` and `grep` take only refs the session fetched.
+  `mint(path, name?)` answers `{ref, size}`.
+  Mounting it grants a persona without a shell the ability to mint any file of its tree, making that tree sendable through tools that take file refs.
+  A persona that only reads artifacts mounts `fetch`, `list`, `read` and `grep` by name instead of mounting the whole toolset.
 - Reach follows the launch tree, and nothing a peer says widens it:
   a mint is readable by the minting peer and its summoners up to the ride root;
   a launch request's `share` list (`summon --share <ref>`, the service tool's `share` field, or another worker type's corresponding launch argument) hands refs the owner itself can read down as the mission opens;

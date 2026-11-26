@@ -74,7 +74,7 @@ class Browser(Bro):
   tools = [
     mount(webview_mcp.toolset),
     mount(mcp.toolset),
-    mount(artifact_mcp.toolset),
+    mount(artifact_mcp.toolset, 'fetch', 'list', 'read', 'grep'),
     source(CurrentTime()),
   ]
   spells = (browser.spells.browse,)
