@@ -5,18 +5,23 @@ from __future__ import annotations
 import importlib.resources
 import json
 import re
-import tempfile
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from bro.artifact import fetch_artifact, is_ref, locate_artifact, mint_artifact
+from bro.artifact import is_ref
 from bro.base import credentials
 from bro.llm.llm import LLMUnavailable
 from bro.mcp import Toolset
+from bro.tool_files import (
+  FILE_PARAMETER_DESCRIPTION,
+  RETURNED_FILE_GUIDANCE,
+  ArtifactFile,
+  return_bytes,
+  return_ref,
+  take,
+)
 
 INLINE_ANSWER_BYTES = 4 * 1024
 _READER_SECRET = 'mu'
@@ -24,7 +29,7 @@ _SNAPSHOT_FILE = 'browser-look-snapshot.yml'
 _TEXT_FILE = 'browser-look-text.json'
 _PAGE_URL = re.compile(r'(?m)^- Page URL: (\S.*)$')
 _PAGE_TITLE = re.compile(r'(?m)^- Page Title: (.*)$')
-_REF_FIELD = Field(description='fetched artifact ref containing page text or a snapshot')
+_REF_FIELD = Field(description=FILE_PARAMETER_DESCRIPTION)
 
 
 class _ReaderElement(BaseModel):
@@ -45,32 +50,9 @@ class _BrowserToolset(Toolset[None]):
 toolset = _BrowserToolset('browser')
 
 
-@contextmanager
-def _temporary_capture(content: str) -> Iterator[Path]:
-  with tempfile.NamedTemporaryFile(
-    dir='.', prefix='.browser-look-', suffix='.txt', delete=False, mode='w'
-  ) as file:
-    file.write(content)
-    path = Path(file.name)
-  try:
-    yield path
-  finally:
-    path.unlink(missing_ok=True)
-
-
-def _mint_text(content: str) -> str:
-  with _temporary_capture(content) as path:
-    return mint_artifact(path.name, name='page.txt').ref
-
-
-def _artifact_text(ref: str, *, fetch: bool) -> str:
-  """the text of `ref`, fetched here when `fetch` holds and otherwise one the
-  agent already fetched."""
-  if not is_ref(ref):
-    raise ValueError(f'invalid artifact ref: {ref!r}')
-  path = Path(fetch_artifact(ref) if fetch else locate_artifact(ref))
-  if not path.is_file():
-    raise ValueError(f'artifact {ref} is not a text file')
+def _artifact_text(file: ArtifactFile) -> str:
+  path = Path(file['path'])
+  ref = file['ref']
   try:
     return path.read_text()
   except (OSError, UnicodeDecodeError) as error:
@@ -87,7 +69,7 @@ def _reply_text(payload: dict[str, Any]) -> str:
     ref = payload.get('ref')
     if not is_ref(ref):
       raise ValueError(f'webview returned an invalid text spill: {payload}')
-    return _artifact_text(str(ref), fetch=True)
+    return _artifact_text(take(str(ref)))
   text = payload.get('text')
   if not isinstance(text, str):
     raise ValueError(f'webview returned no capture reply text: {payload}')
@@ -109,7 +91,7 @@ def _capture_ref(payload: dict[str, Any], filename: str) -> str:
 
 def _capture(
   webview: str, source: Literal['snapshot', 'text'], target: Optional[str]
-) -> tuple[str, str, str, str]:
+) -> tuple[str, ArtifactFile, str, str]:
   from bro.webview.mcp import command_reply
 
   filename = _SNAPSHOT_FILE if source == 'snapshot' else _TEXT_FILE
@@ -126,7 +108,8 @@ def _capture(
   payload = command_reply(webview, tool, arguments)
   reply_text = _reply_text(payload)
   capture_ref = _capture_ref(payload, filename)
-  captured = _artifact_text(capture_ref, fetch=True)
+  file = take(capture_ref) if source == 'text' else return_ref(capture_ref, 'snapshot.yml')
+  captured = _artifact_text(file)
   if source == 'text':
     try:
       decoded = json.loads(captured)
@@ -140,7 +123,7 @@ def _capture(
     if not all(isinstance(value, str) for value in (text, title, url)):
       raise ValueError(f'webview text capture {capture_ref} has non-text page fields')
     captured = text
-    capture_ref = _mint_text(captured)
+    file = return_bytes(captured.encode(), 'page.txt')
   else:
     urls = _PAGE_URL.findall(reply_text)
     if not urls:
@@ -153,7 +136,7 @@ def _capture(
     raise ValueError(
       'page capture is empty; the page may be in a modal state such as an open file chooser'
     )
-  return captured, capture_ref, title, url
+  return captured, file, title, url
 
 
 def _reader_prompt(question: str) -> str:
@@ -205,8 +188,9 @@ def _cut_answer(answer: str) -> str:
 
 
 @toolset.tool(
-  'answer a focused question from a fresh page snapshot or page text, or from a fetched '
-  'text artifact. Element refs are returned only when they match the snapshot read.'
+  'answer a focused question from a fresh page snapshot or page text, or from a '
+  'text artifact. Returns what was read under file. Element refs are returned only when '
+  'they match the snapshot read. ' + RETURNED_FILE_GUIDANCE
 )
 def look(
   question: Annotated[str, Field(description='focused question to answer from the page')],
@@ -232,11 +216,11 @@ def look(
   title: Optional[str] = None
   url: Optional[str] = None
   if webview is not None:
-    content, content_ref, title, url = _capture(webview, source, target)
+    content, file, title, url = _capture(webview, source, target)
   else:
     assert ref is not None
-    content_ref = ref
-    content = _artifact_text(ref, fetch=False)
+    file = return_ref(ref, 'page.txt')
+    content = _artifact_text(file)
     if len(content.strip()) == 0:
       raise ValueError(f'artifact {ref} is empty')
 
@@ -262,7 +246,7 @@ def look(
   result: dict[str, Any] = {
     'answer': _cut_answer(reader.answer),
     'elements': elements,
-    'ref': content_ref,
+    'file': file,
   }
   if title is not None and url is not None:
     result['title'] = title

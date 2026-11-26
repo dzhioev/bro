@@ -137,6 +137,7 @@ The prompt names the profile and says which file to download;
 the browser opens the webview with `downloads` only when the request needs a file.
 
 A download finishes after the action that starts it, so that action can reply before it does or time out while it runs.
-The artifact ref arrives in the first later reply that reports "Downloaded file".
-The browser keeps issuing commands, such as a snapshot, until one does, and reports the ref.
+The returned file arrives in the first later reply that reports "Downloaded file".
+The browser keeps issuing commands, such as a snapshot, until one does, and reports the returned file's ref.
 An owner-led session keeps asking for the same until the file appears.
+To upload a download, the browser shares its ref back with the webview and uploads the path that share returns.

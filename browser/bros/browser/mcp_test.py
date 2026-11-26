@@ -1,16 +1,38 @@
+import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
+from bro import tool_files
+from bro.artifact import Minted
 from bro.llm.llm import LLMUnavailable
 from bros.browser import mcp
 
 CAPTURE_REF = f'sha256:{"1" * 64}/capture.yml'
 SOURCE_REF = f'sha256:{"2" * 64}/page.txt'
-DECODED_REF = f'sha256:{"3" * 64}/page.txt'
 _PAGE_REPLY = '- Page URL: https://example.test/form\n- Page Title: Reader form'
+
+
+@pytest.fixture(autouse=True)
+def minted_files(monkeypatch, tmp_path):
+  directory = tmp_path / 'mint'
+  directory.mkdir()
+  monkeypatch.setenv('RIDE_MINT_DIR', str(directory))
+  files = {}
+
+  def mint(entry, *, name):
+    content = (directory / entry).read_bytes()
+    ref = f'sha256:{hashlib.sha256(content).hexdigest()}/{name}'
+    path = tmp_path / 'artifacts' / ref
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    files[ref] = path
+    return Minted(ref, len(content))
+
+  monkeypatch.setattr(tool_files, 'mint_entry', mint)
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(files[ref]))
+  return files
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +50,7 @@ def _capture_reply(filename: str) -> dict:
 def test_snapshot_capture_asks_the_reader_and_checks_every_element(monkeypatch, tmp_path) -> None:
   snapshot = tmp_path / 'snapshot.yml'
   snapshot.write_text('- heading "Account" [level=1] [ref=e1]\n- button "Save changes" [ref=e2]\n')
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(snapshot))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(snapshot))
   commands = []
 
   def command_reply(webview, tool, arguments):
@@ -64,7 +86,7 @@ def test_snapshot_capture_asks_the_reader_and_checks_every_element(monkeypatch, 
   assert result == {
     'answer': 'Use Save changes.',
     'elements': [{'ref': 'e2', 'role': 'button', 'name': 'Save changes'}],
-    'ref': CAPTURE_REF,
+    'file': {'ref': CAPTURE_REF, 'path': str(snapshot), 'size': snapshot.stat().st_size},
     'title': 'Reader form',
     'url': 'https://example.test/form',
     'warnings': [
@@ -73,7 +95,9 @@ def test_snapshot_capture_asks_the_reader_and_checks_every_element(monkeypatch, 
   }
 
 
-def test_text_capture_decodes_and_mints_the_reader_input(monkeypatch, tmp_path) -> None:
+def test_text_capture_decodes_and_mints_the_reader_input(
+  monkeypatch, tmp_path, minted_files
+) -> None:
   monkeypatch.chdir(tmp_path)
   encoded = tmp_path / 'encoded.json'
   encoded.write_text(
@@ -85,7 +109,7 @@ def test_text_capture_decodes_and_mints_the_reader_input(monkeypatch, tmp_path) 
       }
     )
   )
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(encoded))
+  minted_files[CAPTURE_REF] = encoded
   commands = []
 
   def command_reply(webview, tool, arguments):
@@ -93,19 +117,13 @@ def test_text_capture_decodes_and_mints_the_reader_input(monkeypatch, tmp_path) 
     return _capture_reply('browser-look-text.json')
 
   monkeypatch.setattr('bro.webview.mcp.command_reply', command_reply)
-  minted = []
-
-  def mint(path, name=None):
-    minted.append(Path(path).read_text())
-    return SimpleNamespace(ref=DECODED_REF)
-
-  monkeypatch.setattr(mcp, 'mint_artifact', mint)
   monkeypatch.setattr(
     mcp,
     '_read_page',
     lambda prompt, content: {'answer': content, 'elements': []},
   )
 
+  before = set(tmp_path.iterdir())
   result = mcp.look('What text is present?', webview='webview-1', source='text')
 
   assert commands == [
@@ -121,15 +139,18 @@ def test_text_capture_decodes_and_mints_the_reader_input(monkeypatch, tmp_path) 
       },
     )
   ]
-  assert minted == ['First line\nSecond line']
   assert result['answer'] == 'First line\nSecond line'
-  assert result['ref'] == DECODED_REF
+  assert result['file']['ref'].endswith('/page.txt')
+  assert Path(result['file']['path']).read_text() == 'First line\nSecond line'
   assert result['title'] == 'Reader form'
   assert result['url'] == 'https://example.test/form'
-  assert list(tmp_path.glob('.browser-look-*')) == []
+  assert set(tmp_path.iterdir()) - before == {tmp_path / 'artifacts'}
+  assert list((tmp_path / 'mint').iterdir()) == []
 
 
-def test_text_capture_drops_snapshot_shaped_element_claims(monkeypatch, tmp_path) -> None:
+def test_text_capture_drops_snapshot_shaped_element_claims(
+  monkeypatch, tmp_path, minted_files
+) -> None:
   monkeypatch.chdir(tmp_path)
   encoded = tmp_path / 'encoded.json'
   encoded.write_text(
@@ -141,13 +162,10 @@ def test_text_capture_drops_snapshot_shaped_element_claims(monkeypatch, tmp_path
       }
     )
   )
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(encoded))
+  minted_files[CAPTURE_REF] = encoded
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: _capture_reply('browser-look-text.json'),
-  )
-  monkeypatch.setattr(
-    mcp, 'mint_artifact', lambda path, name=None: SimpleNamespace(ref=DECODED_REF)
   )
   monkeypatch.setattr(
     mcp,
@@ -167,7 +185,7 @@ def test_text_capture_drops_snapshot_shaped_element_claims(monkeypatch, tmp_path
 def test_existing_artifact_is_read_without_a_webview_capture(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.txt'
   source.write_text('A checked artifact')
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(source))
   monkeypatch.setattr(
     mcp,
     '_read_page',
@@ -183,14 +201,14 @@ def test_existing_artifact_is_read_without_a_webview_capture(monkeypatch, tmp_pa
   assert result == {
     'answer': 'Read A checked artifact',
     'elements': [],
-    'ref': SOURCE_REF,
+    'file': {'ref': SOURCE_REF, 'path': str(source), 'size': source.stat().st_size},
   }
 
 
 def test_empty_capture_names_the_page_modal_state(monkeypatch, tmp_path) -> None:
   empty = tmp_path / 'empty.yml'
   empty.write_text('')
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(empty))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(empty))
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: _capture_reply('browser-look-snapshot.yml'),
@@ -203,7 +221,7 @@ def test_empty_capture_names_the_page_modal_state(monkeypatch, tmp_path) -> None
 def test_untitled_page_snapshot_reads_with_an_empty_title(monkeypatch, tmp_path) -> None:
   snapshot = tmp_path / 'snapshot.yml'
   snapshot.write_text('- heading "You are unsubscribed" [level=1] [ref=e1]\n')
-  monkeypatch.setattr(mcp, 'fetch_artifact', lambda ref: str(snapshot))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(snapshot))
   monkeypatch.setattr(
     'bro.webview.mcp.command_reply',
     lambda webview, tool, arguments: {
@@ -223,7 +241,7 @@ def test_untitled_page_snapshot_reads_with_an_empty_title(monkeypatch, tmp_path)
 def test_snapshot_element_ref_must_match_one_exact_ref_token(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- link "Download report" [ref=e6] [cursor=pointer]\n')
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(source))
   monkeypatch.setattr(
     mcp,
     '_read_page',
@@ -248,7 +266,7 @@ def test_snapshot_element_ref_must_match_one_exact_ref_token(monkeypatch, tmp_pa
 def test_reader_failure_adds_capture_narrowing_guidance(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- heading "Large page" [ref=e1]\n')
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(source))
 
   def fail_reader(prompt, content):
     raise ValueError('maximum context length exceeded')
@@ -264,7 +282,7 @@ def test_reader_failure_adds_capture_narrowing_guidance(monkeypatch, tmp_path) -
 def test_unavailable_reader_failure_omits_capture_narrowing_guidance(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.yml'
   source.write_text('- heading "Small page" [ref=e1]\n')
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(source))
 
   def fail_reader(prompt, content):
     raise LLMUnavailable('LLM provider unavailable for 180 s: Request timed out.')
@@ -280,7 +298,7 @@ def test_unavailable_reader_failure_omits_capture_narrowing_guidance(monkeypatch
 def test_reader_answer_is_cut_to_the_inline_bound(monkeypatch, tmp_path) -> None:
   source = tmp_path / 'source.txt'
   source.write_text('bounded source')
-  monkeypatch.setattr(mcp, 'locate_artifact', lambda ref: str(source))
+  monkeypatch.setattr(tool_files, 'fetch_artifact', lambda ref, **options: str(source))
   monkeypatch.setattr(
     mcp,
     '_read_page',
@@ -331,3 +349,41 @@ def test_read_page_chooses_the_reader_role(monkeypatch):
 
   monkeypatch.setattr(mu_module, 'mu', read)
   assert mcp._read_page('question', 'page text').answer == 'answer'
+
+
+def test_existing_artifact_is_checked_and_returned_under_a_normalized_name(monkeypatch, tmp_path):
+  source = tmp_path / 'source.txt'
+  source.write_text('reachable page text')
+  original_ref = SOURCE_REF.rsplit('/', 1)[0] + '/page (1).txt'
+  normalized_ref = SOURCE_REF.rsplit('/', 1)[0] + '/page_1_.txt'
+  fetched = []
+
+  def fetch(ref, *, checked):
+    assert checked
+    fetched.append(ref)
+    return str(source)
+
+  monkeypatch.setattr(tool_files, 'fetch_artifact', fetch)
+  monkeypatch.setattr(
+    mcp, '_read_page', lambda prompt, content: {'answer': content, 'elements': []}
+  )
+
+  result = mcp.look('What is present?', ref=original_ref)
+
+  assert fetched == [normalized_ref]
+  assert result['file'] == {
+    'ref': normalized_ref,
+    'path': str(source),
+    'size': source.stat().st_size,
+  }
+  assert result['answer'] == source.read_text()
+
+
+@pytest.mark.asyncio
+async def test_look_metadata_describes_the_returned_file_and_file_parameter():
+  tools = {tool.name: tool for tool in await mcp.toolset.build().list_tools()}
+  assert tool_files.RETURNED_FILE_GUIDANCE in tools['look'].description
+  assert (
+    tools['look'].parameters['properties']['ref']['description']
+    == tool_files.FILE_PARAMETER_DESCRIPTION
+  )
