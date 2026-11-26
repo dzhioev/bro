@@ -19,7 +19,15 @@ from bro.jobs import Job, JobStatus, Registry
 from bro.monitor import session_dir, trail_pointer
 from bro.native import dev_mcp, loop
 from bro.native.recorder import session_recorder
-from bro.native.run_log import UnsupportedFormat, continuable, new_path, private_directory
+from bro.native.run_log import (
+  UnsupportedFormat,
+  chain,
+  continuable,
+  new_path,
+  private_directory,
+  read,
+)
+from bro.workspace.launch_facts import Launches, LaunchFacts, resume_notice
 from ride.harness import ContainerExtras, RuntimeImage
 from ride.scope import ScopeRecipe
 from ride.workspace.model import Workspace
@@ -166,7 +174,21 @@ def _job_tools(live_run: _NativeRun) -> list[llm_mcp.Tool]:
   ]
 
 
-def _session_options(spec: 'SessionRun', resume_log: Optional[Path]) -> list[str]:
+def _baseline(launches: Launches, resume_log: Path) -> Optional[LaunchFacts]:
+  """The facts of the newest log of the continued chain the conversation takes a step from."""
+  from bro.fork import latest_fork_point
+
+  log = read(resume_log)
+  for segment, bound in reversed(chain(log, latest_fork_point(log))):
+    if bound > 0:
+      index = launches.baseline(segment.path.stem, bound + 1)
+      return None if index is None else launches.entries[index].facts
+  return None
+
+
+def _session_options(
+  spec: 'SessionRun', resume_log: Optional[Path], notice: Optional[str]
+) -> list[str]:
   from ride.do_ride import encode_resolved_recipe
 
   options = [
@@ -179,6 +201,8 @@ def _session_options(spec: 'SessionRun', resume_log: Optional[Path]) -> list[str
   ]
   if resume_log is not None:
     options.extend(['--fork', str(resume_log)])
+  if notice is not None:
+    options.extend(['--resume-notice', notice])
   return options
 
 
@@ -287,7 +311,7 @@ class BroHarness(Harness):
   def check_runtime(self) -> None:
     subprocess.run([spawn.console_script('bro'), '--version'], check=True)
 
-  def run_session(self, spec: 'SessionRun') -> int:
+  def run_session(self, spec: 'SessionRun', launch_facts: LaunchFacts) -> int:
     from ride.do_ride import run_agent
 
     try:
@@ -304,11 +328,20 @@ class BroHarness(Harness):
       return 1
     run_log = new_path(directory / 'bro' / 'runs')
     private_directory(run_log.parent)
+    try:
+      launches = Launches.load(directory)
+      notice = (
+        None if resume_log is None else resume_notice(launch_facts, _baseline(launches, resume_log))
+      )
+      launches.register(run_log.stem, 0, launch_facts)
+    except ValueError as error:
+      log.error('%s', error)
+      return 1
     verb = 'run' if spec.solo else 'chat'
     argv = [
       executable,
       verb,
-      *_session_options(spec, resume_log),
+      *_session_options(spec, resume_log, notice),
       '--run-log',
       str(run_log),
       '--',

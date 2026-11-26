@@ -12,6 +12,7 @@ Workspace creation, provisioning, containers, credential hydration, and teardown
 - `settings.py` — the installed home's packaged launch settings
 - `repository.py` — repository provisioning configuration and uninterpreted owner tables, read at a repo attachment's clone root
 - `banner.py` — typed session facts plus visual and LLM renderings, consumed by launch surfaces and the `bro::banner` service tool
+- `launch_facts.py` — what a managed lifetime was launched under, the session's `launch-facts.json` naming the record and item each lifetime began to write, the baseline a resume compares with, and the resume notice both harnesses give
 - `session.py` — in-session termination through `RIDE_RUNNER_PID`, carrying the status the session is to report
 - `human.py` — the human a session works for: the environment carrying their git identity, the checkout read that resolves it, and the session read back
 

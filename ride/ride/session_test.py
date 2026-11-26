@@ -27,6 +27,7 @@ from bro.base import credentials
 from bro.llm.providers import bind_recipe
 from bro.monitor import trail_pointer, workspace_party_dir, workspace_session_dir
 from bro.workspace.human import HUMAN_EMAIL_ENV, HUMAN_NAME_ENV
+from bro.workspace.launch_facts_test_helper import FACTS
 from bro.workspace.paths import (
   CONTAINER_PARTY_DIR,
   CONTAINER_SESSION_DIR,
@@ -2069,7 +2070,7 @@ def test_configured_record_reaches_harness_argv_and_banner(
     monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'session'))
     monkeypatch.setenv('TRAILS_DISABLED', '1')
     monkeypatch.setattr(do_ride, 'run_agent', lambda argv, env: spawned.append(argv) or 0)
-    assert BRO.run_session(run) == 0
+    assert BRO.run_session(run, FACTS) == 0
     [argv] = spawned
     assert json.loads(argv[argv.index('--resolved-recipe') + 1]) == run.resolved_recipe
   else:
@@ -2081,6 +2082,8 @@ def test_configured_record_reaches_harness_argv_and_banner(
       brash_policy=None,
       activity_file=run.activity_file,
       plugin_dir=None,
+      launch_facts=FACTS,
+      earlier_launches=0,
     )
     assert built.argv[built.argv.index('--model') + 1] == resolved.recipe.model
     assert built.argv[built.argv.index('--effort') + 1] == 'high'

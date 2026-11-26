@@ -117,6 +117,48 @@ async def test_continuation_restores_locally_and_records_its_own_log(tmp_path, m
   assert continued.prompt == read(writer.path).prompt
 
 
+@pytest.mark.asyncio
+async def test_a_notice_leads_the_first_exchange_without_starting_a_turn(tmp_path):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'earlier')
+  call(writer, text='earlier answer')
+  writer.end('ok')
+  runner = fork(writer.path, surface='call', notice='[notice: resumed]')
+  with runner:
+    assert not runner.inbox.has_news()
+    await runner.send('next', surface='call')
+    await runner.send('again', surface='call')
+  assert runner.run_log is not None
+  continued = read(runner.run_log)
+  assert [(step.kind, step.body) for step in continued.steps[1:3]] == [
+    ('notification', '[notice: resumed]'),
+    ('user_input', 'next'),
+  ]
+  requests = [step.body['request'] for step in continued.steps if step.kind == 'llm_call']
+  assert [[item['text'] for item in request['input']] for request in requests] == [
+    ['[notice: resumed]', 'next'],
+    ['again'],
+  ]
+
+
+@pytest.mark.asyncio
+async def test_a_notice_leads_news_that_wakes_the_conversation_first(tmp_path):
+  writer = log(tmp_path / 'root.jsonl')
+  writer.step('user_input', 'earlier')
+  call(writer, text='earlier answer')
+  writer.end('ok')
+  runner = fork(writer.path, surface='call', notice='[notice: resumed]')
+  with runner:
+    runner.notify('[watch line]')
+    await runner.wake()
+  assert runner.run_log is not None
+  continued = read(runner.run_log)
+  assert [(step.kind, step.body) for step in continued.steps[1:3]] == [
+    ('notification', '[notice: resumed]'),
+    ('notification', '[watch line]'),
+  ]
+
+
 def test_new_log_must_be_beside_the_origin(tmp_path):
   writer = log(tmp_path / 'root.jsonl')
   writer.step('user_input', 'hello')

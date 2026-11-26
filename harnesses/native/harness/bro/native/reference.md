@@ -18,6 +18,7 @@ The loop's prompt composes the hold's level text through `bro/bro.py:BaseBro.sys
 Boxed sessions run the same `do-ride` command summoned children get;
 unboxed sessions provision the workspace clone and run the runtime snapshot's `do-ride` under the same broker-root supervision and scoped credential store.
 A resume continues the newest session run log, without reading a trail store.
+Before the run starts, the runner registers the lifetime's launch facts (`bro/reference/ride.md`, "The session executable") for the run log it names, from its step 0.
 
 ## Tool groups
 
@@ -95,6 +96,12 @@ Persona changes alone do not replace the recorded prompt.
 Every replayed call must use the selected recipe's wire, checked before the new log opens.
 An unchanged prompt and provider/model can seed a server-chained wire at a completed call's response id;
 other continuations restore the wire from the local records.
+
+A resume's notice compares the launch facts with those of the newest log in the continued chain that the conversation takes a step from, its system-prompt step not counting;
+when that log registered none, the notice compares nothing.
+The runner hands it to `bro chat` through the suppressed `--resume-notice`, which requires `--fork`,
+and the run sends it as a `notification` step ahead of its first exchange's input, starting no turn of its own.
+An in-process `bro chat --fork` gives no notice and registers nothing.
 
 ## In-process surfaces
 

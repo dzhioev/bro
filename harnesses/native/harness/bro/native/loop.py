@@ -98,10 +98,14 @@ class Loop(LLM):
     self._has_user_input = False
     self._restored = False
     self._pending_input: list[Input] = []
+    self._ahead: Optional[str] = None
 
   def restore(self, prefix: Prefix) -> None:
     self.wire.restore(prefix)
     self._restored = True
+
+  def deliver_ahead(self, text: str) -> None:
+    self._ahead = text
 
   def seed_chain(self, response_id: str) -> None:
     self.wire.seed_chain(response_id)
@@ -295,6 +299,18 @@ class Loop(LLM):
     self.observer.on_event(NotificationEvent(batch.text, batch.job_ids))
     return batch
 
+  async def _send_ahead(self, input_items: list[Input], *, call_index: int) -> None:
+    text = self._ahead
+    if text is None:
+      return
+    self._ahead = None
+    input_items.append(Notification(text))
+    self._pending_input = list(input_items)
+    await self._track_step(
+      'notification', text, turn_index=self._turn_index, call_index=call_index, job_ids=[]
+    )
+    self.observer.on_event(NotificationEvent(text, ()))
+
   async def send(
     self, inputs: Sequence[SystemPrompt | UserMessage], *, request_timeout: Optional[float] = None
   ) -> str:
@@ -322,6 +338,7 @@ class Loop(LLM):
     if notification_turn or (len(user_messages) > 0 and self._has_user_input):
       self._turn_index += 1
     incoming_items: list[Input] = list(incoming)
+    await self._send_ahead(api_input, call_index=self._call_index + 1)
     notification = await self._drain_notifications(
       api_input,
       call_index=self._call_index + 1,

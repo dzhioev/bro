@@ -22,6 +22,10 @@ def bro_claude_session_end():
   return run_cli('bro.claude.session_end', sys.argv)
 
 
+def bro_claude_session_start():
+  return run_cli('bro.claude.session_start', sys.argv)
+
+
 def bro_claude_setup_token():
   return run_cli('bro.claude.setup_token', sys.argv)
 

@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import dataclasses
 import json
 import os
 import shlex
@@ -24,6 +25,7 @@ from bro.inbox import Inbox
 from bro.jobs import Job, Registry
 from bro.jobs_test_helper import StalledSupervisor
 from bro.llm.mcp import MCPServer, Tool
+from bro.llm.tracker import RunFork
 from bro.monitor import (
   SESSION_DIR_ENV,
   health,
@@ -32,9 +34,17 @@ from bro.monitor import (
   workspace_session_dir,
 )
 from bro.native import dev_mcp, recorder
-from bro.native.run_log_test_helper import open_log, session_environment
+from bro.native.run_log import RunLog
+from bro.native.run_log_test_helper import echo_call, open_log, session_environment
 from bro.openai.declaration import Recipe
 from bro.trails.store import default_store
+from bro.workspace.launch_facts import (
+  FILENAME as LAUNCH_FACTS_FILENAME,
+  Launch,
+  Launches,
+  resume_notice,
+)
+from bro.workspace.launch_facts_test_helper import FACTS
 from bro.workspace.paths import CONTAINER_PARTY_DIR, CONTAINER_SESSION_DIR
 from ride.authority_test_helper import mission
 from ride.do_ride import SessionRun, encode_resolved_recipe
@@ -168,7 +178,7 @@ class TestNativeArgv:
     spawned: list[list[str]] = []
     monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
     monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env=None: spawned.append(argv) or 0)
-    assert bro_harness.BRO.run_session(spec) == 0
+    assert bro_harness.BRO.run_session(spec, FACTS) == 0
     argv = spawned[0]
     index = argv.index('--run-log')
     log_path = Path(argv[index + 1])
@@ -239,7 +249,7 @@ class TestNativeArgv:
   def test_resume_without_a_local_log_fails(self, monkeypatch, tmp_path, caplog):
     self._session_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
-    assert bro_harness.BRO.run_session(_run(resume=True)) == 1
+    assert bro_harness.BRO.run_session(_run(resume=True), FACTS) == 1
     assert 'no bro harness session run log' in caplog.text
 
   def test_missing_native_distribution_fails_before_spawn(self, monkeypatch, caplog):
@@ -251,9 +261,94 @@ class TestNativeArgv:
     )
     monkeypatch.setattr('ride.do_ride.run_agent', run_agent)
 
-    assert bro_harness.BRO.run_session(_run()) == 1
+    assert bro_harness.BRO.run_session(_run(), FACTS) == 1
     assert 'native missing' in caplog.text
     run_agent.assert_not_called()
+
+
+class TestResumeNotice:
+  """The facts each lifetime registers for its run log, and the notice a resume
+  is handed, over §3.5's launches A on runtime R, B on an updated runtime S, then C."""
+
+  EARLIER = FACTS
+  UPDATED = dataclasses.replace(FACTS, runtime='5d0c41aa90e2')
+
+  @pytest.fixture(autouse=True)
+  def session(self, monkeypatch, tmp_path):
+    directory = tmp_path / 'session'
+    directory.mkdir()
+    monkeypatch.setenv(SESSION_DIR_ENV, str(directory))
+    monkeypatch.setattr(bro_harness, 'session_recorder', lambda *args: contextlib.nullcontext())
+    monkeypatch.setattr(bro_harness.spawn, 'console_script', lambda name: '/venv/bin/bro')
+    self.directory = directory
+
+  def _launch(self, monkeypatch, facts, *, resume) -> tuple[Path, Optional[str]]:
+    spawned: list[list[str]] = []
+    monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env=None: spawned.append(argv) or 0)
+    assert bro_harness.BRO.run_session(_run(resume=resume, prompt=None), facts) == 0
+    [argv] = spawned
+    log = Path(argv[argv.index('--run-log') + 1])
+    if '--resume-notice' not in argv:
+      return log, None
+    return log, argv[argv.index('--resume-notice') + 1]
+
+  def _first_lifetime(self, monkeypatch) -> Path:
+    path, notice = self._launch(monkeypatch, self.EARLIER, resume=False)
+    assert notice is None
+    writer = open_log(path, interactive=True)
+    writer.step('user_input', 'first')
+    echo_call(writer)
+    writer.end('ok')
+    return path
+
+  def test_every_lifetime_registers_its_facts_for_the_log_it_names(self, monkeypatch):
+    first = self._first_lifetime(monkeypatch)
+    second, _ = self._launch(monkeypatch, self.UPDATED, resume=True)
+    assert Launches.load(self.directory).entries == (
+      Launch(first.stem, 0, self.EARLIER),
+      Launch(second.stem, 0, self.UPDATED),
+    )
+
+  @pytest.mark.parametrize('ended', ['failed-before-its-log', 'closed-before-input', 'killed'])
+  @pytest.mark.parametrize('runtime', ['earlier', 'updated'])
+  def test_the_baseline_is_the_newest_lifetime_the_history_takes_a_step_from(
+    self, monkeypatch, ended, runtime
+  ):
+    first = self._first_lifetime(monkeypatch)
+    second, _ = self._launch(monkeypatch, self.UPDATED, resume=True)
+    if ended != 'failed-before-its-log':
+      writer = RunLog(second)
+      writer.start(
+        'dev', {'type': 'echo', 'model': 'echo'}, 'system', RunFork(first.stem, 2), True, 'test'
+      )
+      if ended == 'killed':
+        writer.step('notification', '[notice: the second lifetime]')
+        writer.step('user_input', 'load a spell')
+        echo_call(writer, calls=['spell'])
+        writer.step('tool_result', 'the spell', call_id='spell')
+    facts = self.EARLIER if runtime == 'earlier' else self.UPDATED
+    _, notice = self._launch(monkeypatch, facts, resume=True)
+    baseline = self.UPDATED if ended == 'killed' else self.EARLIER
+    expected = resume_notice(facts, baseline)
+    assert notice == expected
+    assert ('- the runtime was updated' in expected.splitlines()) == (facts != baseline)
+
+  def test_a_history_whose_lifetime_registered_nothing_has_no_baseline(self, monkeypatch):
+    runs = self.directory / 'bro' / 'runs'
+    writer = open_log(runs / '01m7a.jsonl', interactive=True)
+    writer.step('user_input', 'before launch facts')
+    echo_call(writer)
+    writer.end('ok')
+    _, notice = self._launch(monkeypatch, self.EARLIER, resume=True)
+    assert notice == resume_notice(self.EARLIER, None)
+
+  def test_a_malformed_file_fails_the_launch_naming_it(self, monkeypatch, caplog):
+    self._first_lifetime(monkeypatch)
+    (self.directory / LAUNCH_FACTS_FILENAME).write_text('{"format": 1}')
+    run_agent = Mock(side_effect=AssertionError('the run started'))
+    monkeypatch.setattr('ride.do_ride.run_agent', run_agent)
+    assert bro_harness.BRO.run_session(_run(resume=True, prompt=None), FACTS) == 1
+    assert str(self.directory / LAUNCH_FACTS_FILENAME) in caplog.text
 
 
 class TestContainerSession:
@@ -798,7 +893,7 @@ def test_resume_records_the_named_log_and_settles_the_pointer(
     return 23
 
   monkeypatch.setattr('ride.do_ride.run_agent', run)
-  assert bro_harness.BRO.run_session(_run(resume=True, prompt=None)) == 23
+  assert bro_harness.BRO.run_session(_run(resume=True, prompt=None), FACTS) == 23
   identifier = trail_pointer.read(pointer)
   if not opened:
     assert identifier is None
@@ -831,7 +926,7 @@ def test_disabled_recording_still_names_the_run_log(session, monkeypatch, value)
     return 0
 
   monkeypatch.setattr('ride.do_ride.run_agent', run)
-  assert bro_harness.BRO.run_session(_run()) == 0
+  assert bro_harness.BRO.run_session(_run(), FACTS) == 0
   start.assert_not_called()
   pointer = trail_pointer.path()
   assert pointer is not None and not pointer.exists()
@@ -851,7 +946,7 @@ def test_recorder_exit_before_readiness_prevents_the_session_run(session, tmp_pa
   run = Mock(side_effect=AssertionError('run started before readiness'))
   monkeypatch.setattr('ride.do_ride.run_agent', run)
   with pytest.raises(RuntimeError, match='before readiness.*session-recorder.log'):
-    bro_harness.BRO.run_session(_run())
+    bro_harness.BRO.run_session(_run(), FACTS)
   run.assert_not_called()
 
 
@@ -888,7 +983,7 @@ def test_session_run_waits_for_the_readiness_byte(session, tmp_path, monkeypatch
 
   monkeypatch.setattr('ride.do_ride.run_agent', run)
   with ThreadPoolExecutor() as executor:
-    launch = executor.submit(bro_harness.BRO.run_session, _run())
+    launch = executor.submit(bro_harness.BRO.run_session, _run(), FACTS)
     with started.open('rb', buffering=0) as stream:
       assert stream.read(1) == b'1'
     assert not ran.is_set()
@@ -1007,6 +1102,56 @@ def test_operator_resumes_native_local_history_without_reading_trails(
       client.get_trail(current)
   elif recording == 'disabled':
     assert not (records / 'recording-map.json').exists()
+
+
+@pytest.mark.parametrize('grant', [False, True])
+def test_operator_resume_opens_its_first_exchange_with_the_notice(operator_runtime, grant):
+  from bro.native.run_log import read
+
+  runtime, environment = operator_runtime
+  result = operator_ride(
+    operator_runtime,
+    'solo',
+    '--runtime-bundle',
+    str(runtime),
+    '--workspace',
+    'native-notice',
+    '--unboxed',
+    '--harness',
+    'bro',
+    '--llm',
+    'echo:echo',
+    '--hold',
+    'unattended',
+    '--no-trails',
+    'bro',
+    'first-input',
+  )
+  assert result.returncode == 0, result.stderr
+  result = operator_ride(
+    operator_runtime,
+    'resume',
+    'native-notice',
+    *(['--grant', '@bro'] if grant else []),
+    input='continued-input\n',
+  )
+  assert result.returncode == 0, result.stderr
+  records = Path(environment['XDG_DATA_HOME']) / 'ride' / 'workspaces' / 'native-notice' / 'session'
+  paths = sorted((records / 'bro' / 'runs').glob('*.jsonl'))
+  earlier, current = Launches.load(records).entries
+  assert [earlier.record, current.record] == [path.stem for path in paths]
+  notice = resume_notice(current.facts, earlier.facts)
+  steps = read(paths[-1]).steps
+  assert [(step.kind, step.body) for step in steps[1:3]] == [
+    ('notification', notice),
+    ('user_input', 'continued-input'),
+  ]
+  [request, *_] = [step.body['request'] for step in steps if step.kind == 'llm_call']
+  assert [item['text'] for item in request['input']] == [notice, 'continued-input']
+  changed = [line for line in notice.splitlines() if line.startswith('- may_summon: ')]
+  assert len(changed) == (1 if grant else 0)
+  if grant:
+    assert '@bro' in changed[0].partition(' → ')[2]
 
 
 def test_operator_refuses_a_native_workspace_predating_format_two(operator_runtime):

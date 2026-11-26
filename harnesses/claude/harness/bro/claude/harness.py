@@ -33,6 +33,7 @@ from ride.workspace.model import Workspace
 from ride.workspace.store import ScopedSecrets
 
 if TYPE_CHECKING:
+  from bro.workspace.launch_facts import LaunchFacts
   from ride.do_ride import SessionRun
   from ride.session import SessionSpec
 
@@ -181,10 +182,10 @@ class ClaudeHarness(Harness):
     )
     subprocess.run([str(binary), '--version'], check=True)
 
-  def run_session(self, spec: 'SessionRun') -> int:
+  def run_session(self, spec: 'SessionRun', launch_facts: 'LaunchFacts') -> int:
     from bro.claude.runner import run_session
 
-    return run_session(spec)
+    return run_session(spec, launch_facts)
 
   def session_exists(self, workspace: Workspace) -> bool:
     return latest_jsonl(workspace_projects_dir(workspace)) is not None
