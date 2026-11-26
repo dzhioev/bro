@@ -183,23 +183,43 @@ class TestClient:
     minted = artifact.mint_artifact('out/bundle')
     assert minted == artifact.Minted(ref=REF, size=7)
     assert client.calls == [
-      (artifact.MINT, {'path': str(Path.cwd() / 'out/bundle')}, artifact.DEFAULT_TIMEOUT)
+      (
+        artifact.MINT,
+        {'path': str(Path.cwd() / 'out/bundle'), 'name': 'bundle'},
+        artifact.DEFAULT_TIMEOUT,
+      )
     ]
 
-  @pytest.mark.parametrize('path', ['link/file', 'link/../report', '/etc/hosts'])
-  def test_mint_only_absolutizes_lexically(self, monkeypatch, tmp_path, path):
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / 'link').symlink_to(tmp_path / 'absent', target_is_directory=True)
+  @pytest.mark.parametrize('absolute', [False, True])
+  @pytest.mark.parametrize('outside', [False, True])
+  def test_mint_resolves_links_and_keeps_the_requested_name(
+    self, monkeypatch, tmp_path, absolute, outside
+  ):
+    tree = tmp_path / 'tree'
+    tree.mkdir()
+    target = (tmp_path if outside else tree) / 'target'
+    target.write_bytes(b'payload')
+    link = tree / 'report.txt'
+    link.symlink_to(target if absolute else os.path.relpath(target, tree))
+    monkeypatch.chdir(tree)
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
 
-    artifact.mint_artifact(path)
+    artifact.mint_artifact('report.txt')
 
-    expected = {
-      'link/file': tmp_path / 'link/file',
-      'link/../report': tmp_path / 'report',
-      '/etc/hosts': Path('/etc/hosts'),
-    }
-    assert client.calls[0][1]['path'] == str(expected[path])
+    assert client.calls[0][1] == {'path': str(target), 'name': 'report.txt'}
+
+  def test_resolution_precedes_dotdot_normalization(self, monkeypatch, tmp_path):
+    (tmp_path / 'nested' / 'directory').mkdir(parents=True)
+    (tmp_path / 'link').symlink_to('nested/directory')
+    monkeypatch.chdir(tmp_path)
+    client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})
+    artifact.mint_artifact('link/../report')
+    assert client.calls[0][1] == {'path': str(tmp_path / 'nested/report'), 'name': 'report'}
+
+  def test_a_link_loop_fails_as_an_artifact_error(self, monkeypatch, tmp_path):
+    (tmp_path / 'loop').symlink_to('loop')
+    with pytest.raises(artifact.ArtifactError, match='cannot resolve'):
+      artifact.mint_artifact(str(tmp_path / 'loop'))
 
   def test_mint_sends_an_explicit_name(self, monkeypatch):
     client = _serve(monkeypatch, {'outcome': 'ok', 'value': {'ref': REF, 'size': 7}})

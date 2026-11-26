@@ -2203,11 +2203,75 @@ for path in ['/etc/hosts', str(tree / 'escape')]:
     try:
         mint_artifact(path, timeout=30)
     except ArtifactError as error:
-        assert repr(path) in str(error), error
+        assert '/etc/hosts' in str(error), error
         denied.append(path)
     else:
         raise AssertionError(f'host accepted an outside path: {path}')
-(tree / '.artifact-paths-report').write_text(json.dumps({'accepted': accepted, 'denied': denied}))
+import subprocess
+import sys
+links = []
+for name, target in [('relative-link', 'relative-report'), ('absolute-link', str(clone / 'relative-report'))]:
+    (clone / name).symlink_to(target)
+    minted = subprocess.run([str(Path(sys.executable).with_name('artifact')), 'mint', name], check=True, text=True, capture_output=True).stdout.strip()
+    assert minted.endswith('/' + name), minted
+    assert Path(fetch_artifact(minted, timeout=30)).read_bytes() == b'from the clone'
+    links.append(name)
+
+race = None
+if tree == Path('/tree'):
+    import contextlib
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from bro.artifact import _call, MINT
+    outside = Path(__HOST_OUTSIDE__)
+    candidate = tree / 'candidate'
+    saved = tree / 'saved-candidate'
+    candidate.symlink_to(outside)
+    try:
+        _call(MINT, {'path': str(candidate / 'data')}, 30)
+    except ArtifactError as error:
+        assert "crosses a symbolic link at 'candidate'" in str(error), error
+    else:
+        raise AssertionError('unresolved outside link was accepted')
+    candidate.unlink()
+    candidate.mkdir()
+    (candidate / 'data').write_bytes(b'from the tree')
+    stopped = threading.Event()
+    cycled = threading.Event()
+
+    def swap():
+        while not stopped.is_set():
+            candidate.rename(saved)
+            candidate.symlink_to(outside)
+            candidate.unlink()
+            saved.rename(candidate)
+            cycled.set()
+
+    @contextlib.contextmanager
+    def swapping():
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(swap)
+            try:
+                assert cycled.wait(30), 'swapper did not complete a cycle'
+                yield
+            finally:
+                stopped.set()
+                future.result()
+
+    race = {'minted': 0, 'denied': 0}
+    with swapping():
+        for _ in range(100):
+            try:
+                minted = _call(MINT, {'path': str(candidate / 'data')}, 30)
+            except ArtifactError as error:
+                assert 'symbolic link' in str(error) or 'no file or directory' in str(error), error
+                race['denied'] += 1
+            else:
+                assert Path(fetch_artifact(minted['ref'], timeout=30)).read_bytes() == b'from the tree'
+                race['minted'] += 1
+    minted = mint_artifact(str(candidate / 'data'), timeout=30)
+    assert Path(fetch_artifact(minted.ref, timeout=30)).read_bytes() == b'from the tree'
+(tree / '.artifact-paths-report').write_text(json.dumps({'accepted': accepted, 'denied': denied, 'links': links, 'race': race}))
 """
 
 
@@ -2226,13 +2290,17 @@ def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, 
   workspace = Workspace.ensure(
     name, (repository_attachment(repository, name),), Isolation(isolation)
   )
+  outside = env.root / f'host-only-artifact-{isolation}'
+  outside.mkdir()
+  (outside / 'data').write_bytes(b'host secret, never minted')
+  source = _ARTIFACT_PATHS_PROBE.replace('__HOST_OUTSIDE__', repr(str(outside)))
   mission = _root_mission(targets=(), placement=isolation)
   if workspace.isolation == Isolation.UNBOXED:
-    code = _host_root_route(env, workspace, _ARTIFACT_PATHS_PROBE, mission=mission)
+    code = _host_root_route(env, workspace, source, mission=mission)
   else:
     launch = workspace_docker.Launch(
       name=name,
-      command=_session_broxy_probe(_ARTIFACT_PATHS_PROBE),
+      command=_session_broxy_probe(source),
       env={'RIDE_BRO': 'bro-dev'},
       secrets=(),
       tty=False,
@@ -2259,6 +2327,11 @@ def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, 
   report = json.loads((workspace.tree / '.artifact-paths-report').read_text())
   assert len(report['accepted']) == 2
   assert len(report['denied']) == 2
+  assert len(report['links']) == 2
+  if isolation == 'boxed':
+    assert report['race']['minted'] + report['race']['denied'] == 100
+  else:
+    assert report['race'] is None
 
 
 def _replace_unboxed_session(monkeypatch: pytest.MonkeyPatch, source: str) -> None:
