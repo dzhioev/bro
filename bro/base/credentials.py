@@ -809,6 +809,22 @@ class Store:
         accepted.add(name)
     return frozenset(accepted)
 
+  def held_picks(self) -> tuple[str, ...]:
+    """The pick each kind holding readable material reads, spelled `kind+instance`, sorted."""
+    with self._lock:
+      present = self.instance_names()
+      picks = []
+      for kind in self.registry:
+        instance = self.selection.get(kind, '')
+        stored = storage_name(kind, instance)
+        if (
+          stored in present
+          and (self._readable is None or kind in self._readable)
+          and (self._readable_names is None or stored in self._readable_names)
+        ):
+          picks.append(_selection_spelling(kind, instance))
+      return tuple(sorted(picks))
+
   def winning_source(self, name: str) -> Source:
     return self._winners[self.selected_name(name)]
 

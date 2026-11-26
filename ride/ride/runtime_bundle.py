@@ -296,6 +296,19 @@ def runtime_root_from_reference(reference: str) -> Path:
   return path.resolve()
 
 
+def frozen_hash(host_root: Path) -> str | None:
+  """The hash of the frozen bundle whose host root is `host_root`, or None for a
+  materialized bundle, which has none."""
+  bundle = host_root.parent
+  if (
+    host_root.name == 'host'
+    and _HASH_PATTERN.fullmatch(bundle.name) is not None
+    and bundle.parent.name == 'runtime'
+  ):
+    return bundle.name
+  return None
+
+
 def _bundle_environment() -> dict[str, str]:
   """the ambient environment without the interpreter's own `PYTHON*` settings,
   which would select code outside the bundle."""

@@ -24,6 +24,7 @@ dependencies = [
 "bro.claude.controlling-terminal" = "bro.claude._entrypoints:bro_claude_controlling_terminal"
 "bro.claude.read-gate" = "bro.claude._entrypoints:bro_claude_read_gate"
 "bro.claude.session-end" = "bro.claude._entrypoints:bro_claude_session_end"
+"bro.claude.session-start" = "bro.claude._entrypoints:bro_claude_session_start"
 "bro.claude.setup-token" = "bro.claude._entrypoints:bro_claude_setup_token"
 "bro.claude.statusline" = "bro.claude._entrypoints:bro_claude_statusline"
 "bro.claude.trail-recorder" = "bro.claude._entrypoints:bro_claude_trail_recorder"

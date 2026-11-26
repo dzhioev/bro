@@ -31,6 +31,7 @@ from bro.registry import create_bro
 from bro.trails.local import LocalStore
 from bro.trails.store import fetch_recorded_trail
 from bro.wire_chat.fixtures_test_helper import call, response
+from bro.workspace.launch_facts_test_helper import FACTS
 from bro.workspace.settings import HomeSettings
 from ride import cli
 from ride.authority_launch import credentials_for, hydrate, request
@@ -368,7 +369,7 @@ def summoned_stage(
   monkeypatch.setenv('RIDE_SESSION_DIR', str(tmp_path / 'records'))
   monkeypatch.setenv('TRAILS_DISABLED', '1')
   monkeypatch.setattr('ride.do_ride.run_agent', lambda argv, env: spawned.append(argv) or 0)
-  assert native_harness.BRO.run_session(run) == 0
+  assert native_harness.BRO.run_session(run, FACTS) == 0
   session = credentials.Store(credentials.default_registry(), directory, {})
   return Stage(recipe, files, session, spawned[0])
 

@@ -129,7 +129,7 @@ run those with `--help` for flags.
   `apply_limit` caps to a line budget, and to a byte budget its caller passes, keeping head or tail with inline `[...skipped before/after...]` markers and a fat-finger clamp;
   `numbered_window` layers a cat -n-numbered partial read (0-based `offset`) on top, its after marker naming the offset that reads on, and `numbered` numbers a whole text;
   `take_head` returns the budget-bounded prefix raw, for callers that paginate over a cursor instead of dropping the excess.
-  `DEFAULT_LIMIT` / `MAX_LIMIT` cap the lines a caller asks for, and `BYTE_LIMIT` caps one tool reply and one batch of session news.
+  `DEFAULT_LIMIT` / `MAX_LIMIT` cap the lines a caller asks for, and `BYTE_LIMIT` caps one windowed tool reply and one batch of session news.
 - `source_root.py` — `SOURCE_ROOT`, the installed `bro` package directory, derived from the module's own location.
 - `yesno.py` — `yesno(question, default)` interactive y/n prompt.
 

@@ -189,6 +189,20 @@ class TestKeptTools:
     assert len(store.entries()) == 1
 
   @pytest.mark.asyncio
+  async def test_a_tool_replying_whole_returns_a_long_result_whole_and_keeps_it(self, tmp_path):
+    class _Whole(FunctionTool):
+      @property
+      def replies_whole(self) -> bool:
+        return True
+
+    store = results.Store(tmp_path / 'results')
+    server = InProcessMCPServer('test', [_Whole(lengthy)])
+    registry = ToolRegistry(results.kept([server], lambda: store))
+    assert await registry.call('test__lengthy', {}) == lengthy()
+    (entry,) = store.entries()
+    assert store.read(entry.id)[1] == lengthy()
+
+  @pytest.mark.asyncio
   async def test_a_long_structured_result_pages_as_json_text(self, kept_registry):
     store, registry = kept_registry
     reply = await registry.call('test__structured', {})

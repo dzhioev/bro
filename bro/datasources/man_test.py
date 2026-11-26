@@ -1,8 +1,14 @@
+from contextlib import closing
+from typing import ClassVar
+
 import pytest
 
 from bro.base.text_window import BYTE_LIMIT
+from bro.bro import BaseBro
 from bro.datasources.file import FileSource
 from bro.datasources.man import ManSource
+from bro.mcp import man
+from bro.monitor import SESSION_DIR_ENV
 
 
 @pytest.fixture
@@ -63,6 +69,30 @@ async def test_read_tool_serves_the_roster(source):
 async def test_read_tool_returns_the_page(source):
   tool = (await source.as_mcp_server().list_tools())[0]
   assert await tool.call({'topic': 'first'}) == '# First\n\nfirst body\n'
+
+
+@pytest.mark.asyncio
+async def test_an_assembled_manual_serves_a_page_longer_than_one_window_whole(
+  tmp_path, monkeypatch
+):
+  page = tmp_path / 'long.md'
+  body = ''.join(f'line {index}\n' for index in range(BYTE_LIMIT // 5))
+  page.write_text(body)
+
+  class _Reading(BaseBro):
+    name = 'reading'
+    description = 'd'
+    tools: ClassVar = [man(FileSource('long', summary='x', path=page))]
+
+    def __init__(self):
+      super().__init__(system_prompt='')
+
+  monkeypatch.setenv(SESSION_DIR_ENV, str(tmp_path / 'session'))
+  with closing(_Reading()) as bro:
+    servers = bro.assemble(harness='claude', hold='attended')
+    manual = next(server for server in servers if server.namespace == 'man-source')
+    [read] = await manual.list_tools()
+    assert await read.call({'topic': 'long'}) == body
 
 
 def test_permission_reference_pages_are_served_whole():
