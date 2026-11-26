@@ -292,7 +292,8 @@ def lookup(product_id: str, context: Context[Catalog]) -> str:
 
 - `@toolset.tool('<description>')` registers the function under its own name, so this tool is `catalog::lookup`;
   the signature is the tool's schema, the description its text, and the decorator returns the function unchanged.
-  A tool returns `str`, or a JSON-ready `dict` for structured output.
+  A tool returns `str`, or a typed JSON-ready value for structured output;
+  its return annotation renders the result shape in its description.
   Neither the namespace nor a tool name may contain `__`, the wire separator between them.
 - `secrets` is the credential set the tools read through the store, and becomes the mounted server's `needed_secrets`;
   override `get_secrets(tool_names)` when the set depends on the selected subset.
@@ -306,6 +307,87 @@ def lookup(product_id: str, context: Context[Catalog]) -> str:
   a `bro.toolsets` entry named after the namespace (`catalog = "acme.catalog:toolset"`) additionally lets `mcp-server catalog` serve the toolset standalone.
 - `MCPServerSpec.of('<namespace>', ServerClass, *ctor_args)` is the manifest escape hatch for a server class of another shape, naming the namespace the built server serves;
   wrap it in `ToolLayer(server_specs=(spec,))` to mount it.
+
+### Files in tools
+
+Use `bro.tool_files` for regular files crossing a tool boundary.
+A returned file is an `ArtifactFile` with `ref` (its artifact ref), `path` (its fetched location in this session), and `size` (bytes).
+Return that typed object, or include it in a typed result beside text and other fields;
+report files a producer could not return separately from the successful files.
+A file parameter takes a ref, or a list of refs, never a path supplied by the agent.
+
+```python
+from typing import Annotated
+
+from pydantic import Field
+
+from bro.mcp import Toolset
+from bro.tool_files import (
+  ArtifactFile,
+  FILE_PARAMETER_DESCRIPTION,
+  RETURNED_FILE_GUIDANCE,
+  return_bytes,
+  take,
+)
+
+
+toolset = Toolset[None]('documents')
+
+
+@toolset.tool('return the generated report as report.txt. ' + RETURNED_FILE_GUIDANCE)
+def report() -> ArtifactFile:
+  return return_bytes(b'report contents', 'report.txt')
+
+
+@toolset.tool('deliver a document as an attachment')
+def deliver(ref: Annotated[str, Field(description=FILE_PARAMETER_DESCRIPTION)]) -> str:
+  file = take(ref)
+  if file['size'] > 10_000_000:
+    raise ValueError('attachment exceeds the size limit')
+  return send_attachment(file['path'], ref.split('/', 1)[1])
+```
+
+The two shared texts belong in the returning tool's description and the file parameter's description respectively, as above.
+They tell the agent how to read and hand on a returned file and where to get a file ref.
+The calling persona reads with the tools it carries:
+its harness's file tools at `path` when it has `files`, `artifact::read` or `artifact::grep` by ref for text, or `file::info` and `file::view` at `path` for installed file types.
+Mounting a returning tool does not widen the harness's own file tools.
+
+- `staged(name)` is a context manager yielding a handle with a `Path` in `path` and a `returned()` method.
+  Write to that path directly or have a renderer write there, then call `returned()` inside the block.
+  The entry is created exclusively with a fresh lulid and the name's final extension, and removed when the block ends, including on error.
+- `return_bytes(data, name)` stages bytes and returns the fetched file in one call.
+- `take(ref)` validates the ref before making a request, fetches it with `checked`, refuses directories and answers the materialized file and its size.
+  Bound the size your consumer accepts before opening `path`.
+  The ref's name is the name to deliver, such as an attachment's filename.
+- `return_ref(ref, fallback)` returns reachable content under a normalized name without copying or minting it again.
+  A file a tool takes and hands back goes through this helper, not straight from `take`, whose name may not obey the returned-file rule.
+- `file_name(raw, fallback)` normalizes an external name for a return:
+  it strips the invisible characters recognized by `bro.files.text.sanitize`, applies NFC, keeps the basename after either separator, replaces disallowed runs with `_`, and strips prohibited leading characters.
+  It truncates to the byte bound while keeping the final extension.
+  An empty result uses the validated fallback.
+  Literal names passed to `staged` and `return_bytes` must already obey the rule; invalid names raise before staging.
+
+The returned-file name rule and the final-extension byte bound are defined in `bro.tool_files`.
+Names admit letters, digits, combining marks and `_.+-`, but cannot start with a mark, `-` or `.`.
+They contain no separators, whitespace, controls or shell metacharacters.
+The final extension is the last dot and its tail when short enough, not the whole compound suffix of a name such as `report.tar.gz`.
+An extension is only a claim about type, and both names and file content are untrusted data.
+
+Staging requires a launch-built managed session with `RIDE_MINT_DIR`;
+a run outside one, including a manually launched child, raises `ArtifactError` before staging.
+A mint or fetch failure also raises `ArtifactError` and fails the tool call.
+A successful mint remains reachable if its subsequent fetch fails.
+Returned files live only for the ride, and an editable version must be copied from `path`.
+Checked fetches replace a modified unboxed materialization; boxed materializations are read-only.
+The host attributes a mint to the workspace, not to a particular tool inside it.
+
+For a producer or consumer in another peer, use artifact reach rather than passing local paths:
+return its minted ref through `return_ref`, or share an input ref at launch or through `mission share` and let that peer fetch it into its own artifact view.
+The remote consumer opens only paths below refs it fetched in that view.
+The host enforces reach and confines tree mints, but the consumer must still open only its fetched file.
+A persona without a shell gets refs for its own files through the explicitly mounted `artifact::mint` tool;
+that grant makes its whole tree available to tools that send files outward ([ride](ride.md#sharing-artifacts-between-peers)).
 
 ## Adding a file type
 

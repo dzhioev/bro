@@ -2184,6 +2184,73 @@ def _host_root_route(
   )
 
 
+_TOOL_FILES_PROBE = """
+import asyncio
+import json
+from contextlib import closing
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import ClassVar
+from unittest.mock import patch
+from bro import artifact_mcp
+from bro.artifact import ArtifactError
+from bro.llm.mcp import ToolRegistry, encode_tool_result
+from bro.mcp import Toolset, mount
+from bro.tool_files import ArtifactFile, staged, take
+from bros.bro import Bro
+
+toolset = Toolset[None]('documents')
+
+@toolset.tool('return a staged file')
+def produce() -> ArtifactFile:
+    with staged('returned.txt') as entry:
+        assert entry.path.parent == Path(os.environ['RIDE_MINT_DIR'])
+        assert entry.path.suffix == '.txt'
+        entry.path.write_bytes(b'tool file payload')
+        returned = entry.returned()
+    assert not entry.path.exists()
+    return returned
+
+@toolset.tool('take a file ref')
+def consume(ref: str) -> str:
+    return Path(take(ref)['path']).read_text()
+
+class FileBro(Bro):
+    name = 'tool-file-probe'
+    tools: ClassVar = [mount(toolset), mount(artifact_mcp.toolset)]
+
+with TemporaryDirectory(prefix='tool-files-session-') as state, patch.dict(os.environ, {'RIDE_SESSION_DIR': state}), closing(FileBro()) as persona:
+    assert persona.reach().files is None
+    assert persona.reach().brash is None
+    registry = ToolRegistry(persona.assemble(harness='bro', hold='unattended'))
+    def call(name, arguments):
+        return encode_tool_result(asyncio.run(registry.call(name, arguments)))
+    returned = json.loads(call('documents__produce', {}))
+    path = Path(returned['path'])
+    assert path.read_bytes() == b'tool file payload'
+    assert returned['size'] == len(b'tool file payload')
+    assert call('documents__consume', {'ref': returned['ref']}) == 'tool file payload'
+    if __ISOLATION__ == 'boxed':
+        assert path.is_relative_to('/var/ride/artifacts')
+    else:
+        path.write_bytes(b'modified private copy')
+        assert json.loads(call('documents__produce', {})) == returned
+        assert path.read_bytes() == b'tool file payload'
+    own_file = Path('own-file.txt')
+    own_file.write_text('from the shell-less persona tree')
+    minted = json.loads(call('artifact__mint', {'path': str(own_file), 'name': 'own.txt'}))
+    assert minted['size'] == own_file.stat().st_size
+    assert call('documents__consume', {'ref': minted['ref']}) == own_file.read_text()
+    try:
+        call('artifact__mint', {'path': '/etc/passwd'})
+    except ArtifactError as error:
+        assert 'outside the tree' in str(error), str(error)
+    else:
+        raise AssertionError('a shell-less persona minted outside its tree')
+(tree / '.tool-files-report').write_text(json.dumps({'returned': returned, 'minted': minted}))
+"""
+
+
 _ARTIFACT_PATHS_PROBE = r"""
 import json
 import os
@@ -2317,6 +2384,7 @@ def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, 
   outside.mkdir()
   (outside / 'data').write_bytes(b'host secret, never minted')
   source = _ARTIFACT_PATHS_PROBE.replace('__HOST_OUTSIDE__', repr(str(outside)))
+  source += _TOOL_FILES_PROBE.replace('__ISOLATION__', repr(isolation))
   mission = _root_mission(targets=(), placement=isolation)
   if workspace.isolation == Isolation.UNBOXED:
     code = _host_root_route(env, workspace, source, mission=mission)
@@ -2351,6 +2419,9 @@ def test_artifact_paths_from_the_clone_and_beside_it(isolated_env: IsolatedEnv, 
   assert len(report['accepted']) == 2
   assert len(report['denied']) == 2
   assert len(report['links']) == 2
+  files = json.loads((workspace.tree / '.tool-files-report').read_text())
+  assert files['returned']['ref'].endswith('/returned.txt')
+  assert files['minted']['ref'].endswith('/own.txt')
   if isolation == 'boxed':
     assert report['race']['minted'] + report['race']['denied'] == 100
   else:
@@ -2457,10 +2528,11 @@ def test_manual_summon_commits_over_the_operator_channel_through_credential_pick
 
 def _cross_isolation_member(prompt: str) -> str:
   return f"""
+import json
 import os
 import time
 from pathlib import Path
-from bro.artifact import fetch_artifact, list_artifacts, mint_entry
+from bro.tool_files import return_bytes, take
 from bro.base import credentials
 from bro.run_lifecycle import RunLifecycle
 from bro.summon import summon_and_wait
@@ -2476,11 +2548,9 @@ elif prompt == 'unboxed-owner':
   (mint_directory / 'party-marker').write_text(prompt)
 elif prompt == 'unboxed-member':
   assert (mint_directory / 'party-marker').read_text() == 'unboxed-owner'
-entry = mint_directory / (prompt + '.bin')
-entry.write_bytes(prompt.encode())
-minted = mint_entry(entry.name, name=entry.name, timeout=30)
-entry.unlink()
-assert Path(fetch_artifact(minted.ref, timeout=30)).read_bytes() == prompt.encode()
+returned = return_bytes(prompt.encode(), prompt + '.bin')
+assert Path(returned['path']).read_bytes() == prompt.encode()
+files = [returned]
 if prompt == 'boxed-member':
   assert credentials.get('github') == 'passed-github'
   answer = summon_and_wait(
@@ -2514,12 +2584,16 @@ elif prompt == 'unboxed-member':
 else:
   answer = 'boxed-final'
 if prompt != 'boxed-final':
-  refs = list_artifacts(timeout=30)
-  for descendant in answer.split('>'):
-    ref, = [ref for ref in refs if ref.endswith('/' + descendant + '.bin')]
-    assert Path(fetch_artifact(ref, timeout=30)).read_bytes() == descendant.encode()
+  child = json.loads(answer)
+  for file in child['files']:
+    fetched = take(file['ref'])
+    descendant = file['ref'].rsplit('/', 1)[1].removesuffix('.bin')
+    assert Path(fetched['path']).read_bytes() == descendant.encode()
+    files.append(fetched)
+  answer = child['chain']
   time.sleep(1)
-channel.completed(prompt + '>' + answer if prompt != 'boxed-final' else answer, 'ok')
+chain = prompt + '>' + answer if prompt != 'boxed-final' else answer
+channel.completed(json.dumps({{'chain': chain, 'files': files}}), 'ok')
 channel.close()
 """
 
@@ -2608,12 +2682,13 @@ def test_cross_isolation_summon_chain_uses_both_join_lowerings(
   monkeypatch.setenv('HOME', str(env.home))
   report = workspace.tree / '.cross-isolation-report'
   root_source = """
+import json
 import os
 import time
 from pathlib import Path
 from bro.base import credentials
 from bro.summon import summon_and_wait
-from bro.artifact import fetch_artifact, list_artifacts
+from bro.tool_files import take
 
 (Path(os.environ['RIDE_MINT_DIR']) / 'party-marker').write_text('root')
 assert not credentials.available('github')
@@ -2628,11 +2703,13 @@ answer = summon_and_wait(
   timeout=120,
 )
 assert not credentials.available('github')
-refs = list_artifacts(timeout=30)
-for descendant in answer.split('>'):
-  ref, = [ref for ref in refs if ref.endswith('/' + descendant + '.bin')]
-  assert Path(fetch_artifact(ref, timeout=30)).read_bytes() == descendant.encode()
-Path('/tree/.cross-isolation-report').write_text(answer)
+child = json.loads(answer)
+assert len(child['files']) == 4
+for file in child['files']:
+  fetched = take(file['ref'])
+  descendant = file['ref'].rsplit('/', 1)[1].removesuffix('.bin')
+  assert Path(fetched['path']).read_bytes() == descendant.encode()
+Path('/tree/.cross-isolation-report').write_text(child['chain'])
 time.sleep(2)
 """
   launch = workspace_docker.Launch(

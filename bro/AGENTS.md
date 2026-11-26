@@ -71,8 +71,10 @@ A subpackage with a map of its own is pointed at, not described here.
   the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
   tree minting resolves links in the peer's namespace and sends that absolute wire path with the requested name;
   the client-only entry form names one regular file of the session's provisioned mint directory;
-  `artifact_mcp.py` is the registered `artifact` toolset, fetching and listing reachable refs and reading and grepping fetched text refs in bounded windows;
+  `artifact_mcp.py` is the registered `artifact` toolset, minting tree paths, fetching and listing reachable refs and reading and grepping fetched text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
+- `tool_files.py` — synchronous staged returns and checked takes of regular-file artifacts, the typed `ArtifactFile`, shared tool-description texts, and returned-file naming;
+  the extension contract is `reference/extending.md`, "Files in tools".
 - `job_supervisor.py` — the shared supervisor behind core's `watch-run` and bro-native's jobs:
   it runs the command in a process group of its own and outlives every descendant;
   SIGTERM terminates them, `KILL_SIGNAL` kills them, and the owner-liveness handle closing asks for both in turn.

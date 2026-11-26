@@ -34,7 +34,7 @@ Run `sync-scripts --project browser` after adding or removing a CLI, and build t
 It navigates and extracts:
 before browsing, it refuses a request or instruction that asks for analysis, suggesting an extraction-only rewording.
 Its own seed grants the whole webview worker type, while profile selection, a visible view, and page downloads require the guarded `webview.cred`, `webview.vnc`, and `webview.downloads` permissions.
-It mounts `webview::`, `browser::`, and `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
+It mounts `webview::`, `browser::`, and only `fetch`, `list`, `read` and `grep` from `artifact::`, withholds Claude's file, shell, delegation, and web tools, and closes a webview before answering a one-shot request.
 Its answers omit element refs, page markup such as snapshot syntax or HTML, and tool names;
 Markdown formatting is allowed.
 The `[[browse]]` spell keeps one webview open while the owner sends each instruction as a quest question;
