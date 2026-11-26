@@ -8,6 +8,9 @@ This module owns their kinds, argument keys, and ref grammar for the library cli
 - `artifact.mint` with args `{path, name?}` — `path` names a file or directory
   at an absolute path as the requesting peer sees it, and `name` the artifact,
   defaulting to the path's last component.
+  The client resolves links in the peer's namespace before sending the path,
+  retaining the requested path's name; the host opens each tree-relative component
+  without following links and copies from its opened descriptors.
   The host ingests a private copy into the ride store and answers `ok{ref, size}`.
 - `artifact.fetch` with args `{ref, checked?}` — the host materializes the ref for the requesting peer
   and answers `ok{path}` with the path it appears at, which ends in the ref itself:
@@ -264,9 +267,15 @@ def mint_artifact(
   path: str, *, name: Optional[str] = None, timeout: Optional[float] = None
 ) -> Minted:
   """mint a relative-to-cwd or absolute `path` as `name` (by default the path's
-  last component) and return its ref and size. Raises `ArtifactError` on any failure."""
-  path = os.path.abspath(path)
-  args = {'path': path} if name is None else {'path': path, 'name': name}
+  last component), resolving links in this process's namespace.
+  Return its ref and size; raise `ArtifactError` on any failure."""
+  try:
+    args = {
+      'path': str(Path(path).resolve()),
+      'name': path_name(os.path.abspath(path)) if name is None else name,
+    }
+  except (OSError, RuntimeError, ValueError) as error:
+    raise ArtifactError(f'cannot resolve {path!r}: {error}') from None
   value = _call(MINT, args, timeout)
   ref = value.get('ref')
   size = value.get('size')

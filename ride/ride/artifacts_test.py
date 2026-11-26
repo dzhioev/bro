@@ -225,7 +225,7 @@ class TestMint:
     [
       ('/etc/passwd', 'outside the tree'),
       ('relative.bin', 'must be an absolute path'),
-      ('/tree/../outside', 'escapes the tree'),
+      ('/tree/../outside', 'outside the tree'),
       ('/tree/absent.bin', 'no file or directory'),
     ],
   )
@@ -241,11 +241,135 @@ class TestMint:
     identity = _root_identity() if boxed else _unboxed_root_identity()
     path = str(identity.tree_view / 'link')
 
-    with pytest.raises(ArtifactDenied, match='escapes the tree') as raised:
+    with pytest.raises(ArtifactDenied, match='crosses a symbolic link') as raised:
       store.mint(identity, (), path)
 
     assert repr(path) in str(raised.value)
     assert store.readable('ws') == []
+
+  @pytest.mark.parametrize('last', [False, True])
+  def test_even_a_link_inside_the_tree_is_not_followed(self, store, last):
+    _tree_file('real/data', b'payload')
+    tree = workspace_tree('ws')
+    (tree / 'link').symlink_to('real/data' if last else 'real')
+    path = '/tree/link' if last else '/tree/link/data'
+    with pytest.raises(ArtifactDenied, match="crosses a symbolic link at 'link'"):
+      store.mint(_root_identity(), (), path)
+    assert store.readable('ws') == []
+
+  @pytest.mark.parametrize('component', ['.', '..'])
+  def test_dot_components_are_not_normalized_away(self, store, component):
+    _tree_file('data', b'payload')
+    with pytest.raises(ArtifactDenied, match='outside the tree'):
+      store.mint(_root_identity(), (), f'/tree/{component}/data')
+
+  @pytest.mark.parametrize('components', [('.',), ('..',), ('a/b',), ('',)])
+  def test_the_opening_rejects_non_component_names(self, store, components):
+    with pytest.raises(ValueError, match='invalid path component'):
+      with ride.artifacts._open_source(workspace_tree('ws'), components):
+        pytest.fail('invalid components were opened')
+
+  def test_a_fifo_source_is_refused_without_reading_it(self, store):
+    os.mkfifo(workspace_tree('ws') / 'pipe')
+    with pytest.raises(ArtifactDenied, match='not a file or directory'):
+      store.mint(_root_identity(), (), '/tree/pipe')
+
+  @pytest.mark.parametrize('kind', ['directory', 'fifo', 'link'])
+  def test_a_file_only_opening_refuses_other_types(self, store, kind):
+    tree = workspace_tree('ws')
+    _tree_file('regular', b'payload')
+    if kind == 'directory':
+      (tree / 'entry').mkdir()
+    elif kind == 'fifo':
+      os.mkfifo(tree / 'entry')
+    else:
+      (tree / 'entry').symlink_to('regular')
+    with pytest.raises(ValueError, match='not a regular file|symbolic link'):
+      with ride.artifacts._open_source(tree, ['entry'], file_only=True):
+        pytest.fail('non-file source was opened')
+
+  def test_replacing_an_opened_middle_component_keeps_its_directory(
+    self, store, monkeypatch, tmp_path
+  ):
+    tree = workspace_tree('ws')
+    _tree_file('middle/data', b'payload')
+    (tmp_path / 'data').write_bytes(b'private')
+    open_component = ride.artifacts._open_component
+
+    def racing(stack, parent, component, *, directory):
+      descriptor = open_component(stack, parent, component, directory=directory)
+      if component == 'middle':
+        (tree / 'middle').rename(tree / 'saved')
+        (tree / 'middle').symlink_to(tmp_path)
+      return descriptor
+
+    monkeypatch.setattr(ride.artifacts, '_open_component', racing)
+    ref, _ = store.mint(_root_identity(), (), '/tree/middle/data')
+    assert _object(ref).read_bytes() == b'payload'
+
+  @pytest.mark.parametrize('directory', [False, True])
+  def test_replacing_an_opened_source_cannot_redirect_its_copy(
+    self, store, monkeypatch, tmp_path, directory
+  ):
+    tree = workspace_tree('ws')
+    _tree_file('source/data' if directory else 'source', b'payload')
+    outside = tmp_path / 'outside'
+    if directory:
+      outside.mkdir()
+      (outside / 'data').write_bytes(b'private')
+    else:
+      outside.write_bytes(b'private')
+    copy = ride.artifacts._private_copy
+
+    def racing(source, destination, prefix=''):
+      (tree / 'source').rename(tree / 'saved')
+      (tree / 'source').symlink_to(outside)
+      return copy(source, destination, prefix)
+
+    monkeypatch.setattr(ride.artifacts, '_private_copy', racing)
+    ref, size = store.mint(_root_identity(), (), '/tree/source')
+    copied = _object(ref) / 'data' if directory else _object(ref)
+    assert copied.read_bytes() == b'payload'
+    assert size == len(b'payload')
+    assert digest_path(_object(ref)) == split_ref(ref)[0]
+
+  @pytest.mark.parametrize('directory', [False, True])
+  @pytest.mark.parametrize('after_open', [False, True])
+  def test_a_directory_entry_swapped_for_a_link_is_never_followed(
+    self, store, monkeypatch, tmp_path, directory, after_open
+  ):
+    tree = workspace_tree('ws')
+    _tree_file('bundle/entry/data' if directory else 'bundle/entry', b'payload')
+    outside = tmp_path / 'outside'
+    if directory:
+      outside.mkdir()
+      (outside / 'data').write_bytes(b'private')
+    else:
+      outside.write_bytes(b'private')
+    open_component = ride.artifacts._open_component
+
+    def swap():
+      (tree / 'bundle/entry').rename(tree / 'saved')
+      (tree / 'bundle/entry').symlink_to(outside)
+
+    def racing(stack, parent, component, *, directory):
+      if component == 'entry' and not after_open:
+        swap()
+      descriptor = open_component(stack, parent, component, directory=directory)
+      if component == 'entry' and after_open:
+        swap()
+      return descriptor
+
+    monkeypatch.setattr(ride.artifacts, '_open_component', racing)
+    if not after_open:
+      with pytest.raises(ArtifactDenied, match='symbolic link'):
+        store.mint(_root_identity(), (), '/tree/bundle')
+      assert store.readable('ws') == []
+    else:
+      ref, _ = store.mint(_root_identity(), (), '/tree/bundle')
+      copied = _object(ref) / 'entry/data' if directory else _object(ref) / 'entry'
+      assert copied.read_bytes() == b'payload'
+    assert list((ride.artifacts.store_dir('ws') / 'staging').iterdir()) == []
 
   def test_an_escaping_symlink_inside_the_tree_is_denied(self, store):
     tree = workspace_tree('ws')
@@ -392,6 +516,12 @@ class TestHostReach:
     assert not ride.artifacts.view_dir('ws', 'broker-CH').exists()
     store.share_to_peer(ref, to='broker-OTHER')
     assert store.reachable(ref, 'broker-OTHER')
+
+  def test_a_host_named_link_keeps_the_operators_namespace(self, store, tmp_path):
+    (tmp_path / 'data').write_bytes(b'payload')
+    (tmp_path / 'link').symlink_to('data')
+    ref, _ = store.share_from_host(tmp_path / 'link', 'report', to='ws')
+    assert _object(ref).read_bytes() == b'payload'
 
   def test_the_operator_cannot_share_a_ref_it_cannot_read(self, store):
     ref, _ = store.mint(_root_identity(), (), str(Path('/tree') / _tree_file('a.bin', b'payload')))

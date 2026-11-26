@@ -69,7 +69,7 @@ A subpackage with a map of its own is pointed at, not described here.
   except that a summoned run first gets a notice, which each tool call it makes re-arms.
 - `artifact.py` (`artifact`) — peer-side artifact wire contract (the `artifact.mint`, `artifact.fetch`, `artifact.locate`, `artifact.list`, `artifact.share`, and `artifact.export` kinds,
   the `sha256:` ref grammar, the canonical directory-manifest digest) plus the client and the CLI/session commands;
-  minting sends a relative-to-cwd or absolute path as an absolute peer-visible wire path;
+  minting resolves links in the peer's namespace and sends that absolute wire path with the requested name;
   `artifact_mcp.py` is the registered `artifact` toolset, fetching and listing reachable refs and reading and grepping fetched text refs in bounded windows;
   the host store and enforcement live in `ride/ride/artifacts.py`
 - `job_supervisor.py` — the shared supervisor behind core's `watch-run` and bro-native's jobs:

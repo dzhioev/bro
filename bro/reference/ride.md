@@ -1169,8 +1169,11 @@ Peers pass files by content-addressed reference through the ride's store the lau
   (`artifact digest <path>` computes the same ref locally, which is how a ref is verified end to end).
   The name is not digested, so passing a ref passes its name, and re-minting unchanged content under any name stores nothing new;
   a mint past the ride's byte cap is refused rather than evicted.
-  The client sends an absolute path without resolving symbolic links;
-  the host maps the peer's view to its tree, resolves the path and refuses one outside the resolved tree, including a symbolic link out of it.
+  The client resolves symbolic links in the peer's own namespace, sending the absolute target path and the requested path's last component as its name.
+  The host maps that path to the peer's tree, refusing a path outside it or a symbolic link in any component.
+  It opens each component relative to the preceding directory's descriptor without following links, and copies from those descriptors;
+  replacing a component cannot redirect a mint outside the tree.
+  A directory's symbolic-link entries are recorded by target, never followed, and refused when the target escapes the directory.
   From a clone at `/tree/bro`, `artifact mint report.md` reads `/tree/bro/report.md`, and `artifact mint /tree/review/round.md` reads a report beside the clone.
 - Reaching a ref materializes nothing, in any placement:
   `artifact list` prints every ref the requesting peer can read, one per line in the order they reached it,
