@@ -28,6 +28,7 @@ from bro.claude.live_claude_test_helper import (
 from bro.claude.system_prompt import session_append_prompt
 from bro.claude.trail_recorder import Recorder
 from bro.trails.local import LocalStore
+from bro.trails.record.recording_map import RecordingMap
 from bro.trails.record.session import ManagedSession
 
 pytestmark = REQUIRES_CLAUDE_CREDENTIAL
@@ -201,6 +202,7 @@ def _recorded_messages(
     llm={'model': 'haiku'},
     session=session,
     started_after=0.0,
+    recording_map=RecordingMap.load(root / 'session'),
   )
   assert recorder.finalize() is True
   [header] = list(store.iter_trails(harness='claude'))

@@ -97,15 +97,21 @@ class MappedStart:
     record_id: str,
     spans: tuple[Span, ...],
     request: StartRequest,
+    *,
+    closing: Optional[int] = None,
   ) -> 'MappedStart':
+    """`closing` is the extent at which the open span of the record's last trail
+    is closed, in the same map write as the new entry."""
     if request.id is not None or request.lineage is not None:
       raise ValueError('a mapped start requires an unnamed request without lineage')
     wire = copy.deepcopy(request.to_wire())
     wire['id'] = lulid()
     named = StartRequest.from_wire(wire)
     entry = TrailEntry(wire['id'], spans, forked_from=named.forked_from)
-    entries = [*recording_map.records.get(record_id, []), entry]
-    recording_map.set_entries(record_id, entries)
+    entries = list(recording_map.records.get(record_id, []))
+    if closing is not None:
+      entries[-1] = entries[-1].close(closing)
+    recording_map.set_entries(record_id, [*entries, entry])
     return cls(named)
 
   def start(self, store: TrailsStore) -> Recording:

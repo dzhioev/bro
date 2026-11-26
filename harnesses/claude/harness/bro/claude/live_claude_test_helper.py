@@ -9,6 +9,7 @@ import contextlib
 import fcntl
 import os
 import pty
+import re
 import shlex
 import signal
 import struct
@@ -56,9 +57,56 @@ def bounded(seconds: float) -> Iterator[None]:
     signal.signal(signal.SIGALRM, previous)
 
 
+# a control sequence a terminal draws with: CSI, OSC, a character set
+# designation, or a two-byte escape
+_CONTROL_SEQUENCE = re.compile(
+  rb'\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]|\x1b[@-_]'
+)
+
+
+def _visible(drawn: bytes) -> str:
+  """what `drawn` shows, without its control sequences and whitespace: a TUI
+  moves its cursor over the gaps it redraws rather than printing spaces."""
+  return re.sub(r'\s', '', _CONTROL_SEQUENCE.sub(b'', drawn).decode('utf-8', 'replace'))
+
+
+class Terminal:
+  """a process on a pty of its own: what it has drawn, and the lines typed at it."""
+
+  def __init__(self, process: subprocess.Popen, parent_end: int) -> None:
+    self.process = process
+    self._parent_end = parent_end
+    self._drawn = bytearray()
+    self._grown = threading.Condition()
+
+  def drain(self) -> None:
+    with contextlib.suppress(OSError):
+      while len(chunk := os.read(self._parent_end, 65536)) > 0:
+        with self._grown:
+          self._drawn.extend(chunk)
+          self._grown.notify_all()
+
+  def await_drawn(self, text: str, *, since: int = 0, timeout: float = 60) -> None:
+    """block until the terminal has drawn `text` past byte `since` of its output."""
+    expected = re.sub(r'\s', '', text)
+    with self._grown:
+      drawn = self._grown.wait_for(
+        lambda: expected in _visible(bytes(self._drawn[since:])), timeout=timeout
+      )
+    assert drawn, f'the terminal did not draw {text!r} within {timeout:.0f}s'
+
+  def type_line(self, text: str) -> None:
+    """type `text`, and press enter once the terminal has drawn it."""
+    with self._grown:
+      mark = len(self._drawn)
+    os.write(self._parent_end, text.encode())
+    self.await_drawn(text, since=mark)
+    os.write(self._parent_end, b'\r')
+
+
 @contextlib.contextmanager
-def terminal(argv: list[str], env: dict[str, str], cwd: Path) -> Iterator[subprocess.Popen]:
-  """run `argv` on a pty of its own, draining what it draws, until the block ends."""
+def terminal(argv: list[str], env: dict[str, str], cwd: Path) -> Iterator[Terminal]:
+  """run `argv` on a pty of its own, keeping what it draws, until the block ends."""
   parent_end, child_end = pty.openpty()
   fcntl.ioctl(child_end, termios.TIOCSWINSZ, struct.pack('HHHH', 50, 160, 0, 0))
   process = subprocess.Popen(
@@ -71,16 +119,11 @@ def terminal(argv: list[str], env: dict[str, str], cwd: Path) -> Iterator[subpro
     start_new_session=True,
   )
   os.close(child_end)
-
-  def _drain() -> None:
-    with contextlib.suppress(OSError):
-      while len(os.read(parent_end, 65536)) > 0:
-        pass
-
-  drain = threading.Thread(target=_drain, daemon=True)
+  running = Terminal(process, parent_end)
+  drain = threading.Thread(target=running.drain, daemon=True)
   drain.start()
   try:
-    yield process
+    yield running
   finally:
     process.terminate()
     try:

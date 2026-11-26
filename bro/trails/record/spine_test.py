@@ -114,3 +114,21 @@ def test_mapped_start_appends_to_a_known_record_after_its_span_is_closed(tmp_pat
   assert len(persisted) == 2
   assert persisted[0] == prior.to_wire()
   assert persisted[1]['spans'] == [[3, None]]
+
+
+def test_mapped_start_closes_the_last_trails_open_span_in_the_same_write(tmp_path, monkeypatch):
+  recording_map = RecordingMap.load(tmp_path)
+  prior = TrailEntry(lulid(), (Span(0, 2), Span(5)))
+  recording_map.set_entries('record', [prior])
+  writes = []
+  original_save = RecordingMap.save
+
+  def counted_save(self):
+    writes.append([entry.to_wire() for entry in self.records['record']])
+    original_save(self)
+
+  monkeypatch.setattr(RecordingMap, 'save', counted_save)
+  MappedStart.prepare(recording_map, 'record', (Span(8),), _request(), closing=5)
+  assert len(writes) == 1
+  persisted = json.loads(recording_map.path.read_text())['records']['record']['trails']
+  assert [entry['spans'] for entry in persisted] == [[[0, 2], [5, 8]], [[8, None]]]
