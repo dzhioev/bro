@@ -1388,9 +1388,12 @@ Whichever harness records it, the trail carries the launch recipe and the manage
 — and the session publishes its current trail id to its trail pointer (`bro/monitor/trail_pointer.py`),
 from which summon control stamps the session's summoned children with `summoned_by.trail_id` (see "Summoning another bro").
 Each harness writes a local record of its run, a native run log or Claude transcript, and a separate session recorder turns it into a trail.
+No lifetime reopens a trail an earlier one recorded.
 A native lifetime writes a new log and records a new trail, with a `resume` edge to the trail of the log it continues.
 Its recorder completes predecessor trails from the local logs before forking, recording unknown ancestors oldest first.
-The recording map in the session's records retains those trail identities across lifetimes; continuation reads only the logs, not the map or the pointer.
+A Claude lifetime appends to the transcript it resumes and records each stretch of a transcript it writes into a trail of its own,
+with a `resume` edge to the trail holding the transcript's last recorded line, or a `branch` edge where Claude Code copied another transcript into a new one (`harnesses/claude/harness/bro/claude/reference.md`, "Session recording").
+The recording map in the session's records retains those trail identities across lifetimes; continuation reads only the local records, not the map or the pointer.
 The recorder beats the recording health file (`bro/monitor/health.py`) on every attempt, naming the log where a failure's cause is read, and `ride banner` surfaces it.
 The beat carries the outcome and the age at which the reader must give the recorder up, so both a recorder that fails loudly and one that is simply gone
 — killed by a signal, OOM, a crashed container process

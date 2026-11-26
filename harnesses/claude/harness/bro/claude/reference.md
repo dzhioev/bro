@@ -288,15 +288,15 @@ a long blocking summon runs via the harness's background Bash, and `rewind show 
 The runner under `do-ride` starts a `bro.claude.trail-recorder` daemon (via `harnesses/claude/harness/bro/claude/recorder.py`) before launching Claude and stops it after Claude exits
 — the stop is the recorder's final append and trail end.
 `--no-trails` starts no recorder daemon.
-The recorder records one claude-harness *trail* per transcript segment and appends newly completed lines on every transcript write,
-and at its polling interval without one.
-`harnesses/claude/harness/bro/claude/trail_recorder.py` owns transcript acquisition;
-the core trails schema lives in `bro.trails` and the Claude lineage verdict in `bro.claude_trails`.
-A verified same-segment resume reopens that segment's trail where the previous lifetime stopped, so a process restart adds no edge;
-an interactive resume's history copy opens a fork trail pointing at the prior one, and a whole conversation is the fork chain `rewind show` walks.
-The daemon nominates nothing:
-it starts a trail with the transcript's lineage evidence and the store's harness resolver decides the edge, or declines a transcript claude has not finished writing (`bro/trails/AGENTS.md`).
-The recorder republishes the session's trail pointer as segments turn over.
+The recorder records each stretch of the transcript the session writes to, the lines one lifetime adds to it before switching to another, into a claude-harness *trail* of its own,
+appending newly completed lines on every transcript write and at its polling interval without one.
+`harnesses/claude/harness/bro/claude/trail_recorder.py` owns transcript acquisition and decides each trail's edge from the session's recording map (`bro.trails`) and the transcripts alone.
+Nothing reopens a trail:
+the pinned release's `--resume` and `/resume` append to the transcript in place rather than copying its history, and the lifetime's trail gets a `resume` edge;
+`/branch` and `--fork-session` copy a transcript's records into a new one, whose trail takes its own lines with a `branch` edge;
+`/clear` opens a root.
+A whole conversation is the fork chain `rewind show` walks.
+The recorder republishes the session's trail pointer as it turns from one transcript to another.
 The daemon's stderr goes to `claude/session-recorder.log` in the session state dir, the log its recording health beats name (`bro/reference/ride.md`, "Session recording");
 the statusLine and `ride banner` surface that signal.
 A daemon that cannot be started at all never reaches that signal:

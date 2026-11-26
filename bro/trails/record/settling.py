@@ -50,25 +50,38 @@ def settle_record(
       _discard(recording_map, record_id, entries[-1:])
       entries = entries[:-1]
       continue
-    try:
-      item = entry.item_at(extent - 1)
-    except IndexError:
-      _discard(recording_map, record_id, entries[:])
+    if not verify_trail(store, entry, extent, records):
+      give_up_record(recording_map, record_id)
       return None
-    if item >= len(records):
-      _discard(recording_map, record_id, entries[:])
-      return None
-    try:
-      response = store.append_records(entry.id, extent - 1, [records[item]])
-    except AppendConflict:
-      _discard(recording_map, record_id, entries[:])
-      return None
-    if response.get('duplicate') is not True or response.get('extent') != extent:
-      raise RuntimeError(
-        f'verification for trail {entry.id} returned no duplicate at extent {extent}'
-      )
     return SettledTrail(entry, extent)
   return None
+
+
+def verify_trail(
+  store: TrailsStore, entry: TrailEntry, extent: int, records: Sequence[Any]
+) -> bool:
+  """whether the store's row at the trail's last held step is the record's item
+  there, resent as an append the store answers as a duplicate."""
+  try:
+    item = entry.item_at(extent - 1)
+  except IndexError:
+    return False
+  if item >= len(records):
+    return False
+  try:
+    response = store.append_records(entry.id, extent - 1, [records[item]])
+  except AppendConflict:
+    return False
+  if response.get('duplicate') is not True or response.get('extent') != extent:
+    raise RuntimeError(
+      f'verification for trail {entry.id} returned no duplicate at extent {extent}'
+    )
+  return True
+
+
+def give_up_record(recording_map: RecordingMap, record_id: str) -> None:
+  """remove every entry of a record that is no longer what its trails recorded."""
+  _discard(recording_map, record_id, recording_map.records[record_id])
 
 
 def _discard(recording_map: RecordingMap, record_id: str, removed: list[TrailEntry]) -> None:
